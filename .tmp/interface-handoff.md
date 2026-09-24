@@ -21,3 +21,6 @@ Base 6456283 already supplies Host V2 and shared `SessionSpecV2`/`BackendBinding
 # protocol-final-1 early boundary (base 15e5b682)
 
 Owned: services Codex/Claude adapters, adapter-local provenance, tests/spec. Host/Target/Git read-only subjects, no Host business edits. Codex adapter persists immutable V2 binding + never-started/starting/established; missing/unknown fails attach, Host history remains readable. Byte-bounded pre-ACK/stdio; pinned CLI/Git and SDK fixture evidence remains scoped. No public seam requested. No paid calls or credentials.
+
+# protocol-final-2 early seam (HEAD f2c6259)
+Owned: adapter catch normalization and pinned CLI Host fixture only; spec updated before implementation. No Host/Core/UI/Target/Git/Gateway writes or new public seam. Independent Host/adapter reopen must send on original native thread; child-death accepted send must return execution-unknown, revoke once and never replay. Before-ACK genuine byte proxy remains separately scoped if not proven; no Claude production beta claim. Global heavy slot required for tests/builds.

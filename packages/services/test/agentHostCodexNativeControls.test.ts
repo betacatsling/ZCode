@@ -91,7 +91,7 @@ test(
     const firstTurnFrames = new Map<string, Buffer>();
     const failures: string[] = [];
     const requests: Array<{ phase: string; body: Record<string, unknown> }> = [];
-    let phase: "deny" | "allow" | "cancel" | "resume" = "deny";
+    let phase: "deny" | "allow" | "cancel" | "resume" | "reopened" = "deny";
     let cancelArrived!: () => void;
     const pendingCancel = new Promise<void>((resolve) => {
       cancelArrived = resolve;
@@ -125,7 +125,7 @@ test(
           response.once("close", cancelClosed);
           return;
         }
-        if (phase === "resume") {
+        if (phase === "resume" || phase === "reopened") {
           assert.ok(
             JSON.stringify(input).includes("allowed.txt"),
             "native resumed thread retains prior tool context",
@@ -173,11 +173,13 @@ test(
           response.write(frame("response.output_item.done", { output_index: 0, item }));
         } else {
           const text =
-            phase === "resume"
-              ? "Second model resumed."
-              : phase === "deny"
-                ? "Denied safely."
-                : "Native command completed.";
+            phase === "reopened"
+              ? "Reopened thread continued."
+              : phase === "resume"
+                ? "Second model resumed."
+                : phase === "deny"
+                  ? "Denied safely."
+                  : "Native command completed.";
           const item = {
             id: `msg-${phase}`,
             type: "message",
@@ -253,10 +255,15 @@ test(
                 try {
                   const frame = JSON.parse(line) as {
                     method?: string;
-                    params?: { turnId?: unknown; turn?: { id?: unknown } };
+                    params?: {
+                      turnId?: unknown;
+                      turn?: { id?: unknown };
+                      item?: { type?: unknown };
+                    };
                   };
                   if (frame.method) {
                     const oldFamily = [
+                      "turn/completed",
                       "item/started",
                       "item/completed",
                       "item/agentMessage/delta",
@@ -269,6 +276,14 @@ test(
                       Buffer.byteLength(line) < 1024 * 1024
                     )
                       firstTurnFrames.set(frame.method, Buffer.from(`${line}\n`));
+                    if (
+                      nativeChildren.length === 1 &&
+                      frame.method === "item/completed" &&
+                      frame.params?.item?.type === "commandExecution" &&
+                      !firstTurnFrames.has("native-tool") &&
+                      Buffer.byteLength(line) < 1024 * 1024
+                    )
+                      firstTurnFrames.set("native-tool", Buffer.from(`${line}\n`));
                     nativeFrames.push({
                       method: frame.method,
                       hasTurnId: typeof frame.params?.turnId === "string",
@@ -555,10 +570,111 @@ test(
       await current.close();
       host = undefined;
       await adapter.shutdown();
-      // 修复：Host V2 的持久绑定必须能由独立 adapter 以同一原生 thread 恢复只读快照；不重发 prompt。
+      // 修复：独立 Host/adapter 重启必须实际执行下一轮，而非仅恢复 Host 快照。
+      const originalThreadId = await readFile(
+        join(
+          codexSessionProfile(join(root, "profiles"), spec),
+          `${current.binding.backendSessionId}.thread`,
+        ),
+        "utf8",
+      );
+      const reopenedNativeRequests: Array<{
+        method: string;
+        params?: { threadId?: string; input?: unknown };
+      }> = [];
+      const reopenedRevoked: string[] = [];
+      const reopenedIssued: string[] = [];
+      let ackHeld = false;
+      let releaseAck: (() => void) | undefined;
+      let releaseOldFrames: ((frame: Buffer) => void) | undefined;
+      let interceptedBytes = 0;
+      let proxyChild: ReturnType<typeof spawn> | undefined;
       const resumedAdapter = new CodexHarnessAdapter({
         root: join(root, "profiles"),
-        lease: issuer,
+        lease: {
+          ...issuer,
+          gateway: {
+            ...issuer.gateway,
+            revokeToken: (token: string) => {
+              reopenedRevoked.push(token);
+              issuer.gateway.revokeToken(token);
+            },
+          },
+          issue: async (input) => {
+            const lease = await issuer.issue(input);
+            reopenedIssued.push(lease.token);
+            return lease;
+          },
+        },
+        spawnProcess: ((command, args, options) => {
+          const child = spawn(command, args, options);
+          if (args[0] !== "--version") {
+            nativeCwds.push(options.cwd ?? "");
+            proxyChild = child;
+            let startRequestId: number | undefined;
+            let proxyReleased = false;
+            let tail = Buffer.alloc(0);
+            const delayed: Buffer[] = [];
+            const forward = child.stdout.emit.bind(child.stdout);
+            releaseOldFrames = (frame) => {
+              forward("data", frame);
+            };
+            // Test-only bounded stdout proxy: real CLI bytes, not fabricated JSON-RPC identities.
+            child.stdout.emit = ((event: string, ...args: unknown[]) => {
+              if (event !== "data") return forward(event, ...args);
+              tail = Buffer.concat([tail, args[0] as Buffer]);
+              assert.ok(tail.length + interceptedBytes < 1024 * 1024, "proxy byte limit");
+              for (let end; (end = tail.indexOf(10)) >= 0; ) {
+                const line = tail.subarray(0, end + 1);
+                tail = tail.subarray(end + 1);
+                const parsed = JSON.parse(line.toString("utf8")) as {
+                  id?: number;
+                  result?: { turn?: { id?: string } };
+                };
+                if (
+                  !proxyReleased &&
+                  (ackHeld ||
+                    (startRequestId !== undefined &&
+                      parsed.id === startRequestId &&
+                      parsed.result?.turn?.id))
+                ) {
+                  ackHeld = true;
+                  interceptedBytes += line.length;
+                  assert.ok(interceptedBytes < 1024 * 1024, "proxy delayed byte limit");
+                  delayed.push(Buffer.from(line));
+                  releaseAck ??= () => {
+                    proxyReleased = true;
+                    for (const held of delayed) forward("data", held);
+                    delayed.length = 0;
+                    interceptedBytes = 0;
+                  };
+                } else forward("data", line);
+              }
+              return true;
+            }) as typeof child.stdout.emit;
+            const write = child.stdin.write.bind(child.stdin);
+            child.stdin.write = ((data: string | Buffer, ...rest: unknown[]) => {
+              const raw = String(data);
+              assert.ok(Buffer.byteLength(raw) < 1024 * 1024);
+              for (const line of raw.trimEnd().split("\n")) {
+                const request = JSON.parse(line) as {
+                  method?: string;
+                  params?: { threadId?: string; input?: unknown };
+                };
+                if (request.method === "turn/start")
+                  startRequestId = (request as { id?: number }).id;
+                if (
+                  request.method === "thread/start" ||
+                  request.method === "thread/resume" ||
+                  request.method === "turn/start"
+                )
+                  reopenedNativeRequests.push({ method: request.method, params: request.params });
+              }
+              return (write as (...args: unknown[]) => boolean)(data, ...rest);
+            }) as typeof child.stdin.write;
+          }
+          return child;
+        }) as typeof spawn,
       });
       adapter = resumedAdapter;
       const resumedRegistry = new HarnessRegistry();
@@ -576,6 +692,108 @@ test(
         catalog: { fingerprint: "fixture", validateSelection: () => ({ ok: true }) },
       });
       assert.deepEqual(reopened.snapshot().rows.window, current.snapshot().rows.window);
+      phase = "reopened";
+      const beforeReopenRequestCount = requests.length;
+      const reopenedReceipt = await reopened.dispatch({
+        type: "send",
+        commandId: "send-after-independent-reopen",
+        hostSessionId: spec.hostSessionId,
+        turnId: "after-reopen",
+        text: "Native after-reopen control test",
+      });
+      assert.equal(reopenedReceipt.status, "accepted", JSON.stringify(reopenedReceipt));
+      await waitFor(
+        () => ackHeld,
+        () => ({ phase, requests: reopenedNativeRequests }),
+      );
+      assert.ok(proxyChild);
+      await reopened.whenEventsRecorded();
+      const beforeOldInjection = reopened
+        .eventsSince(0)
+        .filter((event) => event.turnId === "after-reopen");
+      for (const method of [
+        "item/started",
+        "item/completed",
+        "item/agentMessage/delta",
+        "native-tool",
+        "thread/tokenUsage/updated",
+        "turn/completed",
+      ]) {
+        const old = firstTurnFrames.get(method);
+        assert.ok(old, `pinned CLI did not emit ${method}`);
+        // Feed genuine captured bytes before the withheld newer start ACK.
+        releaseOldFrames!(old);
+      }
+      await reopened.whenEventsRecorded();
+      assert.deepEqual(
+        reopened.eventsSince(0).filter((event) => event.turnId === "after-reopen"),
+        beforeOldInjection,
+        "none of the genuine previous-turn item, text, tool, usage or completion frames may project",
+      );
+      assert.equal(reopened.queryCommand("send-after-independent-reopen")?.status, "accepted");
+      assert.deepEqual(reopenedRevoked, [], "old completion cannot revoke the current lease");
+      assert.equal(reopenedIssued.length, 1);
+      assert.equal(
+        reopened
+          .eventsSince(0)
+          .some((event) => event.turnId === "after-reopen" && event.kind === "turn.finished"),
+        false,
+        "old completion cannot settle the new turn before ACK",
+      );
+      assert.equal(
+        reopened
+          .eventsSince(0)
+          .some(
+            (event) =>
+              event.turnId === "after-reopen" &&
+              event.kind === "text.delta" &&
+              event.text.includes("Denied safely."),
+          ),
+        false,
+        "old native text must not project",
+      );
+      assert.ok(releaseAck, "actual pinned start ACK must be held");
+      releaseAck();
+      await reopened.whenIdle();
+      assert.deepEqual(reopenedRevoked, reopenedIssued);
+      assert.equal(
+        reopened
+          .eventsSince(0)
+          .filter((event) => event.kind === "turn.finished" && event.turnId === "after-reopen")
+          .length,
+        1,
+      );
+      assert.equal(reopened.queryCommand("send-after-independent-reopen")?.status, "completed");
+      assert.equal(
+        requests.length,
+        beforeReopenRequestCount + 1,
+        "exactly one new upstream effect",
+      );
+      assert.deepEqual(
+        reopenedNativeRequests.filter((request) => request.method === "thread/start"),
+        [],
+      );
+      assert.deepEqual(
+        reopenedNativeRequests
+          .filter((request) => request.method === "thread/resume")
+          .map((request) => request.params?.threadId),
+        [originalThreadId],
+      );
+      assert.deepEqual(
+        reopenedNativeRequests
+          .filter((request) => request.method === "turn/start")
+          .map((request) => [request.params?.threadId, request.params?.input]),
+        [[originalThreadId, [{ type: "text", text: "Native after-reopen control test" }]]],
+      );
+      assert.equal(nativeCwds.at(-1), await realpath(subdir));
+      assert.equal(
+        reopened
+          .snapshot()
+          .rows.window.some(
+            (row) => row.kind === "assistantText" && row.text === "Reopened thread continued.",
+          ),
+        true,
+      );
       await reopened.close();
       // 修复：已提交 Host 历史不能成为遗失 native thread 的重建许可。
       await rm(

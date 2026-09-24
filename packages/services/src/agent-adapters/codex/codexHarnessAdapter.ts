@@ -264,6 +264,7 @@ export class CodexHarnessAdapter implements HarnessAdapter {
     const token = prepared.token;
     let transport: Awaited<ReturnType<typeof createCodexTransport>> | undefined;
     let turn: RunningCodexTurn | undefined;
+    let nativeAttempted = false;
     try {
       session.plan = prepared.plan;
       // 修复：原生 cwd 只能来自该 worktree 的当前 realpath，避免创建后目录指向外部。
@@ -287,6 +288,8 @@ export class CodexHarnessAdapter implements HarnessAdapter {
         );
       else if (session.ownership.state !== "established")
         throw new Error("Codex native ownership unknown");
+      // 修复：从此处起子进程可能已消费请求；传输失败不能作为安全重试许可。
+      nativeAttempted = true;
       transport = await createCodexTransport({
         cwd: session.cwd,
         sessionHome: session.profile,
@@ -346,6 +349,12 @@ export class CodexHarnessAdapter implements HarnessAdapter {
         this.options.lease.gateway.revokeToken(token);
         await transport?.close();
       }
+      // 修复：原生进程死亡可能抢在 turn/start ACK 前拒绝 RPC；Host 必须收到
+      // execution-unknown，而不是把原始 transport closed 当成可重发的失败。
+      if (nativeAttempted)
+        throw new Error("Codex execution unknown; inspect history before explicit recovery", {
+          cause: error,
+        });
       throw error;
     } finally {
       session.busy = false;

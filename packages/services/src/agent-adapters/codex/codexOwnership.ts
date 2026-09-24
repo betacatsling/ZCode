@@ -47,7 +47,14 @@ export async function createNativeOwnership(
   cwd: string,
 ): Promise<NativeOwnership> {
   // 修复原因：已有目录可能是遗失的原生上下文，不得将它初始化成新 draft。
-  await mkdir(profile, { mode: 0o700 });
+  try {
+    await mkdir(profile, { mode: 0o700 });
+  } catch (error) {
+    // 修复：独占目录冲突代表可能遗失的 Host 创建收据；只转换错误，不碰原记录/marker。
+    if ((error as NodeJS.ErrnoException).code === "EEXIST")
+      throw new Error("Codex native ownership unknown; history only", { cause: error });
+    throw error;
+  }
   const ownership: NativeOwnership = { version: 1, binding, spec, cwd, state: "never-started" };
   if (Buffer.byteLength(JSON.stringify(ownership)) > 16_384)
     throw new Error("Codex native ownership scope too large");
