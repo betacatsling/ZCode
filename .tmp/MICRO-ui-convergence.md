@@ -19,3 +19,15 @@ From this worktree, using `/Users/ykzheng/Desktop/Projects/Zcode/.tmp/multi-harn
 - Required `pnpm typecheck`: **FAILED** under mandatory 2 GiB old-space cap with missing `@zcode/contracts`, `@zcode/adapters/*` declarations and V8 OOM (exit 134). Not called green; no higher heap/repeat of unchanged root job. Attempts to build correct CLI dependencies: shared-types and contracts compiled; dynamic-workflow build failed on absent `libs.generated.js` plus resulting type diagnostic; adapters not built. Do not infer UI or services TypeScript project success from browser transpilation. This dependency/gate is a separate follow-up; no generated CLI runtime patch within this lane.
 
 Parent reproduce: from root, export `TSX_TSCONFIG_PATH=packages/ui/tsconfig.json` for tsx, `ZCODE_E2E_CHROMIUM_PATH` for direct browser; wrap every nontrivial test/build/lint/typecheck with the absolute heavy-slot command above. Direct Playwright must include literal `--workers=1`; lint literal `--threads=1`. Do not use `pnpm e2e:ui -- --workers=1`. No genuine Core factory load or production browser trace was executed here.
+
+Exact focused reproduction commands (run from repository root; the browser path is the existing local Chrome binary on this macOS machine):
+
+```sh
+SLOT=/Users/ykzheng/Desktop/Projects/Zcode/.tmp/multi-harness-5be7ed74/heavy-slot.py
+TSX_TSCONFIG_PATH=packages/ui/tsconfig.json python3 "$SLOT" mise exec -- node scripts/mise-run.mjs pnpm exec tsx --test --test-concurrency=1 packages/ui/test/agentHostConversationTransport.test.ts packages/ui/test/conversationOlderPageFence.test.ts packages/services/test/agentHostProjection.test.ts
+ZCODE_E2E_CHROMIUM_PATH='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' python3 "$SLOT" mise exec -- node scripts/mise-run.mjs pnpm exec playwright test --config scripts/e2e/multi-harness/playwright.config.ts packages/ui/e2e/mounted-hierarchy.spec.ts packages/ui/e2e/shell-pane.spec.ts --workers=1
+python3 "$SLOT" mise exec -- node scripts/mise-run.mjs pnpm lint --threads=1
+python3 "$SLOT" mise exec -- node scripts/mise-run.mjs pnpm exec tsc -b packages/shared
+# Only after generating/building missing CLI dependency declarations, in a dedicated 2GiB budget:
+# python3 "$SLOT" mise exec -- node scripts/mise-run.mjs pnpm typecheck
+```
