@@ -22,7 +22,11 @@ import {
 import { createExternalSessionIndex } from "./externalSessionIndex.js";
 import { createWorkspaceHierarchyService, type NativeHierarchyPort } from "./hierarchyService.js";
 import { IWorkspaceHierarchyService } from "./serviceContract.js";
-import { createMaintenanceCoordination, type MaintenanceCoordination } from "./maintenance.js";
+import {
+  createMaintenanceCoordination,
+  type MaintenanceCoordination,
+  type NativeAdmissionFence,
+} from "./maintenance.js";
 
 export interface CompositionOptions {
   root: string;
@@ -34,7 +38,7 @@ export interface CompositionOptions {
   /** Runtime owner supplies native accepted/waiting/uncertain from the real V4 owner, never a constant zero. */
   nativeActivity: (workspaceId?: string) => Promise<TargetRuntimeActivity>;
   newAdmissionsEnabled: () => boolean;
-  nativeAdmissionFence: () => Promise<() => Promise<void>>;
+  nativeAdmissionFence: () => Promise<NativeAdmissionFence>;
   /** Core binds the real Catalog receipt/archive reconciliation, not a window-local fallback. */
   reconcileBoot: (catalog: ProjectCatalog) => Promise<void>;
   resolveRemoteSession?: (workspaceIdentity: string) => Promise<string | undefined>;
@@ -198,43 +202,43 @@ export function createLazyWorkspaceComposition(options: CompositionOptions): {
     importProject: async (request) => {
       const { catalog } = await get();
       requireBoot();
-      return catalog.importProject(request);
+      return maintenance.withAdmission(() => catalog.importProject(request));
     },
     updateProject: async (id, update) => {
       const { catalog } = await get();
       requireBoot();
-      return catalog.updateProject(id, update);
+      return maintenance.withAdmission(() => catalog.updateProject(id, update));
     },
     updateWorkspace: async (id, update) => {
       const { catalog } = await get();
       requireBoot();
-      return catalog.updateWorkspace(id, update);
+      return maintenance.withAdmission(() => catalog.updateWorkspace(id, update));
     },
     discover: async (id) => {
       const { catalog } = await get();
       requireBoot();
-      return catalog.discover(id);
+      return maintenance.withAdmission(() => catalog.discover(id));
     },
     adopt: async (request) => {
       const { catalog } = await get();
       requireBoot();
-      return catalog.adopt(request);
+      return maintenance.withAdmission(() => catalog.adopt(request));
     },
     create: async (request) => {
       const { catalog } = await get();
       requireBoot();
-      return catalog.create(request);
+      return maintenance.withAdmission(() => catalog.create(request));
     },
     remove: async (request) => {
       const { catalog } = await get();
       requireBoot();
-      return catalog.remove(request);
+      return maintenance.withAdmission(() => catalog.remove(request));
     },
     previewRemoval: async (id, generation) => (await get()).catalog.previewRemoval(id, generation),
     apply: async (operation) => {
       const { catalog } = await get();
       requireBoot();
-      return catalog.apply(operation);
+      return maintenance.withAdmission(() => catalog.apply(operation));
     },
     // 中文：启动核对只能由 Core owner 单次执行；RPC 不允许重跑失败的未知 Git 意图。
     reconcilePending: async () => {
@@ -248,8 +252,38 @@ export function createLazyWorkspaceComposition(options: CompositionOptions): {
     targetId: options.target.id,
     catalog,
     host,
+    registry: options.registry,
+    recoveryFacts: async (workspaceId) => {
+      const { target } = await get();
+      try {
+        const result = await target.lookupWorkspace(workspaceId);
+        if (result) {
+          if (result.receipt.kind === "import")
+            throw new Error("Unexpected workspace import receipt");
+          return {
+            status: "confirmed" as const,
+            generation: result.record.generation,
+            receiptKind: result.receipt.kind,
+          };
+        }
+      } catch (error) {
+        // 中文：仅持久待创建意图能证明结果未知；其它目标实例/仓库校验失败不能
+        // 被吞成「收据不可用」，必须把原始失败传给调用者。
+        if (!target.pendingCreations().some((row) => row.workspaceId === workspaceId)) throw error;
+        return { status: "unresolved" as const, reason: "target-result-unknown" as const };
+      }
+      return { status: "unresolved" as const, reason: "target-receipts-unavailable" as const };
+    },
     native: options.native,
     newAdmissionsEnabled,
+    withNativeAdmission: (workspaceId, generation, cwd, action) =>
+      maintenance.withAdmission(async () => {
+        requireBoot();
+        const { target } = await get();
+        // 中文：原生入口不能只信 Catalog 路径；持有 Target 当前 generation 的排他 admission
+        // 直到 V4 create 回执完成，移除/重建必须在之后重新检查实例。
+        return target.withAdmission(workspaceId, generation, () => action(), cwd);
+      }),
     resolveRemoteSession: options.resolveRemoteSession,
   });
   return {

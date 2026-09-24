@@ -291,7 +291,14 @@ export class TargetWorktreeService {
           "Correlated orphan requires operator review of Git administrative identity",
         );
       // 中文：有 Catalog 回执的孤儿不能仅凭同路径/分支认领；操作员核对 Git 管理目录身份后才可显式恢复。
-      return this.adoptCandidate(intent.bindingId, workspaceId, intent.worktreePath, true);
+      return this.adoptCandidate(
+        intent.bindingId,
+        workspaceId,
+        intent.worktreePath,
+        true,
+        undefined,
+        this.receipt("create", workspaceId) ? review?.reviewedAdminIdentity : undefined,
+      );
     });
   }
   history(workspaceId: string): TargetWorkspaceRecord | undefined {
@@ -361,6 +368,7 @@ export class TargetWorktreeService {
     requestedPath: string,
     recoverPending = false,
     receipt?: { kind: "adopt" | "create"; title: string; sortOrder: number; requestKey: string },
+    reviewedAdminIdentity?: FileIdentity,
   ): Promise<TargetWorkspaceRecord> {
     if (!workspaceId || this.state.workspaces.some((item) => item.id === workspaceId))
       throw new Error("Workspace ID already registered");
@@ -392,6 +400,10 @@ export class TargetWorktreeService {
           candidate.branch !== `refs/heads/${pending.branch}`))
     )
       throw new Error("No verifiable runnable worktree at requested path");
+    // 中文：第一次检查只供操作员审核；认领会再次读取 Git，必须比较同一管理目录实例。
+    // 相同路径和分支可被删除重建，不能把新实例冒充操作员审核过的孤儿。
+    if (reviewedAdminIdentity && !sameFile(candidate.adminIdentity, reviewedAdminIdentity))
+      throw new Error("Reviewed Git administrative instance changed before adoption");
     const adminIdentity = candidate.adminIdentity;
     if (
       this.state.workspaces.some(

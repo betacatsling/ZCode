@@ -28,6 +28,7 @@ function mapping(scope: string, workspaceId: string): LegacyMapping {
     workspaceId,
     targetId: "local",
     worktreeGeneration: `generation-${workspaceId}`,
+    repositoryBindingId: "binding",
     cwdRelativeToWorktree: ".",
     modelBinding,
   };
@@ -44,6 +45,7 @@ test("real SQLite index and native session store join by source scope, not paren
   let creates = 0;
   const activity = { running: 1, waiting: 2, tools: 3, uncertain: 4, offline: false };
   const runtime: NativeRuntimeFactsPort = {
+    certifiedCreate: true, // 受控 V4 fixture；不代表生产已装配原生命令回执
     async create(input) {
       assert.equal(input.commandId, "intent-1");
       creates++;
@@ -59,8 +61,11 @@ test("real SQLite index and native session store join by source scope, not paren
     },
     async fenceAdmissions() {
       fences++;
-      return async () => {
-        fences--;
+      return {
+        verify: async () => true,
+        release: async () => {
+          fences--;
+        },
       };
     },
   };
@@ -181,6 +186,8 @@ test("real SQLite index and native session store join by source scope, not paren
       originalSessionId: "same",
       sourceWorkspacePath: "/repo/nested",
       workspaceIdentity: "/repo/nested",
+      worktreeGeneration: "generation-nested",
+      repositoryBindingId: "binding",
     });
     assert.deepEqual(
       (
@@ -193,6 +200,7 @@ test("real SQLite index and native session store join by source scope, not paren
         projectId: "project",
         workspaceId: "nested",
         worktreeGeneration: "generation-nested",
+        repositoryBindingId: "binding",
         sourceWorkspaceKey: "/repo/nested",
         sourceWorkspacePath: "/repo/nested",
         nativeSessionId: "same",
@@ -251,7 +259,8 @@ test("real SQLite index and native session store join by source scope, not paren
     assert.equal(reads, 1);
     const release = await bridge.nativeAdmissionFence();
     assert.equal(fences, 1);
-    await release();
+    assert.equal(await release.verify(), true);
+    await release.release();
     assert.equal(fences, 0);
     await assert.rejects(() => stat(join(root, "unused-backups")), { code: "ENOENT" });
   } finally {

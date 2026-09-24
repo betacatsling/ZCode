@@ -126,6 +126,7 @@ export class LegacyWorkspaceMigration {
             workspaceId: workspace.id,
             targetId: record.targetId,
             worktreeGeneration: workspace.worktreeGeneration,
+            repositoryBindingId: binding.id,
             cwdRelativeToWorktree,
             modelBinding: record.modelBinding,
           }),

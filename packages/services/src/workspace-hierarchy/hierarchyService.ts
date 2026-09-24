@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import type { ProviderRegistryService } from "@zcode/provider";
+import { createRegistryPiHarness } from "../agent-adapters/pi/createPiHarness.js";
 import {
   deriveWritableSessionSpec,
   type HarnessCapabilitiesV2,
@@ -16,6 +18,8 @@ import type {
 
 /** Native V4 is the only authority for original session IDs, creation and capability truth. */
 export interface NativeHierarchyPort {
+  /** Certified original-ID allocator with durable create command receipt. */
+  readonly certifiedCreate?: boolean;
   resolveOwner(input: { targetId: string; workspaceId: string; sessionId: string }): Promise<
     | {
         originalSessionId: string;
@@ -42,8 +46,24 @@ export function createWorkspaceHierarchyService(input: {
   targetId: string;
   catalog: Pick<IProjectCatalogService, "sidebarSnapshot" | "previewRemoval">;
   host: IAgentHostService;
+  /** Production model catalog; absent in older test compositions means no certified choices. */
+  registry?: ProviderRegistryService;
   native?: NativeHierarchyPort;
   newAdmissionsEnabled: () => boolean;
+  /** Real Target receipt reader; absent legacy compositions do not invent a receipt. */
+  recoveryFacts?: (
+    workspaceId: string,
+  ) => Promise<
+    | { status: "confirmed"; generation: string; receiptKind: "adopt" | "create" | "remove" }
+    | { status: "unresolved"; reason: "target-receipts-unavailable" | "target-result-unknown" }
+  >;
+  /** Core maintenance admission gates native create across the full async effect. */
+  withNativeAdmission?: <T>(
+    workspaceId: string,
+    generation: string,
+    cwd: string,
+    action: () => Promise<T>,
+  ) => Promise<T>;
   /** Authenticated window attachment registry, not an identity inferred from path. */
   resolveRemoteSession?: (workspaceIdentity: string) => Promise<string | undefined>;
 }): IWorkspaceHierarchyService {
@@ -115,7 +135,7 @@ export function createWorkspaceHierarchyService(input: {
     const scope = await scopeFor(workspace.id);
     if (!scope) throw new Error("Workspace scope changed");
     if (request.harnessId === "zcode") {
-      if (!input.native) throw new Error("Native V4 owner unavailable");
+      if (!input.native?.certifiedCreate) throw new Error("Native V4 creation receipt unavailable");
       if (
         !input.newAdmissionsEnabled() ||
         project.archived ||
@@ -123,12 +143,24 @@ export function createWorkspaceHierarchyService(input: {
         workspace.lifecycle !== "active"
       )
         throw new Error("New native admission unavailable");
-      const result = await input.native.create({
-        scope,
-        commandId: request.commandId,
-        modelBinding: request.modelBinding,
-        cwdRelativeToWorktree: request.cwdRelativeToWorktree ?? ".",
-      });
+      const runNative =
+        input.withNativeAdmission ??
+        (<T>(_workspaceId: string, _generation: string, _cwd: string, action: () => Promise<T>) =>
+          action());
+      const result = await runNative(
+        workspace.id,
+        workspace.worktreeGeneration,
+        request.cwdRelativeToWorktree ?? ".",
+        async () => {
+          if (!input.newAdmissionsEnabled()) throw new Error("New native admission frozen");
+          return input.native!.create({
+            scope,
+            commandId: request.commandId,
+            modelBinding: request.modelBinding,
+            cwdRelativeToWorktree: request.cwdRelativeToWorktree ?? ".",
+          });
+        },
+      );
       return {
         owner: {
           kind: "native" as const,
@@ -262,11 +294,21 @@ export function createWorkspaceHierarchyService(input: {
     async pendingRecovery(request) {
       const scope = await scopeFor(request.workspaceId);
       if (!scope) throw new Error("Unknown target workspace");
+      const facts = await input.recoveryFacts?.(request.workspaceId);
       return {
         workspaceId: request.workspaceId,
-        status: "unresolved",
-        reason: "target-receipts-unavailable",
-        actions: ["inspect"],
+        status: facts?.status ?? "unresolved",
+        reason:
+          facts?.status === "confirmed"
+            ? "target-receipt-confirmed"
+            : (facts?.reason ?? "target-receipts-unavailable"),
+        ...(facts?.status === "confirmed"
+          ? {
+              generation: facts.generation,
+              receiptKind: facts.receiptKind,
+            }
+          : {}),
+        actions: ["inspect"] as const,
       };
     },
     async listHarnesses(workspaceId) {
@@ -282,11 +324,61 @@ export function createWorkspaceHierarchyService(input: {
             adapterVersion: "native-v4",
             icon: nativeHarnessAssetMetadata.zcode?.icon,
           },
-          availability: input.native ? ("supported" as const) : ("unknown" as const),
-          ...(!input.native ? { reason: "native owner not attached" } : {}),
+          availability: input.native?.certifiedCreate
+            ? ("supported" as const)
+            : ("unknown" as const),
+          ...(!input.native?.certifiedCreate
+            ? { reason: "native creation receipt not certified" }
+            : {}),
         },
         ...external,
       ];
+    },
+    async listCreateOptions(workspaceId) {
+      const snapshot = await input.catalog.sidebarSnapshot();
+      const workspace = snapshot.workspaces.find((row) => row.id === workspaceId);
+      const scope = await scopeFor(workspaceId);
+      if (!scope || !workspace || workspace.lifecycle !== "active" || workspace.archived)
+        throw new Error("Unknown or inactive target workspace");
+      const registry = input.registry;
+      if (!registry)
+        return { workspaceId, worktreeGeneration: workspace.worktreeGeneration, options: [] };
+      await registry.start();
+      const availability = await input.host.getAvailability();
+      if (availability.target.id !== scope.targetId || !availability.target.available)
+        throw new Error("Target unavailable for model selection");
+      const certified = (await input.host.catalogForTarget(scope.targetId)).filter(
+        (entry) => entry.availability === "supported" && entry.manifest.id === "pi",
+      );
+      // 中文：只探测已经在 Host 注册的生产 Pi adapter；未知/未认证的 Claude、ACP、Codex
+      // 不从 Registry 模型表推导可执行选项，更不能把原生模型误绑到外部 Host。
+      const pi = certified.length ? createRegistryPiHarness({ root: "", registry }) : undefined;
+      const options: { harnessId: string; label: string; binding: ModelBindingRequest }[] = [];
+      if (pi) {
+        for (const provider of registry.listProviders()) {
+          for (const model of provider.models) {
+            for (const reasoningLevel of model.config.optionSpecs.reasoningLevel.values) {
+              const selection = {
+                providerId: provider.providerId,
+                modelId: model.modelId,
+                options: { reasoningLevel },
+              };
+              if (
+                !registry.validateSelection(selection).ok ||
+                (await pi.hostManagedSupport(availability.target, selection)).support !==
+                  "supported"
+              )
+                continue;
+              options.push({
+                harnessId: "pi",
+                label: `${provider.providerName} / ${model.modelId} · ${reasoningLevel}`,
+                binding: { kind: "host-managed", selection },
+              });
+            }
+          }
+        }
+      }
+      return { workspaceId, worktreeGeneration: workspace.worktreeGeneration, options };
     },
     createAgent(request) {
       const intent = JSON.stringify([

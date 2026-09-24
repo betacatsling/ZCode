@@ -34,3 +34,26 @@ Core writer: Target receipt + Catalog intent -> reconcilePending -> reconcileArc
                                          └─ NEW Host/native admission enabled only at ready
 window attachment -> Core RPC -> same Host owner (desktop continuous / mobile replayable)
 ```
+
+## Authority-product owned closure (pending implementation)
+
+Core owns one collection and Target/Catalog writer; configured native index is read-only, native CLI owns live session admission. Catalog/Host mutations must first cross the same Core maintenance gate. Core boot waits for receipt/archive reconciliation; an unknown receipt blocks *new* admission, never replays Git. The native owner cannot be inferred idle from persisted SQLite. Session list options are derived from the live target Registry and certified harness capabilities, scoped by target/workspace/generation; unsupported routes never appear. Native original IDs and reviewed mapping provenance are preserved, unknown provenance is history-only.
+
+```text
+Supervisor begin(token/epoch) -> Core maintenance gate closes Catalog+Host admissions
+  -> existing native CLI worker fence -> drain old admissions -> verify same worker lease
+  -> fresh native+external activity -> Supervisor stops old Core -> apply/rollback
+  -> replacement Core starts FENCED -> verify operation/generation -> open admission
+old Core fence cannot be released until owner disposed; loss/unknown remains blocked.
+Operator stop is distinct and may stop busy sessions deliberately. Desktop continuous and mobile replayable read the same Core owner, never issue a second accepted command on reconnect.
+```
+
+Acceptance: concurrent write/freeze, lazy Host close versus delayed registry startup, reviewed Git admin instance swap, Core subprocess concurrent startup, unknown native worker fails closed, stale release never thaws, actual target/catalog lifecycle in disposable profile, and sidebar reads do not launch workers.
+
+Implementation status: `listCreateOptions` currently exposes only Registry-certified Pi host-managed selections. The native V4 creation receipt and process-wide native maintenance owner remain unmounted; an injected bridge is not itself a Core production boot. Never claim `createCoreAuthority` works until Node exports a factory backed by real configured paths and Supervisor closes the replacement generation gap. Synthetic native fixtures in unit tests do not certify production native execution.
+
+New native create is fail-closed unless its injected live owner explicitly certifies a durable creation receipt; its harness catalog entry stays `unknown` without that attestation. Existing native history lookup retains the original ID even when new creation is unavailable. This does not affect the feature-off native route. The target-exclusive native create admission holds the verified generation/cwd until V4 returns. An unmounted `NativeRuntimeFactsPort` is *not* certified by a controlled test flag.
+
+Operator recovery inspection reads current Target receipt/pending intent under Target owner instead of always claiming receipts unavailable. It returns confirmed receipt facts only after Target validates the instance; pending/uncertain remains unresolved and inspect-only. No automatic adoption, retry of Git, or Catalog-local reconstruction is allowed. An ID absent from both Catalog and Target is unknown, not a recoverable workspace.
+
+Native bridge's maintenance interface requires a verifiable same-worker lease (`verify` + `release`); the old release-only callback is not a production port. Controlled test fixtures may return a verified lease, never stand in for global process enumeration or a real CLI epoch.

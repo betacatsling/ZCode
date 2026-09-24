@@ -33,10 +33,14 @@ export function createLazyTargetAgentHostService(input: {
     if (target) return target;
     if (!flight) flight = (async () => {
       await input.registry.start();
+      if (disposed) throw new Error("agent host service disposed during registry startup");
       const { createRegistryPiHarness } = await import("../agent-adapters/pi/createPiHarness.js");
+      if (disposed) throw new Error("agent host service disposed during adapter startup");
       const harnesses = new HarnessRegistry();
       harnesses.registerTrusted(piManifest,
         () => createRegistryPiHarness({ root: join(input.root, "workers"), registry: input.registry }));
+      // 中文：异步 import/Registry 可能晚于 close；关停后不得产生新的 Host 或写入者。
+      if (disposed) throw new Error("agent host service disposed during adapter startup");
       const instance = new AgentHostTargetService({
         root: join(input.root, "sessions"), target: input.target,
         catalog: createRegistryModelCatalog(input.registry), registry: harnesses,
@@ -100,6 +104,7 @@ export function createLazyTargetAgentHostService(input: {
       events.dispose();
       // Process shutdown with an active turn leaves durable accepted/unknown; no
       // fabricated completion or implicit prompt replay on the next target epoch.
+      await flight?.catch(() => undefined);
       if (target) await target.close();
       await historyOnly.close();
     },
