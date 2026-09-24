@@ -103,8 +103,11 @@ export async function launchCodex(
     'model_providers.zcode.wire_api="responses"',
     "-c",
     'model_provider="zcode"',
+    // 修复原因：Codex 只把紧随 -c 的参数解析为覆盖项；裸参数会让 strict-config 启动失败。
+    "-c",
     'web_search="disabled"',
-    'features.multi_agent=false',
+    "-c",
+    "features.multi_agent=false",
   ];
   return start(executable, args, {
     cwd: options.cwd,
