@@ -706,7 +706,7 @@ export class ConversationV4Gateway {
       if (state.pendingByRawSeq.size > 0) unknown = true;
     }
     for (const id of this.detachedLiveSessions) {
-      if (!this.hydratedSessions.has(id) || snapshot.control.phase === "error") unknown = true;
+      if (!this.hydratedSessions.has(id)) unknown = true;
     }
     for (const [id, publisher] of this.publishers) {
       const snapshot = publisher.getSnapshot();
