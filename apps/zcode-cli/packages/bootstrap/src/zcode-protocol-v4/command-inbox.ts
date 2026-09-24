@@ -1,5 +1,7 @@
 // Command inbox：统一命令 admission 与查询入口。
 // 三类事实严格分离：in-flight / live input 永远 pinned；只有 settled 进入 512/session LRU。
+import { randomUUID } from "node:crypto";
+import type { NativeMaintenanceLease } from "@zcode/shared";
 import type {
   CommandAck,
   CommandEnvelope,
@@ -105,6 +107,31 @@ class AsyncGateRegistry {
 }
 
 export class CommandInbox {
+  private readonly maintenanceEpoch = randomUUID();
+  private maintenanceLease: NativeMaintenanceLease | null = null;
+  private pendingHandles = 0;
+
+  freeze(): NativeMaintenanceLease {
+    if (this.maintenanceLease) throw new Error("native maintenance already frozen");
+    this.maintenanceLease = { epoch: this.maintenanceEpoch, leaseId: randomUUID() };
+    return this.maintenanceLease;
+  }
+
+  release(lease: NativeMaintenanceLease): boolean {
+    if (!this.maintenanceLease || lease.epoch !== this.maintenanceEpoch ||
+        lease.leaseId !== this.maintenanceLease.leaseId) return false;
+    this.maintenanceLease = null;
+    return true;
+  }
+
+  get maintenanceState(): { epoch: string; frozen: boolean; accepted: number; pending: number } {
+    let accepted = 0;
+    for (const entries of this.liveInputs.values()) accepted += entries.size;
+    for (const entries of this.inFlight.values()) accepted += entries.size;
+    return { epoch: this.maintenanceEpoch, frozen: this.maintenanceLease !== null,
+      accepted, pending: this.pendingHandles };
+  }
+
   private readonly inFlight = new Map<string, Map<string, InFlightEntry>>();
   private readonly liveInputs = new Map<string, Map<string, LiveInputEntry>>();
   private readonly settled = new Map<string, Map<string, CommandAck>>();
@@ -115,6 +142,12 @@ export class CommandInbox {
   constructor(private readonly host: CommandInboxHost) {}
 
   async handle(raw: unknown): Promise<CommandInboxOutcome> {
+    this.pendingHandles++;
+    try { return await this.handleAdmission(raw); }
+    finally { this.pendingHandles--; }
+  }
+
+  private async handleAdmission(raw: unknown): Promise<CommandInboxOutcome> {
     const parsed = parseCommandEnvelope(raw);
     if (!parsed.ok) {
       return this.ackOnly({
@@ -152,6 +185,14 @@ export class CommandInbox {
           return this.ackOnly(this.retryAck(afterWait));
         }
 
+        // 中文：持久事实查询可能跨 await；freeze 必须在真正 admission 前再裁决，
+        // 不能让冻结前进来的新 command 藏在 lookup 后面执行。
+        if (this.maintenanceLease && !["stop", "resolveInteraction", "cancelBackgroundWork", "deleteQueueItem"].includes(envelope.type)) {
+          releaseSession();
+          return this.ackOnly({ commandId: envelope.commandId, status: "rejected",
+            reasonCode: "guard.nativeMaintenanceFrozen",
+            revisionAtDecision: envelope.sessionId === null ? 0 : this.host.getRevision(envelope.sessionId) ?? 0 });
+        }
         const decision = this.decide(envelope);
         if (decision.kind === "ack") {
           if (decision.remember) this.rememberSettled(bucketKey, envelope.commandId, decision.ack);

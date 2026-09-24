@@ -6,6 +6,7 @@
     "#src/*": "./src/*"
   },
   "exports": {
+    "./native-maintenance": "./src/zcode-agent/zcodeAgentService.ts",
     "./storage-startup": "./src/storage-startup.ts",
     ".": "./src/index.ts",
     "./cua-permission-broker": "./src/cua-permission-broker/index.ts",

@@ -690,6 +690,31 @@ export class ConversationV4Gateway {
     ).unref?.();
   }
 
+  hasNativeSnapshot(sessionId: string): boolean {
+    return this.hydratedSessions.has(sessionId) && this.publishers.has(sessionId);
+  }
+  freezeNativeAdmission() { return this.inbox.freeze(); }
+  releaseNativeAdmission(lease: import("@zcode/shared").NativeMaintenanceLease): boolean {
+    return this.inbox.release(lease);
+  }
+  getNativeActivity(): import("@zcode/shared").NativeMaintenanceActivity {
+    const state = this.inbox.maintenanceState;
+    let active = 0, pending = state.pending, tools = 0, approvals = 0, accepted = state.accepted;
+    let unknown = this.readyFlights.size > 0 || this.hydrationInFlight.size > 0;
+    for (const [id, publisher] of this.publishers) {
+      const snapshot = publisher.getSnapshot();
+      if (!this.hydratedSessions.has(id)) unknown = true;
+      if (snapshot.control.phase === "running" || snapshot.control.phase === "prewarming" ||
+          snapshot.control.activeWorks.length > 0 || snapshot.control.canStop) active++;
+      if (snapshot.control.stopTargetKind === "unknown") unknown = true;
+      pending += snapshot.queue.items.length + snapshot.pendingCommands.length;
+      approvals += snapshot.pendingInteractions.length;
+      tools += snapshot.backgroundWorks.filter(work => work.status === "running" || work.status === "resultPending").length;
+      if (snapshot.workflowRuns?.runs.some(run => run.status === "running")) active++;
+    }
+    return { epoch: state.epoch, frozen: state.frozen, active, accepted, pending, tools, approvals, unknown };
+  }
+
   setConnectionFlowState(rawParams: unknown): void {
     const params = v4ConnectionFlowParamsSchema.parse(rawParams);
     if (params.state === "closed") {
