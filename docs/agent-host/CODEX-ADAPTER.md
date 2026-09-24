@@ -15,3 +15,16 @@ native completed/interrupt/error → revoke token → child close → next turn 
 Canonical text/tool/interaction/usage/finish events are sequenced within the adapter and validated by Host journal. Native thread/turn IDs are not Host IDs. Unknown or late approvals decline. Cancel races must not turn a subsequent turn into success. On restart after process death, Host uncertain command rules win: no automatic resend of accepted turns. If native history cannot be verified, adapter attach refuses execution. History-only remains readable through Host journal.
 
 Acceptance: fake child validates distinct tokens and exact turn scopes, late request rejection, approval deny, cancel, resumed thread without replay and two distinct models; opt-in real pinned CLI + actual Gateway + fake upstream exercises both turns and confirms an old token is unauthorized after Model change. The separate `codexGatewayJoin.test.ts` runs a real native command denial and cancellation; the new adapter's native two-turn join uses text turns, not a real native approval or cancellation. Pinned Codex warns that unknown per-turn aliases use fallback model metadata and that changing aliases across thread resume may affect performance: this is a compatibility/performance risk, not proven equivalence with the native model's behavior. This adapter is not registered into production composition in this lane. Desktop/mobile projections share the same Host sequence; desktop continuous and mobile replayable delivery are Host responsibilities, not parallel adapter queues.
+
+## Pinned native control acceptance (this lane)
+
+The target-local SessionHost alone admits commands/records receipts and journals adapter events; CodexTransport alone associates native thread/turn and approval callback; the adapter owns the per-turn lease and process. No UI or Gateway writes the Host journal. Test with the installed exact `codex-cli 0.156.1`, private temporary HOME/CODEX_HOME and localhost fake Responses upstream (no Provider calls):
+
+```
+Host send(id, turn) → journal accept → adapter lease(epoch,turn,Model) → native start/resume
+native function call → approval callback → adapter interaction.requested → Host journal → Host resolve(id,epoch,turn) → native accept/decline
+native completion → canonical rows → lease revoke → process close → next turn may start
+Host cancel(id,epoch,turn) → native interrupt → revoke → no success; old token 401
+```
+
+Verify deny does not write a file; allow reaches the native filesystem and the resulting canonical Host tool/interaction/assistant rows are durable; active cancellation against a held upstream response does not finish successfully and revokes the lease; resumed selected second Model sees prior context and old token cannot access the new route. All commands use unique IDs, and stale turn/epoch or duplicate decisions cannot authorize native callbacks. Missing tool approval, silent execution, unsupported pinned binary or uncertain process outcome blocks capability promotion; a raw transport-only callback does not count as Host proof. No production registration or wider Codex version/capability claim follows automatically from this isolated test.
