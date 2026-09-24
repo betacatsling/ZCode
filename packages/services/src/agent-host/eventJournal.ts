@@ -8,12 +8,15 @@ export class EventJournal {
   readonly #lock: FileHandle;
   readonly #lockPath: string;
   readonly #identity: JournalIdentity;
+  readonly #root: string;
   readonly #events: AgentEvent[];
   readonly #bySource: Map<string, AgentEvent>;
   #tail: Promise<void> = Promise.resolve();
   #closed = false;
+  #writeError?: unknown;
 
-  private constructor(storage: Awaited<ReturnType<typeof openJournal>>, identity: JournalIdentity, events: AgentEvent[]) {
+  private constructor(storage: Awaited<ReturnType<typeof openJournal>>, root: string, identity: JournalIdentity, events: AgentEvent[]) {
+    this.#root = root;
     this.#file = storage.file;
     this.#lock = storage.lock;
     this.#lockPath = storage.lockPath;
@@ -46,7 +49,7 @@ export class EventJournal {
   static async open(root: string, identity: JournalIdentity): Promise<EventJournal> {
     const storage = await openJournal(root, journalPath(root, identity, "events"));
     try {
-      return new EventJournal(storage, identity, EventJournal.#parse(storage.lines, identity));
+      return new EventJournal(storage, root, identity, EventJournal.#parse(storage.lines, identity));
     } catch (error) {
       await closeJournal(storage.file, storage.lock, storage.lockPath);
       throw error;
@@ -60,6 +63,7 @@ export class EventJournal {
 
   appendWithStatus(source: AgentEvent): Promise<{ event: AgentEvent; appended: boolean }> {
     const run = this.#tail.then(async () => {
+      if (this.#writeError) throw this.#writeError;
       if (this.#closed) throw new Error("journal closed");
       const sourceId = source.sourceEventId ?? source.eventId;
       const existing = this.#bySource.get(sourceId);
@@ -71,7 +75,8 @@ export class EventJournal {
       if (source.hostSessionId !== this.#identity.hostSessionId || source.runtimeEpoch !== this.#identity.runtimeEpoch) throw new Error("foreign event identity");
       if (source.sequence !== this.#events.length + 1) throw new Error("source event sequence gap or stale event");
       const event = agentEventSchema.parse({ ...source, sourceEventId: sourceId, eventId: randomUUID() });
-      await durableAppend(this.#file, event);
+      try { await durableAppend(this.#file, journalPath(this.#root, this.#identity, "events"), event); }
+      catch (error) { this.#writeError = error; throw error; }
       this.#events.push(event);
       this.#bySource.set(sourceId, event);
       return { event, appended: true };
@@ -79,6 +84,8 @@ export class EventJournal {
     this.#tail = run.then(() => undefined, () => undefined);
     return run;
   }
+
+  get length(): number { return this.#events.length; }
 
   since(sequence: number, limit = 500): readonly AgentEvent[] {
     if (!Number.isSafeInteger(sequence) || sequence < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 500) throw new Error("invalid journal cursor");

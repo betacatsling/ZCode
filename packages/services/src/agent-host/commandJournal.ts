@@ -20,13 +20,16 @@ export class CommandJournal {
   readonly #lock: FileHandle;
   readonly #lockPath: string;
   readonly #identity: JournalIdentity;
+  readonly #root: string;
   readonly #records: Map<string, CommandRecord>;
   readonly #unknownAfterRestart: Set<string>;
   readonly #routes = new Map<string, FrozenTurnModelRoute>();
   #tail: Promise<void> = Promise.resolve();
   #closed = false;
+  #writeError?: unknown;
 
-  private constructor(storage: Awaited<ReturnType<typeof openJournal>>, identity: JournalIdentity, records: Map<string, CommandRecord>) {
+  private constructor(storage: Awaited<ReturnType<typeof openJournal>>, root: string, identity: JournalIdentity, records: Map<string, CommandRecord>) {
+    this.#root = root;
     this.#file = storage.file;
     this.#lock = storage.lock;
     this.#lockPath = storage.lockPath;
@@ -75,7 +78,7 @@ export class CommandJournal {
     const storage = await openJournal(root, journalPath(root, identity, "commands"));
     try {
       const { records, routes } = CommandJournal.#parse(storage.lines, identity);
-      const journal = new CommandJournal(storage, identity, records);
+      const journal = new CommandJournal(storage, root, identity, records);
       for (const [id, route] of routes) journal.#routes.set(id, route);
       return journal;
     } catch (error) {
@@ -87,7 +90,7 @@ export class CommandJournal {
   accept(input: AgentCommand): Promise<AgentCommandReceipt> {
     const command = agentCommandSchema.parse(input);
     const run = this.#tail.then(async () => {
-      if (this.#closed) throw new Error("journal closed");
+      if (this.#closed || this.#writeError) throw new Error("command journal write failed or closed; inspect before admitting commands");
       if (command.hostSessionId !== this.#identity.hostSessionId) throw new Error("foreign command identity");
       const existing = this.#records.get(command.commandId);
       if (existing) {
@@ -95,7 +98,8 @@ export class CommandJournal {
         return { ...this.#safeReceipt(existing.receipt), status: "duplicate" as const };
       }
       const receipt = agentCommandReceiptSchema.parse({ commandId: command.commandId, status: "accepted" });
-      await durableAppend(this.#file, { command, receipt });
+      try { await durableAppend(this.#file, journalPath(this.#root, this.#identity, "commands"), { command, receipt }); }
+      catch (error) { this.#writeError = error; throw error; }
       this.#records.set(command.commandId, { command, receipt });
       return receipt;
     });
@@ -105,13 +109,14 @@ export class CommandJournal {
 
   freezeTurn(commandId: string, route: FrozenTurnModelRoute): Promise<void> {
     const run = this.#tail.then(async () => {
-      if (this.#closed) throw new Error("journal closed");
+      if (this.#closed || this.#writeError) throw new Error("command journal write failed or closed; inspect before admitting commands");
       const record = this.#records.get(commandId);
       const checked = frozenTurnModelRouteSchema.parse(route);
       if (!record || record.command.type !== "send" || record.command.turnId !== checked.turnId ||
         checked.runtimeEpoch !== this.#identity.runtimeEpoch || checked.hostSessionId !== this.#identity.hostSessionId ||
         this.#routes.has(commandId)) throw new Error("invalid frozen turn route");
-      await durableAppend(this.#file, { command: commandId, frozenRoute: checked });
+      try { await durableAppend(this.#file, journalPath(this.#root, this.#identity, "commands"), { command: commandId, frozenRoute: checked }); }
+      catch (error) { this.#writeError = error; throw error; }
       this.#routes.set(commandId, checked);
     });
     this.#tail = run.then(() => undefined, () => undefined);
@@ -121,12 +126,13 @@ export class CommandJournal {
 
   finish(commandId: string, receipt: AgentCommandReceipt): Promise<void> {
     const run = this.#tail.then(async () => {
-      if (this.#closed) throw new Error("journal closed");
+      if (this.#closed || this.#writeError) throw new Error("command journal write failed or closed; inspect before admitting commands");
       const original = this.#records.get(commandId);
       if (!original || receipt.commandId !== commandId || receipt.status === "accepted" || receipt.status === "duplicate") throw new Error("invalid command completion");
       if (original.receipt.status !== "accepted") throw new Error("command was already completed");
       const checked = agentCommandReceiptSchema.parse(receipt);
-      await durableAppend(this.#file, { command: original.command, receipt: checked });
+      try { await durableAppend(this.#file, journalPath(this.#root, this.#identity, "commands"), { command: original.command, receipt: checked }); }
+      catch (error) { this.#writeError = error; throw error; }
       this.#records.set(commandId, { command: original.command, receipt: checked });
       this.#unknownAfterRestart.delete(commandId);
     });

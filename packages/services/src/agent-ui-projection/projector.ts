@@ -16,6 +16,7 @@ export function projectHostConversation(input: {
   runtimeEpoch: string;
   events: readonly AgentEvent[];
   windowSize?: number;
+  rowRange?: { beforeRowId?: number; limit: number };
 }): ConversationSnapshot {
   const { spec, runtimeEpoch, events } = input;
   const windowSize = input.windowSize ?? 100;
@@ -178,7 +179,10 @@ export function projectHostConversation(input: {
     }
   }
   const lastError = errorCode ? { code: errorCode, message: "External harness error; inspect target-host diagnostics", recoverable: false, at: lastErrorAt, source: "runtime" as const } : null;
-  const window = rows.slice(-windowSize);
+  const range = input.rowRange;
+  const window = range
+    ? rows.filter((row) => range.beforeRowId === undefined || row.rowId < range.beforeRowId).slice(-range.limit)
+    : rows.slice(-windowSize);
   return conversationSnapshotSchema.parse({
     protocolVersion: 1, sessionId: spec.hostSessionId, logEpoch: runtimeEpoch, seq, revision,
     agentHost: {

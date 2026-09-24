@@ -60,6 +60,7 @@ export function createLazyTargetAgentHostService(input: {
     catalogForTarget: async (targetId) => (await getTarget()).catalogForTarget(targetId),
     getSessionCapabilities: (spec) => (target ?? historyOnly).getSessionCapabilities(spec),
     getRuntimeActivity: (workspaceId) => (target ?? historyOnly).getRuntimeActivity(workspaceId),
+    getSessionReadModel: (spec) => (target ?? historyOnly).getSessionReadModel(spec),
     getSessionSpec: (scope) => (target ?? historyOnly).getSessionSpec(scope),
     listWorkspaceSessions: (workspaceId) => (target ?? historyOnly).listWorkspaceSessions(workspaceId),
     rowsRange: (spec, request) => (target ?? historyOnly).rowsRange(spec, request),

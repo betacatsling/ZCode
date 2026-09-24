@@ -324,7 +324,9 @@ export {
 
 import { ServiceCollection } from "./collection.js";
 import { IAgentHostService } from "./agent-host/serviceContract.js";
-import { createLazyTargetAgentHostService } from "./agent-host/lazyTargetService.js";
+import { createLazyWorkspaceComposition, IProjectCatalogRpcService, IWorkspaceHierarchyService, type CompositionOptions } from "./workspace-hierarchy/lazyComposition.js";
+import { parseRemoteWorkspaceIdentity } from "@zcode/shared";
+import type { MaintenanceCoordination } from "./workspace-hierarchy/maintenance.js";
 import { IFileService } from "./file/file.js";
 import { IMediaPreviewService } from "./media-preview/mediaPreview.js";
 import { IGitService } from "./git/git.js";
@@ -720,6 +722,11 @@ export function getOffPeakRequestAuthBuilder(
 }
 const managedHostApiNetworkTransports = new WeakMap<ServiceCollection, HostApiNetworkTransport>();
 const managedAgentHostServices = new WeakMap<ServiceCollection, { dispose(): Promise<void> }>();
+const workspaceMaintenanceServices = new WeakMap<ServiceCollection, MaintenanceCoordination>();
+/** Runtime owner wraps automatic update/uninstall/restart here; explicit operator stop is separate. */
+export function getWorkspaceMaintenanceCoordination(services: ServiceCollection): MaintenanceCoordination | undefined {
+  return workspaceMaintenanceServices.get(services);
+}
 
 export function registerManagedCuaHelperHostForDispose(
   services: ServiceCollection,
@@ -1376,6 +1383,9 @@ export function createLocalServices(options: {
   serviceAuthorityMode?: ServiceAuthorityMode;
   /** Stable target identity supplied by the standalone supervisor; absent disables this channel. */
   agentHostTargetId?: string;
+  /** Trusted native complete index/owner/activity and target identity are supplied by the runtime owner. */
+  workspaceComposition?: Partial<Pick<CompositionOptions,
+    "nativeIndex" | "native" | "nativeActivity" | "nativeAdmissionFence" | "identity" | "resolveRemoteSession">>;
   cuaProductMcpServerResolver?: CuaProductMcpServerResolver;
   agentRuntimeContext?: {
     getDeviceMid?: () => string | undefined;
@@ -2666,8 +2676,8 @@ export function createLocalServices(options: {
     .register(IModelSelectionService, providerRuntime.modelSelection);
   if (options.agentHostTargetId &&
       (options.serviceAuthorityMode === "standalone-server" || options.serviceAuthorityMode === "desktop-local")) {
-    const agentHost = createLazyTargetAgentHostService({
-      root: join(resolveAppConfigDir(), "agent-host", "v1"),
+    const agentHost = createLazyWorkspaceComposition({
+      root: join(resolveAppConfigDir(), "workspace-composition", "v1"),
       target: {
         id: options.agentHostTargetId,
         kind: options.serviceAuthorityMode === "desktop-local" ? "local" : process.platform === "linux" ? "ssh" : "local",
@@ -2675,10 +2685,23 @@ export function createLocalServices(options: {
         available: process.platform === "linux" || process.platform === "darwin",
       },
       registry: providerRuntime.registryService,
-      allowNewSessions: () => process.env.ZCODE_MULTI_HARNESS_ENABLED === "1",
+      identity: options.workspaceComposition?.identity ?? ((targetId, canonicalPath) => {
+        if (targetId !== options.agentHostTargetId || options.serviceAuthorityMode !== "desktop-local" || parseRemoteWorkspaceIdentity(canonicalPath))
+          throw new Error("Remote target requires authenticated identity builder");
+        return canonicalPath;
+      }),
+      nativeIndex: options.workspaceComposition?.nativeIndex,
+      native: options.workspaceComposition?.native,
+      nativeActivity: options.workspaceComposition?.nativeActivity,
+      nativeAdmissionFence: options.workspaceComposition?.nativeAdmissionFence,
+      resolveRemoteSession: options.workspaceComposition?.resolveRemoteSession,
+      newAdmissionsEnabled: () => process.env.ZCODE_MULTI_HARNESS_ENABLED === "1",
     });
-    services.register(IAgentHostService, agentHost.service);
+    services.register(IAgentHostService, agentHost.agentHost)
+      .register(IProjectCatalogRpcService, agentHost.catalog)
+      .register(IWorkspaceHierarchyService, agentHost.hierarchy);
     managedAgentHostServices.set(services, agentHost);
+    workspaceMaintenanceServices.set(services, agentHost.maintenance);
   }
   if (isDesktopAttachedRemote || options.providerProvisioningTargetEnabled === true) {
     services.register(
@@ -2829,6 +2852,7 @@ export function disposeServiceResources(services: ServiceCollection): void {
   managedHostApiNetworkTransports.get(services)?.dispose();
   void managedAgentHostServices.get(services)?.dispose().catch(() => {});
   managedAgentHostServices.delete(services);
+  workspaceMaintenanceServices.delete(services);
 }
 
 export async function disposeServiceResourcesAndWait(services: ServiceCollection): Promise<void> {
@@ -2871,4 +2895,5 @@ export async function disposeServiceResourcesAndWait(services: ServiceCollection
     .catch(() => {});
   await managedAgentHostServices.get(services)?.dispose().catch(() => {});
   managedAgentHostServices.delete(services);
+  workspaceMaintenanceServices.delete(services);
 }
