@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, realpath } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createFixture, runLoad, validateOptions, validateProductFacts, isolatedEnvironment } from './runner.mjs';
@@ -95,7 +95,18 @@ test('rejects detached UI and missing owner counters; still writes failure artif
 
 test('missing production driver fails closed before launch', () => assert.rejects(runLoad({mode:'smoke'}), /driver/));
 
-test('artifact base inside project Git checkout is refused before fixture creation', () => assert.rejects(runLoad({driver:driver(),mode:'smoke',artifactBase:process.cwd()}), /outside/));
+test('artifact base inside project Git checkout is refused before any new directory', async () => {
+  const path = join(process.cwd(),'.load-must-not-create-fixture-dir');
+  await assert.rejects(runLoad({driver:driver(),mode:'smoke',artifactBase:path}), /outside/);
+  await assert.rejects(access(path));
+});
+
+test('artifact base inside another real Git checkout is refused without creating a directory', async () => {
+  const fixture = await createFixture(await temp(),1);
+  const path = join(fixture.repo,'unsafe-artifacts');
+  await assert.rejects(runLoad({driver:driver(),mode:'smoke',artifactBase:path}), /outside/);
+  await assert.rejects(access(path));
+});
 
 test('backlog and orphan child fail gate, as does mismatched delivery', async () => {
   for (const options of [{backlog:1},{lingering:true},{delivery:'web-remote-replayable'}]) {
