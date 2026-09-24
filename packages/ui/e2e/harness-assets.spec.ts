@@ -30,7 +30,7 @@ test("missing/broken/malicious descriptors fall back with no external request", 
     if (!request.url().startsWith("http://127.0.0.1:4179/")) external.push(request.url());
   });
   const icon = page.getByTestId("harness-icon").first();
-  for (const mode of ["missing", "url", "svg", "oversized", "broken", "throw"]) {
+  for (const mode of ["missing", "url", "svg", "oversized", "broken", "trailing", "throw"]) {
     await page.getByRole("button", { name: mode, exact: true }).click();
     await expect(icon).toContainText("P");
     await expect(icon.locator("img")).toHaveCount(0);

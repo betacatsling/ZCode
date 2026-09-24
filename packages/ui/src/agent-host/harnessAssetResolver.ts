@@ -35,17 +35,51 @@ export function safeHarnessPngDataUrl(
   )
     return undefined;
   try {
-    const header = atob(descriptor.base64.slice(0, 36));
-    if (!header.startsWith("\x89PNG\r\n\x1a\n") || header.slice(12, 16) !== "IHDR")
+    const bytes = atob(descriptor.base64);
+    if (bytes.length < 57 || bytes.length > 256 * 1024 || !bytes.startsWith("\x89PNG\r\n\x1a\n"))
       return undefined;
-    const dimension = (index: number) =>
-      header.charCodeAt(index) * 0x1000000 +
-      (header.charCodeAt(index + 1) << 16) +
-      (header.charCodeAt(index + 2) << 8) +
-      header.charCodeAt(index + 3);
-    const width = dimension(16);
-    const height = dimension(20);
-    if (width < 1 || height < 1 || width > 1024 || height > 1024) return undefined;
+    const uint32 = (index: number) =>
+      bytes.charCodeAt(index) * 0x1000000 +
+      (bytes.charCodeAt(index + 1) << 16) +
+      (bytes.charCodeAt(index + 2) << 8) +
+      bytes.charCodeAt(index + 3);
+    let offset = 8;
+    let first = true;
+    let imageData = false;
+    let ended = false;
+    while (offset < bytes.length) {
+      if (offset + 12 > bytes.length) return undefined;
+      const length = uint32(offset);
+      if (length > bytes.length - offset - 12) return undefined;
+      const type = bytes.slice(offset + 4, offset + 8);
+      if (first) {
+        if (type !== "IHDR" || length !== 13) return undefined;
+        const width = uint32(offset + 8);
+        const height = uint32(offset + 12);
+        if (
+          width < 1 ||
+          height < 1 ||
+          width > 1024 ||
+          height > 1024 ||
+          bytes.charCodeAt(offset + 16) !== 8 ||
+          ![2, 6].includes(bytes.charCodeAt(offset + 17)) ||
+          bytes.charCodeAt(offset + 18) !== 0 ||
+          bytes.charCodeAt(offset + 19) !== 0 ||
+          bytes.charCodeAt(offset + 20) !== 0
+        )
+          return undefined;
+        first = false;
+      } else if (type === "IHDR") return undefined;
+      if (type === "IDAT") imageData = true;
+      offset += length + 12;
+      if (type === "IEND") {
+        if (length !== 0 || !imageData) return undefined;
+        ended = true;
+        break;
+      }
+    }
+    // 不能只验 IHDR；被截断的描述符或在 IEND 后拼接的负载必须在设置 img.src 前拒绝。
+    if (!ended || offset !== bytes.length) return undefined;
   } catch {
     return undefined;
   }

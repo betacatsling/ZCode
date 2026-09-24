@@ -42,6 +42,12 @@ function Fixture() {
       } as HarnessAssetDescriptor;
     if (mode === "oversized")
       return { kind: "trusted-png", mimeType: "image/png", base64: "A".repeat(350000) };
+    if (mode === "trailing")
+      return {
+        kind: "trusted-png",
+        mimeType: "image/png",
+        base64: btoa(atob(lightPng) + "<svg/>"),
+      };
     return {
       kind: "trusted-png",
       mimeType: "image/png",
@@ -53,13 +59,13 @@ function Fixture() {
       <button onClick={() => setTheme(theme === "light" ? "dark" : "light")}>Theme</button>
       <button onClick={() => setModel(model === "model1" ? "model2" : "model1")}>Model</button>
       <output data-testid="model">{model}</output>
-      {(["valid", "missing", "url", "svg", "oversized", "broken", "throw"] as const).map(
-        (value) => (
-          <button key={value} onClick={() => setMode(value)}>
-            {value}
-          </button>
-        ),
-      )}
+      {(
+        ["valid", "missing", "url", "svg", "oversized", "broken", "trailing", "throw"] as const
+      ).map((value) => (
+        <button key={value} onClick={() => setMode(value)}>
+          {value}
+        </button>
+      ))}
       <HarnessIcon harnessId="pi" catalog={catalog} theme={theme} resolveIconAsset={resolve} />
       <HarnessIcon harnessId="unknown" catalog={catalog} theme={theme} resolveIconAsset={resolve} />
     </main>

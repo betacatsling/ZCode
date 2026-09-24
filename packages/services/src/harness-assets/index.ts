@@ -20,8 +20,8 @@ export const nativeHarnessAssetMetadata: Readonly<
 };
 
 /** Paths relative to this module, required by a packaged runtime (no renderer URLs). */
-export const harnessAssetPackagePaths: readonly string[] = Object.values(trustedManifest).map(
-  ({ packagedPath }) => packagedPath,
+export const harnessAssetPackagePaths: readonly string[] = Object.freeze(
+  Object.values(trustedManifest).map(({ packagedPath }) => packagedPath),
 );
 
 export interface TrustedPngDescriptor {
@@ -31,6 +31,17 @@ export interface TrustedPngDescriptor {
 }
 
 const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+
+function pngChunkCrc(png: Buffer, start: number, end: number): number {
+  let crc = 0xffffffff;
+  for (let i = start; i < end; i++) {
+    crc ^= png[i]!;
+    for (let bit = 0; bit < 8; bit++) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
 
 /** Reject malformed PNG containers before anything reaches an image decoder. */
 export function validateTrustedPng(bytes: Uint8Array): {
@@ -56,6 +67,11 @@ export function validateTrustedPng(bytes: Uint8Array): {
     if (png.length - offset < 12) throw new Error("truncated PNG chunk");
     const length = png.readUInt32BE(offset);
     if (length > png.length - offset - 12) throw new Error("invalid PNG chunk length");
+    const crcOffset = offset + 8 + length;
+    // 元数据与像素块都验 CRC；否则头部看似可信的损坏/伪造 PNG 会被发送到浏览器解码器。
+    if (pngChunkCrc(png, offset + 4, crcOffset) !== png.readUInt32BE(crcOffset)) {
+      throw new Error("invalid PNG chunk checksum");
+    }
     const type = png.toString("ascii", offset + 4, offset + 8);
     if (!/^[a-zA-Z]{4}$/.test(type)) throw new Error("invalid PNG chunk type");
     if (first) {
