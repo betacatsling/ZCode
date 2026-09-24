@@ -60,7 +60,7 @@ export type ZCodeAgentCommandResolver = (
 
 export interface ZCodeAgentProcessManagerOptions {
   /** Node Core-only: CLI constructor installs its CommandInbox hold before serving requests. */
-  bootAdmissionHeld?: boolean;
+  bootAdmissionHeld?: () => boolean;
   commandResolver?: ZCodeAgentCommandResolver;
   presentationSurface?: ZCodeAgentPresentationSurface;
   requestTimeoutMs?: number;
@@ -590,7 +590,7 @@ export class ZCodeAgentProcessManager {
   readonly onRuntimeLifecycle = this.runtimeLifecycleEmitter.event;
 
   constructor(options?: ZCodeAgentProcessManagerOptions) {
-    this.bootAdmissionHeld = options?.bootAdmissionHeld === true;
+    this.bootAdmissionHeld = options?.bootAdmissionHeld;
     this.commandResolver = options?.commandResolver ?? resolveDefaultZCodeAgentCommand;
     this.presentationSurface = options?.presentationSurface;
     this.requestTimeoutMs = options?.requestTimeoutMs;
@@ -603,7 +603,7 @@ export class ZCodeAgentProcessManager {
       options?.idleTimeoutMs && options.idleTimeoutMs > 0 ? options.idleTimeoutMs : undefined;
   }
 
-  private readonly bootAdmissionHeld: boolean;
+  private readonly bootAdmissionHeld?: () => boolean;
 
   private reportProcessLifecycle(
     callback: (reporter: RuntimeProcessLifecycleReporter) => void,
@@ -1050,7 +1050,7 @@ export class ZCodeAgentProcessManager {
         ...buildAgentWorkspaceIdentityEnv(params.workspaceIdentity),
         ...buildE2EAgentCoverageEnv(),
         // 中文：最后写入受信 Core 的启动模式；自定义 command.env 不得覆盖门禁。
-        ...(this.bootAdmissionHeld ? { ZCODE_CORE_BOOT_ADMISSION: "held" } : {}),
+        ZCODE_CORE_BOOT_ADMISSION: this.bootAdmissionHeld?.() ? "held" : "open",
       },
       stdio: ["pipe", "pipe", "pipe"],
     });

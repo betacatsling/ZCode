@@ -866,8 +866,10 @@ function createRuntimeUnavailableError(params: ZCodeAgentWorkspaceTarget): Error
 
 interface CreateZCodeAgentServiceOptions extends Omit<
   ZCodeAgentProcessManagerOptions,
-  "idleTimeoutMs"
+  "idleTimeoutMs" | "bootAdmissionHeld"
 > {
+  /** Core instance-owned boot mode; only its first storage worker receives constructor hold. */
+  bootAdmissionHeld?: boolean;
   /** 仅供 MCP 状态探测进程使用，不能把空闲回收传给 chat。 */
   mcpStatusIdleTimeoutMs?: number;
   accountProviderConfigSource?: ProviderSource<AccountProviderConfigSnapshot>;
@@ -1154,7 +1156,13 @@ export function createZCodeAgentService(
     await options?.waitForSpawnAdmission?.(context);
     if (!allowed()) throw new Error("native process admission frozen");
   };
-  const processManager = new ZCodeAgentProcessManager({ ...options, waitForSpawnAdmission });
+  const processManager = new ZCodeAgentProcessManager({
+    ...options,
+    waitForSpawnAdmission,
+    // 中文：旧实现把 held env 固定给所有后续 worker；开门后新 workspace 仍永久 frozen。
+    // 标记仅授予启动 storage worker，后续 worker 由常规进程/Workspace 门禁管理。
+    bootAdmissionHeld: () => bootPreparing && spawnFrozen,
+  });
   const otherLaneSpawnAdmission: typeof waitForSpawnAdmission = async (context) => {
     if (spawnFrozen) throw new Error("native process admission frozen");
     await options?.waitForSpawnAdmission?.(context);
