@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { access, chmod, cp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { builtinModules } from "node:module";
+import { build } from "esbuild";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { createRuntimeManifest, type ServerTarget } from "../runtime/manifest.js";
 import { isTarCommand, resolveHostTarCommand } from "./tarCommand.js";
@@ -10,19 +11,35 @@ import { isTarCommand, resolveHostTarCommand } from "./tarCommand.js";
 const NODE_BUILTIN_MODULES = new Set(builtinModules);
 
 /**
- * 从 bundle 产物中提取顶层裸模块引用（`from "x"` / `import("x")` / `require("x")`）。
- * 结果只做语法归一化（scoped 包取前两段），是否为真实 npm 包由调用方与
- * workspace node_modules 求交集决定；node 内置模块在这里直接过滤。
+ * 从 bundle 产物中解析顶层裸模块引用（`from "x"` / `import("x")` / `require("x")`）。
+ * 仅对语法引用做归一化（scoped 包取前两段），是否为真实 npm 包由调用方与
+ * workspace node_modules 求交集决定；Node 内置模块在这里直接过滤。
  */
-function collectBareModuleSpecifiers(source: string): Set<string> {
+/** @internal Syntax-only dependency parser used by staging and its fail-closed regression. */
+export async function collectBareModuleSpecifiers(
+  source: string,
+  commonJsBundle = false,
+): Promise<Set<string>> {
+  // 中文：正则扫描会把内嵌 SDK 文档里的 import 示例和 `import(` 文本误当成运行时依赖；
+  // esbuild 只在内存解析入口，把 npm 包标成 external；metafile.outputs.imports
+  // 才包含语法引用（bundle:false 的 inputs.imports 始终为空），不写入/改写发行产物。
+  const sourcefile = commonJsBundle ? "agent.cjs" : "server-core.js";
+  const result = await build({
+    stdin: { contents: source, sourcefile, resolveDir: process.cwd() },
+    bundle: true,
+    packages: "external",
+    write: false,
+    metafile: true,
+    platform: "node",
+    format: commonJsBundle ? "cjs" : "esm",
+    logLevel: "silent",
+  });
+  const output = Object.values(result.metafile.outputs)[0];
+  if (!output) throw new Error(`Unable to parse release bundle imports: ${sourcefile}`);
   const names = new Set<string>();
-  const specifierPattern =
-    /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*|\bimport\s+)["']([^"'\n]+)["']/g;
-  let match: RegExpExecArray | null;
-  while ((match = specifierPattern.exec(source)) !== null) {
-    const specifier = match[1];
+  for (const { path: specifier } of output.imports) {
     if (!specifier || specifier.startsWith(".") || specifier.startsWith("/")) continue;
-    if (specifier.startsWith("node:")) continue;
+    if (/^[a-z][a-z\d+.-]*:/iu.test(specifier)) continue;
     const segments = specifier.split("/");
     const packageName = specifier.startsWith("@") ? segments.slice(0, 2).join("/") : segments[0];
     if (!packageName || NODE_BUILTIN_MODULES.has(packageName)) continue;
@@ -403,11 +420,11 @@ export async function stageRelease(options: StageOptions): Promise<StagedRelease
   }
 
   // 入口 bundle 与 sourcemap 同名复制，文件名必须与 cli.ts 的相对路径解析保持一致。
-  const bundleSources: string[] = [];
+  const bundleSources: Array<{ source: string; commonJs: boolean }> = [];
   for (const entryName of ["server-cli.js", "server-core.js", "piWorker.js"]) {
     const sourcePath = join(options.distDir, entryName);
     const contents = await readFile(sourcePath, "utf8");
-    bundleSources.push(contents);
+    bundleSources.push({ source: contents, commonJs: false });
     await writeFile(join(runtimeDir, entryName), contents, "utf8");
   }
   await writeFile(
@@ -417,7 +434,7 @@ export async function stageRelease(options: StageOptions): Promise<StagedRelease
   );
   await cp(options.agentBundlePath, join(runtimeDir, "zcode.cjs"), { dereference: true });
   // Agent bundle 是第三个实际运行入口；只扫描 Server bundle 会漏掉外置的 TUI/Playwright。
-  bundleSources.push(await readFile(options.agentBundlePath, "utf8"));
+  bundleSources.push({ source: await readFile(options.agentBundlePath, "utf8"), commonJs: true });
 
   const nodeTargetPath = join(
     runtimeDir,
@@ -429,8 +446,9 @@ export async function stageRelease(options: StageOptions): Promise<StagedRelease
   // runtime/node_modules 以产物扫描为事实源：bundle 引用什么就装什么（含传递依赖），
   // 不使用 tsup external 声明列表，避免声明与实际引用漂移。
   const referencedPackages = new Set<string>();
-  for (const source of bundleSources) {
-    for (const name of collectBareModuleSpecifiers(source)) referencedPackages.add(name);
+  for (const { source, commonJs } of bundleSources) {
+    for (const name of await collectBareModuleSpecifiers(source, commonJs))
+      referencedPackages.add(name);
   }
   const rawClosure = await resolveProductionPackageClosure(
     [...referencedPackages],

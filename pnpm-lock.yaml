@@ -1353,6 +1353,9 @@ importers:
       '@types/yauzl':
         specifier: ^2.10.3
         version: 2.10.3
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
       tsup:
         specifier: ^8.4.0
         version: 8.5.1(jiti@2.7.0)(postcss@8.5.9)(tsx@4.21.0)(typescript@6.0.2)(yaml@2.9.0)
