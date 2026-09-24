@@ -512,6 +512,14 @@ test("actual Core → utility Host → preload → Shell Pi create/input/final/u
     expect(census.map((item) => item.id).sort()).toEqual([sessionId!, secondId!].sort());
     expect(census.map((item) => item.harnessId)).toEqual(["pi", "pi"]);
     expect(nativePaneRpcs).toEqual([]);
+
+    // D RED: this must create a synthetic session via the mounted Core's real hierarchy,
+    // never by changing a renderer row or writing the journal from the fixture.
+    const createHistory = await app.evaluate(() =>
+      typeof (globalThis as typeof globalThis & { __actualShellCreateHistory?: unknown })
+        .__actualShellCreateHistory,
+    );
+    expect(createHistory).toBe("function");
   } finally {
     releaseSecond();
     try {
