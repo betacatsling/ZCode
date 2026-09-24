@@ -16,6 +16,9 @@ test('freeze wins over an awaiting fresh admission; duplicate, query and stop re
   });
   const send = (commandId: string, type = 'sendText', payload: object = { text: 'sample' }) =>
     ({ commandId, clientId: 'client', sessionId: 'session', type, payload, issuedAt: Date.now() });
+  const accepted = await inbox.handle(send('accepted-before-freeze'));
+  assert.equal(accepted.kind, 'execute');
+  if (accepted.kind === 'execute') accepted.settle({ status: 'accepted' });
   const late = inbox.handle(send('late'));
   await seen;
   const lease = inbox.freeze();
@@ -25,6 +28,9 @@ test('freeze wins over an awaiting fresh admission; duplicate, query and stop re
   const rejected = await late;
   assert.equal(rejected.kind, 'ack');
   if (rejected.kind === 'ack') assert.equal(rejected.ack.reasonCode, 'guard.nativeMaintenanceFrozen');
+  const retry = await inbox.handle(send('accepted-before-freeze'));
+  assert.equal(retry.kind, 'ack');
+  if (retry.kind === 'ack') assert.equal(retry.ack.status, 'duplicate');
   const stop = await inbox.handle(send('stop-1', 'stop', {}));
   assert.equal(stop.kind, 'execute');
   if (stop.kind === 'execute') stop.settle({ status: 'accepted' });

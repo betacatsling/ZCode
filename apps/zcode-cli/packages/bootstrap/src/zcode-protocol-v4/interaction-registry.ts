@@ -241,6 +241,9 @@ export class V4InteractionRegistry {
     return snoozedInteractionCount;
   }
 
+  /** Fresh in-process approval/question count; not derived from an attached GUI projection. */
+  get pendingCount(): number { return this.pending.size; }
+
   has(interactionId: string): boolean {
     return this.pending.has(interactionId);
   }

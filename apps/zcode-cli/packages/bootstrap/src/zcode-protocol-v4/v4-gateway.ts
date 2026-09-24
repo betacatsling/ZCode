@@ -700,14 +700,23 @@ export class ConversationV4Gateway {
   getNativeActivity(): import("@zcode/shared").NativeMaintenanceActivity {
     const state = this.inbox.maintenanceState;
     let active = 0, pending = state.pending, tools = 0, approvals = 0, accepted = state.accepted;
-    let unknown = this.readyFlights.size > 0 || this.hydrationInFlight.size > 0;
+    let unknown = this.readyFlights.size > 0 || this.hydrationInFlight.size > 0 ||
+      this.hydrationBuffers.size > 0 || this.projectionFaultedSessions.size > 0;
+    for (const state of this.rawSequenceStates.values()) {
+      if (state.pendingByRawSeq.size > 0) unknown = true;
+    }
+    for (const id of this.detachedLiveSessions) {
+      if (!this.hydratedSessions.has(id)) unknown = true;
+    }
     for (const [id, publisher] of this.publishers) {
       const snapshot = publisher.getSnapshot();
       if (!this.hydratedSessions.has(id)) unknown = true;
       if (snapshot.control.phase === "running" || snapshot.control.phase === "prewarming" ||
           snapshot.control.activeWorks.length > 0 || snapshot.control.canStop) active++;
-      if (snapshot.control.stopTargetKind === "unknown") unknown = true;
+      if (snapshot.control.stopTargetKind === "unknown" &&
+          (snapshot.control.phase === "running" || snapshot.control.activeWorks.length > 0)) unknown = true;
       pending += snapshot.queue.items.length + snapshot.pendingCommands.length;
+      if (snapshot.inputRouting.mode === "choice") unknown = true;
       approvals += snapshot.pendingInteractions.length;
       tools += snapshot.backgroundWorks.filter(work => work.status === "running" || work.status === "resultPending").length;
       if (snapshot.workflowRuns?.runs.some(run => run.status === "running")) active++;

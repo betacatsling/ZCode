@@ -48,6 +48,8 @@ export interface ConfigFactoryOptions {
   cliOverrides?: RuntimeConfigPatch;
   /** Skip loading user config file */
   skipUserConfig?: boolean;
+  /** Read-only metadata path lookup must not emit config diagnostics to disk. */
+  suppressDiagnostics?: boolean;
   /** Optional logger factory for tests or embedding runtimes. Defaults to the node JSONL logger. */
   loggerFactory?: LoggerFactory;
 }
@@ -169,7 +171,7 @@ export function createConfig(options: ConfigFactoryOptions = {}): ConfigResult {
   const projectDiagnostics = discoveredProjectConfigs.diagnostics;
   // 配置 diagnostics 过去只返回给调用方，用户导出日志时看不到加载失败或被跳过的 MCP server。
   // 在汇总入口统一写 warn，保留具体文件路径和 JSON path，方便定位迁移配置问题。
-  logConfigDiagnostics({
+  if (!options.suppressDiagnostics) logConfigDiagnostics({
     env: options.env,
     loggerFactory: options.loggerFactory,
     projectDiagnostics,
