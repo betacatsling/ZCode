@@ -50,22 +50,17 @@ export function hasMountedHierarchy(
     "projectCatalogService" in services &&
     typeof services.projectCatalogService === "object" &&
     services.projectCatalogService !== null &&
-    "sidebarSnapshot" in services.projectCatalogService &&
+    // 原因：真实 RemoteServiceAccess 使用 RPC Proxy#get，`method in proxy` 恒为 false；
+    // 这里只检验可调用接口，实际鉴权及能力由目标 RPC 拒绝/返回结果裁决。
     typeof services.projectCatalogService.sidebarSnapshot === "function" &&
-    "importProject" in services.projectCatalogService &&
     typeof services.projectCatalogService.importProject === "function" &&
     "workspaceHierarchyService" in services &&
     typeof services.workspaceHierarchyService === "object" &&
     services.workspaceHierarchyService !== null &&
-    "resolveOwner" in services.workspaceHierarchyService &&
     typeof services.workspaceHierarchyService.resolveOwner === "function" &&
-    "listHarnesses" in services.workspaceHierarchyService &&
     typeof services.workspaceHierarchyService.listHarnesses === "function" &&
-    "listCreateOptions" in services.workspaceHierarchyService &&
     typeof services.workspaceHierarchyService.listCreateOptions === "function" &&
-    "createAgent" in services.workspaceHierarchyService &&
     typeof services.workspaceHierarchyService.createAgent === "function" &&
-    "asset" in services.workspaceHierarchyService &&
     typeof services.workspaceHierarchyService.asset === "function"
   );
 }
