@@ -210,6 +210,14 @@ if (childMode) {
               `child closed before V4 frame; stderr bytes=${Buffer.concat(stderr).length}`,
             );
           const frame = JSON.parse(value.value);
+          if (frame.method === "interaction/requestPermission" && frame.id !== undefined) {
+            // Fake upstream fixture authorizes only the read-only tool; no broad auto-approval.
+            assert.equal(frame.params?.toolName, "Read");
+            child.stdin.write(
+              JSON.stringify({ id: frame.id, result: { decision: "allow" } }) + "\n",
+            );
+            continue;
+          }
           if (frame.method === "session/requestRuntimePreferences" && frame.id !== undefined) {
             child.stdin.write(
               JSON.stringify({
@@ -256,6 +264,32 @@ if (childMode) {
           `reason=${created.result?.reasonCode ?? "none"}; stderrBytes=${Buffer.concat(stderr).length}`,
         );
         const sessionId = created.result.result.sessionId as string;
+        child.stdin.write(
+          JSON.stringify({
+            id: ++seq,
+            method: V4_METHODS.conversationSubscribe,
+            params: {
+              topic: `conversation/${sessionId}`,
+              connectionId: "fixture",
+              clientMode: "desktop-continuous",
+            },
+          }) + "\n",
+        );
+        const subscribed = await next((frame) => frame.id === seq);
+        assert.ok(subscribed.result?.ack?.subscriptionId);
+        const observedPhases: string[] = [];
+        const completedFrame = (frame: any) => {
+          if (frame.method !== "v4/conversation/frame") return false;
+          const payload = frame.params?.frame?.payload;
+          const phases =
+            payload?.kind === "snapshot"
+              ? [payload.snapshot.control?.phase]
+              : payload?.deltas
+                  ?.filter((delta: any) => delta.op === "state.updated")
+                  .map((delta: any) => delta.patch?.control?.phase);
+          for (const phase of phases ?? []) if (phase) observedPhases.push(phase);
+          return phases?.includes("completedSuccess") ?? false;
+        };
         for (let turn = 1; turn <= 2; turn++) {
           const ack = await command("sendText", sessionId, { text: `fixture instruction ${turn}` });
           assert.equal(ack.result?.status, "accepted");
@@ -267,11 +301,27 @@ if (childMode) {
             turn === 1 ? requests > 0 : sawSecondPrompt,
             `turn=${turn} requests=${requests}`,
           );
-          // Allow terminal source events to commit before the next native admission.
-          if (turn === 1) {
-            await new Promise((resolve) => setTimeout(resolve, 450));
-            await writeFile(fixturePath, "seed=amber\n");
+          // A real V4 terminal projection, not a delay, fences the next turn's admission.
+          let terminalTimeout: ReturnType<typeof setTimeout> | undefined;
+          try {
+            await Promise.race([
+              next(completedFrame),
+              new Promise<never>((_, reject) => {
+                terminalTimeout = setTimeout(
+                  () =>
+                    reject(
+                      new Error(
+                        `terminal V4 projection missing: turn=${turn}; phases=${observedPhases.join(",")}; requests=${requests}`,
+                      ),
+                    ),
+                  9000,
+                );
+              }),
+            ]);
+          } finally {
+            if (terminalTimeout) clearTimeout(terminalTimeout);
           }
+          if (turn === 1) await writeFile(fixturePath, "seed=amber\n");
         }
         const currentReadDeadline = Date.now() + 12000;
         while (!sawCurrentRead && Date.now() < currentReadDeadline)
@@ -281,17 +331,22 @@ if (childMode) {
           true,
           `current turn did not read changed file; requests=${requests}`,
         );
+        console.log(
+          `native-fake-proof: modelRequests=${requests} readTools=2 terminalTurns=2 currentRead=true paidUsage=none`,
+        );
       } finally {
         child.stdin.end();
-        await new Promise<void>((resolve) => {
-          child.once("exit", resolve);
-          setTimeout(() => {
-            child.kill();
-            resolve();
-          }, 3000).unref();
+        const exitCode = await new Promise<number | null>((resolve) => {
+          let exitTimeout: ReturnType<typeof setTimeout>;
+          child.once("exit", (code) => {
+            clearTimeout(exitTimeout);
+            resolve(code);
+          });
+          exitTimeout = setTimeout(() => child.kill(), 3000);
         });
         await new Promise<void>((resolve) => upstream.close(() => resolve()));
         await rm(root, { recursive: true, force: true });
+        assert.equal(exitCode, 0, "native V4 owner must dispose and exit after stdio detach");
       }
     },
   );
