@@ -22,6 +22,7 @@ export function ConfirmationDialog({
   cancelLabel,
   onConfirm,
   onClose,
+  disabled = false,
 }: {
   title: string;
   description: string;
@@ -29,10 +30,12 @@ export function ConfirmationDialog({
   cancelLabel: string;
   onConfirm: () => Promise<void>;
   onClose: () => void;
+  disabled?: boolean;
 }) {
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
   async function submit() {
+    if (disabled || pending) return;
     setPending(true);
     try {
       await onConfirm();
@@ -64,7 +67,12 @@ export function ConfirmationDialog({
           <Button type="button" variant="outline" onClick={onClose} disabled={pending}>
             {cancelLabel}
           </Button>
-          <Button type="button" variant="destructive" onClick={submit} disabled={pending}>
+          <Button
+            type="button"
+            variant="destructive"
+            onClick={submit}
+            disabled={pending || disabled}
+          >
             {confirmLabel}
           </Button>
         </DialogFooter>

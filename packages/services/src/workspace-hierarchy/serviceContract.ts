@@ -1,4 +1,9 @@
-import type { HarnessCatalogEntry, HarnessCapabilitiesV2, ModelBindingRequest, SessionSpecV2 } from "@zcode/shared/agent-host";
+import type {
+  HarnessCatalogEntry,
+  HarnessCapabilitiesV2,
+  ModelBindingRequest,
+  SessionSpecV2,
+} from "@zcode/shared/agent-host";
 import type { ConversationSnapshot } from "@zcode/shared/zcode-protocol-v4";
 import type { RemovalPreview } from "../project-workspaces/worktreeService.js";
 import type { TrustedPngDescriptor } from "../harness-assets/index.js";
@@ -13,8 +18,18 @@ export interface WorkspaceNavigationScope {
   remoteSessionId?: string;
 }
 export type SessionOwner =
-  | { kind: "native"; scope: WorkspaceNavigationScope; originalSessionId: string; historyOnly: boolean }
-  | { kind: "external"; scope: WorkspaceNavigationScope; spec: SessionSpecV2; historyOnly: boolean };
+  | {
+      kind: "native";
+      scope: WorkspaceNavigationScope;
+      originalSessionId: string;
+      historyOnly: boolean;
+    }
+  | {
+      kind: "external";
+      scope: WorkspaceNavigationScope;
+      spec: SessionSpecV2;
+      historyOnly: boolean;
+    };
 
 export interface IWorkspaceHierarchyService {
   resolveWorkspace(input: {
@@ -23,9 +38,16 @@ export interface IWorkspaceHierarchyService {
     remoteSessionId?: string;
     targetId: string;
   }): Promise<WorkspaceNavigationScope | undefined>;
-  resolveOwner(input: { targetId: string; workspaceId: string; sessionId: string }): Promise<SessionOwner | undefined>;
+  resolveOwner(input: {
+    targetId: string;
+    workspaceId: string;
+    sessionId: string;
+  }): Promise<SessionOwner | undefined>;
   /** Target-verified live facts; no client-provided execution or Git fields. */
-  previewRemoval(input: { workspaceId: string; expectedGeneration: string }): Promise<RemovalPreview>;
+  previewRemoval(input: {
+    workspaceId: string;
+    expectedGeneration: string;
+  }): Promise<RemovalPreview>;
   /** Explicit, read-only operator inspection; missing receipts remain unresolved. */
   pendingRecovery(input: { workspaceId: string }): Promise<{
     workspaceId: string;
@@ -46,4 +68,5 @@ export interface IWorkspaceHierarchyService {
   asset(assetId: string): Promise<TrustedPngDescriptor | undefined>;
 }
 
-export const IWorkspaceHierarchyService = createServiceDescriptor<IWorkspaceHierarchyService>("workspace-hierarchy");
+export const IWorkspaceHierarchyService =
+  createServiceDescriptor<IWorkspaceHierarchyService>("workspace-hierarchy");

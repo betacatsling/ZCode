@@ -153,6 +153,7 @@ function makeSnapshot(tick: number): SidebarSnapshot {
 function Fixture() {
   const [tick, setTick] = React.useState(0);
   const [events, setEvents] = React.useState<string[]>([]);
+  const [removalMode, setRemovalMode] = React.useState("safe");
   const record = (value: string) => setEvents((previous) => [...previous, value]);
   return (
     <main className="bg-background text-foreground min-h-screen p-2 text-ui-base">
@@ -183,9 +184,62 @@ function Fixture() {
           onCreateWorkspace: async (value) => record(`create:${value.repositoryBindingId}`),
           onHideWorkspace: async (id) => record(`hide:${id}`),
           onArchiveWorkspace: async (id) => record(`archive:${id}`),
-          onRemoveWorkspace: async (id) => record(`remove:${id}`),
+          onPreviewRemoval: async (id, generation) => ({
+            workspaceId: id,
+            generation,
+            git: {
+              worktree: {
+                path: `/repos/${id}`,
+                kind:
+                  id === "main" || removalMode === "main" ? ("main" as const) : ("linked" as const),
+                head: null,
+                branch: null,
+                detached: false,
+                locked: null,
+                prunable: null,
+              },
+              isMain: id === "main" || removalMode === "main",
+              dirty: removalMode === "dirty",
+              untracked: removalMode === "untracked",
+              submodules: removalMode === "submodules",
+              locked: removalMode === "locked",
+              prunable: false,
+              gitLocks: removalMode === "gitLocks",
+            },
+            activity: {
+              running: removalMode === "running" ? 1 : 0,
+              waiting: 0,
+              tools: 0,
+              uncertain: 0,
+              offline: removalMode === "offline",
+            },
+            unknown: removalMode === "unknown",
+            safe: id !== "main" && ["safe", "reject"].includes(removalMode),
+          }),
+          onRemoveWorkspace: async (id) => {
+            if (removalMode === "reject") throw new Error("frozen recheck rejected");
+            record(`remove:${id}`);
+          },
         }}
       />
+      <select
+        data-testid="removal-mode"
+        aria-label="Removal preview fixture"
+        value={removalMode}
+        onChange={(event) => setRemovalMode(event.target.value)}
+      >
+        <option value="safe">safe</option>
+        <option value="dirty">dirty</option>
+        <option value="unknown">unknown</option>
+        <option value="reject">reject</option>
+        <option value="main">main</option>
+        <option value="untracked">untracked</option>
+        <option value="submodules">submodules</option>
+        <option value="locked">locked</option>
+        <option value="gitLocks">gitLocks</option>
+        <option value="running">running</option>
+        <option value="offline">offline</option>
+      </select>
       <button type="button" data-testid="background-update" onClick={() => setTick((n) => n + 1)}>
         Background update
       </button>

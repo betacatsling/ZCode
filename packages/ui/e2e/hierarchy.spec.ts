@@ -94,7 +94,50 @@ test("separate create, adopt, hide, archive, remove and shared workspace agent a
   await page.getByRole("button", { name: "Confirm archive" }).click();
   await expect(page.getByTestId("events")).toContainText("archive:linked");
   await page.getByRole("button", { name: /Remove linked/ }).click();
-  await expect(page.getByRole("dialog")).toContainText("External activity");
+  await expect(page.getByRole("dialog")).toContainText("External processes may race");
+  await expect(page.getByRole("button", { name: "Confirm remove" })).toBeEnabled();
   await page.getByRole("button", { name: "Confirm remove" }).click();
   await expect(page.getByTestId("events")).toContainText("remove:linked");
+});
+
+test("removal preview rejects unsafe and unknown facts, keeps dialog on failed frozen recheck", async ({
+  page,
+}) => {
+  await page.getByTestId("removal-mode").selectOption("dirty");
+  await page.getByRole("button", { name: /Remove linked/ }).click();
+  await expect(page.getByRole("dialog")).toContainText("dirty");
+  await expect(page.getByRole("button", { name: "Confirm remove" })).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await page.getByTestId("removal-mode").selectOption("unknown");
+  await page.getByRole("button", { name: /Remove linked/ }).click();
+  await expect(page.getByRole("dialog")).toContainText("Unknown");
+  await expect(page.getByRole("button", { name: "Confirm remove" })).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await page.getByTestId("removal-mode").selectOption("reject");
+  await page.getByRole("button", { name: /Remove linked/ }).click();
+  await expect(page.getByRole("button", { name: "Confirm remove" })).toBeEnabled();
+  await page.getByRole("button", { name: "Confirm remove" }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await expect(page.getByRole("alert")).toContainText("frozen recheck rejected");
+  await expect(page.getByTestId("events")).not.toContainText("remove:linked");
+  await page.keyboard.press("Escape");
+  await page.getByTestId("removal-mode").selectOption("main");
+  await page.getByRole("button", { name: /Remove linked/ }).click();
+  await expect(page.getByRole("dialog")).toContainText("main worktree");
+  await expect(page.getByRole("button", { name: "Confirm remove" })).toBeDisabled();
+  await page.keyboard.press("Escape");
+  for (const [mode, risk] of [
+    ["untracked", "untracked files"],
+    ["submodules", "submodules"],
+    ["locked", "worktree locked"],
+    ["gitLocks", "Git locks"],
+    ["running", "running: 1"],
+    ["offline", "target offline"],
+  ]) {
+    await page.getByTestId("removal-mode").selectOption(mode);
+    await page.getByRole("button", { name: /Remove linked/ }).click();
+    await expect(page.getByRole("dialog")).toContainText(risk);
+    await expect(page.getByRole("button", { name: "Confirm remove" })).toBeDisabled();
+    await page.keyboard.press("Escape");
+  }
 });

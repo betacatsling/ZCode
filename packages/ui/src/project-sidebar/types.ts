@@ -1,4 +1,5 @@
 import type { SidebarSnapshot } from "@zcode/shared/project-workspaces";
+import type { IWorkspaceHierarchyService } from "@zcode/services";
 import type { HarnessCatalogEntry, ModelBindingRequest } from "@zcode/shared/agent-host";
 import type { SidebarIconAsset } from "../agent-host/harnessAssetResolver.js";
 
@@ -30,6 +31,11 @@ export interface SidebarActions {
   onCreateWorkspace: (input: CreateWorkspaceInput) => Promise<void>;
   onHideWorkspace: (workspaceId: string) => Promise<void>;
   onArchiveWorkspace: (workspaceId: string) => Promise<void>;
+  /** Must forward to the server hierarchy/Target; absent port fails closed. */
+  onPreviewRemoval?: (
+    workspaceId: string,
+    expectedGeneration: string,
+  ) => ReturnType<IWorkspaceHierarchyService["previewRemoval"]>;
   onRemoveWorkspace: (workspaceId: string, expectedGeneration: string) => Promise<void>;
 }
 export interface ProjectSidebarProps {

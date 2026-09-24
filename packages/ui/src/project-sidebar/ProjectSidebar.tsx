@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import type { IWorkspaceHierarchyService } from "@zcode/services";
 import type { WorktreeWorkspace } from "@zcode/shared/project-workspaces";
 import { ProjectNode } from "./ProjectNode.js";
 import {
@@ -12,6 +13,96 @@ import type { ProjectSidebarProps } from "./types.js";
 
 function byOrder<T extends { sortOrder: number; id: string }>(left: T, right: T) {
   return left.sortOrder - right.sortOrder || left.id.localeCompare(right.id);
+}
+
+type RemovalPreview = Awaited<ReturnType<IWorkspaceHierarchyService["previewRemoval"]>>;
+
+function RemovalConfirmation({
+  workspace,
+  props,
+  onClose,
+}: {
+  workspace: WorktreeWorkspace;
+  props: ProjectSidebarProps;
+  onClose: () => void;
+}) {
+  const [preview, setPreview] = useState<RemovalPreview>();
+  const [error, setError] = useState("");
+  const previewRemoval = props.actions.onPreviewRemoval;
+  useEffect(() => {
+    let active = true;
+    if (!previewRemoval) {
+      setError("Target removal preview unavailable");
+    } else {
+      void previewRemoval(workspace.id, workspace.worktreeGeneration).then(
+        (value) => {
+          if (active) setPreview(value);
+        },
+        (cause: unknown) => {
+          if (active) setError(cause instanceof Error ? cause.message : String(cause));
+        },
+      );
+    }
+    return () => {
+      active = false;
+    };
+  }, [previewRemoval, workspace.id, workspace.worktreeGeneration]);
+  const valid =
+    preview?.workspaceId === workspace.id && preview.generation === workspace.worktreeGeneration;
+  const git = valid ? preview.git : null;
+  const activity = valid ? preview.activity : null;
+  const risks = [
+    git?.isMain && "main worktree",
+    git?.dirty && "dirty changes",
+    git?.untracked && "untracked files",
+    git?.submodules && "submodules",
+    git?.locked && "worktree locked",
+    git?.gitLocks && "Git locks",
+    git?.prunable && "prunable worktree",
+    activity?.offline && "target offline",
+    activity && activity.running > 0 && `running: ${activity.running}`,
+    activity && activity.waiting > 0 && `waiting: ${activity.waiting}`,
+    activity && activity.tools > 0 && `tools: ${activity.tools}`,
+    activity && activity.uncertain > 0 && `uncertain: ${activity.uncertain}`,
+    (!valid || preview?.unknown || !git || !activity) && "Unknown target or activity facts",
+  ]
+    .filter(Boolean)
+    .join(", ");
+  // 中文：即便服务返回 safe，也不能把缺失或不合法的活动计数当作空闲确认。
+  const validActivity =
+    !!activity &&
+    !activity.offline &&
+    [activity.running, activity.waiting, activity.tools, activity.uncertain].every(
+      (count) => Number.isSafeInteger(count) && count === 0,
+    );
+  const safe =
+    valid &&
+    !!preview?.safe &&
+    !preview.unknown &&
+    !!git &&
+    !git.isMain &&
+    !git.dirty &&
+    !git.untracked &&
+    !git.submodules &&
+    !git.locked &&
+    !git.gitLocks &&
+    !git.prunable &&
+    validActivity;
+  const warning =
+    props.locale === "zh"
+      ? "外部进程可能在预检后竞态修改文件；确认时宿主重新冻结并检查，拒绝时保持此对话框。"
+      : "External processes may race after this preview. The host freezes and checks again on confirmation; rejection keeps this dialog open.";
+  return (
+    <ConfirmationDialog
+      title={`${props.locale === "zh" ? "移除" : "Remove"} ${workspace.title}?`}
+      description={`${error || (!preview ? "Checking target…" : risks || "No detected risks.")} ${warning}`}
+      confirmLabel={props.locale === "zh" ? "确认移除" : "Confirm remove"}
+      cancelLabel={props.locale === "zh" ? "取消" : "Cancel"}
+      disabled={!safe}
+      onClose={onClose}
+      onConfirm={() => props.actions.onRemoveWorkspace(workspace.id, workspace.worktreeGeneration)}
+    />
+  );
 }
 
 type Modal =
@@ -145,7 +236,14 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
           onClose={() => setModal(undefined)}
         />
       ) : null}
-      {modal?.kind === "confirmation" && modal.action ? (
+      {modal?.kind === "confirmation" && modal.action === "remove" ? (
+        <RemovalConfirmation
+          key={`${modal.workspace.id}:${modal.workspace.worktreeGeneration}`}
+          workspace={modal.workspace}
+          props={props}
+          onClose={() => setModal(undefined)}
+        />
+      ) : modal?.kind === "confirmation" && modal.action ? (
         <ConfirmationDialog
           title={`${props.locale === "zh" ? actionLabels[modal.action] : `${modal.action.charAt(0).toUpperCase()}${modal.action.slice(1)}`} ${modal.workspace.title}?`}
           description={confirmationText[modal.action]}
