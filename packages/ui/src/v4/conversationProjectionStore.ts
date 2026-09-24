@@ -252,14 +252,38 @@ export function shouldAutoLoadIncompleteLeadingTurn(
  * 窗口首行之前的行、去重后前插；顺序键 = rowId 升序（全序保证）。
  * 返回 null 表示无可并入行（窗口无变化，调用方不换引用）。
  */
-function mergeOlderRows(
+export function mergeOlderRows(
   window: readonly ConversationRow[],
   fetched: readonly ConversationRow[],
 ): ConversationRow[] | null {
   const firstRowId = window[0]?.rowId ?? Number.POSITIVE_INFINITY;
-  const older = fetched.filter((row) => row.rowId < firstRowId);
-  if (older.length === 0) return null;
-  return [...older, ...window];
+  // Bug 原因：分页服务在重试/跨页边界可能重复返回同一 rowId；只有
+  // 窗口之前的行可前插，按 rowId 去重，不能覆盖 live 修订后的现有行。
+  const older = new Map<number, ConversationRow>();
+  for (const row of fetched) if (row.rowId < firstRowId) older.set(row.rowId, row);
+  if (older.size === 0) return null;
+  return [...older.values()].sort((a, b) => a.rowId - b.rowId).concat(window);
+}
+
+/** A range read belongs to exactly one projection generation and directory revision. */
+export function canMergeOlderPage(input: {
+  requestedGeneration: number;
+  currentGeneration: number;
+  requestedRevision: number;
+  currentRevision: number;
+  requestedEpoch: string;
+  resultEpoch: string;
+  currentEpoch: string;
+  requestedBeforeRowId: number;
+  currentBeforeRowId: number | undefined;
+}): boolean {
+  return (
+    input.requestedGeneration === input.currentGeneration &&
+    input.requestedRevision === input.currentRevision &&
+    input.requestedEpoch === input.resultEpoch &&
+    input.requestedEpoch === input.currentEpoch &&
+    input.requestedBeforeRowId === input.currentBeforeRowId
+  );
 }
 
 /**
@@ -992,6 +1016,8 @@ export class ConversationProjectionStore {
     if (!sessionId) return;
     const beforeRowId = snapshot.rows.window[0]?.rowId;
     if (beforeRowId === undefined) return;
+    const requestedGeneration = this.generation;
+    const requestedRevision = this.state.turnNavigatorDirectoryRevision;
     this.setState({ loadingOlder: true });
     try {
       const result = await this.transport.rowsRange({
@@ -999,7 +1025,7 @@ export class ConversationProjectionStore {
         beforeRowId,
         limit,
       });
-      if (this.closed) return;
+      if (this.closed || requestedGeneration !== this.generation) return;
       const current = this.state.snapshot;
       if (!current || result.atLogEpoch !== current.logEpoch) {
         logger.warn(
@@ -1009,7 +1035,20 @@ export class ConversationProjectionStore {
       }
       // 在途期间游标失效（row.removed 截断 / snapshot resync 整体替换）→ 结果作废，
       // 防止把权威侧已移除的历史行复活；下次触发按新窗口重新拉。
-      if (current.rows.window[0]?.rowId !== beforeRowId) return;
+      if (
+        !canMergeOlderPage({
+          requestedGeneration,
+          currentGeneration: this.generation,
+          requestedRevision,
+          currentRevision: this.state.turnNavigatorDirectoryRevision,
+          requestedEpoch: snapshot.logEpoch,
+          resultEpoch: result.atLogEpoch,
+          currentEpoch: current.logEpoch,
+          requestedBeforeRowId: beforeRowId,
+          currentBeforeRowId: current.rows.window[0]?.rowId,
+        })
+      )
+        return;
       const window = mergeOlderRows(current.rows.window, result.rows);
       if (window === null) return;
       this.setState({
@@ -1055,6 +1094,7 @@ export class ConversationProjectionStore {
     if (!sessionId || initialBeforeRowId === undefined) return stale(snapshot.logEpoch);
 
     const initialLogEpoch = snapshot.logEpoch;
+    const requestedGeneration = this.generation;
     const preserveIncompleteLeadingTurn = shouldAutoLoadIncompleteLeadingTurn(snapshot, false);
     const pages: ConversationRow[][] = [];
     let beforeRowId = initialBeforeRowId;
@@ -1074,13 +1114,14 @@ export class ConversationProjectionStore {
           beforeRowId,
           limit: PROTOCOL_V4_LIMITS.rowsRangeMaxLimit,
         });
-        if (this.closed) return stale(initialLogEpoch);
+        if (this.closed || requestedGeneration !== this.generation) return stale(initialLogEpoch);
         const current = this.state.snapshot;
         if (
           !current ||
           result.atLogEpoch !== initialLogEpoch ||
           current.logEpoch !== initialLogEpoch ||
-          current.rows.window[0]?.rowId !== initialBeforeRowId
+          current.rows.window[0]?.rowId !== initialBeforeRowId ||
+          this.state.turnNavigatorDirectoryRevision !== directoryRevision
         ) {
           logger.warn("[v4-store] 完整问题目录补拉期间投影游标失效，整批丢弃", {
             currentBeforeRowId: current?.rows.window[0]?.rowId,
@@ -1110,7 +1151,9 @@ export class ConversationProjectionStore {
       if (
         !current ||
         current.logEpoch !== initialLogEpoch ||
-        current.rows.window[0]?.rowId !== initialBeforeRowId
+        current.rows.window[0]?.rowId !== initialBeforeRowId ||
+        this.state.turnNavigatorDirectoryRevision !== directoryRevision ||
+        requestedGeneration !== this.generation
       ) {
         return stale(initialLogEpoch);
       }

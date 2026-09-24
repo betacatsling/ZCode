@@ -147,6 +147,7 @@ const services: MountedHierarchyServices = {
       return {
         kind: "native",
         originalSessionId: "original-native-id",
+        historyOnly: false,
         scope: {
           targetId,
           workspaceId,
@@ -210,9 +211,33 @@ const services: MountedHierarchyServices = {
               ],
       };
     },
-    previewRemoval: async (workspaceId, generation) => {
-      events.push(`preview:${workspaceId}:${generation}`);
-      return { allowed: true, risks: ["External process may change the worktree"] };
+    previewRemoval: async ({ workspaceId, expectedGeneration }) => {
+      events.push(`preview:${workspaceId}:${expectedGeneration}`);
+      return {
+        workspaceId,
+        generation: expectedGeneration,
+        git: {
+          worktree: {
+            path: "/same",
+            kind: "linked",
+            head: null,
+            branch: null,
+            detached: false,
+            locked: null,
+            prunable: null,
+          },
+          isMain: false,
+          dirty: false,
+          untracked: false,
+          submodules: false,
+          locked: false,
+          gitLocks: false,
+          prunable: false,
+        },
+        activity: { running: 0, waiting: 0, tools: 0, uncertain: 0, offline: false },
+        unknown: false,
+        safe: true,
+      };
     },
     createAgent: async (input) => {
       events.push(

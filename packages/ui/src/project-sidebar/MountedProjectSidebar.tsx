@@ -10,12 +10,19 @@ export function MountedProjectSidebar({
   services,
   onNavigate,
   locale,
+  navigationScope,
 }: {
   services: MountedHierarchyServices;
   onNavigate: (owner: MountedSessionOwner) => void;
   locale: "en" | "zh";
+  navigationScope?: string;
 }) {
-  const { error, ...props } = useMountedProjectSidebar({ services, onNavigate, locale });
+  const { error, ...props } = useMountedProjectSidebar({
+    services,
+    onNavigate,
+    locale,
+    navigationScope,
+  });
   return (
     <section
       aria-label={locale === "zh" ? "项目层级" : "Project hierarchy"}

@@ -534,7 +534,8 @@ export function SessionPane(props: SessionPaneProps) {
         </MountedExternalConversationProvider>
       );
   }
-  return <NativeSessionPane {...props} />;
+  // Bug 原因：原生 owner 可被权威标记 history-only；不能因 pane 的可编辑默认值丢掉禁写证明。
+  return <NativeSessionPane {...props} readOnly={props.readOnly || mountedOwner?.historyOnly} />;
 }
 
 function NativeSessionPane({

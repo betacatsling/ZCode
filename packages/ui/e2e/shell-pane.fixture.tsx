@@ -46,7 +46,14 @@ const specs: SessionSpecV2[] = ["one", "two"].map((id) => ({
   },
 }));
 const owners = new Map<string, object>([
-  ["alias-native", { kind: "native", scope, originalSessionId: "original-native" }],
+  [
+    "alias-native",
+    { kind: "native", scope, originalSessionId: "original-native", historyOnly: false },
+  ],
+  [
+    "original-native",
+    { kind: "native", scope, originalSessionId: "original-native", historyOnly: false },
+  ],
   ...specs.map(
     (spec) => [spec.hostSessionId, { kind: "external", scope, spec, historyOnly: false }] as const,
   ),
@@ -130,7 +137,22 @@ let changed = () => {};
 let nativeCalls = 0;
 let nativeSubscriptions = 0;
 let createCalls = 0;
+let deferNextOwnerLookup = false;
+let pendingOwnerLookup: (() => void) | null = null;
+let rejectPendingOwnerLookup = false;
 const hierarchy = {
+  resolveWorkspace: async (input: {
+    targetId: string;
+    workspacePath: string;
+    workspaceIdentity?: string;
+    remoteSessionId?: string;
+  }) =>
+    input.targetId === "fixture" &&
+    input.workspacePath === path &&
+    input.workspaceIdentity === identity &&
+    !input.remoteSessionId
+      ? scope
+      : undefined,
   resolveOwner: async ({
     targetId,
     workspaceId,
@@ -142,8 +164,27 @@ const hierarchy = {
   }) => {
     events.push(`resolve:${sessionId}`);
     changed();
+    if (sessionStorage.getItem("fixture-owner-offline") === "1") throw new Error("owner offline");
+    if (deferNextOwnerLookup) {
+      deferNextOwnerLookup = false;
+      await new Promise<void>((resolve, reject) => {
+        pendingOwnerLookup = () => {
+          if (rejectPendingOwnerLookup) reject(new Error("offline old lookup"));
+          else resolve();
+          pendingOwnerLookup = null;
+          rejectPendingOwnerLookup = false;
+          changed();
+        };
+        changed();
+      });
+    }
     return targetId === "fixture" && workspaceId === "ws" ? owners.get(sessionId) : undefined;
   },
+  listCreateOptions: async (workspaceId: string) => ({
+    workspaceId,
+    worktreeGeneration: "generation",
+    options: [],
+  }),
   listHarnesses: async () => [
     {
       manifest: { schemaVersion: 1, id: "zcode", name: "ZCode", adapterVersion: "1" },
@@ -274,13 +315,14 @@ function Fixture() {
   const [, setTick] = React.useState(0);
   changed = () => setTick((tick) => tick + 1);
   const [activeTaskId, setActiveTaskId] = React.useState<string | null>(null);
+  const [currentIdentity, setCurrentIdentity] = React.useState(identity);
   const noop = () => {};
   const props = {
     services,
     platform,
     workspaceAbsPath: path,
-    workspaceIdentity: identity,
-    workspaceTabs: [{ workspacePath: path, workspaceIdentity: identity, label: "Worktree" }],
+    workspaceIdentity: currentIdentity,
+    workspaceTabs: [{ workspacePath: path, workspaceIdentity: currentIdentity, label: "Worktree" }],
     reconnectingRemoteWorkspaceKeys: [],
     remoteWorkspaceErrorByWorkspaceKey: {},
     projectName: "Project",
@@ -360,6 +402,46 @@ function Fixture() {
         }
       >
         Restore unproven binding
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          deferNextOwnerLookup = true;
+          changed();
+        }}
+      >
+        Delay next owner lookup
+      </button>
+      <button type="button" onClick={() => pendingOwnerLookup?.()} disabled={!pendingOwnerLookup}>
+        Release owner lookup
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          rejectPendingOwnerLookup = true;
+          pendingOwnerLookup?.();
+        }}
+        disabled={!pendingOwnerLookup}
+      >
+        Reject owner lookup
+      </button>
+      <button type="button" onClick={() => sessionStorage.setItem("fixture-owner-offline", "1")}>
+        Make owner offline on reload
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          usePaneLayoutStore.getState().splitPaneWithBinding(V4_PRIMARY_PANE_ID, "right", {
+            workspaceScope: { workspacePath: path, workspaceIdentity: identity },
+            sessionId: "pi-one",
+            restoredUnvalidated: true,
+          })
+        }
+      >
+        Restore verified Pi split
+      </button>
+      <button type="button" onClick={() => setCurrentIdentity("target:other")}>
+        Switch attachment
       </button>
       <WorkspaceShellLayout {...props} />
     </main>

@@ -17,7 +17,7 @@ export async function readMountedCreateChoices(
 ): Promise<ReadonlyMap<string, readonly MountedCreateChoice[]>> {
   const choices = await Promise.all(
     workspaces.map(async (workspace, index) => {
-      const result = await hierarchy.listCreateOptions?.(workspace.id).catch(() => undefined);
+      const result = await hierarchy.listCreateOptions(workspace.id).catch(() => undefined);
       const supported = new Set(
         harnessLists[index]!.filter((entry) => entry.availability === "supported").map(
           (entry) => entry.manifest.id,

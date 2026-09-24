@@ -14,10 +14,8 @@ import type {
   V4ConversationWorkflowRunNodeResultParams,
 } from "@zcode/shared/zcode-protocol-v4";
 import { ServiceProvider, useServices } from "@/hooks/useServices.js";
-import { usePlatform } from "@/hooks/usePlatform.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
-import { createAgentConversationTransport } from "@/v4/agentConversationTransport.js";
-import { createScopedAgentHostConversationFacade } from "@/v4/agentHostConversationFacade.js";
+import { createAgentHostConversationTransport } from "@/v4/agentHostConversationTransport.js";
 import {
   matchesMountedSessionOwner,
   sameMountedExternalOwner,
@@ -39,7 +37,6 @@ export function MountedExternalConversationProvider({
   children: ReactNode;
 }) {
   const services = useServices();
-  const platform = usePlatform();
   const { locale } = useZCodeIntl();
   const labels =
     locale === "zh-CN"
@@ -117,7 +114,6 @@ export function MountedExternalConversationProvider({
       services={services}
       hierarchy={hierarchy}
       host={host}
-      platform={platform}
     >
       {children}
     </ReadyMountedExternalConversationProvider>
@@ -129,65 +125,38 @@ function ReadyMountedExternalConversationProvider({
   services,
   hierarchy,
   host,
-  platform,
   children,
 }: {
   owner: Extract<MountedSessionOwner, { kind: "external" }>;
   services: IServiceAccessor;
   hierarchy: NonNullable<IServiceAccessor["workspaceHierarchyService"]>;
   host: NonNullable<IServiceAccessor["agentHostService"]>;
-  platform: ReturnType<typeof usePlatform>;
   children: ReactNode;
 }) {
   const { scope } = owner;
   const bundle = useMemo(() => {
-    const native = createAgentConversationTransport(services.zcodeAgentService, {
-      workspacePath: scope.workspacePath,
+    // Bug 原因：外部 pane 的混合 facade 即使只路由 Host，构造/监听时仍建立 native transport。
+    // 使用纯 Host transport；任何外部 owner 失效直接拒绝，不存在 native fallback。
+    const transport = createAgentHostConversationTransport(host, {
+      targetId: scope.targetId,
+      workspaceId: scope.workspaceId,
       workspaceIdentity: scope.workspaceIdentity,
-      ...(scope.remoteSessionId
-        ? {}
-        : platform.createLocalMediaPreviewUrl
-          ? { createLocalMediaPreviewUrl: platform.createLocalMediaPreviewUrl }
-          : {}),
-    });
-    // Bug 原因：按路径/未知 ID 退回 native 会把外部 session ID 发往 ZCode CLI。
-    // facade 必须先于 SessionDataLayer 建立，并且每次订阅/命令都查持久 owner。
-    const facade = createScopedAgentHostConversationFacade({
-      native,
-      host,
-      scope: {
-        targetId: scope.targetId,
-        workspaceId: scope.workspaceId,
-        workspaceIdentity: scope.workspaceIdentity,
-        worktreePath: scope.workspacePath,
-      },
-      enabled: true,
-      externalAdmissionEnabled: false,
-      locateOwner: async (sessionId) => {
+      worktreePath: scope.workspacePath,
+      locateExternal: async (sessionId) => {
         const current = await hierarchy.resolveOwner({
           targetId: scope.targetId,
           workspaceId: scope.workspaceId,
           sessionId,
         });
-        if (
-          !current ||
-          !matchesMountedSessionOwner(current, sessionId, {
-            workspacePath: scope.workspacePath,
-            workspaceIdentity: scope.workspaceIdentity,
-            remoteSessionId: scope.remoteSessionId,
-          })
-        )
+        if (current?.kind !== "external" || !sameMountedExternalOwner(current, owner))
           return undefined;
-        return current.kind === "native"
-          ? { kind: "native" as const }
-          : { kind: "external" as const, spec: current.spec, historyOnly: current.historyOnly };
+        return { spec: current.spec, historyOnly: current.historyOnly };
       },
     });
-    const transport = facade.transport;
     const layer = new SessionDataLayer({ transport });
     return {
       layer,
-      facade,
+      transport,
       value: {
         layer,
         sendCommand: (envelope: CommandEnvelope) => transport.sendCommand(envelope),
@@ -219,11 +188,11 @@ function ReadyMountedExternalConversationProvider({
           transport.onRuntimeLifecycle?.(listener) ?? (() => {}),
       } satisfies V4ConversationContextValue,
     };
-  }, [services.zcodeAgentService, hierarchy, host, platform.createLocalMediaPreviewUrl, scope]);
+  }, [hierarchy, host, owner, scope]);
   useEffect(
     () => () => {
       bundle.layer.dispose();
-      bundle.facade.dispose();
+      bundle.transport.dispose();
     },
     [bundle],
   );

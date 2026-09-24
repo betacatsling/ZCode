@@ -303,6 +303,44 @@ export interface WorkbenchShellBinding {
   onSearchResultHighlightDone?: (requestId: number) => void;
 }
 
+/** Restored view keys are untrusted: wait for a fresh Catalog+hierarchy owner before attaching transport. */
+function RestoredScopedOwnerGate({
+  sessionId,
+  scope,
+  resolve,
+  onResolved,
+}: {
+  sessionId: string;
+  scope: PaneWorkspaceScope;
+  resolve: (
+    sessionId: string,
+    scope: PaneWorkspaceScope,
+  ) => Promise<MountedSessionOwner | undefined>;
+  onResolved: (owner: MountedSessionOwner) => void;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    void resolve(sessionId, scope)
+      .then((owner) => {
+        if (!active) return;
+        if (owner && matchesMountedSessionOwner(owner, sessionId, scope)) onResolved(owner);
+        else setError("Session owner unresolved");
+      })
+      .catch(() => {
+        if (active) setError("Session owner unavailable");
+      });
+    return () => {
+      active = false;
+    };
+  }, [sessionId, scope, resolve, onResolved]);
+  return error ? (
+    <div role="alert" className="p-4 text-ui-sm text-destructive">
+      {error}
+    </div>
+  ) : null;
+}
+
 interface WorkbenchLeafPaneProps {
   paneId: string;
   rect: RectExpr;
@@ -317,6 +355,11 @@ interface WorkbenchLeafPaneProps {
   shell: WorkbenchShellBinding;
   mountedOwners?: readonly MountedSessionOwner[];
   mountedSessionRouting?: "native" | "scoped";
+  onResolveRestoredOwner?: (
+    sessionId: string,
+    scope: PaneWorkspaceScope,
+  ) => Promise<MountedSessionOwner | undefined>;
+  onRestoredOwner?: (owner: MountedSessionOwner) => void;
   onFocusRequest: (paneId: string) => void;
   onSplit?: (paneId: string, direction: SplitDirection, scope: PaneWorkspaceScope) => void;
   onClosePane: (paneId: string) => void;
@@ -352,6 +395,8 @@ export function WorkbenchLeafPane({
   shell,
   mountedOwners = [],
   mountedSessionRouting = "native",
+  onResolveRestoredOwner,
+  onRestoredOwner,
   onFocusRequest,
   onSplit,
   onClosePane,
@@ -538,7 +583,27 @@ export function WorkbenchLeafPane({
   // 最后拒绝未知 owner，也已经发出 native RPC。只有已证实的 native 或草稿才能挂该 provider。
   const nativeProviderAllowed =
     mountedSessionRouting !== "scoped" || !sessionId || mountedOwner?.kind === "native";
-  const conversation = (
+  const handleRestoredOwner = useCallback(
+    (owner: MountedSessionOwner) => {
+      onRestoredOwner?.(owner);
+      onConfirmRestoredSession(paneId);
+    },
+    [onRestoredOwner, onConfirmRestoredSession, paneId],
+  );
+  const scopedRestoring =
+    mountedSessionRouting === "scoped" &&
+    sessionId &&
+    !mountedOwner &&
+    (isPrimary ? primaryBinding : binding)?.restoredUnvalidated &&
+    onResolveRestoredOwner;
+  const conversation = scopedRestoring ? (
+    <RestoredScopedOwnerGate
+      sessionId={sessionId}
+      scope={scope}
+      resolve={onResolveRestoredOwner}
+      onResolved={handleRestoredOwner}
+    />
+  ) : (
     <>
       {nativeProviderAllowed &&
       (isPrimary ? primaryBinding : binding)?.restoredUnvalidated &&

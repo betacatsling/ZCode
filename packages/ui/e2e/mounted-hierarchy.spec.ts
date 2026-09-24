@@ -15,7 +15,9 @@ test("mounted hierarchy queries authoritative owner and keeps stale catalog on d
     "open:original-native-id:target:active",
   );
   await page.getByRole("button", { name: /Remove Workspace active/ }).click();
-  await expect(page.getByRole("dialog")).toContainText("External process may change the worktree");
+  await expect(page.getByRole("dialog")).toContainText(
+    "External processes may race after this preview",
+  );
   await page.getByRole("button", { name: "Confirm remove" }).click();
   await expect(page.getByRole("dialog")).toContainText("Target removal rejected: dirty worktree");
   await expect(page.getByTestId("mounted-events")).toContainText("remove:ws-active:gen-active");

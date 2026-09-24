@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { IServiceAccessor, IProjectCatalogService } from "@zcode/services";
+/* oxlint-disable eslint(max-lines) -- Mounted sidebar owns one Catalog refresh/navigation/intent controller; splitting its ordered async closure would duplicate local request versions. */
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
-  HarnessCatalogEntry,
-  ModelBindingRequest,
-  SessionSpecV2,
-} from "@zcode/shared/agent-host";
+  IServiceAccessor,
+  IProjectCatalogService,
+  IWorkspaceHierarchyService,
+  SessionOwner,
+} from "@zcode/services";
+import type { HarnessCatalogEntry, ModelBindingRequest } from "@zcode/shared/agent-host";
 import {
   parseSidebarSnapshot,
   type SessionSummary,
@@ -15,47 +17,20 @@ import type { ProjectSidebarProps, SidebarActions } from "../project-sidebar/typ
 import { readMountedCreateChoices } from "./mountedProjectCreateChoices.js";
 import { resolveMountedSidebarOwner } from "./mountedProjectSidebarNavigation.js";
 
-/** UI's read/command slice of the Host contract. The production accessor supplies this after integration. */
-export type MountedSessionOwner =
-  | { kind: "native"; scope: MountedNavigationScope; originalSessionId: string }
-  | { kind: "external"; scope: MountedNavigationScope; spec: SessionSpecV2; historyOnly: boolean };
-export interface MountedNavigationScope {
-  targetId: string;
-  workspaceId: string;
-  workspacePath: string;
-  workspaceIdentity: string;
-  remoteSessionId?: string;
-}
-export interface MountedHierarchyService {
-  resolveOwner(input: {
-    targetId: string;
-    workspaceId: string;
-    sessionId: string;
-  }): Promise<MountedSessionOwner | undefined>;
-  listHarnesses(workspaceId: string): Promise<readonly HarnessCatalogEntry[]>;
-  /** Target-scoped Model catalog + certified Harness capabilities; no UI-guessed fallback. */
-  listCreateOptions?(workspaceId: string): Promise<{
+/** The public hierarchy contract is the only owner type; never narrow away native historyOnly. */
+export type MountedSessionOwner = SessionOwner;
+// Until authority-product exports listCreateOptions, this required structural edge documents
+// the exact public DTO. hasMountedHierarchy refuses to mount without the real service method.
+export type MountedHierarchyService = Pick<
+  IWorkspaceHierarchyService,
+  "resolveOwner" | "listHarnesses" | "createAgent" | "asset" | "previewRemoval"
+> & {
+  listCreateOptions(workspaceId: string): Promise<{
     workspaceId: string;
     worktreeGeneration: string;
     options: readonly { harnessId: string; label: string; binding: ModelBindingRequest }[];
   }>;
-  /** Trusted target preflight; the target still rechecks before remove. */
-  previewRemoval?(
-    workspaceId: string,
-    expectedGeneration: string,
-  ): Promise<{
-    allowed: boolean;
-    risks: readonly string[];
-  }>;
-  createAgent(input: {
-    workspaceId: string;
-    harnessId: string;
-    modelBinding: ModelBindingRequest;
-    cwdRelativeToWorktree?: string;
-    commandId: string;
-  }): Promise<{ owner: MountedSessionOwner }>;
-  asset(assetId: string): Promise<SidebarIconAsset | undefined>;
-}
+};
 export type MountedHierarchyServices = {
   projectCatalogService: Pick<
     IProjectCatalogService,
@@ -89,6 +64,8 @@ export function hasMountedHierarchy(
     typeof services.workspaceHierarchyService.resolveOwner === "function" &&
     "listHarnesses" in services.workspaceHierarchyService &&
     typeof services.workspaceHierarchyService.listHarnesses === "function" &&
+    "listCreateOptions" in services.workspaceHierarchyService &&
+    typeof services.workspaceHierarchyService.listCreateOptions === "function" &&
     "createAgent" in services.workspaceHierarchyService &&
     typeof services.workspaceHierarchyService.createAgent === "function" &&
     "asset" in services.workspaceHierarchyService &&
@@ -100,10 +77,12 @@ export function useMountedProjectSidebar({
   services,
   onNavigate,
   locale,
+  navigationScope,
 }: {
   services: MountedHierarchyServices;
   onNavigate: (owner: MountedSessionOwner) => void;
   locale: "en" | "zh";
+  navigationScope?: string;
 }): Omit<
   Pick<
     ProjectSidebarProps,
@@ -123,6 +102,8 @@ export function useMountedProjectSidebar({
   const catalogService = services.projectCatalogService;
   const hierarchy = services.workspaceHierarchyService;
   const [snapshot, setSnapshot] = useState<SidebarSnapshot>();
+  const snapshotRef = useRef(snapshot);
+  snapshotRef.current = snapshot;
   const [catalog, setCatalog] = useState<readonly HarnessCatalogEntry[]>([]);
   const [catalogByWorkspace, setCatalogByWorkspace] = useState<
     ReadonlyMap<string, readonly HarnessCatalogEntry[]>
@@ -142,8 +123,26 @@ export function useMountedProjectSidebar({
   );
   const importIds = useRef(new Map<string, { id: string; bindingId: string }>());
   const refreshSequence = useRef(0);
+  const refreshReady = useRef(false);
+  const navigationSequence = useRef(0);
+  useLayoutEffect(
+    () => () => {
+      // Bug 原因：workspace/endpoint 切换时即便 Catalog 未刷新，旧查询仍可能晚完成。
+      navigationSequence.current += 1;
+    },
+    [hierarchy, navigationScope],
+  );
+  useEffect(
+    () => () => {
+      refreshSequence.current += 1;
+    },
+    [hierarchy, catalogService],
+  );
   const refresh = useCallback(async () => {
     const request = ++refreshSequence.current;
+    refreshReady.current = false;
+    // Bug 原因：刷新中旧 generation 的选项在 I/O 等待期间仍可被点击。
+    setWorkspaceOptions(new Map());
     const raw = await catalogService.sidebarSnapshot();
     const next = parseSidebarSnapshot(raw);
     if (request !== refreshSequence.current) return;
@@ -166,6 +165,7 @@ export function useMountedProjectSidebar({
       new Map(activeWorkspaces.map((workspace, index) => [workspace.id, harnessLists[index]!])),
     );
     setWorkspaceOptions(choices);
+    refreshReady.current = true;
     setError(undefined);
     setStale(false);
     const ids = [
@@ -206,7 +206,26 @@ export function useMountedProjectSidebar({
   }, [refresh]);
   const navigate = useCallback(
     async (summary: SessionSummary) => {
-      onNavigate(await resolveMountedSidebarOwner(summary, snapshot, hierarchy));
+      // Bug 原因：较早的 owner lookup 晚完成会覆盖最后点击；旧请求的拒绝也不能报错。
+      const request = ++navigationSequence.current;
+      const source = snapshot;
+      const generation = source?.workspaces.find(
+        (w) => w.id === summary.session.workspaceId,
+      )?.worktreeGeneration;
+      try {
+        const owner = await resolveMountedSidebarOwner(summary, source, hierarchy);
+        if (
+          request !== navigationSequence.current ||
+          source !== snapshotRef.current ||
+          source?.workspaces.find((w) => w.id === owner.scope.workspaceId)?.worktreeGeneration !==
+            generation
+        )
+          return;
+        onNavigate(owner);
+      } catch (cause) {
+        if (request !== navigationSequence.current || source !== snapshotRef.current) return;
+        throw cause;
+      }
     },
     [hierarchy, onNavigate, snapshot],
   );
@@ -243,6 +262,7 @@ export function useMountedProjectSidebar({
         void navigate(summary).catch((cause) => setError(String(cause)));
       },
       onCreateAgent: async (input) => {
+        ++navigationSequence.current;
         const key = JSON.stringify(input);
         const intent = creationCommands.current.get(key) ?? { commandId: crypto.randomUUID() };
         creationCommands.current.set(key, intent);
@@ -253,6 +273,7 @@ export function useMountedProjectSidebar({
         );
         if (
           stale ||
+          !refreshReady.current ||
           !workspace ||
           !binding ||
           workspace.worktreeGeneration !== input.expectedGeneration
@@ -327,10 +348,11 @@ export function useMountedProjectSidebar({
         execute(() => catalogService.updateWorkspace(id, { archived: true })),
       onUnarchiveWorkspace: (id) =>
         execute(() => catalogService.updateWorkspace(id, { archived: false })),
-      onPreviewRemove: async (id, expectedGeneration) => {
+      onPreviewRemoval: async (id, expectedGeneration) => {
         const workspace = snapshot?.workspaces.find((w) => w.id === id);
         if (
           stale ||
+          !refreshReady.current ||
           !workspace ||
           workspace.isMainWorktree ||
           workspace.lifecycle !== "active" ||
@@ -338,12 +360,13 @@ export function useMountedProjectSidebar({
           !hierarchy.previewRemoval
         )
           throw new Error("Target removal preview unavailable");
-        return hierarchy.previewRemoval(id, expectedGeneration);
+        return hierarchy.previewRemoval({ workspaceId: id, expectedGeneration });
       },
       onRemoveWorkspace: async (id, expectedGeneration) => {
         const workspace = snapshot?.workspaces.find((w) => w.id === id);
         if (
           stale ||
+          !refreshReady.current ||
           !workspace ||
           workspace.isMainWorktree ||
           workspace.lifecycle !== "active" ||
@@ -351,9 +374,23 @@ export function useMountedProjectSidebar({
           !hierarchy.previewRemoval
         )
           throw new Error("Target removal preview unavailable");
-        const preview = await hierarchy.previewRemoval(id, expectedGeneration);
-        if (!preview.allowed)
-          throw new Error(preview.risks.join("; ") || "Target rejected removal");
+        const preview = await hierarchy.previewRemoval({ workspaceId: id, expectedGeneration });
+        if (
+          preview.workspaceId !== id ||
+          preview.generation !== expectedGeneration ||
+          !preview.safe ||
+          preview.unknown ||
+          !preview.git ||
+          !preview.activity ||
+          preview.activity.offline ||
+          [
+            preview.activity.running,
+            preview.activity.waiting,
+            preview.activity.tools,
+            preview.activity.uncertain,
+          ].some((count) => !Number.isSafeInteger(count) || count !== 0)
+        )
+          throw new Error("Target rejected removal or activity is unknown");
         await execute(() =>
           catalogService.remove({ workspaceId: id, expectedGeneration, confirmation: true }),
         );
