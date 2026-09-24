@@ -1084,14 +1084,15 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
         return;
       }
       setMountedOwners((previous) => [
+        // Bug 原因：同 attachment 的 Catalog workspace 重新建立后，旧证明若排在前面，
+        // pane 查找会命中已失效的 workspaceId。新 resolveOwner 结果替换它，而非并存。
         ...previous.filter(
           (entry) =>
-            !(
-              entry.scope.targetId === owner.scope.targetId &&
-              entry.scope.workspaceId === owner.scope.workspaceId &&
-              (entry.kind === "external" ? entry.spec.hostSessionId : entry.originalSessionId) ===
-                sessionId
-            ),
+            !matchesMountedSessionOwner(entry, sessionId, {
+              workspacePath: owner.scope.workspacePath,
+              workspaceIdentity: owner.scope.workspaceIdentity,
+              remoteSessionId: owner.scope.remoteSessionId,
+            }),
         ),
         owner,
       ]);
