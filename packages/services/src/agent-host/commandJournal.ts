@@ -139,6 +139,15 @@ export class CommandJournal {
     return record && this.#safeReceipt(record.receipt);
   }
 
+  static async hasUnresolvedHistory(root: string, identity: JournalIdentity): Promise<boolean> {
+    const { records } = CommandJournal.#parse(await readJournalLines(journalPath(root, identity, "commands")), identity);
+    return [...records.values()].some(({ receipt }) => receipt.status === "accepted" || receipt.status === "execution-unknown");
+  }
+
+  hasPendingSend(): boolean {
+    return [...this.#records.values()].some(({ command, receipt }) => command.type === "send" && receipt.status === "accepted");
+  }
+
   /** A lost backend acknowledgement cannot be turned into permission to run another prompt. */
   hasUncertainSend(): boolean {
     for (const [id, record] of this.#records) {

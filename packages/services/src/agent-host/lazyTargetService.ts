@@ -66,10 +66,11 @@ export function createLazyTargetAgentHostService(input: {
     async listSessions(workspaceIdentity, worktreePath) {
       return (target ?? historyOnly).listSessions(workspaceIdentity, worktreePath);
     },
-    async create(spec) {
+    async create(spec, commandId) {
       if (!input.allowNewSessions()) throw new Error("new external sessions disabled; existing history remains readable");
-      return (await getTarget()).create(spec);
+      return (await getTarget()).create(spec, commandId);
     },
+    queryCreationCommand: (commandId) => (target ?? historyOnly).queryCreationCommand(commandId),
     async attach(spec) { return (await getTarget()).attach(spec); },
     async dispatch(spec, command) { return (await getTarget()).dispatch(spec, command); },
     async snapshot(spec) { return (target ?? historyOnly).snapshot(spec); },
