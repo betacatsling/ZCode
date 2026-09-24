@@ -465,6 +465,8 @@ export const rowsWindowSchema = z.object({
   totalCount: z.number(),
   // 全序第一行 rowId；window 首行等于它 ⇔ 已到顶（游标分页判定）。
   firstRowId: z.number().nullable(),
+  /** External Host only: last event changing a row outside its canonical live tail. */
+  historicalRevision: z.number().int().nonnegative().optional(),
 });
 export type RowsWindow = z.infer<typeof rowsWindowSchema>;
 

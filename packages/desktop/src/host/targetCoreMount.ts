@@ -1,6 +1,8 @@
 import {
   ServiceCollection,
   IAgentHostService,
+  IProjectCatalogRpcService,
+  IWorkspaceHierarchyService,
   IZCodeAgentService,
   IZCodeSessionService,
   IZCodeTaskService,
@@ -74,6 +76,8 @@ export async function mountLocalCore(location: CoreAttachmentLocation): Promise<
     const services = new ServiceCollection();
     services
       .register(IAgentHostService, remote.agentHostService)
+      .register(IProjectCatalogRpcService, remote.projectCatalogService)
+      .register(IWorkspaceHierarchyService, remote.workspaceHierarchyService)
       .register(IZCodeAgentService, remote.zcodeAgentService)
       .register(IZCodeSessionService, remote.zcodeSessionService)
       .register(IZCodeTaskService, remote.zcodeTaskService)

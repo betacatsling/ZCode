@@ -17,6 +17,8 @@ import {
   createZCodeAgentConnectionScope,
   IZCodeAgentService,
   IAgentHostService,
+  IProjectCatalogRpcService,
+  IWorkspaceHierarchyService,
   ServiceCollection,
 } from "@zcode/services";
 import { createServiceLogger } from "@zcode/services/node";
@@ -106,9 +108,16 @@ function exposeWebSocket(
   services.exposeOnChannelServer(
     server,
     scope ? new Map([[IZCodeAgentService.channelName, scope.service]]) : new Map(),
-    // Generic /ws lacks host-relay authorization. Never expose external-session
-    // commands, journal history or event subscriptions on that connection.
-    clientMode === "desktop-continuous" ? new Set() : new Set([IAgentHostService.channelName]),
+    // 中文：通用 /ws 没有一次性 Host ticket；Core 加载真实 Catalog 后仅屏蔽 Host
+    // 仍会泄露可写 Git/会话目录和归属。桌面专用 /ws/host 已消费能力票据；
+    // 手机 replayable 不能借未认证入口升级权限，须等独立的认证 attachment。
+    clientMode === "desktop-continuous"
+      ? new Set()
+      : new Set([
+          IAgentHostService.channelName,
+          IProjectCatalogRpcService.channelName,
+          IWorkspaceHierarchyService.channelName,
+        ]),
   );
   socket.onClose(() => {
     void scope?.dispose();

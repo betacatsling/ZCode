@@ -3,7 +3,7 @@ import { TID_V4_SESSION_PANE, testId } from "@zcode/shared";
 import { Button } from "@/components/ui/button.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { useExternalSessionController } from "@/v4/useExternalSessionController.js";
-import { canLoadExternalOlder } from "@/v4/conversationProjectionStore.js";
+import { canLoadExternalNewer, canLoadExternalOlder } from "@/v4/conversationProjectionStore.js";
 import { ConversationTimeline } from "@/v4/ConversationTimeline.js";
 import { ConversationHeader, type PaneWorkspaceBadge } from "@/v4/ConversationHeader.js";
 import { DEFAULT_CODE_PREVIEW_SETTINGS } from "@/lib/codePreviewSettings.js";
@@ -35,6 +35,9 @@ const externalLabels = {
     unknownModel: "unknown",
     loading: "Loading session…",
     older: "Load earlier messages",
+    newer: "Load newer messages",
+    latest: "Latest messages",
+    window: (first: number, last: number, total: number) => `Rows ${first}–${last} of ${total}`,
     usage: {
       inputTokens: "Input",
       outputTokens: "Output",
@@ -58,6 +61,10 @@ const externalLabels = {
     unknownModel: "未知",
     loading: "正在加载会话…",
     older: "加载更早消息",
+    newer: "加载较新消息",
+    latest: "最新消息",
+    window: (first: number, last: number, total: number) =>
+      `第 ${first}–${last} 行，共 ${total} 行`,
     usage: {
       inputTokens: "输入",
       outputTokens: "输出",
@@ -176,17 +183,53 @@ export function ExternalSessionPane({
           )}
         </div>
       )}
-      {canLoadExternalOlder(snapshot) && (
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="self-start"
-          disabled={state.loadingOlder}
-          onClick={() => void lease?.store.loadOlder()}
-        >
-          {labels.older}
-        </Button>
+      {(canLoadExternalOlder(snapshot) || canLoadExternalNewer(snapshot)) && (
+        <div className="flex flex-wrap items-center gap-2 px-3 pt-8">
+          {state.externalHistoryBrowsing && snapshot?.rows.window.length ? (
+            <span
+              data-testid="external-history-range"
+              className="text-ui-xs text-foreground-subtle"
+            >
+              {labels.window(
+                snapshot.rows.window[0]!.rowId,
+                snapshot.rows.window.at(-1)!.rowId,
+                snapshot.rows.totalCount,
+              )}
+            </span>
+          ) : null}
+          {canLoadExternalOlder(snapshot) && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={state.loadingOlder}
+              onClick={() => void lease?.store.loadOlder()}
+            >
+              {labels.older}
+            </Button>
+          )}
+          {canLoadExternalNewer(snapshot) && (
+            <>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={state.loadingOlder}
+                onClick={() => void lease?.store.loadNewer()}
+              >
+                {labels.newer}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => void lease?.store.jumpToLatest()}
+              >
+                {labels.latest}
+              </Button>
+            </>
+          )}
+        </div>
       )}
       <div className="min-h-0 flex-1 pt-8">
         {state.status === "error" ? (

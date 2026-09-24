@@ -26,6 +26,7 @@ export function projectHostConversation(input: {
   const windowSize = input.windowSize ?? 100;
   if (!Number.isSafeInteger(windowSize) || windowSize < 1 || windowSize > 100_000) throw new Error("invalid rows window size");
   const rows: ConversationRow[] = [];
+  const lastRowMutation = new Map<number, number>();
   const headers = new Map<string, TurnHeaderRow>();
   const messages = new Map<string, ConversationRow>();
   const tools = new Map<string, ToolCallRow>();
@@ -50,6 +51,9 @@ export function projectHostConversation(input: {
     createdAtSeq: event.sequence,
   });
   for (const event of events) {
+    const touched = (row: ConversationRow | undefined) => {
+      if (row) lastRowMutation.set(row.rowId, event.sequence);
+    };
     if (event.hostSessionId !== spec.hostSessionId || event.runtimeEpoch !== runtimeEpoch) throw new Error("foreign projection event");
     if (event.sequence !== seq + 1) throw new Error("projection event sequence gap, duplicate or reorder");
     seq = event.sequence;
@@ -77,6 +81,7 @@ export function projectHostConversation(input: {
         }
         if (row.kind !== "assistantText" || row.state !== "streaming") throw new Error("text after final message");
         row.text += event.text;
+        touched(row);
         break;
       }
       case "message.finished": {
@@ -92,6 +97,7 @@ export function projectHostConversation(input: {
           // Terminal text is authoritative and replaces deltas, never appends to them.
           existing.text = event.text;
           existing.state = "complete";
+          touched(existing);
         } else {
           const row: ConversationRow = { ...base(event), kind: "assistantText", text: event.text, state: "complete", assistantResponseId: event.messageId };
           rows.push(row);
@@ -110,6 +116,7 @@ export function projectHostConversation(input: {
         const row = reasoning.get(event.messageId);
         if (event.turnId !== activeTurn || !row || row.state !== "streaming") throw new Error("reasoning delta without active item");
         row.text += event.text;
+        touched(row);
         break;
       }
       case "reasoning.finished": {
@@ -118,6 +125,7 @@ export function projectHostConversation(input: {
         // 修复增量之后终帧重复追加：可见终稿替换增量，私有签名从未进入此投影。
         row.text = event.text;
         row.state = "complete";
+        touched(row);
         break;
       }
       case "tool.started": {
@@ -135,6 +143,7 @@ export function projectHostConversation(input: {
         if (event.turnId !== activeTurn || !row || row.turnId !== event.turnId || interactions.has(event.interactionId)) throw new Error("unmatched approval request");
         row.status = "pendingApproval";
         row.approvalInteractionId = event.interactionId;
+        touched(row);
         interactions.set(event.interactionId, {
           interactionId: event.interactionId, kind: "permission", anchorRowId: row.rowId, createdAt: event.at,
           payload: {
@@ -166,6 +175,7 @@ export function projectHostConversation(input: {
         if (row) {
           row.approvalInteractionId = undefined;
           row.status = event.decision === "deny" ? "cancelled" : "running";
+          touched(row);
         }
         interactions.delete(event.interactionId);
         break;
@@ -179,6 +189,7 @@ export function projectHostConversation(input: {
         row.endedAt = event.at;
         if (event.outcome === "error") row.error = { code: "backend-tool-error", message: "Tool failed" };
         if (event.outputText !== undefined) row.output = { text: event.outputText };
+        touched(row);
         break;
       }
       case "file.changed": {
@@ -186,6 +197,7 @@ export function projectHostConversation(input: {
         if (header) {
           const previous = header.fileChanges;
           header.fileChanges = { files: (previous?.files ?? 0) + 1, additions: (previous?.additions ?? 0) + event.additions, deletions: (previous?.deletions ?? 0) + event.deletions };
+          touched(header);
         }
         break;
       }
@@ -200,10 +212,11 @@ export function projectHostConversation(input: {
         header.state = event.outcome === "success" ? "completedSuccess" : event.outcome === "cancelled" ? "completedInterrupted" : "failed";
         header.endedAt = event.at;
         header.activeMs = Math.max(0, event.at - startedAt);
+        touched(header);
         for (const pending of interactions.keys()) interactions.delete(pending);
-        for (const row of reasoning.values()) if (row.turnId === event.turnId && row.state === "streaming") row.state = "interrupted";
+        for (const row of reasoning.values()) if (row.turnId === event.turnId && row.state === "streaming") { row.state = "interrupted"; touched(row); }
         for (const row of tools.values()) {
-          if (row.turnId === event.turnId && (row.status === "running" || row.status === "pendingApproval")) row.status = "cancelled";
+          if (row.turnId === event.turnId && (row.status === "running" || row.status === "pendingApproval")) { row.status = "cancelled"; touched(row); }
         }
         phase = event.outcome === "success" ? "completedSuccess" : event.outcome === "cancelled" ? "completedInterrupted" : "error";
         activeTurn = undefined;
@@ -256,6 +269,7 @@ export function projectHostConversation(input: {
           if (event.parentToolCallId && existing.parentToolCallId && event.parentToolCallId !== existing.parentToolCallId) throw new Error("conflicting child parent");
           if (event.parentToolCallId) existing.parentToolCallId = event.parentToolCallId;
           if (event.subagentType || event.childHarnessId) existing.subagentType = event.subagentType ?? event.childHarnessId!;
+          touched(existing);
         }
         childrenRevision++;
         break;
@@ -269,6 +283,11 @@ export function projectHostConversation(input: {
   const totals = usage.totals();
   const { inputTokens = 0, outputTokens = 0, cacheReadTokens = 0, cacheWriteTokens = 0 } = totals;
   const lastError = errorCode ? { code: errorCode, message: "External harness error; inspect target-host diagnostics", recoverable: false, at: lastErrorAt, source: "runtime" as const } : null;
+  const liveTailFirstRowId = rows.at(-windowSize)?.rowId ?? rows[0]?.rowId ?? 1;
+  let historicalRevision = 0;
+  for (const [rowId, sequence] of lastRowMutation) {
+    if (rowId < liveTailFirstRowId) historicalRevision = Math.max(historicalRevision, sequence);
+  }
   const range = input.rowRange;
   const window = range
     ? rows.filter((row) => range.beforeRowId === undefined || row.rowId < range.beforeRowId).slice(-range.limit)
@@ -304,6 +323,6 @@ export function projectHostConversation(input: {
     queue: { items: [], autoDrain: true }, pendingInteractions: [...interactions.values()], pendingCommands: [], backgroundWorks: [],
     subagents: { revision: childrenRevision, childSessionIds: [], running: [...children.values()].filter((row) => row.status === "running").map((row) => ({ childSessionId: row.childSessionId!, subagentType: row.subagentType, title: row.summaryText || row.subagentType, status: "running" as const, ...(row.parentToolCallId ? { toolCallId: row.parentToolCallId } : {}), startedAt: row.startedAt })), endedTotal: endedChildren },
     goal: null, plan, workspaceHookAdmission: null,
-    rows: { window, totalCount: rows.length, firstRowId: rows[0]?.rowId ?? null },
+    rows: { window, totalCount: rows.length, firstRowId: rows[0]?.rowId ?? null, historicalRevision },
   });
 }
