@@ -1,6 +1,7 @@
 /* oxlint-disable eslint(max-lines) -- Supervisor 集中维护生命周期、Core 代际和更新回滚状态机，启动恢复锁边界修复不应拆散其原子流程。 */
 
 import { type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { createServiceLogger } from "@zcode/services/node";
 import {
@@ -9,6 +10,7 @@ import {
   type ControlRequest,
   type LifecycleState,
   type ReleaseManifest,
+  type RuntimeActivity,
   type ServerStatus,
 } from "../contracts.js";
 import { createControlServer, type ControlHandler } from "../ipc/controlServer.js";
@@ -21,6 +23,7 @@ import { recoverSupervisorStartup } from "../runtime/startupRecovery.js";
 import { waitForUpdateReady } from "../runtime/updateReadiness.js";
 import { createRollbackFailure, updateErrorMessage } from "../runtime/updateErrors.js";
 import { CrashBudget } from "./crashBudget.js";
+import { unsafeActivityCount } from "./activityGuard.js";
 
 // 生命周期事件按运维排障判据用 info/warn/error（出问题时运维要能在日志里看到）；
 // 高频 heartbeat/task-activity 明细走 debug，避免生产日志膨胀。
@@ -59,6 +62,7 @@ export class Supervisor {
   private port: number | null = null;
   private startedAt: number | null = null;
   private runningTaskCount = 0;
+  private externalActivity: RuntimeActivity = { running: 0, waiting: 0, uncertain: 1 };
   private lastExitReason: string | null = null;
   private readonly persistStatusSnapshot: () => Promise<void>;
   private lifecycleOperation:
@@ -266,8 +270,8 @@ export class Supervisor {
   private async applyUpdate(force: boolean): Promise<unknown> {
     const pending = await this.releaseManager.readPending();
     if (!pending) throw new Error("No pending release is prepared");
-    if (this.runningTaskCount > 0 && !force) {
-      throw new Error("Running tasks require --force for update");
+    if (!force && (await this.readUnsafeActivityCount()) > 0) {
+      throw new Error("Active or uncertain tasks require --force for update");
     }
     const previous = await this.releaseManager.readCurrent();
     log.info("applying pending release", { version: pending.version, force });
@@ -341,6 +345,7 @@ export class Supervisor {
       lastExitReason: this.lastExitReason,
       serviceRegistered: this.options.serviceRegistered ?? false,
       runningTaskCount: this.runningTaskCount,
+      externalActivity: this.externalActivity,
       crashBudget: this.crashBudget.snapshot(),
       updatedAt: Date.now(),
     };
@@ -436,8 +441,13 @@ export class Supervisor {
         port: this.port,
         generation: this.generation,
       });
-    } else if (message.type === "heartbeat" || message.type === "task-activity") {
+    } else if (
+      message.type === "heartbeat" ||
+      message.type === "task-activity" ||
+      message.type === "activity"
+    ) {
       this.runningTaskCount = message.runningTaskCount;
+      this.externalActivity = message.externalActivity ?? { running: 0, waiting: 0, uncertain: 1 };
       log.debug("core activity snapshot", {
         type: message.type,
         runningTaskCount: message.runningTaskCount,
@@ -463,6 +473,54 @@ export class Supervisor {
     this.port = null;
     this.startedAt = null;
     this.runningTaskCount = 0;
+    // Core 代际死亡不是会话终态；新 Core 恢复/journal 核验之前不能声明 idle。
+    this.externalActivity = { running: 0, waiting: 0, uncertain: 1 };
+  }
+
+  /** Fresh Core roundtrip closes the heartbeat-to-update race after a command was admitted. */
+  private async readUnsafeActivityCount(): Promise<number> {
+    const core = this.core;
+    if (!core || this.state !== "ready") return 1;
+    const requestId = randomUUID();
+    const activityCount = await new Promise<number | undefined>((resolve) => {
+      let settled = false;
+      const finish = (count: number | undefined): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        core.off("message", onMessage);
+        core.off("exit", onExit);
+        core.off("close", onExit);
+        resolve(count);
+      };
+      const onExit = (): void => finish(undefined);
+      const onMessage = (raw: unknown): void => {
+        const parsed = coreMessageSchema.safeParse(raw);
+        if (
+          parsed.success &&
+          parsed.data.type === "activity" &&
+          parsed.data.requestId === requestId
+        ) {
+          finish(unsafeActivityCount(parsed.data.runningTaskCount, parsed.data.externalActivity));
+        }
+      };
+      const timer = setTimeout(() => finish(undefined), 2_000);
+      core.on("message", onMessage);
+      core.once("exit", onExit);
+      core.once("close", onExit);
+      try {
+        core.send({ command: "activity", requestId }, (error) => {
+          if (error) finish(undefined);
+        });
+      } catch {
+        finish(undefined);
+      }
+    });
+    if (activityCount === undefined || this.core !== core || this.state !== "ready") {
+      this.externalActivity = { running: 0, waiting: 0, uncertain: 1 };
+      return 1;
+    }
+    return activityCount;
   }
 
   private async handleControl(request: ControlRequest): Promise<unknown> {
@@ -484,7 +542,7 @@ export class Supervisor {
         return { restarting: true };
       case "prepare-update":
         return {
-          status: this.runningTaskCount ? "blocked" : "ready",
+          status: (await this.readUnsafeActivityCount()) ? "blocked" : "ready",
           runningTaskCount: this.runningTaskCount,
         };
       case "apply-update":
@@ -493,7 +551,7 @@ export class Supervisor {
         );
       case "prepare-uninstall":
         return {
-          status: this.runningTaskCount ? "blocked" : "ready",
+          status: (await this.readUnsafeActivityCount()) ? "blocked" : "ready",
           runningTaskCount: this.runningTaskCount,
         };
       case "confirm-uninstall":
@@ -503,9 +561,9 @@ export class Supervisor {
         // prepare-uninstall 会返回 blocked 却没有任何调用方消费它，confirm-uninstall
         // 直接停 Core 删数据，运行中的任务会被无提示中断。这里在最后防线上强制 guard，
         // 有运行任务时返回结构化错误并保持原状态。
-        if (this.runningTaskCount > 0) {
+        if ((await this.readUnsafeActivityCount()) > 0) {
           throw new Error(
-            `Cannot uninstall while ${this.runningTaskCount} task(s) are running; stop the server first`,
+            "Cannot uninstall while tasks are active, waiting or uncertain; stop the server first",
           );
         }
         log.info("uninstall confirmed, stopping server");

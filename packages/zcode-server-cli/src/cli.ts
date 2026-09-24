@@ -28,6 +28,7 @@ import {
 } from "./runtime/uninstallGuard.js";
 import { readPersistedStatus, readPersistedStatusDetailed } from "./runtime/statusSnapshot.js";
 import { waitForServerStopped } from "./runtime/shutdownWait.js";
+import { unsafeActivityCount } from "./supervisor/activityGuard.js";
 export { readPersistedStatus } from "./runtime/statusSnapshot.js";
 import {
   hasLegacyServiceRegistration,
@@ -158,13 +159,27 @@ async function runServe(
           );
         return 0;
       }
-      if (existing.runningTaskCount > 0) {
+      // 迁移会停止旧 Core；外部 Host 等待审批/恢复未知时不能仅以原生任务数为零替换 owner。
+      if (unsafeActivityCount(existing.runningTaskCount, existing.externalActivity) > 0) {
         throw new Error(
-          `Cannot replace fallback daemon while ${existing.runningTaskCount} task(s) are running; stop the server first`,
+          "Cannot replace fallback daemon while tasks are active, waiting or uncertain; stop the server first",
         );
       }
       // 旧 fallback 会持有 data-root lock，直接注册并启动 OS service 只能
       // 拉起一个立即锁冲突的 Supervisor。空闲时先收口 fallback，再重试真实注册。
+      // Core 的最新 Host admission 可能发生在 status 心跳之后；停止旧 daemon 前再向
+      // 其 owner 同步询问一次，避免迁移窗口用过期快照中断审批或在途工具。
+      const readiness = await requestControl(layout.controlEndpoint, {
+        command: "prepare-uninstall",
+      });
+      if (
+        !readiness ||
+        typeof readiness !== "object" ||
+        !("status" in readiness) ||
+        readiness.status !== "ready"
+      ) {
+        throw new Error("Cannot verify fallback Server is idle before migration");
+      }
       const persistedBeforeStop = await readPersistedStatusDetailed(layout);
       if (persistedBeforeStop.state === "invalid" || persistedBeforeStop.state === "unreadable") {
         throw new Error("Cannot verify fallback Server status before migration");

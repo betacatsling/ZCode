@@ -5,6 +5,20 @@ import type {
   ZCodeAgentWorkspaceTarget,
 } from "@zcode/services";
 import type { ConversationTelemetryFact } from "@zcode/shared/zcode-protocol-v4";
+import { runtimeActivitySchema, type RuntimeActivity } from "../contracts.js";
+
+/** Host 是外部会话活动的唯一所有者；缺失方法或读取失败不可误判为空闲。 */
+export async function readExternalActivity(
+  host: { getRuntimeActivity?: () => Promise<RuntimeActivity> } | undefined,
+): Promise<RuntimeActivity> {
+  if (!host) return { running: 0, waiting: 0, uncertain: 0 };
+  try {
+    if (!host.getRuntimeActivity) throw new Error("Host activity source is unavailable");
+    return runtimeActivitySchema.parse(await host.getRuntimeActivity());
+  } catch {
+    return { running: 0, waiting: 0, uncertain: 1 };
+  }
+}
 
 interface TaskActivityTracker extends IDisposable {
   readonly onDidChangeRunningTaskCount: Event<number>;

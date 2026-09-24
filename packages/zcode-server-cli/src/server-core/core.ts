@@ -5,12 +5,13 @@ import {
   getAppConfigDir,
   ZCODE_BUILTIN_PROVIDER_CONFIG_FILE_ENV,
 } from "@zcode/services/node";
-import { IZCodeAgentService } from "@zcode/services";
+import { IAgentHostService, IZCodeAgentService } from "@zcode/services";
+import { coreCommandSchema, type RuntimeActivity } from "../contracts.js";
 import { ZCODE_VERSION } from "@zcode/shared";
 import { createCoreHttpServer } from "./http.js";
 import { installParentDisconnectHandler } from "./parentDisconnect.js";
 import { resolveCoreServerId } from "./serverIdentity.js";
-import { createTaskActivityTracker } from "./taskActivityTracker.js";
+import { createTaskActivityTracker, readExternalActivity } from "./taskActivityTracker.js";
 
 declare const __ZCODE_BUILTIN_PROVIDER_CONFIG_JSON__: string | undefined;
 
@@ -44,6 +45,11 @@ export async function runServerCore(generation: number): Promise<void> {
     agentHostTargetId: serverId,
   });
   const taskActivityTracker = createTaskActivityTracker(services.getOptional(IZCodeAgentService));
+  // V2 Host 由集成层挂载；旧 Host 若无法报告外部活动必须视为不确定，不能假定空闲。
+  const host = services.getOptional(IAgentHostService) as
+    | (IAgentHostService & { getRuntimeActivity?: () => Promise<RuntimeActivity> })
+    | undefined;
+  const externalActivity = (): Promise<RuntimeActivity> => readExternalActivity(host);
   const http = await createCoreHttpServer(services, { serverId });
   const send = (message: unknown): Promise<void> => {
     if (typeof process.send !== "function" || process.connected === false) return Promise.resolve();
@@ -70,27 +76,44 @@ export async function runServerCore(generation: number): Promise<void> {
   const activitySubscription = taskActivityTracker.onDidChangeRunningTaskCount(
     (runningTaskCount) => {
       lastRunningTaskCount = runningTaskCount;
-      void send({ type: "task-activity", runningTaskCount });
+      void externalActivity().then((activity) =>
+        send({ type: "task-activity", runningTaskCount, externalActivity: activity }),
+      );
     },
   );
   let heartbeatInFlight: Promise<void> | undefined;
-  const heartbeat = setInterval(() => {
+  const reportHeartbeat = (): void => {
     if (heartbeatInFlight) return;
-    heartbeatInFlight = Promise.resolve(taskActivityTracker.readRunningTaskCount())
-      .then((runningTaskCount) => {
+    heartbeatInFlight = Promise.all([
+      Promise.resolve(taskActivityTracker.readRunningTaskCount()),
+      externalActivity(),
+    ])
+      .then(([runningTaskCount, activity]) => {
         if (runningTaskCount !== lastRunningTaskCount) {
           lastRunningTaskCount = runningTaskCount;
-          void send({ type: "task-activity", runningTaskCount });
+          void send({ type: "task-activity", runningTaskCount, externalActivity: activity });
         }
-        void send({ type: "heartbeat", at: Date.now(), runningTaskCount });
+        void send({
+          type: "heartbeat",
+          at: Date.now(),
+          runningTaskCount,
+          externalActivity: activity,
+        });
       })
       .catch(() => {
-        void send({ type: "heartbeat", at: Date.now(), runningTaskCount: lastRunningTaskCount });
+        void send({
+          type: "heartbeat",
+          at: Date.now(),
+          runningTaskCount: lastRunningTaskCount,
+          externalActivity: { running: 0, waiting: 0, uncertain: 1 },
+        });
       })
       .finally(() => {
         heartbeatInFlight = undefined;
       });
-  }, 10_000);
+  };
+  reportHeartbeat();
+  const heartbeat = setInterval(reportHeartbeat, 10_000);
   shutdown = async (reason: string): Promise<void> => {
     if (shutdownStarted) return;
     shutdownStarted = true;
@@ -112,14 +135,21 @@ export async function runServerCore(generation: number): Promise<void> {
     process.exit(0);
   };
   if (parentDisconnected) void shutdown("parent-disconnected");
-  process.on("message", (message: unknown) => {
-    if (
-      typeof message === "object" &&
-      message !== null &&
-      "command" in message &&
-      message.command === "shutdown"
-    ) {
+  process.on("message", (raw: unknown) => {
+    const parsed = coreCommandSchema.safeParse(raw);
+    if (!parsed.success) return;
+    if (parsed.data.command === "shutdown") {
       void shutdown("requested");
+    } else if (!shutdownStarted) {
+      const requestId = parsed.data.requestId;
+      void externalActivity().then((activity) =>
+        send({
+          type: "activity",
+          requestId,
+          runningTaskCount: taskActivityTracker.readRunningTaskCount(),
+          externalActivity: activity,
+        }),
+      );
     }
   });
   process.once("SIGTERM", () => void shutdown("SIGTERM"));
