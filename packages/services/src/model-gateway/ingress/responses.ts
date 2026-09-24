@@ -134,19 +134,32 @@ export function decodeResponsesRequest(
     const field = `input[${index}]`;
     if (item.type === "reasoning") {
       keys(item, ["type", "id", "encrypted_content", "summary", "status"], field);
-      if (item.status !== undefined && item.status !== "completed") fail("unsupported_reasoning", field);
+      if (item.status !== undefined && item.status !== "completed")
+        fail("unsupported_reasoning", field);
       const id = string(item.id, `${field}.id`);
       if (typeof item.encrypted_content !== "string" || !item.encrypted_content)
         fail("unsupported_reasoning", `${field}.encrypted_content`);
       const encrypted = item.encrypted_content;
       if (!Array.isArray(item.summary)) fail("unsupported_reasoning", `${field}.summary`);
-      const summary = item.summary.map((raw: unknown, partIndex: number) => {
-        const part = record(raw, `${field}.summary[${partIndex}]`);
-        keys(part, ["type", "text"], `${field}.summary[${partIndex}]`);
-        if (part.type !== "summary_text" || typeof part.text !== "string") fail("unsupported_reasoning", `${field}.summary[${partIndex}]`);
-        return part.text;
-      }).join("");
-      messages.push({ role: "assistant", content: [{ type: "reasoning", text: summary, providerOptions: { openai: { itemId: id, reasoningEncryptedContent: encrypted } } }] });
+      const summary = item.summary
+        .map((raw: unknown, partIndex: number) => {
+          const part = record(raw, `${field}.summary[${partIndex}]`);
+          keys(part, ["type", "text"], `${field}.summary[${partIndex}]`);
+          if (part.type !== "summary_text" || typeof part.text !== "string")
+            fail("unsupported_reasoning", `${field}.summary[${partIndex}]`);
+          return part.text;
+        })
+        .join("");
+      messages.push({
+        role: "assistant",
+        content: [
+          {
+            type: "reasoning",
+            text: summary,
+            providerOptions: { openai: { itemId: id, reasoningEncryptedContent: encrypted } },
+          },
+        ],
+      });
     } else if (item.type === "function_call") {
       keys(item, ["type", "id", "call_id", "name", "arguments", "status"], field);
       if (item.status !== undefined && item.status !== "completed")
@@ -180,7 +193,12 @@ export function decodeResponsesRequest(
         fail("unsupported_content", `${field}.type`);
       if (item.status !== undefined && item.status !== "completed")
         fail("unsupported_parameter", `${field}.status`);
-      if (item.role !== "system" && item.role !== "developer" && item.role !== "user" && item.role !== "assistant")
+      if (
+        item.role !== "system" &&
+        item.role !== "developer" &&
+        item.role !== "user" &&
+        item.role !== "assistant"
+      )
         fail("unsupported_content", `${field}.role`);
       messages.push({
         role: item.role,
@@ -192,7 +210,13 @@ export function decodeResponsesRequest(
       });
     }
   }
-  if (input.prompt_cache_key !== undefined) fail("unsupported_cache", "prompt_cache_key");
+  if (
+    input.prompt_cache_key !== undefined &&
+    (typeof input.prompt_cache_key !== "string" ||
+      !input.prompt_cache_key ||
+      input.prompt_cache_key.length > 256)
+  )
+    fail("invalid_request", "prompt_cache_key", 400);
   let tools: ModelToolContract[] | undefined;
   if (input.tools !== undefined) {
     if (!Array.isArray(input.tools)) fail("invalid_request", "tools", 400);
@@ -220,6 +244,9 @@ export function decodeResponsesRequest(
   return {
     request: {
       messages,
+      ...(input.prompt_cache_key !== undefined
+        ? { promptCacheKey: input.prompt_cache_key as string }
+        : {}),
       ...(tools ? { tools } : {}),
       ...(maxOutputTokens
         ? { options: { maxOutputTokens, reasoningLevel: "off" } }

@@ -119,7 +119,12 @@ export class CodexTransport {
       throw new Error("Codex turn is invalid or already active");
     this.startingTurns.add(threadId);
     try {
-      const value = await this.request("turn/start", { threadId, input: [{ type: "text", text }] });
+      const value = await this.request("turn/start", {
+        threadId,
+        input: [{ type: "text", text }],
+        effort: "none",
+        summary: "none",
+      });
       if (!record(value) || !record(value.turn) || typeof value.turn.id !== "string")
         throw new Error("Invalid Codex turn response");
       if (this.earlyCompleted.get(threadId) !== value.turn.id)

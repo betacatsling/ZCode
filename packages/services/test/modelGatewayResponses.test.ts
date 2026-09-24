@@ -72,13 +72,17 @@ test("Responses decoder preserves system instruction order, paired multiple tool
 });
 
 test("Responses keeps pinned native developer instructions as developer, never system", () => {
-  const pinned = codexFixture.cases.find((entry) => entry.name === "optional-tools-disabled")?.request.body;
+  const pinned = codexFixture.cases.find((entry) => entry.name === "optional-tools-disabled")
+    ?.request.body;
   assert.ok(pinned);
-  const { prompt_cache_key: _cacheKey, ...withoutUnmappedCache } = pinned;
-  const decoded = decodeResponsesRequest(withoutUnmappedCache, {});
+  const decoded = decodeResponsesRequest(pinned, {});
+  assert.equal(decoded.request.promptCacheKey, pinned.prompt_cache_key);
   assert.equal(decoded.request.messages[0]?.role, "system");
   assert.equal(decoded.request.messages[1]?.role, "developer");
-  assert.equal(decoded.request.messages[1]?.content, pinned.input[0]?.content?.map((part) => part.text).join(""));
+  assert.equal(
+    decoded.request.messages[1]?.content,
+    pinned.input[0]?.content?.map((part) => part.text).join(""),
+  );
 });
 
 test("Responses system-only instructions retain order without developer role promotion", () => {
@@ -102,8 +106,7 @@ test("Responses system-only instructions retain order without developer role pro
 
 test("Responses decoder fails closed on actual pinned Codex default and malformed/unknown features", () => {
   assert.throws(() => decodeResponsesRequest(defaultCodex, {}), {
-    code: "unsupported_cache",
-    field: "prompt_cache_key",
+    code: "unsupported_tool",
     statusCode: 422,
   });
   const cases: Array<[unknown, string]> = [
@@ -136,7 +139,9 @@ test("Responses decoder fails closed on actual pinned Codex default and malforme
     [{ ...base, tools: [{ type: "web_search" }] }, "unsupported_tool"],
     [{ ...base, reasoning: { effort: "low" } }, "unsupported_reasoning"],
     [{ ...base, tool_choice: "required" }, "unsupported_tool_choice"],
-    [{ ...base, prompt_cache_key: "opaque-cache" }, "unsupported_cache"],
+    [{ ...base, prompt_cache_key: "" }, "invalid_request"],
+    [{ ...base, prompt_cache_key: 5 }, "invalid_request"],
+    [{ ...base, prompt_cache_key: "x".repeat(257) }, "invalid_request"],
   ];
   for (const [body, code] of cases) assert.throws(() => decodeResponsesRequest(body, {}), { code });
 });
@@ -209,37 +214,109 @@ test("Responses maps plain live reasoning without inventing encrypted history an
     { type: "reasoning_end", id: "r" },
     { type: "finish", finishReason: "stop", usage: { inputTokens: 3, outputTokens: 4 } },
   ]);
-  const item = plain.find((frame) => frame.event === "response.output_item.done")?.data as { item: Record<string, unknown> };
+  const item = plain.find((frame) => frame.event === "response.output_item.done")?.data as {
+    item: Record<string, unknown>;
+  };
   assert.deepEqual(item.item.summary, [{ type: "summary_text", text: "synthetic thought" }]);
   assert.equal("encrypted_content" in item.item, false);
   assert.equal(plain.at(-1)?.event, "response.completed");
   const encrypted = await collect([
-    { type: "reasoning_start", id: "r", providerMetadata: { openai: { itemId: "reasoning-original", reasoningEncryptedContent: "synthetic-opaque" } } },
+    {
+      type: "reasoning_start",
+      id: "r",
+      providerMetadata: {
+        openai: { itemId: "reasoning-original", reasoningEncryptedContent: "synthetic-opaque" },
+      },
+    },
     { type: "reasoning_delta", id: "r", text: "text" },
     { type: "reasoning_end", id: "r" },
     { type: "finish", finishReason: "stop", usage: { inputTokens: 3, outputTokens: 4 } },
   ]);
-  const original = encrypted.find((frame) => frame.event === "response.output_item.done")?.data as { item: Record<string, unknown> };
+  const original = encrypted.find((frame) => frame.event === "response.output_item.done")?.data as {
+    item: Record<string, unknown>;
+  };
   assert.equal(original.item.id, "reasoning-original");
   assert.equal(original.item.encrypted_content, "synthetic-opaque");
-  const replay = decodeResponsesRequest({ ...base, input: [
-    { type: "reasoning", id: "reasoning-original", encrypted_content: "synthetic-opaque", summary: [{ type: "summary_text", text: "text" }] },
-    { role: "user", content: "continue" },
-  ] }, {});
-  assert.deepEqual(replay.request.messages[0], { role: "assistant", content: [{ type: "reasoning", text: "text", providerOptions: { openai: { itemId: "reasoning-original", reasoningEncryptedContent: "synthetic-opaque" } } }] });
-  assert.throws(() => decodeResponsesRequest({ ...base, input: [{ type: "reasoning", id: "r", summary: [{ type: "summary_text", text: "text" }] }] }, {}), { code: "unsupported_reasoning" });
+  const replay = decodeResponsesRequest(
+    {
+      ...base,
+      input: [
+        {
+          type: "reasoning",
+          id: "reasoning-original",
+          encrypted_content: "synthetic-opaque",
+          summary: [{ type: "summary_text", text: "text" }],
+        },
+        { role: "user", content: "continue" },
+      ],
+    },
+    {},
+  );
+  assert.deepEqual(replay.request.messages[0], {
+    role: "assistant",
+    content: [
+      {
+        type: "reasoning",
+        text: "text",
+        providerOptions: {
+          openai: { itemId: "reasoning-original", reasoningEncryptedContent: "synthetic-opaque" },
+        },
+      },
+    ],
+  });
+  assert.throws(
+    () =>
+      decodeResponsesRequest(
+        {
+          ...base,
+          input: [
+            { type: "reasoning", id: "r", summary: [{ type: "summary_text", text: "text" }] },
+          ],
+        },
+        {},
+      ),
+    { code: "unsupported_reasoning" },
+  );
 });
 
 test("Responses validates inclusive cached usage and never completes before stream exhaustion", async () => {
-  const valid = await collect([{ type: "finish", finishReason: "stop", usage: { inputTokens: 20, outputTokens: 4, cacheReadTokens: 10 } }]);
-  const completed = valid.find((item) => item.event === "response.completed")?.data as { response: { usage: unknown } };
-  assert.deepEqual(completed.response.usage, { input_tokens: 20, output_tokens: 4, total_tokens: 24, input_tokens_details: { cached_tokens: 10 } });
-  const invalid = await collect([{ type: "finish", finishReason: "stop", usage: { inputTokens: 5, outputTokens: 4, cacheReadTokens: 10 } }]);
+  const valid = await collect([
+    {
+      type: "finish",
+      finishReason: "stop",
+      usage: { inputTokens: 20, outputTokens: 4, cacheReadTokens: 10 },
+    },
+  ]);
+  const completed = valid.find((item) => item.event === "response.completed")?.data as {
+    response: { usage: unknown };
+  };
+  assert.deepEqual(completed.response.usage, {
+    input_tokens: 20,
+    output_tokens: 4,
+    total_tokens: 24,
+    input_tokens_details: { cached_tokens: 10 },
+  });
+  const invalid = await collect([
+    {
+      type: "finish",
+      finishReason: "stop",
+      usage: { inputTokens: 5, outputTokens: 4, cacheReadTokens: 10 },
+    },
+  ]);
   assert.equal(invalid.at(-1)?.event, "response.failed");
-  assert.equal(invalid.some((item) => item.event === "response.completed"), false);
-  const afterFinish = await collect([{ type: "finish", finishReason: "stop", usage: { inputTokens: 5, outputTokens: 4 } }, { type: "error", error: new Error("synthetic") }]);
+  assert.equal(
+    invalid.some((item) => item.event === "response.completed"),
+    false,
+  );
+  const afterFinish = await collect([
+    { type: "finish", finishReason: "stop", usage: { inputTokens: 5, outputTokens: 4 } },
+    { type: "error", error: new Error("synthetic") },
+  ]);
   assert.equal(afterFinish.at(-1)?.event, "response.failed");
-  assert.equal(afterFinish.some((item) => item.event === "response.completed"), false);
+  assert.equal(
+    afterFinish.some((item) => item.event === "response.completed"),
+    false,
+  );
 });
 
 test("Responses final text snapshot replaces deltas and finish token usage is not summed", async () => {
