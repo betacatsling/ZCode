@@ -1,0 +1,3 @@
+# Sidebar removal confirmation
+
+The server resolves the target and original generation for preview. A loading/failed/unknown/unsafe preview cannot enable confirmation. Show dirty, untracked, submodules, locks, main, unknown and live activity, and warn of external-process races even for a safe preview. Clicking confirm invokes only the existing removal command with original generation; the host freezes and rechecks. Keep the dialog open with the error when removal rejects. Closing/reopening discards stale preview. The sidebar never treats a client path, cached summary, or preview as permission to remove.
