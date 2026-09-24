@@ -14,25 +14,13 @@ import {
   type SessionSpec,
 } from "@zcode/shared/agent-host";
 import type { HarnessAdapter } from "../../agent-host/harnessRegistry.js";
-import {
-  createCodexTransport,
-  type CodexNativeEvent,
-  type CodexTransport,
-} from "./codexTransport.js";
+import { createCodexTransport, type CodexNativeEvent } from "./codexTransport.js";
+import { createRunningCodexTurn, type RunningCodexTurn } from "./codexTurnRuntime.js";
 import { probeCodexVersion } from "./codexLaunch.js";
 import type { CodexTurnLeaseIssuer } from "./codexAdapterContract.js";
 import { projectCodexNotification } from "./codexCanonicalProjection.js";
 import { assertCodexBinding, codexSessionProfile } from "./codexBinding.js";
 
-interface Running {
-  turnId: string;
-  nativeTurnId?: string;
-  token: string;
-  transport: CodexTransport;
-  callbacks: Map<string, { interactionId: string; nativeItemId: string }>;
-  finish?: Promise<void>;
-  earlyCompletion?: "success" | "cancelled" | "failed";
-}
 interface Session {
   spec: SessionSpec;
   plan: BindingPlan;
@@ -40,7 +28,7 @@ interface Session {
   profile: string;
   threadId?: string;
   sequence: number;
-  running?: Running;
+  running?: RunningCodexTurn;
   busy: boolean;
   finishing?: Promise<void>;
   failed?: boolean;
@@ -186,7 +174,7 @@ export class CodexHarnessAdapter implements HarnessAdapter {
     if (session.busy || session.running) throw new Error("Codex session busy");
     session.busy = true;
     let token: string | undefined;
-    let transport: CodexTransport | undefined;
+    let transport: Awaited<ReturnType<typeof createCodexTransport>> | undefined;
     try {
       const nextPlan = this.options.resolveTurnPlan
         ? await this.options.resolveTurnPlan(session.spec, session.plan, command.turnId)
@@ -226,7 +214,7 @@ export class CodexHarnessAdapter implements HarnessAdapter {
             void this.#finish(session, session.running, "unknown");
         },
       });
-      const running: Running = { turnId: command.turnId, token, transport, callbacks: new Map() };
+      const running = createRunningCodexTurn(command.turnId, token, transport);
       session.running = running;
       if (session.threadId) {
         const resumed = await transport.resumeThread(session.threadId);
@@ -240,8 +228,19 @@ export class CodexHarnessAdapter implements HarnessAdapter {
         await rename(temp, path);
       }
       this.#emit(session, { kind: "turn.started", turnId: command.turnId });
+      this.#emit(session, {
+        kind: "message.finished",
+        turnId: command.turnId,
+        messageId: `user-${command.turnId}`,
+        role: "user",
+        text: command.text,
+      });
       running.nativeTurnId = await transport.startTurn(session.threadId, command.text);
       if (running.earlyCompletion) await this.#finish(session, running, running.earlyCompletion);
+      // 修复原因：Host 的 send 收据只在 adapter.send 完成后定案；若启动后立刻返回，
+      // Host 会把仍在运行且等待审批的 prompt 记为 execution-unknown，阻断后续 turn。
+      if ((await running.terminal) === "unknown")
+        throw new Error("Codex execution unknown; inspect history before explicit recovery");
     } catch (error) {
       session.failed = true;
       if (session.running) await this.#finish(session, session.running, "unknown");
@@ -363,7 +362,7 @@ export class CodexHarnessAdapter implements HarnessAdapter {
   }
   async #finish(
     session: Session,
-    running: Running,
+    running: RunningCodexTurn,
     outcome: "success" | "cancelled" | "failed" | "unknown",
   ): Promise<void> {
     if (running.finish) return running.finish;
@@ -374,6 +373,7 @@ export class CodexHarnessAdapter implements HarnessAdapter {
       this.#emit(session, { kind: "turn.finished", turnId: running.turnId, outcome });
     }
     this.options.lease.gateway.revokeToken(running.token);
+    running.settle(outcome);
     running.finish = running.transport.close();
     session.finishing = running.finish;
     try {

@@ -22,7 +22,7 @@ The target-local SessionHost alone admits commands/records receipts and journals
 
 ```
 Host send(id, turn) → journal accept → adapter lease(epoch,turn,Model) → native start/resume
-native function call → approval callback → adapter interaction.requested → Host journal → Host resolve(id,epoch,turn) → native accept/decline
+adapter turn.started → accepted user message.finished → native function call → approval callback → adapter interaction.requested → Host journal → Host resolve(id,epoch,turn) → native accept/decline
 native completion → canonical rows → lease revoke → process close → next turn may start
 Host cancel(id,epoch,turn) → native interrupt → revoke → no success; old token 401
 ```

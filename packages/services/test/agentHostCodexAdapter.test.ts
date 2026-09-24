@@ -133,13 +133,14 @@ test("two frozen model leases restart pinned process and resume native thread wi
   try {
     const binding = await adapter.create(spec, plan);
     adapter.subscribe(spec.hostSessionId, (event) => events.push(event));
-    await adapter.send({
+    const firstRun = adapter.send({
       type: "send",
       commandId: "one",
       hostSessionId: spec.hostSessionId,
       turnId: "host-turn-1",
       text: "first",
     });
+    await until(() => f.requests.some((entry) => entry.method === "turn/start"));
     const first = f.processes[0]!;
     first.send({
       id: 90,
@@ -163,13 +164,15 @@ test("two frozen model leases restart pinned process and resume native thread wi
       params: { threadId: "native-thread", turn: { id: "native-turn-1", status: "completed" } },
     });
     await until(() => revoked.includes("token-1"));
-    await adapter.send({
+    await firstRun;
+    const secondRun = adapter.send({
       type: "send",
       commandId: "two",
       hostSessionId: spec.hostSessionId,
       turnId: "host-turn-2",
       text: "second",
     });
+    await until(() => f.requests.filter((entry) => entry.method === "turn/start").length === 2);
     assert.deepEqual(f.tokens, ["token-1", "token-2"]);
     assert.equal(f.requests.filter((entry) => entry.method === "thread/start").length, 1);
     assert.equal(f.requests.filter((entry) => entry.method === "thread/resume").length, 1);
@@ -203,6 +206,7 @@ test("two frozen model leases restart pinned process and resume native thread wi
       runtimeEpoch: binding.runtimeEpoch,
       turnId: "host-turn-2",
     });
+    await secondRun;
     assert.deepEqual(revoked, ["token-1", "token-2"]);
     assert.equal(events.filter((event) => event.kind === "turn.finished").length, 2);
     assert.equal(issued.length, 2);
@@ -394,7 +398,7 @@ test(
       const binding = await adapter.create(spec, realPlan);
       const events: AgentEvent[] = [];
       adapter.subscribe(spec.hostSessionId, (event) => events.push(event));
-      await adapter.send({
+      const firstRun = adapter.send({
         type: "send",
         commandId: "first",
         hostSessionId: spec.hostSessionId,
@@ -404,7 +408,8 @@ test(
       await until(() =>
         events.some((event) => event.kind === "turn.finished" && event.turnId === "first"),
       );
-      await adapter.send({
+      await firstRun;
+      const secondRun = adapter.send({
         type: "send",
         commandId: "second",
         hostSessionId: spec.hostSessionId,
@@ -421,6 +426,7 @@ test(
       await until(() =>
         events.some((event) => event.kind === "turn.finished" && event.turnId === "second"),
       );
+      await secondRun;
       assert.equal(binding.backendVersion, "0.156.1");
       assert.deepEqual(
         seen.map((item) => item.model),
@@ -465,14 +471,16 @@ test("native child death revokes lease and refuses an automatic prompt retry", a
   try {
     await adapter.create(spec, plan);
     adapter.subscribe(spec.hostSessionId, (event) => events.push(event));
-    await adapter.send({
+    const run = adapter.send({
       type: "send",
       commandId: "first",
       hostSessionId: spec.hostSessionId,
       turnId: "turn-1",
       text: "once",
     });
+    await until(() => f.processes.length === 1);
     f.processes[0]!.kill();
+    await assert.rejects(run, /execution unknown/);
     await until(() => revoked.includes("token-1"));
     await assert.rejects(
       adapter.send({
