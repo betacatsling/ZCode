@@ -12,8 +12,17 @@ export function createRpcAgentHostService(target: AgentHostTargetService, admiss
   const service: IAgentHostService = {
     onEvent: emitter.event,
     getAvailability: async () => ({ ...await target.getAvailability(), admissionEnabled: admissionEnabled() }),
+    catalogForTarget: (targetId) => target.catalogForTarget(targetId),
+    getSessionCapabilities: (spec) => target.getSessionCapabilities(spec),
+    getRuntimeActivity: (workspaceId) => target.getRuntimeActivity(workspaceId),
+    getSessionSpec: (scope) => target.getSessionSpec(scope),
+    listWorkspaceSessions: (workspaceId) => target.listWorkspaceSessions(workspaceId),
+    rowsRange: (spec, request) => target.rowsRange(spec, request),
     listSessions: (workspaceIdentity, worktreePath) => target.listSessions(workspaceIdentity, worktreePath),
-    create: (spec) => target.create(spec),
+    create: (spec) => {
+      if (!admissionEnabled()) throw new Error("new external sessions disabled; existing history remains readable");
+      return target.create(spec);
+    },
     attach: (spec) => target.attach(spec),
     dispatch: (spec, command) => target.dispatch(spec, command),
     snapshot: (spec) => target.snapshot(spec),

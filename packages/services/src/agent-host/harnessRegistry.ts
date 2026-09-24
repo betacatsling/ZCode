@@ -3,12 +3,13 @@ import { harnessManifestSchema, type HarnessManifest } from "@zcode/shared/agent
 import type {
   AgentCommand,
   AgentEvent,
-  BackendBinding,
+  BackendBindingV2,
   BindingPlan,
   CapabilityReport,
   ExecutionTarget,
   HarnessCapabilities,
-  SessionSpec,
+  HarnessCapabilitiesV2,
+  SessionSpecV2,
 } from "@zcode/shared/agent-host";
 
 /** Adapter owns backend control. The host owns IDs, persistence and admission. */
@@ -17,20 +18,22 @@ export interface HarnessAdapter {
   readonly version: string;
   readonly hostManagedRoute: BindingPlan["route"];
   probe(target: ExecutionTarget): Promise<CapabilityReport>;
-  capabilities(target: ExecutionTarget): Promise<HarnessCapabilities>;
+  capabilities(target: ExecutionTarget): Promise<HarnessCapabilities | HarnessCapabilitiesV2>;
   hostManagedSupport(target: ExecutionTarget, selection: ModelSelection): Promise<CapabilityReport>;
   /** Native-account route is opt-in, not an implicit fallback from host-managed. */
   harnessManagedSupport?(
     target: ExecutionTarget,
     nativeModelId?: string,
   ): Promise<CapabilityReport>;
-  create(spec: SessionSpec, plan: BindingPlan): Promise<BackendBinding>;
+  create(spec: SessionSpecV2, plan: BindingPlan): Promise<BackendBindingV2>;
   attach(
-    spec: SessionSpec,
-    binding: BackendBinding,
+    spec: SessionSpecV2,
+    binding: BackendBindingV2,
     lastJournalSequence: number,
     plan: BindingPlan,
   ): Promise<void>;
+  /** Prepare the actual immutable model route, without executing prompt or tools. */
+  prepareTurn?(spec: SessionSpecV2, input: { turnId: string; runtimeEpoch: string; plan: BindingPlan }): Promise<void>;
   send(command: Extract<AgentCommand, { type: "send" }>): Promise<void>;
   cancelTurn(command: Extract<AgentCommand, { type: "cancelTurn" }>): Promise<void>;
   resolveInteraction(command: Extract<AgentCommand, { type: "resolveInteraction" }>): Promise<void>;

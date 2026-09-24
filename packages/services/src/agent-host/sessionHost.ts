@@ -1,32 +1,25 @@
 import { createHash } from "node:crypto";
-import { mkdir, open, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { z } from "zod";
 import {
-  agentCommandSchema, backendBindingSchema, bindingPlanSchema, executionTargetSchema,
-  sessionSpecSchema, type AgentCommand, type AgentCommandReceipt, type AgentEvent,
-  type BackendBinding, type BindingPlan, type ExecutionTarget, type SessionSpec,
+  agentCommandSchema, backendBindingV2Schema, executionTargetSchema,
+  frozenTurnModelRouteSchema, readableSessionSpecSchema, writableSessionSpecV2Schema, type AgentCommand, type AgentCommandReceipt, type AgentEvent,
+  type BackendBinding, type BackendBindingV2, type BindingPlan, type ExecutionTarget, type LegacySessionSpec, type SessionSpecV2,
   type StoredAgentSessionSummary,
 } from "@zcode/shared/agent-host";
 import { CommandJournal } from "./commandJournal.js";
+import { assertBinding, manifestPath, manifestSchema, matchesScope, readableManifestSchema, saveManifest } from "./sessionManifest.js";
 import { EventJournal } from "./eventJournal.js";
 import { HarnessRegistry, type HarnessAdapter } from "./harnessRegistry.js";
 import type { JournalIdentity } from "./journalStorage.js";
 import { planModelBinding, type ModelCatalogPort } from "./modelBindingPlanner.js";
+import type { V4ConversationRowsRangeParams, V4ConversationRowsRangeResult } from "@zcode/shared/zcode-protocol-v4";
+import { v4ConversationRowsRangeParamsSchema, v4ConversationRowsRangeResultSchema } from "@zcode/shared/zcode-protocol-v4";
 import { projectHostConversation } from "../agent-ui-projection/projector.js";
-
-const manifestSchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  state: z.enum(["creating", "running", "terminated"]),
-  spec: sessionSpecSchema,
-  plan: bindingPlanSchema,
-  binding: backendBindingSchema.optional(),
-});
-type Manifest = z.infer<typeof manifestSchema>;
 
 export interface SessionHostOptions {
   root: string;
-  spec: SessionSpec;
+  spec: SessionSpecV2;
   target: ExecutionTarget;
   catalog: ModelCatalogPort;
   registry: HarnessRegistry;
@@ -34,11 +27,13 @@ export interface SessionHostOptions {
 
 /** One target-local owner. Renderer disconnect must NOT call close() on this service. */
 export class SessionHost {
-  readonly spec: SessionSpec;
-  readonly binding: BackendBinding;
+  readonly spec: SessionSpecV2;
+  readonly binding: BackendBindingV2;
   readonly plan: BindingPlan;
   readonly #manifestPath: string;
   readonly #adapter: HarnessAdapter;
+  readonly #target: ExecutionTarget;
+  readonly #catalog: ModelCatalogPort;
   readonly #commands: CommandJournal;
   readonly #events: EventJournal;
   readonly #listeners = new Set<(event: AgentEvent) => void>();
@@ -46,22 +41,30 @@ export class SessionHost {
   readonly #interactions = new Map<string, string>();
   #activeTurn?: string;
   #eventTail: Promise<void> = Promise.resolve();
+  #dispatchTail: Promise<void> = Promise.resolve();
   #eventError?: Error;
   #unsubscribe: () => void;
   #closed = false;
 
   private constructor(options: {
-    manifestPath: string; spec: SessionSpec; plan: BindingPlan; binding: BackendBinding;
-    adapter: HarnessAdapter; commands: CommandJournal; events: EventJournal;
+    manifestPath: string; spec: SessionSpecV2; plan: BindingPlan; binding: BackendBindingV2;
+    adapter: HarnessAdapter; commands: CommandJournal; events: EventJournal; target: ExecutionTarget; catalog: ModelCatalogPort;
   }) {
     this.#manifestPath = options.manifestPath;
     this.spec = options.spec;
     this.plan = options.plan;
     this.binding = options.binding;
     this.#adapter = options.adapter;
+    this.#target = options.target;
+    this.#catalog = options.catalog;
     this.#commands = options.commands;
     this.#events = options.events;
-    for (const event of this.#events.since(0)) this.#applyEventState(event);
+    for (let sequence = 0; ; ) {
+      const batch = this.#events.since(sequence);
+      for (const event of batch) this.#applyEventState(event);
+      sequence += batch.length;
+      if (batch.length < 500) break;
+    }
     this.#unsubscribe = options.adapter.subscribe(options.spec.hostSessionId, (source) => {
       this.#eventTail = this.#eventTail.then(async () => {
         if (this.#eventError) return;
@@ -76,72 +79,66 @@ export class SessionHost {
   }
 
   static async create(options: SessionHostOptions): Promise<SessionHost> {
-    const spec = sessionSpecSchema.parse(options.spec);
+    const spec = writableSessionSpecV2Schema.parse(options.spec);
     const target = executionTargetSchema.parse(options.target);
     const adapter = options.registry.require(spec.harness.id);
     const plan = await planModelBinding({ spec, target, harness: adapter, catalog: options.catalog });
     if (plan.support.support !== "supported") throw new Error(plan.support.reason ?? "unsupported model binding");
     const path = manifestPath(options.root, spec);
     await mkdir(options.root, { recursive: true, mode: 0o700 });
+    // 修复跨 Harness/工作区相同 hostSessionId 被复用：先持久保留全 target 的唯一 ID。
+    const reservation = await open(join(options.root, `${createHash("sha256").update(spec.hostSessionId).digest("hex")}.owner.json`), "wx", 0o600);
+    try { await reservation.writeFile(JSON.stringify({ schemaVersion: 2, targetId: spec.execution.targetId, workspaceId: spec.workspaceId, hostSessionId: spec.hostSessionId })); await reservation.sync(); }
+    finally { await reservation.close(); }
     // Mark an in-flight create before backend launch. Crash at this point is unknown, not retried.
     const handle = await open(path, "wx", 0o600);
     try {
-      const initial = manifestSchema.parse({ schemaVersion: 1, state: "creating", spec, plan });
+      const initial = manifestSchema.parse({ schemaVersion: 2, state: "creating", spec, plan });
       await handle.writeFile(JSON.stringify(initial));
       await handle.sync();
     } finally {
       await handle.close();
     }
-    const binding = backendBindingSchema.parse(await adapter.create(spec, plan));
-    if (binding.hostSessionId !== spec.hostSessionId || binding.backendVersion !== adapter.version) throw new Error("backend identity mismatch");
-    await saveManifest(path, { schemaVersion: 1, state: "running", spec, plan, binding });
-    return SessionHost.#mount(options.root, path, spec, plan, binding, adapter);
+    const binding = backendBindingV2Schema.parse(await adapter.create(spec, plan));
+    assertBinding(spec, binding, adapter);
+    await saveManifest(path, { schemaVersion: 2, state: "running", spec, plan, binding });
+    return SessionHost.#mount(options.root, path, spec, plan, binding, adapter, target, options.catalog);
   }
 
   static async open(options: SessionHostOptions): Promise<SessionHost> {
-    const spec = sessionSpecSchema.parse(options.spec);
+    const spec = writableSessionSpecV2Schema.parse(options.spec);
     const path = manifestPath(options.root, spec);
     const manifest = manifestSchema.parse(JSON.parse(await readFile(path, "utf8")));
-    if (JSON.stringify(manifest.spec) !== JSON.stringify(spec)) throw new Error("session identity or configuration mismatch");
+    if (!matchesScope(manifest, spec)) throw new Error("session identity or configuration mismatch");
     if (!manifest.binding || manifest.state === "creating") throw new Error("execution-unknown: backend create was not confirmed");
     if (manifest.state === "terminated") throw new Error("terminated session is history-only; never restart its backend");
     const adapter = options.registry.require(spec.harness.id);
-    if (adapter.version !== manifest.binding.backendVersion) throw new Error("backend version mismatch: history only");
-    const host = await SessionHost.#mount(options.root, path, spec, manifest.plan, manifest.binding, adapter);
+    assertBinding(spec, manifest.binding, adapter);
+    const host = await SessionHost.#mount(options.root, path, spec, manifest.plan, manifest.binding, adapter, options.target, options.catalog);
     try { await adapter.attach(spec, manifest.binding, host.snapshot().seq, manifest.plan); } catch (error) { await host.close(); throw error; }
     return host;
   }
 
   /** Read-only recovery path: does not load an adapter, call a Provider or start a worker. */
-  static async snapshotHistory(root: string, spec: SessionSpec) {
+  static async snapshotHistory(root: string, spec: LegacySessionSpec | SessionSpecV2) {
     const { binding, identity } = await SessionHost.#storedHistory(root, spec);
-    const journal = await EventJournal.open(root, identity);
-    try {
-      const events: AgentEvent[] = [];
-      while (true) {
-        const batch = journal.since(events.length);
-        events.push(...batch);
-        if (batch.length < 500) break;
-      }
-      return projectHostConversation({ spec, runtimeEpoch: binding.runtimeEpoch, events });
-    } finally { await journal.close(); }
+    const events = await EventJournal.readHistory(root, identity);
+    return projectHostConversation({ spec, runtimeEpoch: binding.runtimeEpoch, events });
   }
 
-  static async eventsSinceHistory(root: string, spec: SessionSpec, sequence: number): Promise<readonly AgentEvent[]> {
+  static async eventsSinceHistory(root: string, spec: LegacySessionSpec | SessionSpecV2, sequence: number): Promise<readonly AgentEvent[]> {
     const { identity } = await SessionHost.#storedHistory(root, spec);
-    const journal = await EventJournal.open(root, identity);
-    try { return journal.since(sequence); } finally { await journal.close(); }
+    return EventJournal.sinceHistory(root, identity, sequence);
   }
 
-  static async queryCommandHistory(root: string, spec: SessionSpec, commandId: string): Promise<AgentCommandReceipt | undefined> {
+  static async queryCommandHistory(root: string, spec: LegacySessionSpec | SessionSpecV2, commandId: string): Promise<AgentCommandReceipt | undefined> {
     const { identity } = await SessionHost.#storedHistory(root, spec);
-    const journal = await CommandJournal.open(root, identity);
-    try { return journal.query(commandId); } finally { await journal.close(); }
+    return CommandJournal.queryHistory(root, identity, commandId);
   }
 
   /** Target-local sidecar index; never inserts external sessions into native CLI storage. */
   static async listStoredSessions(root: string, input: {
-    targetId: string; workspaceIdentity: string; worktreePath: string;
+    targetId: string; workspaceIdentity?: string; worktreePath?: string; workspaceId?: string;
   }): Promise<StoredAgentSessionSummary[]> {
     let entries;
     try { entries = await readdir(root, { withFileTypes: true }); }
@@ -156,21 +153,35 @@ export class SessionHost {
       const metadata = await stat(path);
       if (metadata.size > 128 * 1024) throw new Error("oversized external session manifest; manual inspection required");
       const value: unknown = JSON.parse(await readFile(path, "utf8"));
-      const parsed = manifestSchema.safeParse(value);
+      const parsed = readableManifestSchema.safeParse(value);
       if (!parsed.success) throw new Error("unreadable or future external session manifest; refusing to hide history");
       const manifest = parsed.data;
       if (manifest.spec.execution.targetId !== input.targetId ||
-          manifest.spec.execution.workspaceIdentity !== input.workspaceIdentity ||
-          manifest.spec.execution.worktreePath !== input.worktreePath) continue;
+          (input.workspaceIdentity !== undefined && manifest.spec.execution.workspaceIdentity !== input.workspaceIdentity) ||
+          (input.worktreePath !== undefined && manifest.spec.execution.worktreePath !== input.worktreePath) ||
+          (input.workspaceId !== undefined && (manifest.schemaVersion !== 2 || manifest.spec.workspaceId !== input.workspaceId))) continue;
       summaries.push({ spec: manifest.spec, state: manifest.state, updatedAt: metadata.mtimeMs });
     }
     return summaries.sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
-  static async #storedHistory(root: string, raw: SessionSpec): Promise<{ binding: BackendBinding; identity: JournalIdentity }> {
-    const spec = sessionSpecSchema.parse(raw);
-    const manifest = manifestSchema.parse(JSON.parse(await readFile(manifestPath(root, spec), "utf8")));
-    if (JSON.stringify(manifest.spec) !== JSON.stringify(spec)) throw new Error("session identity or configuration mismatch");
+  static async rowsRangeHistory(root: string, spec: LegacySessionSpec | SessionSpecV2, request: V4ConversationRowsRangeParams): Promise<V4ConversationRowsRangeResult> {
+    const params = v4ConversationRowsRangeParamsSchema.parse(request);
+    if (params.sessionId !== spec.hostSessionId) throw new Error("foreign rows session");
+    const snapshot = await SessionHost.snapshotHistory(root, spec);
+    const { binding, identity } = await SessionHost.#storedHistory(root, spec);
+    const events = await EventJournal.readHistory(root, identity);
+    const all = projectHostConversation({ spec, runtimeEpoch: binding.runtimeEpoch, events, windowSize: 100_000 }).rows.window;
+    const eligible = all.filter((row) => params.beforeRowId === undefined || row.rowId < params.beforeRowId);
+    const rows = eligible.slice(-params.limit);
+    return v4ConversationRowsRangeResultSchema.parse({ rows, atSeq: snapshot.seq, atRevision: snapshot.revision,
+      atLogEpoch: snapshot.logEpoch, hasMore: eligible.length > rows.length });
+  }
+
+  static async #storedHistory(root: string, raw: LegacySessionSpec | SessionSpecV2): Promise<{ binding: BackendBinding; identity: JournalIdentity }> {
+    const spec = readableSessionSpecSchema.parse(raw);
+    const manifest = readableManifestSchema.parse(JSON.parse(await readFile(manifestPath(root, spec), "utf8")));
+    if (!matchesScope(manifest, spec)) throw new Error("session identity or configuration mismatch");
     if (!manifest.binding) throw new Error("execution-unknown: backend create was not confirmed");
     return {
       binding: manifest.binding,
@@ -182,7 +193,7 @@ export class SessionHost {
     };
   }
 
-  static async #mount(root: string, path: string, spec: SessionSpec, plan: BindingPlan, binding: BackendBinding, adapter: HarnessAdapter): Promise<SessionHost> {
+  static async #mount(root: string, path: string, spec: SessionSpecV2, plan: BindingPlan, binding: BackendBindingV2, adapter: HarnessAdapter, target: ExecutionTarget, catalog: ModelCatalogPort): Promise<SessionHost> {
     const identity: JournalIdentity = {
       targetId: spec.execution.targetId,
       workspaceIdentity: spec.execution.workspaceIdentity,
@@ -193,20 +204,27 @@ export class SessionHost {
     const events = await EventJournal.open(root, identity);
     try {
       const commands = await CommandJournal.open(root, identity);
-      return new SessionHost({ manifestPath: path, spec, plan, binding, adapter, commands, events });
+      return new SessionHost({ manifestPath: path, spec, plan, binding, adapter, commands, events, target, catalog });
     } catch (error) { await events.close(); throw error; }
   }
 
   async dispatch(raw: AgentCommand): Promise<AgentCommandReceipt> {
+    // 同一个 Host 是唯一命令 admission owner：并发 send 必须串行检查 activeTurn。
+    const run = this.#dispatchTail.then(() => this.#dispatch(raw));
+    this.#dispatchTail = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  async #dispatch(raw: AgentCommand): Promise<AgentCommandReceipt> {
     if (this.#closed) throw new Error("session host closed");
-    if (this.#eventError) throw this.#eventError;
     const command = agentCommandSchema.parse(raw);
     if (command.hostSessionId !== this.spec.hostSessionId) throw new Error("foreign session command");
     const receipt = await this.#commands.accept(command);
     if (receipt.status === "duplicate") return receipt;
     await this.#eventTail;
     if (this.#closed) return this.#reject(command, "backend-failure", "session host is closing");
-    if (this.#eventError) return this.#reject(command, "backend-failure", "event stream is no longer reliable");
+    if (this.#eventError && !["viewHistory", "detach", "terminateSession"].includes(command.type))
+      return this.#reject(command, "execution-unknown", "event gap requires backend resync; history remains readable");
     if (command.type === "send") {
       if (this.#commands.hasUncertainSend()) {
         return this.#reject(command, "execution-unknown", "previous prompt may have executed; inspect history before explicit recovery");
@@ -214,33 +232,61 @@ export class SessionHost {
       if (this.#activeTurn) return this.#reject(command, "unsupported", "session busy");
       this.#activeTurn = command.turnId;
       try {
+        const plan = await planModelBinding({ spec: this.spec, target: this.#target, harness: this.#adapter, catalog: this.#catalog });
+        if (plan.support.support !== "supported" || plan.capabilities.text?.support !== "supported") {
+          this.#activeTurn = undefined;
+          return this.#reject(command, "unsupported", plan.support.reason ?? plan.capabilities.text?.reason ?? "text unavailable");
+        }
+        if (plan.requested.kind === "host-managed" && !this.#adapter.prepareTurn && plan.route !== "mock") {
+          this.#activeTurn = undefined;
+          return this.#reject(command, "unsupported", "adapter cannot freeze the selected model before dispatch");
+        }
+        const route = frozenTurnModelRouteSchema.parse({
+          schemaVersion: 1, hostSessionId: this.spec.hostSessionId, turnId: command.turnId,
+          runtimeEpoch: this.binding.runtimeEpoch, targetId: this.spec.execution.targetId,
+          workspaceId: this.spec.workspaceId, harnessId: this.spec.harness.id,
+          adapterVersion: plan.adapterVersion, catalogFingerprint: plan.catalogFingerprint,
+          requested: plan.requested, effective: plan.effective, route: plan.route, credentialRef: plan.credentialRef,
+        });
+        await this.#commands.freezeTurn(command.commandId, route);
+        await this.#adapter.prepareTurn?.(this.spec, { turnId: command.turnId, runtimeEpoch: this.binding.runtimeEpoch, plan });
         const run = this.#adapter.send(command);
         this.#track(command.commandId, command.turnId, run);
         return receipt;
       } catch (error) {
         this.#activeTurn = undefined;
-        return this.#reject(command, "backend-failure", error instanceof Error ? error.message : "backend failed");
+        // 准备阶段可能已分配后端资源；不可在未知副作用后将同一命令重发。
+        await this.#commands.finish(command.commandId, { commandId: command.commandId, status: "execution-unknown", reasonCode: "execution-unknown" });
+        return { commandId: command.commandId, status: "execution-unknown", reasonCode: "execution-unknown", message: error instanceof Error ? error.message : "backend failed" };
       }
     }
     try {
       switch (command.type) {
         case "cancelTurn":
           if (!this.#isCurrentTurn(command)) return this.#reject(command, "stale-turn", "turn or epoch changed");
+          if ((await this.#adapter.capabilities(this.#target)).cancelTurn.support !== "supported")
+            return this.#reject(command, "unsupported", "cancel unavailable");
           await this.#adapter.cancelTurn(command);
           break;
         case "resolveInteraction":
           if (!this.#isCurrentTurn(command) || this.#interactions.get(command.interactionId) !== command.turnId) {
             return this.#reject(command, "stale-interaction", "interaction or epoch changed");
           }
+          if ((await this.#adapter.capabilities(this.#target)).approvals.support !== "supported")
+            return this.#reject(command, "unsupported", "approvals unavailable");
           await this.#adapter.resolveInteraction(command);
           break;
         case "detach": // Closing a UI subscription never touches the target worker.
         case "viewHistory":
           break;
-        case "terminateSession":
+        case "terminateSession": {
+          const capabilities = await this.#adapter.capabilities(this.#target);
+          if (!("terminateSession" in capabilities) || capabilities.terminateSession.support !== "supported")
+            return this.#reject(command, "unsupported", "termination is not certified");
           await this.#adapter.terminate(this.spec.hostSessionId);
-          await saveManifest(this.#manifestPath, { schemaVersion: 1, state: "terminated", spec: this.spec, plan: this.plan, binding: this.binding });
+          await saveManifest(this.#manifestPath, { schemaVersion: 2, state: "terminated", spec: this.spec, plan: this.plan, binding: this.binding });
           break;
+        }
         case "resumeExecution":
           return this.#reject(command, "unsupported", "backend native resume is not implemented");
         case "createSession":
@@ -254,33 +300,56 @@ export class SessionHost {
     }
   }
 
+  getActivity(): "running" | "waiting" | "uncertain" | "idle" {
+    if (this.#eventError || this.#commands.hasUncertainSend()) return "uncertain";
+    if (this.#interactions.size) return "waiting";
+    return this.#activeTurn ? "running" : "idle";
+  }
+  rowsRange(request: V4ConversationRowsRangeParams): V4ConversationRowsRangeResult {
+    const params = v4ConversationRowsRangeParamsSchema.parse(request);
+    if (params.sessionId !== this.spec.hostSessionId) throw new Error("foreign rows session");
+    const snapshot = this.snapshot();
+    const all = this.#projectAllRows();
+    const eligible = all.filter((row) => params.beforeRowId === undefined || row.rowId < params.beforeRowId);
+    const rows = eligible.slice(-params.limit);
+    return v4ConversationRowsRangeResultSchema.parse({ rows, atSeq: snapshot.seq, atRevision: snapshot.revision,
+      atLogEpoch: snapshot.logEpoch, hasMore: eligible.length > rows.length });
+  }
   eventsSince(sequence: number): readonly AgentEvent[] { return this.#events.since(sequence); }
   snapshot() {
+    return projectHostConversation({ spec: this.spec, runtimeEpoch: this.binding.runtimeEpoch, events: this.#allEvents() });
+  }
+  #allEvents(): AgentEvent[] {
     const events: AgentEvent[] = [];
-    while (true) {
-      const batch = this.#events.since(events.length);
-      events.push(...batch);
-      if (batch.length < 500) break;
-    }
-    return projectHostConversation({ spec: this.spec, runtimeEpoch: this.binding.runtimeEpoch, events });
+    while (true) { const batch = this.#events.since(events.length); events.push(...batch); if (batch.length < 500) break; }
+    return events;
+  }
+  #projectAllRows() {
+    // Pagination must project the full journal, not just a tail snapshot.
+    return projectHostConversation({ spec: this.spec, runtimeEpoch: this.binding.runtimeEpoch, events: this.#allEvents(), windowSize: 100_000 }).rows.window;
   }
   queryCommand(commandId: string): AgentCommandReceipt | undefined { return this.#commands.query(commandId); }
   subscribe(listener: (event: AgentEvent) => void): () => void {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
   }
+  async whenEventsRecorded(): Promise<void> { await this.#eventTail; }
   async whenEventsSettled(): Promise<void> {
-    await this.#eventTail;
+    await this.whenEventsRecorded();
     if (this.#eventError) throw this.#eventError;
   }
-  async whenIdle(): Promise<void> {
+  async whenIdleAllowingGap(): Promise<void> {
     await Promise.all(this.#active);
-    await this.whenEventsSettled();
+    await this.whenEventsRecorded();
+  }
+  async whenIdle(): Promise<void> {
+    await this.whenIdleAllowingGap();
+    if (this.#eventError) throw this.#eventError;
   }
   async close(): Promise<void> {
     if (this.#closed) return;
     if (this.#active.size) throw new Error("active turn: detach a client, cancel the turn or terminate the session before closing the host");
-    await this.whenIdle();
+    await this.whenIdleAllowingGap();
     this.#closed = true;
     this.#unsubscribe();
     await this.#commands.close();
@@ -320,16 +389,4 @@ export class SessionHost {
     await this.#commands.finish(command.commandId, receipt);
     return receipt;
   }
-}
-
-function manifestPath(root: string, spec: SessionSpec): string {
-  const identity = [spec.execution.targetId, spec.execution.workspaceIdentity, spec.harness.id, spec.hostSessionId];
-  return join(root, `${createHash("sha256").update(JSON.stringify(identity)).digest("hex")}.session.json`);
-}
-
-async function saveManifest(path: string, value: Manifest): Promise<void> {
-  const checked = manifestSchema.parse(value);
-  const tmp = `${path}.${process.pid}.tmp`;
-  await writeFile(tmp, JSON.stringify(checked), { mode: 0o600 });
-  await rename(tmp, path);
 }

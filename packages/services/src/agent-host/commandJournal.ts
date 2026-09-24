@@ -2,10 +2,12 @@ import type { FileHandle } from "node:fs/promises";
 import {
   agentCommandReceiptSchema,
   agentCommandSchema,
+  frozenTurnModelRouteSchema,
+  type FrozenTurnModelRoute,
   type AgentCommand,
   type AgentCommandReceipt,
 } from "@zcode/shared/agent-host";
-import { closeJournal, durableAppend, journalPath, openJournal, type JournalIdentity } from "./journalStorage.js";
+import { closeJournal, durableAppend, journalPath, openJournal, readJournalLines, type JournalIdentity } from "./journalStorage.js";
 
 interface CommandRecord {
   command: AgentCommand;
@@ -20,6 +22,7 @@ export class CommandJournal {
   readonly #identity: JournalIdentity;
   readonly #records: Map<string, CommandRecord>;
   readonly #unknownAfterRestart: Set<string>;
+  readonly #routes = new Map<string, FrozenTurnModelRoute>();
   #tail: Promise<void> = Promise.resolve();
   #closed = false;
 
@@ -32,20 +35,49 @@ export class CommandJournal {
     this.#unknownAfterRestart = new Set([...records].filter(([, record]) => record.receipt.status === "accepted").map(([id]) => id));
   }
 
+  /** History query does not acquire the writer lease or create a missing journal. */
+  static async queryHistory(root: string, identity: JournalIdentity, commandId: string): Promise<AgentCommandReceipt | undefined> {
+    const { records } = CommandJournal.#parse(await readJournalLines(journalPath(root, identity, "commands")), identity);
+    const receipt = records.get(commandId)?.receipt;
+    return receipt?.status === "accepted"
+      ? { commandId, status: "execution-unknown", reasonCode: "execution-unknown" }
+      : receipt;
+  }
+
+  static #parse(lines: readonly string[], identity: JournalIdentity): { records: Map<string, CommandRecord>; routes: Map<string, FrozenTurnModelRoute> } {
+    const records = new Map<string, CommandRecord>();
+    const routes = new Map<string, FrozenTurnModelRoute>();
+    for (const line of lines) {
+      const raw = JSON.parse(line) as { command: unknown; receipt: unknown; frozenRoute?: unknown };
+      if (raw.frozenRoute) {
+        const route = frozenTurnModelRouteSchema.parse(raw.frozenRoute);
+        const prior = routes.get(raw.command as string);
+        if (prior || typeof raw.command !== "string") throw new Error("duplicate or corrupt frozen turn route");
+        routes.set(raw.command, route);
+        continue;
+      }
+      const command = agentCommandSchema.parse(raw.command);
+      const receipt = agentCommandReceiptSchema.parse(raw.receipt);
+      if (command.hostSessionId !== identity.hostSessionId || receipt.commandId !== command.commandId) throw new Error("foreign command journal record");
+      const original = records.get(command.commandId);
+      if (original && JSON.stringify(original.command) !== JSON.stringify(command)) throw new Error("command ID collision in journal");
+      records.set(command.commandId, { command, receipt });
+    }
+    for (const [id, route] of routes) {
+      const record = records.get(id);
+      if (!record || record.command.type !== "send" || record.command.turnId !== route.turnId || route.runtimeEpoch !== identity.runtimeEpoch ||
+        route.hostSessionId !== identity.hostSessionId) throw new Error("foreign frozen turn route");
+    }
+    return { records, routes };
+  }
+
   static async open(root: string, identity: JournalIdentity): Promise<CommandJournal> {
     const storage = await openJournal(root, journalPath(root, identity, "commands"));
     try {
-      const records = new Map<string, CommandRecord>();
-      for (const line of storage.lines) {
-        const raw = JSON.parse(line) as { command: unknown; receipt: unknown };
-        const command = agentCommandSchema.parse(raw.command);
-        const receipt = agentCommandReceiptSchema.parse(raw.receipt);
-        if (command.hostSessionId !== identity.hostSessionId || receipt.commandId !== command.commandId) throw new Error("foreign command journal record");
-        const original = records.get(command.commandId);
-        if (original && JSON.stringify(original.command) !== JSON.stringify(command)) throw new Error("command ID collision in journal");
-        records.set(command.commandId, { command, receipt });
-      }
-      return new CommandJournal(storage, identity, records);
+      const { records, routes } = CommandJournal.#parse(storage.lines, identity);
+      const journal = new CommandJournal(storage, identity, records);
+      for (const [id, route] of routes) journal.#routes.set(id, route);
+      return journal;
     } catch (error) {
       await closeJournal(storage.file, storage.lock, storage.lockPath);
       throw error;
@@ -70,6 +102,22 @@ export class CommandJournal {
     this.#tail = run.then(() => undefined, () => undefined);
     return run;
   }
+
+  freezeTurn(commandId: string, route: FrozenTurnModelRoute): Promise<void> {
+    const run = this.#tail.then(async () => {
+      if (this.#closed) throw new Error("journal closed");
+      const record = this.#records.get(commandId);
+      const checked = frozenTurnModelRouteSchema.parse(route);
+      if (!record || record.command.type !== "send" || record.command.turnId !== checked.turnId ||
+        checked.runtimeEpoch !== this.#identity.runtimeEpoch || checked.hostSessionId !== this.#identity.hostSessionId ||
+        this.#routes.has(commandId)) throw new Error("invalid frozen turn route");
+      await durableAppend(this.#file, { command: commandId, frozenRoute: checked });
+      this.#routes.set(commandId, checked);
+    });
+    this.#tail = run.then(() => undefined, () => undefined);
+    return run;
+  }
+  turnRoute(commandId: string): FrozenTurnModelRoute | undefined { return this.#routes.get(commandId); }
 
   finish(commandId: string, receipt: AgentCommandReceipt): Promise<void> {
     const run = this.#tail.then(async () => {

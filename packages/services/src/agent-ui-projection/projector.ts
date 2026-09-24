@@ -6,20 +6,20 @@ import {
   type ToolCallRow,
   type TurnHeaderRow,
 } from "@zcode/shared/zcode-protocol-v4";
-import type { AgentEvent, SessionSpec } from "@zcode/shared/agent-host";
+import type { AgentEvent, LegacySessionSpec, SessionSpecV2 } from "@zcode/shared/agent-host";
 
 const unavailable = { allowed: false as const, reasonCode: "externalHarnessUnsupported" };
 
 /** Pure V4 read projection. Replay never sends a prompt, performs a tool, or resolves approval. */
 export function projectHostConversation(input: {
-  spec: SessionSpec;
+  spec: LegacySessionSpec | SessionSpecV2;
   runtimeEpoch: string;
   events: readonly AgentEvent[];
   windowSize?: number;
 }): ConversationSnapshot {
   const { spec, runtimeEpoch, events } = input;
   const windowSize = input.windowSize ?? 100;
-  if (!Number.isSafeInteger(windowSize) || windowSize < 1 || windowSize > 500) throw new Error("invalid rows window size");
+  if (!Number.isSafeInteger(windowSize) || windowSize < 1 || windowSize > 100_000) throw new Error("invalid rows window size");
   const rows: ConversationRow[] = [];
   const headers = new Map<string, TurnHeaderRow>();
   const messages = new Map<string, ConversationRow>();

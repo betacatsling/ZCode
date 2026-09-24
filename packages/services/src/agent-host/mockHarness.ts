@@ -1,12 +1,12 @@
 import {
   agentEventSchema,
-  backendBindingSchema,
+  backendBindingV2Schema,
   type AgentCommand,
   type AgentEvent,
-  type BackendBinding,
+  type BackendBindingV2,
   type ExecutionTarget,
-  type HarnessCapabilities,
-  type SessionSpec,
+  type HarnessCapabilitiesV2,
+  type SessionSpecV2,
 } from "@zcode/shared/agent-host";
 import type { HarnessAdapter } from "./harnessRegistry.js";
 
@@ -17,7 +17,7 @@ interface PendingApproval {
   answer: Promise<"allow" | "deny">;
 }
 interface MockState {
-  binding: BackendBinding;
+  binding: BackendBindingV2;
   seq: number;
   activeTurn?: string;
   pending?: PendingApproval;
@@ -57,7 +57,7 @@ export class MockHarness implements HarnessAdapter {
   async harnessManagedSupport(target: ExecutionTarget) {
     return this.probe(target);
   }
-  async capabilities(_target: ExecutionTarget): Promise<HarnessCapabilities> {
+  async capabilities(_target: ExecutionTarget): Promise<HarnessCapabilitiesV2> {
     const yes = { support: "supported" as const };
     const no = { support: "unsupported" as const, reason: "not simulated" };
     return {
@@ -69,11 +69,22 @@ export class MockHarness implements HarnessAdapter {
       history: yes,
       images: no,
       modelSwitch: no,
+      detach: yes,
+      terminateSession: yes,
+      viewHistory: yes,
+      hostManagedModel: yes,
+      fork: no,
+      subagents: no,
     };
   }
-  async create(spec: SessionSpec): Promise<BackendBinding> {
+  async create(spec: SessionSpecV2): Promise<BackendBindingV2> {
     if (this.#states.has(spec.hostSessionId)) throw new Error("duplicate-id");
-    const binding = backendBindingSchema.parse({
+    const binding = backendBindingV2Schema.parse({
+      schemaVersion: 2,
+      targetId: spec.execution.targetId,
+      workspaceId: spec.workspaceId,
+      worktreeGeneration: spec.execution.worktreeGeneration,
+      harnessId: spec.harness.id,
       hostSessionId: spec.hostSessionId,
       backendSessionId: `mock-${spec.hostSessionId}`,
       backendVersion: this.version,
@@ -82,11 +93,13 @@ export class MockHarness implements HarnessAdapter {
     this.#states.set(spec.hostSessionId, { binding, seq: 0, cancelled: false });
     return binding;
   }
-  async attach(spec: SessionSpec, binding: BackendBinding): Promise<void> {
+  async attach(spec: SessionSpecV2, binding: BackendBindingV2): Promise<void> {
     const state = this.#require(spec.hostSessionId);
     if (
       state.binding.backendSessionId !== binding.backendSessionId ||
-      state.binding.runtimeEpoch !== binding.runtimeEpoch
+      state.binding.runtimeEpoch !== binding.runtimeEpoch ||
+      state.binding.workspaceId !== spec.workspaceId ||
+      state.binding.worktreeGeneration !== spec.execution.worktreeGeneration
     )
       throw new Error("stale-epoch");
   }
@@ -123,7 +136,8 @@ export class MockHarness implements HarnessAdapter {
       state.activeTurn = undefined;
       return;
     }
-    const tool = { ...base, toolCallId: "tool-1", name: "write" };
+    // 修复后续轮次复用固定 tool ID 导致投影误判重复工具：同会话各轮次须有独立 ID。
+    const tool = { ...base, toolCallId: `tool-${command.turnId}`, name: "write" };
     this.#emit(command.hostSessionId, "tool.started", tool);
     let settle!: (decision: "allow" | "deny") => void;
     const answer = new Promise<"allow" | "deny">((resolve) => {
