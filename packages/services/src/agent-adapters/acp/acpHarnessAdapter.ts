@@ -173,33 +173,26 @@ export class AcpHarnessAdapter implements HarnessAdapter {
     try {
       const result = await runtime.transport.prompt(command.text);
       if (runtime.turn !== turn) return;
-      this.#finish(
-        command.hostSessionId,
-        runtime,
-        turn,
-        result.stopReason === "end_turn"
-          ? "success"
-          : result.stopReason === "cancelled"
-            ? "cancelled"
-            : "unknown",
-      );
-    } catch (error) {
-      if (turn.cancelled) {
-        // 取消回执不是后端已经停止；必须等原 prompt 的原生响应，才允许下一轮。
-        try {
-          await runtime.transport.waitForCancelSettlement();
-        } catch {
-          /* exit listener records unknown */
-        }
+      if (turn.cancelled && result.stopReason === "cancelled") {
+        // 原生终态已确认取消，但无 prompt ID 的迟到 update 仍可能污染下一轮：封闭连接。
+        runtime.failed = new Error("ACP cancelled connection requires verified recovery");
+        this.#finish(command.hostSessionId, runtime, turn, "cancelled");
+      } else if (!turn.cancelled && result.stopReason === "end_turn") {
+        this.#finish(command.hostSessionId, runtime, turn, "success");
+      } else {
+        throw new Error("ACP prompt outcome unknown");
       }
-      if (runtime.turn === turn)
-        this.#finish(
-          command.hostSessionId,
-          runtime,
-          turn,
-          turn.cancelled ? "cancelled" : "unknown",
-        );
-      if (!turn.cancelled) throw error;
+    } catch (error) {
+      if (runtime.turn === turn) {
+        runtime.failed = error instanceof Error ? error : new Error("ACP prompt outcome unknown");
+        for (const pending of runtime.permissions.values()) pending.request.deny();
+        runtime.permissions.clear();
+        this.#emit(command.hostSessionId, runtime, {
+          kind: "session.status",
+          state: "execution-unknown",
+        });
+      }
+      throw error;
     }
   }
   async cancelTurn(command: Extract<AgentCommand, { type: "cancelTurn" }>): Promise<void> {
@@ -313,7 +306,13 @@ export class AcpHarnessAdapter implements HarnessAdapter {
     const runtime: Runtime = { binding, transport, sequence, permissions: new Map() };
     this.#sessions.set(binding.hostSessionId, runtime);
     transport.onUpdate((params) => {
-      if (!runtime.turn || runtime.turn.cancelled || runtime.failed) return;
+      if (
+        this.#sessions.get(binding.hostSessionId) !== runtime ||
+        !runtime.turn ||
+        runtime.turn.cancelled ||
+        runtime.failed
+      )
+        return;
       projectAcpUpdate(params.update, runtime.turn, (fields) =>
         this.#emit(binding.hostSessionId, runtime, fields),
       );

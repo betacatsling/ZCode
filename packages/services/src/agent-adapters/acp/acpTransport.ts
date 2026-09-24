@@ -37,7 +37,7 @@ export interface AcpTransportOptions {
   /** Supply only callbacks whose operations are independently authorized by the host. */
   clientRequests?: Readonly<Record<string, (params: ObjectValue) => Promise<unknown>>>;
   clientCapabilities?: ObjectValue;
-  onPermission?: (request: AcpPermission) => void;
+  onPermission?: (request: AcpPermission) => void | Promise<void>;
 }
 
 /** Raw ACP connection; does not project events, persist host state, or bind a model. */
@@ -60,11 +60,8 @@ export class AcpTransport {
   private inPrompt = false;
   private promptId?: number;
   private cancelledPromptId?: number;
-  private cancelSettlement?: {
-    promise: Promise<void>;
-    resolve(): void;
-    reject(error: Error): void;
-  };
+  /** ACP updates have only a native session ID, not a prompt ID. Never reuse a cancelled connection. */
+  private poisoned = false;
   private caps: ObjectValue = {};
 
   private constructor(
@@ -98,25 +95,10 @@ export class AcpTransport {
     if ((await probe(descriptor)) !== descriptor.version.exact)
       throw new Error("ACP executable version mismatch");
     const advertised = options.clientCapabilities ?? {};
-    const fs = record(advertised.fs) ? advertised.fs : {};
-    for (const [capability, method] of [
-      ["readTextFile", "fs/read_text_file"],
-      ["writeTextFile", "fs/write_text_file"],
-    ] as const) {
-      if (fs[capability] === true && !Object.hasOwn(options.clientRequests ?? {}, method))
-        throw new Error(`ACP ${method} advertised without authorized callback`);
-    }
-    if (
-      advertised.terminal === true &&
-      ![
-        "terminal/create",
-        "terminal/output",
-        "terminal/release",
-        "terminal/wait_for_exit",
-        "terminal/kill",
-      ].every((method) => Object.hasOwn(options.clientRequests ?? {}, method))
-    )
-      throw new Error("ACP terminal advertised without complete authorized callbacks");
+    // ACP client requests have no prompt identity; an async write already dispatched cannot be
+    // revoked by session/cancel. Reject the entire injection rather than promise a false fence.
+    if (Object.keys(options.clientRequests ?? {}).length || Object.keys(advertised).length)
+      throw new Error("ACP client callbacks/capabilities lack a cancellable prompt fence");
     const child = (
       options.launch ??
       ((d) =>
@@ -179,8 +161,8 @@ export class AcpTransport {
     this.sessionId = sessionId;
   }
   async prompt(text: string): Promise<ObjectValue> {
-    if (!this.sessionId || this.inPrompt || this.cancelledPromptId !== undefined)
-      throw new Error("ACP session missing or prompt active/cancelling");
+    if (!this.sessionId || this.inPrompt || this.poisoned)
+      throw new Error("ACP session missing or prompt active/cancelling/uncertain");
     this.inPrompt = true;
     try {
       const result = await this.call(
@@ -192,33 +174,23 @@ export class AcpTransport {
       );
       if (!record(result) || typeof result.stopReason !== "string")
         return this.fail("ACP invalid prompt response");
+      if (result.stopReason !== (this.poisoned ? "cancelled" : "end_turn")) {
+        this.poisoned = true;
+        throw new Error("ACP prompt outcome unknown");
+      }
       return result;
     } finally {
       this.inPrompt = false;
       this.promptId = undefined;
     }
   }
-  waitForCancelSettlement(): Promise<void> {
-    return this.cancelSettlement?.promise ?? Promise.resolve();
-  }
   async cancel(): Promise<void> {
-    if (!this.sessionId || !this.inPrompt) return;
-    this.inPrompt = false;
+    if (!this.sessionId || !this.inPrompt || this.cancelledPromptId !== undefined) return;
+    // 取消通知不是终态；原 RPC 必须等原生 cancelled 结果，错误则维持未知态。
+    this.poisoned = true;
+    this.cancelledPromptId = this.promptId;
     this.notify("session/cancel", { sessionId: this.sessionId });
     this.cancelPermissions();
-    if (this.promptId !== undefined) {
-      this.cancelledPromptId = this.promptId;
-      let resolve!: () => void;
-      let reject!: (error: Error) => void;
-      const promise = new Promise<void>((yes, no) => {
-        resolve = yes;
-        reject = no;
-      });
-      void promise.catch(() => {});
-      this.cancelSettlement = { promise, resolve, reject };
-      this.pending.get(this.promptId)?.reject(new Error("ACP prompt cancelled"));
-      this.pending.delete(this.promptId);
-    }
   }
   async close(): Promise<void> {
     this.shutdown(new Error("ACP connection closed"));
@@ -290,10 +262,10 @@ export class AcpTransport {
     if (!rpcId(frame.id) || "result" in frame === "error" in frame)
       return this.protocolError("ACP invalid response");
     if (frame.id === this.cancelledPromptId) {
+      if (!record(frame.result) || frame.result.stopReason !== "cancelled" || "error" in frame)
+        return this.protocolError("ACP cancelled prompt outcome unknown");
       this.cancelledPromptId = undefined;
-      this.cancelSettlement?.resolve();
-      this.cancelSettlement = undefined;
-      return; // Cancellation is cleared only after the old backend turn actually settles.
+      // The pending original RPC is resolved below; poison stays set for late callbacks.
     }
     const pending = typeof frame.id === "number" ? this.pending.get(frame.id) : undefined;
     if (!pending) return; // Late response after cancellation is never re-admitted.
@@ -335,7 +307,7 @@ export class AcpTransport {
         return true;
       };
       try {
-        this.options.onPermission({
+        const authorization = this.options.onPermission({
           id,
           sessionId: params.sessionId,
           toolCall: params.toolCall,
@@ -343,31 +315,14 @@ export class AcpTransport {
           resolve: (option) => settle(option),
           deny: () => settle(),
         });
+        // 同步 catch 不会处理异步授权拒绝；保持一次性 RPC 并默认拒绝。
+        if (authorization) void Promise.resolve(authorization).catch(() => settle());
       } catch {
         settle();
       }
       return;
     }
-    const handler = this.options.clientRequests?.[method];
-    if (!handler || !Object.hasOwn(this.options.clientRequests ?? {}, method)) {
-      this.send({ jsonrpc: "2.0", id, error: { code: -32601, message: "Method not authorized" } });
-      return;
-    }
-    void Promise.resolve()
-      .then(() => handler(params))
-      .then(
-        (result) => {
-          if (!this.closed) this.send({ jsonrpc: "2.0", id, result });
-        },
-        () => {
-          if (!this.closed)
-            this.send({
-              jsonrpc: "2.0",
-              id,
-              error: { code: -32000, message: "Authorized operation failed" },
-            });
-        },
-      );
+    this.send({ jsonrpc: "2.0", id, error: { code: -32601, message: "Method not authorized" } });
   }
   private cancelPermissions(): void {
     for (const id of this.inbound.keys()) {
@@ -390,8 +345,6 @@ export class AcpTransport {
     for (const request of this.pending.values()) request.reject(error);
     this.pending.clear();
     this.cancelledPromptId = undefined;
-    this.cancelSettlement?.reject(error);
-    this.cancelSettlement = undefined;
     this.inbound.clear();
     this.listeners.clear();
     this.process.stdin.end();
