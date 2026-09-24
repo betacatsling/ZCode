@@ -1,6 +1,5 @@
-import { isAbsolute, resolve } from "node:path";
 import { SqliteSessionStore } from "@zcode/adapters/storage";
-import { resolvePath, type ConfigResult } from "@zcode/adapters/config";
+import { resolveConfiguredSessionDbPath, type ConfigResult } from "@zcode/adapters/config";
 import {
   SESSION_ENTRY_MODEL_SELECTION,
   parseModelSelectionValue,
@@ -102,11 +101,7 @@ export async function openStartupSessionStore(
 }
 
 export function getSessionDbPath(configResult: ConfigResult, workingDirectory?: string): string {
-  const configured = configResult.config.storage.sessionDbPath;
-  // 存储 Worker 不能 chdir；显式传入业务实际 cwd，保持相对路径与普通 Agent 一致。
-  if (workingDirectory && !isAbsolute(configured) && !configured.startsWith("~/"))
-    return resolve(workingDirectory, configured);
-  return resolvePath(configured);
+  return resolveConfiguredSessionDbPath(configResult, workingDirectory);
 }
 
 function isPromiseLike<T>(value: T | Promise<T>): value is Promise<T> {
