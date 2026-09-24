@@ -36,7 +36,10 @@ export function ProjectNode({
   sessions: readonly SessionSummary[];
   props: ProjectSidebarProps;
   onCreateAgent: (workspace: WorktreeWorkspace) => void;
-  onConfirm: (workspace: WorktreeWorkspace, action: "hide" | "archive" | "remove") => void;
+  onConfirm: (
+    workspace: WorktreeWorkspace,
+    action: "hide" | "show" | "archive" | "unarchive" | "remove",
+  ) => void;
   onCreateWorkspace: (bindingId: string) => void;
   onDiscover: (bindingId: string) => void;
 }) {

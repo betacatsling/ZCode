@@ -28,12 +28,12 @@ export function WorktreeWorkspaceNode({
   sessions: readonly SessionSummary[];
   props: ProjectSidebarProps;
   onCreateAgent: () => void;
-  onConfirm: (action: "hide" | "archive" | "remove") => void;
+  onConfirm: (action: "hide" | "show" | "archive" | "unarchive" | "remove") => void;
 }) {
   const expanded = useProjectSidebarViewStore((s) => s.expandedWorkspaces[workspace.id] !== false);
   const setExpanded = useProjectSidebarViewStore((s) => s.setWorkspaceExpanded);
   const l = labels[props.locale];
-  const isActive = workspace.lifecycle === "active";
+  const isActive = workspace.lifecycle === "active" && !workspace.archived;
   return (
     <section data-testid={`workspace-${workspace.id}`} className="border-l border-border pl-2">
       <div className="flex min-w-0 items-center gap-1">
@@ -103,19 +103,33 @@ export function WorktreeWorkspaceNode({
           type="button"
           size="sm"
           variant="ghost"
-          aria-label={`${props.locale === "zh" ? "隐藏" : "Hide"} ${workspace.title}`}
-          onClick={() => onConfirm("hide")}
+          aria-label={`${props.locale === "zh" ? (workspace.hidden ? "显示" : "隐藏") : workspace.hidden ? "Show" : "Hide"} ${workspace.title}`}
+          onClick={() => onConfirm(workspace.hidden ? "show" : "hide")}
+          disabled={workspace.hidden && !props.actions.onShowWorkspace}
         >
-          {props.locale === "zh" ? "隐藏" : "Hide"}
+          {props.locale === "zh"
+            ? workspace.hidden
+              ? "显示"
+              : "隐藏"
+            : workspace.hidden
+              ? "Show"
+              : "Hide"}
         </Button>
         <Button
           type="button"
           size="sm"
           variant="ghost"
-          aria-label={`${props.locale === "zh" ? "归档" : "Archive"} ${workspace.title}`}
-          onClick={() => onConfirm("archive")}
+          aria-label={`${props.locale === "zh" ? (workspace.archived ? "取消归档" : "归档") : workspace.archived ? "Unarchive" : "Archive"} ${workspace.title}`}
+          onClick={() => onConfirm(workspace.archived ? "unarchive" : "archive")}
+          disabled={Boolean(workspace.archived && !props.actions.onUnarchiveWorkspace)}
         >
-          {props.locale === "zh" ? "归档" : "Archive"}
+          {props.locale === "zh"
+            ? workspace.archived
+              ? "取消归档"
+              : "归档"
+            : workspace.archived
+              ? "Unarchive"
+              : "Archive"}
         </Button>
         {!workspace.isMainWorktree ? (
           <Button

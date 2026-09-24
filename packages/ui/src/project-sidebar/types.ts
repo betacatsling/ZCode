@@ -22,8 +22,13 @@ export interface CreateAgentInput {
   draft: string;
 }
 export interface SidebarActions {
+  onImportProject?: (input: {
+    name: string;
+    targetId: string;
+    repositoryPath: string;
+  }) => Promise<void>;
   /** Preserve the indexed workspace/target identity for authoritative owner resolution. */
-  onSelectSession: (summary: SessionSummary) => void;
+  onSelectSession: (summary: SessionSummary) => Promise<void>;
   onOpenAttention: (summary: SessionSummary) => void;
   onCreateAgent: (input: CreateAgentInput) => Promise<void>;
   onDiscover: (repositoryBindingId: string) => Promise<void>;
@@ -31,6 +36,8 @@ export interface SidebarActions {
   onCreateWorkspace: (input: CreateWorkspaceInput) => Promise<void>;
   onHideWorkspace: (workspaceId: string) => Promise<void>;
   onArchiveWorkspace: (workspaceId: string) => Promise<void>;
+  onUnarchiveWorkspace?: (workspaceId: string) => Promise<void>;
+  onShowWorkspace?: (workspaceId: string) => Promise<void>;
   /** Must read target Git/activity facts; undefined means removal is not admitted. */
   onPreviewRemove?: (workspaceId: string, expectedGeneration: string) => Promise<RemovalPreview>;
   onRemoveWorkspace: (workspaceId: string, expectedGeneration: string) => Promise<void>;

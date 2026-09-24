@@ -63,6 +63,25 @@ test("actual hierarchy preserves draft, caret and focus through background summa
   await expect(draft).toHaveValue("hello world");
 });
 
+test("sidebar persists only window view preferences across reload", async ({ page }) => {
+  await page.getByRole("button", { name: /New agent in linked/ }).click();
+  await page.getByRole("textbox", { name: "Draft" }).fill("unsent local draft");
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: /Collapse Project two/ }).click();
+  await page.reload();
+  await expect(page.getByRole("button", { name: /Expand Project two/ })).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
+  await page.getByRole("button", { name: /New agent in linked/ }).click();
+  await expect(page.getByRole("textbox", { name: "Draft" })).toHaveValue("unsent local draft");
+  const persisted = await page.evaluate(() =>
+    localStorage.getItem("zcode:project-sidebar:view:v1"),
+  );
+  expect(persisted).not.toContain("workspaceSummaries");
+  expect(persisted).not.toContain("activity");
+});
+
 test("separate create, adopt, hide, archive, remove and shared workspace agent actions", async ({
   page,
 }) => {
