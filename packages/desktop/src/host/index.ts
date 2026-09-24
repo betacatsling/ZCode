@@ -14,6 +14,7 @@
  * 3. 后续远端 connect / scoped attachment 都由同一 Host 处理
  */
 import { createHostDatabaseStartup } from "./hostDatabaseStartup.js";
+import { createRemoteHierarchyAttachment } from "./remoteHierarchyAttachment.js";
 import { mountLocalCore, type CoreAttachmentLocation } from "./targetCoreMount.js";
 import { randomUUID } from "node:crypto";
 import {
@@ -44,6 +45,7 @@ import {
   IZCodeAgentService,
   IZCodeTaskService,
   IZCodeSessionService,
+  IWorkspaceHierarchyService,
   ICuaPipSessionService,
   createZCodeAgentConnectionScope,
   type ZCodeAgentV4ClientMode,
@@ -1992,6 +1994,7 @@ function exposeServicesOnMessagePort(
   clientMode: ZCodeAgentV4ClientMode = "desktop-continuous",
   attachmentScope: WindowHostAttachmentScope = { kind: "local" },
   capabilities?: HostRemoteConnectionCapabilities,
+  attachmentGeneration?: number,
 ): ExposedServicePortHandle {
   const wrappedPort = wrapElectronPort(port);
   const protocol = new MessagePortProtocol(wrappedPort);
@@ -2031,6 +2034,23 @@ function exposeServicesOnMessagePort(
   }
   if (connectionScope) {
     overrides.set(IZCodeAgentService.channelName, connectionScope.service);
+  }
+  if (attachmentScope.kind === "remote") {
+    const hierarchy = services.getOptional(IWorkspaceHierarchyService);
+    if (hierarchy && attachmentGeneration !== undefined) {
+      // 中文：远端 Native create 必须复用这条 Host 已认证 attachment 的代际与目标服务，
+      // 不可让 renderer 的 ID 决定路由；异步提交后失联只报告不确定，不自动重新发送。
+      overrides.set(
+        IWorkspaceHierarchyService.channelName,
+        createRemoteHierarchyAttachment(hierarchy, attachmentScope, (action) =>
+          windowRemoteConnectionRegistry.withCurrentScopedServices(
+            attachmentScope,
+            attachmentGeneration,
+            (targetServices) => action(targetServices),
+          ),
+        ),
+      );
+    }
   }
   const conversationShareService = services.getOptional(IConversationShareService);
   if (conversationShareService) {
@@ -2111,8 +2131,8 @@ const windowHostAttachmentRegistry = createWindowHostAttachmentRegistry<
       capabilities: windowRemoteConnectionRegistry.resolveScopedCapabilities(scope),
     };
   },
-  expose: ({ port, services, clientMode, scope, capabilities }) =>
-    exposeServicesOnMessagePort(port, services, false, clientMode, scope, capabilities),
+  expose: ({ port, services, clientMode, scope, capabilities, generation }) =>
+    exposeServicesOnMessagePort(port, services, false, clientMode, scope, capabilities, generation),
 });
 
 function logWindowHostTopology(reason: string): void {
