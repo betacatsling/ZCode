@@ -897,6 +897,13 @@ export class ZCodeAgentProcessManager {
     return managed && !managed.child.killed ? managed.client : undefined;
   }
 
+  /** Census includes starts and retiring owners: a worker not in the current map is NOT idle. */
+  countUnresolvedWorkers(): number {
+    return this.startingByWorkspaceKey.size + [...this.ownedProcesses].filter(
+      (managed) => !managed.exited && this.processesByWorkspaceKey.get(managed.runtimeIdentity.workspaceKey) !== managed,
+    ).length;
+  }
+
   /** 资源管理器：当前仍存活的受管 runtime（pid + workspace + client） */
   listManagedProcesses(): Array<{
     pid: number;

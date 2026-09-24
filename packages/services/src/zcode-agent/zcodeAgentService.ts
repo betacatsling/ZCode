@@ -1081,10 +1081,35 @@ export function getNativeMaintenanceControlPort(
   return port;
 }
 
+export interface NativeProcessActivity {
+  running: number;
+  waiting: number;
+  uncertain: number;
+  offline: boolean;
+}
+/** Process-wide owner: includes all three managed lanes, never a SQLite status projection. */
+export interface NativeProcessControlPort {
+  activity(): Promise<NativeProcessActivity>;
+  fenceAdmissions(): Promise<{ verify(): Promise<boolean>; release(): Promise<void> }>;
+}
+const nativeProcessPorts = new WeakMap<IZCodeAgentService, NativeProcessControlPort>();
+export function getNativeProcessControlPort(service: IZCodeAgentService): NativeProcessControlPort {
+  const port = nativeProcessPorts.get(service);
+  if (!port) throw new Error("native process owner unavailable");
+  return port;
+}
+
 export function createZCodeAgentService(
   options?: CreateZCodeAgentServiceOptions,
 ): IZCodeAgentService & { disposeAllAndWait(): Promise<void> } {
-  const processManager = new ZCodeAgentProcessManager(options);
+  let spawnFrozen = false;
+  const waitForSpawnAdmission: NonNullable<CreateZCodeAgentServiceOptions["waitForSpawnAdmission"]> = async (context) => {
+    // 中文：spawn 前后均检查冻结位；旧异步 env/preflight 回调不能穿过维护边界。
+    if (spawnFrozen) throw new Error("native process admission frozen");
+    await options?.waitForSpawnAdmission?.(context);
+    if (spawnFrozen) throw new Error("native process admission frozen");
+  };
+  const processManager = new ZCodeAgentProcessManager({ ...options, waitForSpawnAdmission });
   // Windows indicator 与 macOS producer lifecycle client 共用已校验、去重的 sideband facts。
   const cuaOperationTurnTracker =
     options?.cuaOperationStateReporter || options?.onCuaPipSessionLifecycle
@@ -1111,7 +1136,7 @@ export function createZCodeAgentService(
     presentationSurface: options?.presentationSurface,
     requestTimeoutMs: options?.requestTimeoutMs,
     resolveSpawnEnv: options?.resolveSpawnEnv,
-    waitForSpawnAdmission: options?.waitForSpawnAdmission,
+    waitForSpawnAdmission,
   });
   // 合并时误删了独立进程：mcp/list 的慢握手会堵住串行 stdio 队列，连带卡住插件卸载。
   // 恢复专用控制面进程及空闲回收；共享 workspace 路径，不共享请求队列或 watchdog。
@@ -1121,7 +1146,7 @@ export function createZCodeAgentService(
     processLifecycleReporter: options?.processLifecycleReporter,
     requestTimeoutMs: options?.requestTimeoutMs,
     resolveSpawnEnv: options?.resolveSpawnEnv,
-    waitForSpawnAdmission: options?.waitForSpawnAdmission,
+    waitForSpawnAdmission,
     lane: "mcp-status",
     idleTimeoutMs: options?.mcpStatusIdleTimeoutMs ?? MCP_STATUS_LANE_IDLE_TIMEOUT_MS,
   });
@@ -5701,6 +5726,79 @@ export function createZCodeAgentService(
     if (client.isDisposed || activeClientsByWorkspaceKey.get(key)?.client !== client)
       throw new Error("native worker changed during maintenance control");
   }
+  const nativeManagers = [processManager, pluginProcessManager, mcpStatusProcessManager];
+  let frozenFacts: NativeProcessActivity | undefined;
+  nativeProcessPorts.set(service, {
+    async activity() {
+      const unresolved = nativeManagers.reduce((sum, manager) => sum + manager.countUnresolvedWorkers(), 0);
+      const workers = nativeManagers.flatMap((manager) => manager.listManagedProcesses());
+      if (spawnFrozen && frozenFacts && unresolved === 0) return frozenFacts;
+      // 中文：未持有同代 CLI lease 时不能从 SQLite 或 client request count 推断运行态为空。
+      return { running: 0, waiting: 0, uncertain: unresolved + workers.length, offline: false };
+    },
+    async fenceAdmissions() {
+      if (spawnFrozen) throw new Error("native process fence already held");
+      // 中文：先封住三条 lane 的新 spawn，再枚举现存 worker；await 前的异步启动视为未知。
+      spawnFrozen = true;
+      frozenFacts = undefined;
+      const workers = nativeManagers.flatMap((manager) => manager.listManagedProcesses());
+      if (nativeManagers.some((manager) => manager.countUnresolvedWorkers() > 0))
+        throw new Error("native worker startup or retirement unresolved");
+      const leases: Array<{
+        worker: (typeof workers)[number];
+        lease: import("@zcode/shared").NativeMaintenanceLease;
+      }> = [];
+      const stillOwned = () => {
+        const current = nativeManagers.flatMap((manager) => manager.listManagedProcesses());
+        return current.length === workers.length && workers.every(
+          (worker) => current.some((entry) => entry.client === worker.client && !entry.client.isDisposed),
+        ) && nativeManagers.every((manager) => manager.countUnresolvedWorkers() === 0);
+      };
+      for (const worker of workers) {
+        const result = await worker.client.request(
+          zcodeProtocolMethods.nativeMaintenanceFreeze, {}, nativeMaintenanceFreezeResultSchema,
+        );
+        leases.push({ worker, lease: result.lease });
+        if (!stillOwned() || result.activity.unknown || !result.activity.frozen)
+          throw new Error("native process fence uncertain");
+      }
+      const verify = async () => {
+        if (!stillOwned() || leases.length !== workers.length)
+          throw new Error("native worker epoch changed");
+        const snapshots = await Promise.all(leases.map(({ worker, lease }) => worker.client.request(
+          zcodeProtocolMethods.nativeMaintenanceGetActivity, lease, nativeMaintenanceActivitySchema,
+          { lifecycle: "observation" },
+        )));
+        if (!stillOwned() || snapshots.some((snapshot, i) =>
+          snapshot.epoch !== leases[i]!.lease.epoch || !snapshot.frozen || snapshot.unknown ||
+          ![snapshot.active, snapshot.accepted, snapshot.pending, snapshot.tools, snapshot.approvals]
+            .every((value) => Number.isSafeInteger(value) && value >= 0),
+        )) throw new Error("native process activity uncertain");
+        frozenFacts = { running: snapshots.reduce((n, s) => n + s.active + s.tools, 0),
+          waiting: snapshots.reduce((n, s) => n + s.accepted + s.pending + s.approvals, 0),
+          uncertain: 0, offline: false };
+        return snapshots.every((snapshot) =>
+          [snapshot.active, snapshot.accepted, snapshot.pending, snapshot.tools, snapshot.approvals]
+            .every((value) => value === 0),
+        );
+      };
+      return {
+        verify,
+        async release() {
+          if (!stillOwned()) throw new Error("native worker changed before release");
+          for (const { worker, lease } of [...leases].reverse()) {
+            const result = await worker.client.request(
+              zcodeProtocolMethods.nativeMaintenanceRelease, lease, nativeMaintenanceReleaseResultSchema,
+            );
+            if (!result.released) throw new Error("native process release rejected");
+          }
+          if (!stillOwned()) throw new Error("native worker changed during release");
+          frozenFacts = undefined;
+          spawnFrozen = false;
+        },
+      };
+    },
+  });
   nativeMaintenancePorts.set(service, {
     async freeze(target) {
       const { key, client } = await currentClient(target);

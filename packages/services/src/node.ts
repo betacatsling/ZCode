@@ -320,6 +320,7 @@ export {
   OffPeakPermanentDispatchError,
 } from "./session/offPeakRuntimeModel.js";
 export { createServiceLogger } from "./logger/serviceLogger.js";
+export { createCoreAuthority, type CoreAuthorityOptions, type CoreAuthorityResult } from "./coreAuthority.js";
 export {
   buildOfficialMcpAuthHeaders,
   createOfficialMcpAuthHeadersResolver,
