@@ -207,8 +207,8 @@ test("real native control lease is verified after workspace drain; positive acti
   const started = new Promise<void>((resolve) => { entered = resolve; });
   let checks = 0;
   const released: unknown[] = [];
-  const nativeLease = { epoch: 19, leaseId: "worker-19" };
-  const activity = { epoch: 19, frozen: true, active: 0, accepted: 0, pending: 0, tools: 0, approvals: 0, unknown: false };
+  const nativeLease = { epoch: "0195ab00-0000-4000-8000-000000000019", leaseId: "worker-19" };
+  const activity = { epoch: nativeLease.epoch, frozen: true, active: 0, accepted: 0, pending: 0, tools: 0, approvals: 0, unknown: false };
   const nativeFence = createNativeAdmissionFence({
     freeze: async () => ({ lease: nativeLease, activity }),
     getActivity: async (_target, lease) => {
@@ -237,9 +237,9 @@ test("real native control lease is verified after workspace drain; positive acti
 
 test("changed native epoch, unknown worker, or denied release cannot certify maintenance idle", async () => {
   const { createNativeAdmissionFence } = await import("../src/maintenance-lease.js");
-  const lease = { epoch: 7, leaseId: "old-worker" };
-  const activity = { epoch: 7, frozen: true, active: 0, accepted: 0, pending: 0, tools: 0, approvals: 0, unknown: false };
-  for (const later of [{ ...activity, epoch: 8 }, { ...activity, unknown: true }]) {
+  const lease = { epoch: "0195ab00-0000-4000-8000-000000000007", leaseId: "old-worker" };
+  const activity = { epoch: lease.epoch, frozen: true, active: 0, accepted: 0, pending: 0, tools: 0, approvals: 0, unknown: false };
+  for (const later of [{ ...activity, epoch: "0195ab00-0000-4000-8000-000000000008" }, { ...activity, unknown: true }]) {
     let releaseCount = 0;
     const port = createMaintenanceCoordination({
       nativeFence: createNativeAdmissionFence({
