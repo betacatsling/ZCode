@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Keep same-child native fault matrix with shared fixture assertions. */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
@@ -119,6 +120,17 @@ test(
       ),
     );
     assert.equal(report.usageCoverage.main, "reported");
+    assert.equal(report.usageCoverage.auxiliary, "reported");
+    assert.equal(report.usageQualified, true);
+    assert.ok(
+      report.modelUsageCalls.some(
+        (call) =>
+          call.purpose === "session_title_generation" &&
+          call.coverage === "finished" &&
+          call.metrics.outputTokens.status === "reported" &&
+          call.metrics.outputTokens.value === 2,
+      ),
+    );
     assert.equal(report.httpCountAttribution, "model-call");
     assert.equal(
       report.modelUsageCalls.reduce((total, call) => total + call.httpReservations, 0),
@@ -140,6 +152,8 @@ for (const fault of [
   "wrong-route",
   "endpoint-leak",
   "fresh-foreign-turn",
+  "fresh-foreign-call-before-row",
+  "fresh-foreign-request-before-row",
   "foreign-native-command",
   "foreign-native-session",
   "foreign-native-turn",
@@ -157,11 +171,16 @@ for (const fault of [
   "unsolicited-outcome",
   "old-row",
   "wrong-bash",
+  "shell-profile",
+  "shell-override",
+  "inherited-path",
   "no-read",
   "wrong-read",
   "echo-500",
   "error-200",
   "broken-sse",
+  "chunked-oversize-json",
+  "truncated-sse",
   "hang-scan",
   "hang-cleanup",
 ]) {
@@ -207,6 +226,8 @@ for (const fault of [
       if (
         [
           "fresh-foreign-turn",
+          "fresh-foreign-call-before-row",
+          "fresh-foreign-request-before-row",
           "foreign-native-command",
           "foreign-native-session",
           "foreign-native-turn",
@@ -220,9 +241,18 @@ for (const fault of [
           false,
         );
         assert.equal(report.effects.allowedWrite, false);
+        assert.equal(
+          report.beforeEffectFileAbsent,
+          true,
+          "foreign permission cannot mutate files before denial",
+        );
+      }
+      if (["shell-profile", "shell-override", "inherited-path"].includes(fault)) {
+        assert.equal(report.effects.bash, false, "no unapproved subprocess effect");
+        assert.equal(report.unapprovedSubprocessAbsent, true);
       }
       if (fault === "endpoint-leak") assert.equal(report.privateArtifactScan, false);
-      if (fault === "broken-sse")
+      if (["broken-sse", "chunked-oversize-json", "truncated-sse"].includes(fault))
         assert.ok(report.modelUsageCalls.some((call) => call.coverage === "error-partial"));
       if (fault === "webfetch")
         assert.equal(report.forbiddenToolRequests, 0, "unregistered tool must not run");
@@ -250,10 +280,11 @@ test(
     assert.equal(auxiliary.commandId, report.turns[0].commandId);
     assert.equal(
       auxiliary.coverage,
-      "error-partial",
-      "a failed title is not fabricated as complete",
+      "finished",
+      "a valid nonstream Anthropic response must finish the actual auxiliary call",
     );
-    assert.equal(report.usageQualified, false);
+    assert.equal(report.usageCoverage.auxiliary, "reported");
+    assert.equal(report.usageQualified, true);
   },
 );
 

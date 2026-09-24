@@ -1,5 +1,5 @@
 import { readFile, realpath } from "node:fs/promises";
-import { delimiter, dirname, join } from "node:path";
+import { join } from "node:path";
 import { createNodeFileSystemAdapter } from "@zcode/adapters/fs";
 import { createNodeExecutionAdapter } from "@zcode/adapters/exec";
 import type { ExecutionPort, FileSystemPort } from "@zcode/contracts";
@@ -13,6 +13,8 @@ export function createPrivateEffectPorts(input: {
   writeContent: string;
   bashCommand: string;
   processEnv: NodeJS.ProcessEnv;
+  /** Same-child synthetic request mutation at the ExecutionPort, never a product setting. */
+  fakeExecFault?: "shell-profile" | "shell-override" | "inherited-path";
 }): {
   fileSystemPort: FileSystemPort;
   executionPort: ExecutionPort;
@@ -23,7 +25,7 @@ export function createPrivateEffectPorts(input: {
   const fs = createNodeFileSystemAdapter();
   const nodeBinary = process.execPath;
   const exec = createNodeExecutionAdapter({
-    processEnv: { PATH: [dirname(nodeBinary), input.processEnv.PATH ?? ""].join(delimiter), HOME: input.processEnv.HOME },
+    processEnv: { PATH: input.processEnv.PATH, HOME: input.processEnv.HOME },
     outputRootDir: input.cwd,
   });
   const reject = (): never => {
@@ -66,15 +68,29 @@ export function createPrivateEffectPorts(input: {
   };
   const executionPort: ExecutionPort = {
     async run(request, options) {
+      if (input.fakeExecFault === "inherited-path") {
+        // 即使环境 PATH 被错误继承，也不得让 shell 解析另一个 node。
+        request = { ...request, env: { base: "inherit", set: { PATH: input.cwd } } };
+      }
+      if (input.fakeExecFault === "shell-profile" && request.command.mode === "shell")
+        request = { ...request, command: { ...request.command, shellProfile: undefined } };
+      if (input.fakeExecFault === "shell-override" && request.command.mode === "shell")
+        request = { ...request, command: { ...request.command, shell: "/bin/sh" } };
       if (
         phase !== 2 ||
         request.cwd !== input.cwd ||
         request.command.mode !== "shell" ||
         request.command.command !== input.bashCommand ||
-        (request.bashPrelude && request.bashPrelude.kind !== "embedded-search") ||
+        request.command.shellProfile !== "posix-bash" ||
+        request.command.shell !== undefined ||
+        (request.command.shellOverride !== undefined &&
+          (request.command.shellOverride.source !== "auto-detected" &&
+           request.command.shellOverride.source !== "legacy-fallback")) ||
+        (request.bashPrelude !== undefined && request.bashPrelude.kind !== "embedded-search") ||
         request.stdin !== undefined ||
         request.env !== undefined ||
-        request.sandbox?.dangerouslyDisableSandbox === true
+        request.sandbox?.enabled !== true ||
+        request.sandbox.dangerouslyDisableSandbox === true
       )
         return reject();
       // 修复：命令文本相同不保证 PATH 解析同一个 node；固定当前 Node 24 二进制、
@@ -84,7 +100,10 @@ export function createPrivateEffectPorts(input: {
           (await readFile(join(input.cwd, "verify.cjs"), "utf8")) !==
             "require('node:fs').writeFileSync('bash-effect.txt', 'bash-verified|' + process.execPath); console.log('exit=0')\n")
         return reject();
-      return exec.run(request, options);
+      // 已验证唯一脚本和固定二进制后借用原执行 adapter 的 argv 模式，彻底绕开
+      // login shell / profile / PATH 解析；此证明仅限这一个已知 fixture。
+      return exec.run({ ...request, bashPrelude: undefined, command: { mode: "argv", file: nodeBinary, args: ["verify.cjs"] } },
+        options);
     },
     // 禁止 auto-background、额外进程、输出检索或注册表动作；只借用 foreground run。
   };

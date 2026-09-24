@@ -15,6 +15,7 @@ const fixtureUrl = fake ? process.env.ZCODE_NATIVE_FAKE_URL : undefined;
 const exposeWebFetch = fake && process.env.ZCODE_NATIVE_FAKE_EXPOSE_WEBFETCH === "1";
 const hangScan = fake && process.env.ZCODE_NATIVE_FAKE_HANG_SCAN === "1";
 const transportFault = fake ? process.env.ZCODE_NATIVE_FAKE_TRANSPORT_FAULT : undefined;
+const execFault = fake ? process.env.ZCODE_NATIVE_FAKE_EXEC_FAULT : undefined;
 const isolated = process.cwd();
 // 修复：父环境的密钥、代理、项目配置和运行时开关不能进入私有原生执行器。
 for (const key of Object.keys(process.env)) {
@@ -184,6 +185,7 @@ try {
     writeContent: await readFile(join(cwd, "approved-content.txt"), "utf8"),
     bashCommand: "node verify.cjs",
     processEnv: process.env,
+    fakeExecFault: execFault === "shell-profile" || execFault === "shell-override" || execFault === "inherited-path" ? execFault : undefined,
   });
   process.on("message", (message: unknown) => {
     if (
@@ -253,6 +255,7 @@ try {
         httpClientPort: { request: async () => { forbiddenToolRequests++; throw new Error("private nonfixture network denied"); } },
         privateToolAllowlist: exposeWebFetch ? ["Read", "Write", "Bash", "WebFetch"] : ["Read", "Write", "Bash"],
         privateNativeTurnObservation: (fact) => notify({ kind: "native-turn", ...fact }),
+        privateNativePermissionObservation: (fact) => notify({ kind: "native-permission", ...fact }),
         startProviderRegistryRuntime: async () => ({
           runtime: { registryService: registry },
           snapshot,

@@ -72,6 +72,7 @@ async function run(route) {
     childExit: null,
     effects: { deniedWrite: false, allowedWrite: false, bash: false, freshReadAnswer: false },
     privateArtifactScan: false,
+    beforeEffectFileAbsent: null,
     scannedFiles: 0,
     forbiddenToolRequests: 0,
     cleanup: false,
@@ -88,6 +89,9 @@ async function run(route) {
     turnId;
   let deniedWrites = 0;
   let pendingIdentity = false;
+  const nativePermissions = new Map();
+  const seenNativeRequestIds = new Set();
+  let permissionWake;
   const rows = new Map();
   let evidenceOrdinal = 0;
   const counts = { model: 0, http: 0, dispatch: 0 };
@@ -118,6 +122,8 @@ async function run(route) {
         "usage-absent",
         "aux-interleave",
         "fresh-foreign-turn",
+        "fresh-foreign-call-before-row",
+        "fresh-foreign-request-before-row",
         "foreign-native-command",
         "foreign-native-session",
         "foreign-native-turn",
@@ -133,14 +139,21 @@ async function run(route) {
         "hang-scan",
         "hang-cleanup",
         "wrong-bash",
+        "shell-profile",
+        "shell-override",
+        "inherited-path",
         "no-read",
         "wrong-read",
         "echo-500",
         "error-200",
         "broken-sse",
+        "chunked-oversize-json",
+        "truncated-sse",
       ].includes(process.env.ZCODE_NATIVE_FAKE_FAULT)
         ? process.env.ZCODE_NATIVE_FAKE_FAULT
         : undefined;
+    if (fault === "inherited-path")
+      await writeFile(join(cwd, "node"), "#!/bin/sh\ntouch unapproved-shell-effect.txt\n", { mode: 0o755 });
     if (fake)
       upstream = await startPrivateFake({
         cwd,
@@ -160,6 +173,8 @@ async function run(route) {
     if (fake) childEnv.ZCODE_NATIVE_FAKE_URL = upstream.baseUrl;
     if (fault === "webfetch-exposed") childEnv.ZCODE_NATIVE_FAKE_EXPOSE_WEBFETCH = "1";
     if (fault === "hang-scan") childEnv.ZCODE_NATIVE_FAKE_HANG_SCAN = "1";
+    if (["shell-profile", "shell-override", "inherited-path"].includes(fault))
+      childEnv.ZCODE_NATIVE_FAKE_EXEC_FAULT = fault;
     if (
       [
         "wrong-model-body",
@@ -200,6 +215,33 @@ async function run(route) {
             throw new Error("native turn/command mapping invalid");
           active.runtimeTurnId = message.runtimeTurnId;
           active.productMessageId = message.productMessageId;
+        } else if (message?.kind === "native-permission") {
+          const active = report.turns.at(-1);
+          if (
+            !active?.runtimeTurnId ||
+            message.sessionId !== sessionId ||
+            message.runtimeTurnId !== active.runtimeTurnId ||
+            typeof message.requestId !== "string" ||
+            !message.requestId ||
+            typeof message.toolCallId !== "string" ||
+            !message.toolCallId ||
+            typeof message.toolName !== "string" ||
+            !/^[a-f0-9]{64}$/u.test(message.inputDigest) ||
+            Object.keys(message).some((key) => ![
+              "kind", "sessionId", "runtimeTurnId", "requestId", "toolCallId", "toolName", "inputDigest",
+            ].includes(key)) ||
+            seenNativeRequestIds.has(message.requestId) ||
+            seenNativeRequestIds.size >= 12
+          )
+            throw new Error("native permission identity invalid");
+          seenNativeRequestIds.add(message.requestId);
+          nativePermissions.set(message.requestId, {
+            sessionId: message.sessionId, runtimeTurnId: message.runtimeTurnId,
+            requestId: message.requestId, toolCallId: message.toolCallId,
+            toolName: message.toolName, inputDigest: message.inputDigest,
+            commandId: active.commandId,
+          });
+          permissionWake?.();
         } else if (message?.kind === "model-observation") {
           usage.observe(message);
           if (
@@ -295,7 +337,14 @@ async function run(route) {
           )
             row.turnId = report.turns[0]?.turnId ?? row.turnId;
           if (!row.rowId) throw new Error("private row identity missing");
-          rows.set(row.rowId, row);
+          // 故障注入：延迟 V4 tool 投影，使同一真实子进程的 permission 在无产品行时校验。
+          if (
+            !["fresh-foreign-call-before-row", "fresh-foreign-request-before-row"].includes(
+              fault,
+            ) ||
+            row.kind !== "toolCall"
+          )
+            rows.set(row.rowId, row);
           if (rows.size > 2048) throw new Error("private row budget exceeded");
           const current = report.turns.at(-1);
           if (phase === 3 && current && row.turnId === turnId) {
@@ -351,6 +400,11 @@ async function run(route) {
           if (fault === "stale-call") params.toolCallId = "stale";
           if (fault === "stale-turn" && phase === 2) params.turnId = report.turns[0]?.nativeTurnId;
           if (fault === "fresh-foreign-turn") params.turnId = `foreign-${randomUUID()}`;
+          // 模拟 RPC 帧被替换为新鲜外来业务 ID；不依赖已有 V4 工具行阻止副作用。
+          if (fault === "fresh-foreign-call-before-row")
+            params.toolCallId = `foreign-${randomUUID()}`;
+          if (fault === "fresh-foreign-request-before-row")
+            params.requestId = `foreign-${randomUUID()}`;
           const current = report.turns.at(-1);
           // 修复：原生 turn.started 先于 Model/tool 执行产生，订阅事实给出运行时 turnId、
           // 已准入 sourceCommandId 与持久 messageId；不把 V4 product turnId 当作 runtime UUID。
@@ -363,7 +417,37 @@ async function run(route) {
               pendingIdentity = false;
             }
           }
-          // V4 tool row 可以晚于反向 RPC；已有旧 row 拒绝，尚未发布者终态再核对。
+          // 修复：V4 行可能晚于反向 RPC。只用原生 executor 在 broker 前发出的
+          // permission.requested 事实证明业务 request/call/input，不能凭新鲜字符串放行。
+          if (!nativePermissions.has(params?.requestId)) {
+            pendingIdentity = true;
+            let identityTimer;
+            try {
+              await Promise.race([
+                new Promise((resolve) => {
+                  permissionWake = resolve;
+                }),
+                new Promise((_, reject) => {
+                  identityTimer = setTimeout(
+                    () => reject(new Error("native permission fact unavailable")),
+                    Math.max(1, Math.min(1000, deadlineAt - Date.now() - 9000)),
+                  );
+                }),
+              ]);
+            } finally {
+              clearTimeout(identityTimer);
+              pendingIdentity = false;
+              permissionWake = undefined;
+            }
+          }
+          const nativePermission = nativePermissions.get(params?.requestId);
+          if (
+            ["fresh-foreign-call-before-row", "fresh-foreign-request-before-row"].includes(fault) &&
+            rowList().some(
+              (row) => row.kind === "toolCall" && row.toolCallId === nativePermission?.toolCallId,
+            )
+          )
+            throw new Error("fault did not exercise permission before V4 row");
           const existingRows = rowList().filter(
             (row) => row.kind === "toolCall" && row.toolCallId === params?.toolCallId,
           );
@@ -375,6 +459,13 @@ async function run(route) {
             current.events.includes("ack") &&
             params?.sessionId === sessionId &&
             params?.turnId === current.runtimeTurnId &&
+            nativePermission?.commandId === current.commandId &&
+            nativePermission?.sessionId === params.sessionId &&
+            nativePermission?.runtimeTurnId === params.turnId &&
+            nativePermission?.toolCallId === params.toolCallId &&
+            nativePermission?.toolName === params.toolName &&
+            nativePermission?.inputDigest ===
+              createHash("sha256").update(JSON.stringify(params.input)).digest("hex") &&
             typeof params?.toolCallId === "string" &&
             params.toolCallId.length > 0 &&
             (existingRows.length === 0 || !!matchingRow) &&
@@ -417,6 +508,7 @@ async function run(route) {
           if (report.turns.slice(0, -1).some((previous) => previous.nativeTurnId === params.turnId))
             throw new Error("stale native permission turn");
           current.nativeTurnId = params.turnId;
+          nativePermissions.delete(params.requestId);
           current.actions.push({
             toolName: params.toolName,
             toolCallId: params.toolCallId,
@@ -528,6 +620,7 @@ async function run(route) {
       const { reply, commandId } = await command("sendText", sessionId, { text: expected });
       if (reply.result?.status !== "accepted") throw new Error("send rejected");
       report.ack++;
+      if (phase === 2 && fault === "aux-interleave") upstream.releaseAux();
       current.events.push("ack"); // ACK can follow start; no invented ACK-before-start ordering.
       const terminal =
         matchingTerminal(rowList(), commandId) ??
@@ -631,6 +724,37 @@ async function run(route) {
         failure = true;
       report.childOutputBytes = channel.outputBytes;
     }
+    if (
+      [
+        "fresh-foreign-call-before-row",
+        "fresh-foreign-request-before-row",
+        "fresh-foreign-turn",
+        "foreign-native-command",
+        "foreign-native-session",
+        "foreign-native-turn",
+        "stale-session",
+        "stale-call",
+        "stale-turn",
+      ].includes(fault)
+    ) {
+      try {
+        await assertAbsent(writePath);
+        await assertAbsent(bashPath);
+        report.beforeEffectFileAbsent = true;
+      } catch {
+        report.beforeEffectFileAbsent = false;
+        failure = true;
+      }
+    }
+    if (["shell-profile", "shell-override", "inherited-path"].includes(fault)) {
+      try {
+        await assertAbsent(join(cwd, "unapproved-shell-effect.txt"));
+        report.unapprovedSubprocessAbsent = true;
+      } catch {
+        report.unapprovedSubprocessAbsent = false;
+        failure = true;
+      }
+    }
     if (upstream) {
       if (
         upstream.counts.requests !== report.httpDispatches ||
@@ -666,7 +790,7 @@ async function run(route) {
       : "partial";
     report.usageQualified =
       observedUsage.usageCoverage.main === "reported" &&
-      ["reported", "absent"].includes(observedUsage.usageCoverage.auxiliary);
+      observedUsage.usageCoverage.auxiliary === "reported";
     if (
       usage.count !== counts.model ||
       usage.dispatchCount !== counts.dispatch ||

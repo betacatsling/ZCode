@@ -17,6 +17,10 @@ export async function startPrivateFake({
   let forbiddenRequests = 0;
   let forbiddenRegisteredTools = 0;
   let baseUrl;
+  let releaseAux;
+  const auxiliaryBarrier = new Promise((resolve) => {
+    releaseAux = resolve;
+  });
   const server = createServer(async (request, response) => {
     requests++;
     if (
@@ -33,8 +37,8 @@ export async function startPrivateFake({
     try {
       const serialized = JSON.parse(body.toString("utf8"));
       if (fault === "aux-interleave" && serialized.stream !== true) {
-        // Synthetic scheduling fault only; Model invocation context, not stream flag, owns purpose.
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        // 父控制器在新命令准入后显式释放；不靠毫秒延时推断并发顺序。
+        await auxiliaryBarrier;
       }
       if (
         serialized.model !== "fixture-model" ||
@@ -60,12 +64,31 @@ export async function startPrivateFake({
       forbiddenRegisteredTools++;
       forbiddenRequests++;
     }
+    let serializedStream = true;
+    try {
+      serializedStream = JSON.parse(body.toString("utf8")).stream === true;
+    } catch {
+      /* counted above */
+    }
     const phase = body.includes(Buffer.from("fixture instruction 3"))
       ? 2
       : body.includes(Buffer.from("fixture instruction 2"))
         ? 1
         : 0;
     const step = routeCounts[phase]++;
+    if (phase === 0 && step === 0 && fault === "chunked-oversize-json") {
+      response.writeHead(200, { "content-type": "application/json" });
+      for (let i = 0; i < 18; i++) response.write("x".repeat(65536));
+      response.end();
+      return;
+    }
+    if (phase === 0 && step === 0 && fault === "truncated-sse") {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(
+        `event: message_start\ndata: ${JSON.stringify({ type: "message_start", message: { id: "truncated", usage: { input_tokens: 4 } } })}\n\n`,
+      );
+      return;
+    }
     if (
       phase === 0 &&
       step === 0 &&
@@ -150,6 +173,29 @@ export async function startPrivateFake({
       }
       return `event: ${type}\ndata: ${json}\n\n`;
     };
+    if (serializedStream === false) {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          id: `msg_fixture_${requests}`,
+          type: "message",
+          role: "assistant",
+          model: "fixture-model",
+          content: [{ type: "text", text: "Fixture title" }],
+          stop_reason: "end_turn",
+          stop_sequence: null,
+          ...(fault === "usage-absent"
+            ? {}
+            : {
+                usage:
+                  fault === "usage-zero"
+                    ? { input_tokens: 0, output_tokens: 0 }
+                    : { input_tokens: 4, output_tokens: 2 },
+              }),
+        }),
+      );
+      return;
+    }
     response.writeHead(200, { "content-type": "text/event-stream" });
     const inputUsage =
       fault === "usage-zero"
@@ -214,6 +260,7 @@ export async function startPrivateFake({
   baseUrl = `http://127.0.0.1:${address.port}/fixture`;
   return {
     baseUrl,
+    releaseAux: () => releaseAux(),
     get counts() {
       return { requests, forbiddenRequests, forbiddenRegisteredTools, routeCounts };
     },

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createConfig } from "@zcode/adapters/config";
 import type { AiSdkModelAdapter } from "@zcode/adapters/model";
 import { createNodeModelSelectionFacade } from "@zcode/provider-node";
@@ -102,6 +103,11 @@ export interface NativeProtocolBootstrapDependencies {
   /** Trusted Node-only private observation of native TurnStarted (not a wire/session projection). */
   readonly privateNativeTurnObservation?: (fact: {
     sessionId: string; runtimeTurnId: string; sourceCommandId: string; productMessageId: string;
+  }) => void;
+  /** Trusted native permission.requested fact; emitted before the broker, never a Model/RPC claim. */
+  readonly privateNativePermissionObservation?: (fact: {
+    sessionId: string; runtimeTurnId: string; requestId: string;
+    toolCallId: string; toolName: string; inputDigest: string;
   }) => void;
   readonly startProviderRegistryRuntime?: (
     env: Readonly<Record<string, string | undefined>>,
@@ -368,7 +374,7 @@ export async function runZCodeProtocolAgent(
       takePostResponseBatch: (requestId) => server.takePostResponseBatch(requestId),
     });
     server.setNotificationSink((notification) => {
-      if (dependencies.privateNativeTurnObservation && notification.method === "session/event") {
+      if ((dependencies.privateNativeTurnObservation || dependencies.privateNativePermissionObservation) && notification.method === "session/event") {
         // 修复：legacy 订阅只用于可信 Native 身份事实；其他 session/event 可能含
         // provider 配置或原文，绝不能为了读取 turn.started 顺带写入私有 stdout。
         const event = notification.params as {
@@ -380,10 +386,26 @@ export async function runZCodeProtocolAgent(
           const productMessageId = event.payload?.messageId;
           if (typeof event.sessionId === "string" && typeof event.turnId === "string" &&
               typeof sourceCommandId === "string" && typeof productMessageId === "string")
-            dependencies.privateNativeTurnObservation({
+            dependencies.privateNativeTurnObservation?.({
               sessionId: event.sessionId, runtimeTurnId: event.turnId,
               sourceCommandId, productMessageId,
             });
+        }
+        if (event?.type === "permission.requested" && dependencies.privateNativePermissionObservation) {
+          const payload = event.payload as typeof event.payload & {
+            requestId?: unknown; toolCallId?: unknown; toolName?: unknown; input?: unknown;
+          };
+          if (typeof event.sessionId === "string" && typeof event.turnId === "string" &&
+              typeof payload?.requestId === "string" && typeof payload.toolCallId === "string" &&
+              typeof payload.toolName === "string") {
+            // 原生 executor 在调用 broker 前发出事实；只投影输入摘要，绝不发送原始工具输入。
+            dependencies.privateNativePermissionObservation({
+              sessionId: event.sessionId, runtimeTurnId: event.turnId,
+              requestId: payload.requestId, toolCallId: payload.toolCallId,
+              toolName: payload.toolName,
+              inputDigest: createHash("sha256").update(JSON.stringify(payload.input)).digest("hex"),
+            });
+          }
         }
         return;
       }

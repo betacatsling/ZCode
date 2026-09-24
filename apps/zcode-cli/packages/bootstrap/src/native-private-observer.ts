@@ -77,8 +77,24 @@ export function createPrivateObservation(input: {
         if (response.ok) {
           if (!response.body) return response;
           if (!response.headers.get("content-type")?.includes("text/event-stream")) {
-            const bytes = await response.arrayBuffer();
-            if (bytes.byteLength > 1_048_576) throw new Error("private upstream body budget");
+            // 修复：arrayBuffer 会在检查前分配完整上游正文；逐块限制并取消 reader。
+            const reader = response.body.getReader();
+            const chunks: Uint8Array[] = [];
+            let size = 0;
+            let bytes: Uint8Array;
+            try {
+              for (;;) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                size += value.byteLength;
+                if (size > 1_048_576) throw new Error("private upstream body budget");
+                chunks.push(value);
+              }
+              bytes = new Uint8Array(Buffer.concat(chunks, size));
+            } catch {
+              void reader.cancel().catch(() => {});
+              throw new Error("private upstream body budget");
+            }
             let json: { content?: Array<{ type?: string; name?: string }>; error?: unknown };
             try { json = JSON.parse(Buffer.from(bytes).toString("utf8")); }
             catch { throw new Error("private upstream JSON invalid"); }
@@ -86,7 +102,7 @@ export function createPrivateObservation(input: {
             input.onProviderUsage?.({ callId, dispatchId, metrics: readProviderUsage((json as { usage?: unknown }).usage), complete: true });
             if (json.content?.some((part) => part.type === "tool_use" && !input.allowedToolNames?.includes(part.name ?? "")))
               throw new Error("private tool denied before execution");
-            return new Response(bytes, { status: response.status, headers: response.headers });
+            return new Response(Uint8Array.from(bytes), { status: response.status, headers: response.headers });
           }
           const reader = response.body.getReader();
           let pending = Buffer.alloc(0);
@@ -98,7 +114,8 @@ export function createPrivateObservation(input: {
                 const { done, value } = await reader.read();
                 if (done) {
                   if (pending.toString("utf8").trim()) throw new Error("private upstream incomplete frame");
-                  if (!usageReported) input.onProviderUsage?.({ callId, dispatchId, metrics: providerMetrics, complete: true });
+                  // EOF 不等于 message_stop：即使已收到有效用量帧，也不能宣称完整。
+                  if (!usageReported) throw new Error("private upstream terminal missing");
                   controller.close();
                 } else {
                   // 修复：session tool allowlist 在 V4 create 时被 schema 丢弃；
@@ -144,6 +161,8 @@ export function createPrivateObservation(input: {
                   }
                 }
               } catch {
+                // 修复：guard 失败不能留下继续向私有消费者流入的上游 reader。
+                void reader.cancel().catch(() => { /* private cause */ });
                 controller.error(new Error("private upstream stream failure"));
               }
             },
