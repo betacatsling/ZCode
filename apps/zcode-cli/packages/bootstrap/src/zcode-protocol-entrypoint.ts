@@ -14,6 +14,7 @@ import {
   type ZCodeMcpTelemetryEvent,
 } from "@zcode/shared";
 import type { SqliteSessionStore } from "@zcode/adapters/storage";
+import type { NativeCreateReceipt } from "@zcode/contracts";
 import {
   traceContextToLogContext,
   createRootTraceContext,
@@ -88,6 +89,10 @@ type NativeProtocolRegistryRuntime = Pick<
 > & { readonly runtime: Pick<ProcessRegistryRuntime["runtime"], "registryService"> };
 
 export interface NativeProtocolBootstrapDependencies {
+  /** Trusted test fixture only: barrier after SQLite COMMIT but before command ACK. Never serialized. */
+  readonly onNativeCreateReceiptCommitted?: (receipt: NativeCreateReceipt) => Promise<void>;
+  /** Trusted test fixture only: hold after durable first-input admission, before promotion. */
+  readonly onNativeCreateInputAdmitted?: () => Promise<void>;
   /** 可信 Node-only 私有运行器可注入原有 Adapter 的观测配置；绝不进入 wire/schema。 */
   readonly modelAdapter?: AiSdkModelAdapter;
   /** 私有一次性验证不允许把 provider 原始错误/endpoint 落盘。 */
@@ -173,6 +178,26 @@ export async function runZCodeProtocolAgent(
             }),
         }),
     });
+    if (dependencies.onNativeCreateReceiptCommitted) {
+      const store = sessionStore;
+      const commit = store.commitNativeCreateReceipt.bind(store);
+      store.commitNativeCreateReceipt = async (input) => {
+        const receipt = await commit(input);
+        await dependencies.onNativeCreateReceiptCommitted!(receipt);
+        return receipt;
+      };
+    }
+    if (dependencies.onNativeCreateInputAdmitted) {
+      const store = sessionStore;
+      const save = store.saveSessionInput.bind(store);
+      store.saveSessionInput = async (input) => {
+        const result = await save(input);
+        if (input.payload.sourceCommandType === "createSession") {
+          await dependencies.onNativeCreateInputAdmitted!();
+        }
+        return result;
+      };
+    }
     const runtimeEnv = options.env ?? process.env;
     options.lifecycle?.signal.throwIfAborted();
     providerRegistryRuntime = await acquireProtocolStartupResource({

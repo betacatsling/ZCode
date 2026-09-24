@@ -135,6 +135,31 @@ if (childMode) {
         output: process.stdout,
       },
       {
+        // 中文：仅测试子进程使用 IPC 栅栏停在真实 SQLite COMMIT 后、ACK 前；
+        // 父进程 SIGKILL 后可证明丢 ACK 不会重复创建或首发，产品启动不安装此钩子。
+        ...(process.env.ZCODE_BOOT_FIXTURE_CREATE_BARRIER === "1"
+          ? {
+              onNativeCreateReceiptCommitted: async (receipt: {
+                commandId: string;
+                originalSessionId: string;
+              }) => {
+                process.send?.({
+                  kind: "native-create-committed",
+                  commandId: receipt.commandId,
+                  sessionId: receipt.originalSessionId,
+                });
+                await new Promise<void>(() => {});
+              },
+            }
+          : {}),
+        ...(process.env.ZCODE_BOOT_FIXTURE_INPUT_BARRIER === "1"
+          ? {
+              onNativeCreateInputAdmitted: async () => {
+                process.send?.({ kind: "native-create-input-admitted" });
+                await new Promise<void>(() => {});
+              },
+            }
+          : {}),
         loggerFactory: createPrivateNoopLoggerFactory(),
         fileSystemPort: effects.fileSystemPort,
         executionPort: effects.executionPort,

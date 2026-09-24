@@ -39,7 +39,7 @@ test(
     const address = server.address();
     assert.ok(address && typeof address !== "string");
     const children = new Set<ChildProcess>();
-    const launch = async () => {
+    const launch = async (barrier = false) => {
       const child = spawn(
         process.execPath,
         [
@@ -56,6 +56,7 @@ test(
             ZCODE_DATA_BASE_DIR: root,
             ZCODE_SESSION_DB_PATH: dbPath,
             ZCODE_NATIVE_BOOT_FIXTURE_CHILD: "1",
+            ...(barrier ? { ZCODE_BOOT_FIXTURE_CREATE_BARRIER: "1" } : {}),
             ZCODE_BOOT_FIXTURE_CWD: cwd,
             ZCODE_BOOT_FIXTURE_URL: `http://127.0.0.1:${address.port}/fixture-private-endpoint-sentinel`,
             ZCODE_TELEMETRY_ENABLED: "false",
@@ -116,10 +117,23 @@ test(
         child.stdin!.write(JSON.stringify({ id, method, params }) + "\n");
         return next((frame) => frame.id === id);
       };
+      const committed = () =>
+        new Promise<{ commandId: string; sessionId: string }>((resolve, reject) => {
+          const timer = setTimeout(
+            () => reject(new Error(`post-COMMIT IPC timed out: ${stderr}`)),
+            16000,
+          );
+          child.once("message", (message: any) => {
+            clearTimeout(timer);
+            if (message?.kind !== "native-create-committed")
+              reject(new Error("unexpected IPC event"));
+            else resolve(message);
+          });
+        });
       await next(
         (frame) => frame.method === "startup/storageState" && frame.params?.phase === "ready",
       );
-      return { child, send };
+      return { child, send, committed, frames };
     };
     try {
       const first = await launch();
@@ -256,3 +270,234 @@ test(
     }
   },
 );
+
+for (const phase of ["draft", "firstInput", "admitted"] as const) {
+  test(`SIGKILL after real CLI COMMIT before ACK (${phase})`, { timeout: 45000 }, async () => {
+    const withInput = phase !== "draft";
+    const root = await mkdtemp(join(tmpdir(), "native-create-crash-"));
+    const cwd = join(root, "workspace");
+    const dbPath = join(root, "session.sqlite");
+    await mkdir(cwd);
+    let requests = 0;
+    const server = createServer((_req, res) => {
+      requests++;
+      res.writeHead(500).end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const children: ChildProcess[] = [];
+    const launch = async (barrier: boolean) => {
+      const child = spawn(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          new URL("./native-bootstrap-subprocess.test.ts", import.meta.url).pathname,
+        ],
+        {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            HOME: root,
+            XDG_CONFIG_HOME: root,
+            ZCODE_DATA_BASE_DIR: root,
+            ZCODE_SESSION_DB_PATH: dbPath,
+            ZCODE_NATIVE_BOOT_FIXTURE_CHILD: "1",
+            ...(barrier && phase !== "admitted" ? { ZCODE_BOOT_FIXTURE_CREATE_BARRIER: "1" } : {}),
+            ...(barrier && phase === "admitted" ? { ZCODE_BOOT_FIXTURE_INPUT_BARRIER: "1" } : {}),
+            ZCODE_BOOT_FIXTURE_CWD: cwd,
+            ZCODE_BOOT_FIXTURE_URL: `http://127.0.0.1:${address.port}/fixture-private-endpoint-sentinel`,
+            ZCODE_TELEMETRY_ENABLED: "false",
+          },
+          stdio: ["pipe", "pipe", "pipe", "ipc"],
+        },
+      );
+      children.push(child);
+      const frames: any[] = [];
+      let stderr = "";
+      child.stderr!.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString().slice(0, 300);
+      });
+      createInterface({ input: child.stdout! }).on("line", (line) => {
+        try {
+          const frame = JSON.parse(line);
+          frames.push(frame);
+          if (frame.method === "session/requestRuntimePreferences" && frame.id !== undefined)
+            child.stdin!.write(
+              JSON.stringify({
+                id: frame.id,
+                result: { memoryEnabled: false, nativeSearchEnhancementsEnabled: false },
+              }) + "\n",
+            );
+        } catch {
+          /* non-JSON fixture output */
+        }
+      });
+      const next = async (predicate: (frame: any) => boolean) => {
+        for (let attempt = 0; attempt < 1600; attempt++) {
+          const frame = frames.find(predicate);
+          if (frame) return frame;
+          if (child.exitCode !== null) throw new Error(`child exited: ${stderr}`);
+          await delay(10);
+        }
+        throw new Error(`stdio timeout: ${stderr.slice(0, 300)}`);
+      };
+      const send = (id: number, method: string, params: object) => {
+        child.stdin!.write(JSON.stringify({ id, method, params }) + "\n");
+        return next((frame) => frame.id === id);
+      };
+      await next(
+        (frame) => frame.method === "startup/storageState" && frame.params?.phase === "ready",
+      );
+      return { child, frames, send };
+    };
+    try {
+      const first = await launch(true);
+      const params = {
+        commandId: "pre-ack-create",
+        sessionId: null,
+        clientId: "desktop-continuous",
+        type: "createSession",
+        issuedAt: 1,
+        payload: {
+          workspaceId: cwd,
+          ...(withInput ? { firstInput: { text: "do not execute before commit" } } : {}),
+        },
+      };
+      const committed = new Promise<{ kind: string; sessionId: string; commandId: string }>(
+        (resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error("no post-COMMIT IPC")), 16000);
+          first.child.once("message", (message: any) => {
+            clearTimeout(timer);
+            resolve(message);
+          });
+        },
+      );
+      first.child.stdin!.write(
+        JSON.stringify({ id: 80, method: V4_METHODS.command, params }) + "\n",
+      );
+      const proof = await committed;
+      assert.equal(
+        proof.kind,
+        phase === "admitted" ? "native-create-input-admitted" : "native-create-committed",
+      );
+      if (phase !== "admitted") assert.equal(proof.commandId, params.commandId);
+      // Input-admitted IPC follows its durable row; the receipt supplies the original ID.
+      if (phase === "admitted") {
+        const committedDb = new DatabaseSync(dbPath, { readOnly: true });
+        try {
+          proof.sessionId = (
+            committedDb
+              .prepare(
+                "select session_id as sessionId from native_create_receipt where command_id = ?",
+              )
+              .get(params.commandId) as { sessionId: string }
+          ).sessionId;
+        } finally {
+          committedDb.close();
+        }
+      }
+      assert.equal(
+        first.frames.some((frame) => frame.id === 80),
+        false,
+        "no ACK before SIGKILL",
+      );
+      first.child.kill("SIGKILL");
+      await new Promise<void>((resolve) => first.child.once("exit", resolve));
+      const view = new ReadonlyNativeSessionMetadataView(dbPath);
+      assert.equal(
+        await view.readCreateReceipt(params.commandId, cwd),
+        undefined,
+        "pending cannot be writable",
+      );
+      const restarted = await launch(false);
+      const query = await restarted.send(81, V4_METHODS.commandsQuery, {
+        commands: [{ sessionId: null, commandId: params.commandId }],
+      });
+      const fact = query.result?.results?.[0]?.result;
+      assert.equal(fact?.result?.sessionId, proof.sessionId);
+      assert.equal(fact?.reasonCode, "fault.command.createPending");
+      if (phase === "admitted") {
+        const scopedQuery = await restarted.send(83, V4_METHODS.commandsQuery, {
+          commands: [{ sessionId: proof.sessionId, commandId: params.commandId }],
+        });
+        assert.ok(
+          scopedQuery.result?.results,
+          JSON.stringify(scopedQuery.error ?? scopedQuery.result),
+        );
+        const db = new DatabaseSync(dbPath, { readOnly: true });
+        try {
+          assert.equal(
+            (
+              db
+                .prepare("select status from session_input where id = ?")
+                .get(`queue_${params.commandId}`) as { status: string }
+            ).status,
+            "admitted",
+            "global query must not discard on cold worker",
+          );
+        } finally {
+          db.close();
+        }
+        const resumed = await restarted.send(84, V4_METHODS.conversationSubscribe, {
+          topic: `conversation/${proof.sessionId}`,
+          connectionId: "fixture",
+          clientMode: "web-remote-replayable",
+        });
+        assert.ok(
+          resumed.result?.ack?.subscriptionId,
+          JSON.stringify(resumed.error ?? resumed.result),
+        );
+        const afterResume = new DatabaseSync(dbPath, { readOnly: true });
+        try {
+          const row = afterResume
+            .prepare("select status, status_reason as reason from session_input where id = ?")
+            .get(`queue_${params.commandId}`) as { status: string; reason: string };
+          assert.equal(row.status, "discarded");
+          assert.equal(row.reason, "session_resumed");
+        } finally {
+          afterResume.close();
+        }
+        const again = await restarted.send(85, V4_METHODS.commandsQuery, {
+          commands: [{ sessionId: null, commandId: params.commandId }],
+        });
+        assert.equal(again.result?.results?.[0]?.result?.result?.sessionId, proof.sessionId);
+      }
+      const retry = await restarted.send(82, V4_METHODS.command, {
+        ...params,
+        clientId: "web-remote-replayable",
+        issuedAt: 999,
+      });
+      assert.equal(retry.result?.result?.sessionId, proof.sessionId);
+      assert.equal(retry.result?.reasonCode, "fault.command.createPending");
+      const db = new DatabaseSync(dbPath, { readOnly: true });
+      try {
+        assert.equal(
+          (db.prepare("select count(*) as count from session").get() as { count: number }).count,
+          1,
+        );
+        assert.equal(
+          (
+            db
+              .prepare("select status from native_create_receipt where command_id = ?")
+              .get(params.commandId) as { status: string }
+          ).status,
+          "pending",
+        );
+        assert.equal(
+          (db.prepare("select count(*) as count from session_input").get() as { count: number })
+            .count,
+          phase === "admitted" ? 1 : 0,
+        );
+      } finally {
+        db.close();
+      }
+      assert.equal(requests, 0, "no model or tool before/after pending retry");
+    } finally {
+      for (const child of children) if (child.exitCode === null) child.kill("SIGKILL");
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+}

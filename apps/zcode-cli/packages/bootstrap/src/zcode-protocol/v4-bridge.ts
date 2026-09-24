@@ -585,10 +585,10 @@ export function createConversationV4Gateway(
       const workspacePath = live?.workspace.workspacePath ?? stored?.directory;
       if (!workspacePath) return null;
       const workspaceIdentity = live?.workspace.workspaceIdentity ?? stored?.workspaceID;
+      // 中文：旧实现让冷 session 的 commands/query 顺带丢弃 admitted 输入；
+      // 查询只能读取事实，真正的冷恢复由 resumePersistedSession 负责 disposition。
       const facts = context.deps.sessionStore
-        ? await loadPersistentCommandFacts(context.deps.sessionStore, sessionId as SessionId, {
-            discardAdmittedOnLoad: !live,
-          })
+        ? await loadPersistentCommandFacts(context.deps.sessionStore, sessionId as SessionId)
         : undefined;
       return {
         workspacePath,
@@ -1532,6 +1532,14 @@ export function createConversationV4Gateway(
         },
         { reusePersistedMessages: true },
       );
+      // 中文：只有 runtime 真正完成 cold resume 才能判定旧 admitted 输入不可重播；
+      // 在 query 时做此写入会使观察行为取消用户仍存活的输入。
+      if (context.deps.sessionStore) {
+        await loadPersistentCommandFacts(context.deps.sessionStore, sessionId as SessionId, {
+          discardAdmittedOnLoad: true,
+        });
+        persistentCommands.invalidate(sessionId);
+      }
       return {
         status: "resumed",
         persistedMessages: activated.persistedMessages,
