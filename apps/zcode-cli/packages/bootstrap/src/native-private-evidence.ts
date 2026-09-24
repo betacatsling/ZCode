@@ -8,6 +8,8 @@ interface Row {
   toolName?: string;
   status?: string;
   input?: unknown;
+  output?: unknown;
+  toolCallId?: string;
 }
 interface Frame {
   method?: string;
@@ -48,6 +50,15 @@ export function matchingTerminal(rows: readonly Row[], commandId: string): strin
   )?.turnId;
 }
 
+export function matchingTool(
+  rows: readonly Row[], turnId: string, toolName: string, input: Record<string, unknown>,
+  predicate: (output: unknown) => boolean = () => true,
+): boolean {
+  return rows.some((row) => row.kind === "toolCall" && row.turnId === turnId &&
+    row.toolName === toolName && row.status === "success" &&
+    JSON.stringify(row.input) === JSON.stringify(input) && predicate(row.output));
+}
+
 export function matchingFinalAnswer(
   rows: readonly Row[],
   turnId: string,
@@ -86,12 +97,12 @@ export function isExactFixtureAction(input: FixturePermissionInput): boolean {
       keys === "file_path" &&
       args.file_path === input.readPath) ||
     (input.toolName === "Write" &&
-      input.phase === 1 &&
+      (input.phase === 1 || input.phase === 2) &&
       keys === "content,file_path" &&
       args.file_path === input.writePath &&
       args.content === input.writeContent) ||
     (input.toolName === "Bash" &&
-      input.phase === 1 &&
+      input.phase === 2 &&
       keys === "command" &&
       args.command === input.bashCommand)
   );
@@ -100,7 +111,7 @@ export function isExactFixtureAction(input: FixturePermissionInput): boolean {
 export function permittedFixtureAction(input: FixturePermissionInput): "allow" | "deny" {
   // 修复：首次 Write 拒绝也必须先验证其完整输入；坏输入拒绝但不计作成功测试步骤。
   if (!isExactFixtureAction(input)) return "deny";
-  return input.toolName === "Write" && input.deniedWrites === 0 ? "deny" : "allow";
+  return input.toolName === "Write" && input.phase === 1 ? "deny" : "allow";
 }
 function safeObject(value: string): unknown {
   try {

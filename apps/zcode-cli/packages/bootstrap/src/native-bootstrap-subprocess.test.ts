@@ -102,6 +102,7 @@ if (childMode) {
     api: "anthropic-messages",
     baseUrl: process.env.ZCODE_BOOT_FIXTURE_URL!,
     fetch: globalThis.fetch.bind(globalThis),
+    allowedToolNames: ["Read", "Write", "Bash"],
     notify: () => {},
   });
   const cwd = process.env.ZCODE_BOOT_FIXTURE_CWD!;
@@ -211,7 +212,7 @@ if (childMode) {
             : 0;
         const step = routeCounts[turn]++;
         if (turn === 2 && step > 0) sawCurrentRead = body.includes(Buffer.from(changedContent));
-        if (turn === 0 && step === 4) {
+        if (turn === 1 && step === 2) {
           const decoded = body.toString();
           const containsExactCommand = (value: unknown): boolean =>
             typeof value === "string"
@@ -223,13 +224,13 @@ if (childMode) {
                   : false;
           bashResultSeen = decoded.includes("exit=0") && containsExactCommand(JSON.parse(decoded));
         }
-        const tools: Array<{ name: string; input: object }> = [
+        const tool = turn === 0 ? [
           { name: "Read", input: { file_path: fixturePath } },
           { name: "Write", input: { file_path: writePath, content: "allowed-write-content" } },
+        ][step] : turn === 1 ? [
           { name: "Write", input: { file_path: writePath, content: "allowed-write-content" } },
           { name: "Bash", input: { command: bashCommand } },
-        ];
-        const tool = turn === 0 ? tools[step] : step === 0 ? tools[0] : undefined;
+        ][step] : step === 0 ? { name: "Read", input: { file_path: fixturePath } } : undefined;
         if (turn === 2 && !tool) finalAnswerSent = sawCurrentRead;
         const event = (type: string, data: object) =>
           `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`;
@@ -339,7 +340,7 @@ if (childMode) {
             if (decision === "deny" && toolName !== "Write")
               throw new Error("unapproved tool input");
             if (toolName === "Write") {
-              if (deniedWrites === 0) {
+              if (currentTurn === 1) {
                 await assert.rejects(access(writePath));
                 deniedWrites++;
                 assert.equal(decision, "deny");
@@ -474,11 +475,14 @@ if (childMode) {
             if (terminalTimeout) clearTimeout(terminalTimeout);
           }
           assert.ok(
-            routeCounts[turn - 1]! >= (turn === 1 ? 5 : 2),
+            routeCounts[turn - 1]! >= (turn === 3 ? 2 : 3),
             `terminal did not follow this turn's Model continuation: turn=${turn}`,
           );
           if (turn === 1) {
             assert.equal(deniedWrites, 1);
+            await assert.rejects(access(writePath));
+          }
+          if (turn === 2) {
             assert.equal(allowedWrites, 1);
             assert.equal(bashApprovals, 1);
             assert.equal(await readFile(writePath, "utf8"), "allowed-write-content");
@@ -502,8 +506,8 @@ if (childMode) {
           true,
           "Bash command/result must be present in model continuation",
         );
-        assert.ok(routeCounts[0] >= 5 && routeCounts[0] <= 6);
-        assert.deepEqual(routeCounts.slice(1), [2, 2]);
+        assert.ok(routeCounts[0] >= 3 && routeCounts[0] <= 4);
+        assert.deepEqual(routeCounts.slice(1), [3, 2]);
         assert.ok(requests <= 12, `fake native route exceeded request budget: ${requests}`);
         console.log(
           `native-fake-proof: upstreamHttpRequests=${requests} modelCallCounter=observed readTools=3 deniedWrites=${deniedWrites} allowedWrites=${allowedWrites} bashApprovals=${bashApprovals} terminalTurns=3 currentRead=true finalAnswer=true paidUsage=none`,

@@ -20,3 +20,9 @@ Verification: CLI dependency build and scoped typecheck succeeded through global
 # protocol-v2-closure early public API handoff
 
 Base 6456283 already supplies Host V2 and shared `SessionSpecV2`/`BackendBindingV2`. This lane owns `@zcode/services/agent-host/codex` and `/claude` public trusted factories, not a replacement Host. Codex V2 adapter will reject V1 writes, bind target/workspace/generation, use verified relative cwd and fence all native events by turn ID. Claude final assistant is authoritative over partial text. No paid calls; native fake plus Host replay tests required before certification. No production enablement implied.
+
+## native-private-safety current lane (not accepted yet)
+Joined 49c9391 as 5e96141; Services V2 sources owned by separate lane, not edited. Safety lane edits only CLI bootstrap private runner/observer/effects/evidence, narrow Node DI, scripts/native-private-* and their tests/spec. Same fake/live controller required; MAIN retains paid gate. Spec: apps/zcode-cli/packages/bootstrap/src/NATIVE-PRIVATE-SAFETY-SPEC.md. No paid calls here.
+
+### native-private-safety final candidate (not live-approved)
+Implementation/test/spec paths: `scripts/native-private-{runner,channel,fake,remove,safety.test}.mjs`, `apps/zcode-cli/packages/bootstrap/src/native-private-{child,observer,evidence,effects}*`, `NATIVE-PRIVATE-SAFETY-SPEC.md`. One fake/live V4 controller; fake 24/24 safety probes + 16/16 native matrix, 9 upstream fake HTTP, final child secret scan true, cleanup true. Root lint 0 errors/76 warnings; scoped bootstrap+dependencies typecheck pass; root typecheck OOM under required 2GiB; nested CLI scripts cannot find turbo. Full handoff/residuals `.tmp/MICRO-native-private-safety.md`; independent fresh review pending (no delegation authorized), live remains closed. Receipt/CommandInbox/storage/Services/Core untouched by this safety change.

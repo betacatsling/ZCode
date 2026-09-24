@@ -5,9 +5,10 @@ export function createPrivateObservation(input: {
   baseUrl: string;
   api: "anthropic-messages" | "openai-chat-completions" | "openai-responses";
   maxAttempts?: number;
+  allowedToolNames?: readonly string[];
   fetch: typeof globalThis.fetch;
   notify: (event: {
-    kind: "model" | "http";
+    kind: "model" | "http" | "dispatch";
     count: number;
     operation?: "generate" | "stream";
   }) => void;
@@ -24,10 +25,11 @@ export function createPrivateObservation(input: {
         : `${prefix}/chat/completions`;
   const limit = input.maxAttempts ?? 12;
   let httpAttempts = 0;
+  let httpDispatches = 0;
   let modelCalls = 0;
   return {
     get counts() {
-      return { httpAttempts, modelCalls };
+      return { httpAttempts, httpDispatches, modelCalls };
     },
     onModelCall(operation: "generate" | "stream", providerId: string, modelId: string) {
       // 修复：模型身份和次数先于 executor/SDK 执行拒绝，不能依赖 HTTP 次数当作 Model 调用数。
@@ -35,18 +37,95 @@ export function createPrivateObservation(input: {
         throw new Error("Model route/budget denied");
       input.notify({ kind: "model", operation, count: ++modelCalls });
     },
-    transport: (request: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    transport: async (request: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      // 预留必须早于 await body；验证 SDK 真正序列化的请求而不是仅验证逻辑 Model id。
       const target = new URL(request instanceof Request ? request.url : String(request));
-      // 严格匹配唯一 SDK API 路径；不能按 host/prefix 放行另一个模型或未经批准的 endpoint。
-      if (target.origin !== base.origin || target.pathname !== path || httpAttempts >= limit)
-        throw new Error("HTTP route/budget denied before IO");
+      const method = (init?.method ?? (request instanceof Request ? request.method : "GET")).toUpperCase();
+      if (httpAttempts >= limit) throw new Error("HTTP budget denied before IO");
       input.notify({ kind: "http", count: ++httpAttempts });
-      // 内建 fetch 默认跟随 30x，隐含的第二个真实 HTTP 请求既不计数也可能越过路由；
-      // 私有闸门禁用自动跟随，保留请求 body/header/cache，重定向按失败处理。
-      return input
-        .fetch(request, { ...init, redirect: "manual" })
-        .then(async (response) => {
-          if (response.ok) return response;
+      if (
+        target.origin !== base.origin || target.pathname !== path || target.search !== "" ||
+        target.username !== "" || target.password !== "" || method !== "POST" ||
+        base.search !== "" || base.username !== "" || base.password !== "" ||
+        init?.redirect === "follow" || (request instanceof Request && request.redirect === "follow" && !init)
+      ) throw new Error("HTTP route denied before IO");
+      try {
+        const body = init?.body ?? (request instanceof Request ? await request.clone().text() : undefined);
+        if (typeof body !== "string" || body.length > 1_048_576) throw new Error("HTTP model denied before IO");
+        const serialized = JSON.parse(body);
+        if (serialized?.model !== input.modelId || !Number.isSafeInteger(serialized.max_tokens) ||
+            serialized.max_tokens < 1 || serialized.max_tokens > 4096)
+          throw new Error("HTTP model denied before IO");
+      } catch {
+        throw new Error("HTTP model denied before IO");
+      }
+      // 修复：不修改原请求/签名/body/headers；只禁止自动重定向。成功响应须屏蔽
+      // 解码错误可能含上游私有字符串（尤其 200 malformed/SSE decoder failure）。
+      try {
+        ++httpDispatches;
+        input.notify({ kind: "dispatch", count: httpDispatches });
+        const response = await input.fetch(request, { ...init, redirect: "manual" });
+        if (response.ok) {
+          if (!response.body) return response;
+          if (!response.headers.get("content-type")?.includes("text/event-stream")) {
+            const bytes = await response.arrayBuffer();
+            if (bytes.byteLength > 1_048_576) throw new Error("private upstream body budget");
+            let json: { content?: Array<{ type?: string; name?: string }>; error?: unknown };
+            try { json = JSON.parse(Buffer.from(bytes).toString("utf8")); }
+            catch { throw new Error("private upstream JSON invalid"); }
+            if (json.error) throw new Error("private upstream JSON error");
+            if (json.content?.some((part) => part.type === "tool_use" && !input.allowedToolNames?.includes(part.name ?? "")))
+              throw new Error("private tool denied before execution");
+            return new Response(bytes, { status: response.status, headers: response.headers });
+          }
+          const reader = response.body.getReader();
+          let pending = Buffer.alloc(0);
+          const stream = new ReadableStream<Uint8Array>({
+            async pull(controller) {
+              try {
+                const { done, value } = await reader.read();
+                if (done) {
+                  if (pending.toString("utf8").trim()) throw new Error("private upstream incomplete frame");
+                  controller.close();
+                } else {
+                  // 修复：session tool allowlist 在 V4 create 时被 schema 丢弃；
+                  // SSE tool_use 必须在 SDK 获得完整字节之前拒绝，避免任何 handler 副作用。
+                  pending = Buffer.concat([pending, value]);
+                  if (pending.length > 131_072) throw new Error("private upstream frame budget");
+                  let released = 0;
+                  for (;;) {
+                    const lf = pending.indexOf("\n\n", released);
+                    const crlf = pending.indexOf("\r\n\r\n", released);
+                    const at = lf < 0 ? crlf : crlf < 0 ? lf : Math.min(lf, crlf);
+                    if (at < 0) break;
+                    const end = at + (at === crlf ? 4 : 2);
+                    const event = pending.subarray(released, end).toString("utf8");
+                    const data = event.split(/\r?\n/u).find((line) => line.startsWith("data: "))?.slice(6);
+                    if (data) {
+                      let parsed: { type?: string; content_block?: { type?: string; name?: string } };
+                      try { parsed = JSON.parse(data); } catch { throw new Error("private upstream frame invalid"); }
+                      if (parsed.type === "content_block_start" && parsed.content_block?.type === "tool_use" &&
+                          !input.allowedToolNames?.includes(parsed.content_block.name ?? ""))
+                        throw new Error("private tool denied before execution");
+                    }
+                    released = end;
+                  }
+                  if (released) {
+                    controller.enqueue(pending.subarray(0, released));
+                    pending = Buffer.from(pending.subarray(released));
+                  }
+                }
+              } catch {
+                controller.error(new Error("private upstream stream failure"));
+              }
+            },
+            async cancel() { try { await reader.cancel(); } catch { /* private cause */ } },
+          });
+          return new Response(stream, { status: response.status, headers: response.headers });
+        }
+        {
+          // Even successful HTTP status can contain malformed/private text in SDK decoder errors;
+          // adapter boundary must sanitize that exception before persistence as well.
           // 修复：上游失败正文可能回显凭据/endpoint；在私有验证中不能把它交给
           // SDK 错误包装、V4 持久化或日志。请求的 body/header 和成功响应保持原样。
           try {
@@ -58,11 +137,10 @@ export function createPrivateObservation(input: {
             status: response.status,
             headers: { "content-type": "application/json" },
           });
-        })
-        .catch(() => {
-          // 连网络错误的 cause 也可能包含原始 endpoint；禁止透传到原生持久层。
-          throw new Error("private transport failure");
-        });
+        }
+      } catch {
+        throw new Error("private transport failure");
+      }
     },
   };
 }

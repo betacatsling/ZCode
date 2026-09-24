@@ -19,7 +19,7 @@ import {
   createRootTraceContext,
   type LoggerFactory,
 } from "@zcode/contracts";
-import type { McpPort, ModelSelection, FileSystemPort, ExecutionPort } from "@zcode/contracts";
+import type { McpPort, ModelSelection, FileSystemPort, ExecutionPort, HttpClientPort } from "@zcode/contracts";
 import type { PresentationSurface } from "@zcode/core";
 import type { RunZCodeProtocolAgentOptions, ZCodeAppOptions } from "./app/types.js";
 import { createZCodeApp } from "./app/create-app.js";
@@ -95,6 +95,10 @@ export interface NativeProtocolBootstrapDependencies {
   /** 私有 fixture 对免确认 Read 与底层 Bash 仍必须实施 I/O 端口级范围约束。 */
   readonly fileSystemPort?: FileSystemPort;
   readonly executionPort?: ExecutionPort;
+  /** Native private validation: reject even preapproved WebFetch before network IO. */
+  readonly httpClientPort?: HttpClientPort;
+  /** Trusted disposable native run only: constrain registered tools before any handler executes. */
+  readonly privateToolAllowlist?: readonly string[];
   readonly startProviderRegistryRuntime?: (
     env: Readonly<Record<string, string | undefined>>,
   ) => Promise<NativeProtocolRegistryRuntime>;
@@ -279,6 +283,10 @@ export async function runZCodeProtocolAgent(
           ...(dependencies.loggerFactory ? { loggerFactory: dependencies.loggerFactory } : {}),
           ...(dependencies.fileSystemPort ? { fileSystemPort: dependencies.fileSystemPort } : {}),
           ...(dependencies.executionPort ? { executionPort: dependencies.executionPort } : {}),
+          ...(dependencies.httpClientPort ? { httpClientPort: dependencies.httpClientPort } : {}),
+          ...(dependencies.privateToolAllowlist ? {
+            runtimeConfig: { ...appOptions.runtimeConfig, toolAllowlist: [...dependencies.privateToolAllowlist], dynamicWorkflowEnabled: false },
+          } : {}),
           ...applyProtocolProviderRegistry(
             applyProtocolPresentationSurface(appOptions, presentationSurface),
             activeProviderRegistryRuntime.runtime.registryService,

@@ -26,7 +26,7 @@ test("private transport does not follow an unobserved HTTP redirect to another r
       notify() {},
     });
     observer.onModelCall("stream", "fixture", "only");
-    const response = await observer.transport(`${baseUrl}/v1/messages`);
+    const response = await observer.transport(`${baseUrl}/v1/messages`, { method: "POST", body: JSON.stringify({ model: "only", max_tokens: 1024 }) });
     assert.equal(response.status, 302);
     assert.equal(visited, 1);
     assert.equal(redirected, 0);

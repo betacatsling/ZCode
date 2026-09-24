@@ -34,7 +34,7 @@ export function createPrivateEffectPorts(input: {
     async readTextFile(request) {
       if (
         (request.path !== input.readPath && request.path !== input.writePath) ||
-        (request.path === input.writePath && phase !== 1) ||
+        (request.path === input.writePath && phase !== 2) ||
         (request.path === input.readPath && phase !== 1 && phase !== 3)
       )
         return reject();
@@ -42,7 +42,7 @@ export function createPrivateEffectPorts(input: {
     },
     readBinaryFile: async () => reject(),
     async writeTextFile(request) {
-      if (phase !== 1 || request.path !== input.writePath || request.content !== input.writeContent)
+      if (phase !== 2 || request.path !== input.writePath || request.content !== input.writeContent)
         return reject();
       return fs.writeTextFile(request);
     },
@@ -50,7 +50,7 @@ export function createPrivateEffectPorts(input: {
       if (
         request.path !== input.cwd &&
         !(request.path === input.readPath && (phase === 1 || phase === 3)) &&
-        !(request.path === input.writePath && phase === 1)
+        !(request.path === input.writePath && phase === 2)
       )
         return reject();
       return fs.stat(request);
@@ -64,7 +64,7 @@ export function createPrivateEffectPorts(input: {
   const executionPort: ExecutionPort = {
     async run(request, options) {
       if (
-        phase !== 1 ||
+        phase !== 2 ||
         request.cwd !== input.cwd ||
         request.command.mode !== "shell" ||
         request.command.command !== input.bashCommand ||
