@@ -110,6 +110,35 @@ export function createOpenAiDeveloperRoleFetch(
   };
 }
 
+export function withOpenAiPromptCacheKey(
+  providerOptions: Record<string, unknown> | undefined,
+  promptCacheKey: string | undefined,
+  providerKind: string,
+): Record<string, unknown> | undefined {
+  if (promptCacheKey === undefined) return providerOptions;
+  if (providerKind !== "openai") {
+    throw invalidDeveloperRole("Prompt cache key requires a verified OpenAI Responses provider");
+  }
+  if (
+    typeof promptCacheKey !== "string" ||
+    promptCacheKey.length === 0 ||
+    promptCacheKey.length > 256
+  ) {
+    throw invalidDeveloperRole(
+      "Prompt cache key must be a non-empty string of at most 256 characters",
+    );
+  }
+  const openai = providerOptions?.openai;
+  if (openai !== undefined && (!openai || typeof openai !== "object" || Array.isArray(openai))) {
+    throw invalidDeveloperRole("OpenAI provider options must be an object for prompt cache key");
+  }
+  const settings = (openai ?? {}) as Record<string, unknown>;
+  if (settings.promptCacheKey !== undefined && settings.promptCacheKey !== promptCacheKey) {
+    throw invalidDeveloperRole("Prompt cache key conflicts with bound OpenAI provider options");
+  }
+  return { ...providerOptions, openai: { ...settings, promptCacheKey } };
+}
+
 export function requireOpenAiDeveloperSystemMode(
   providerOptions: Record<string, unknown> | undefined,
   hasDeveloper: boolean,

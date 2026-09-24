@@ -2,7 +2,10 @@ import { Output, jsonSchema } from "ai";
 import type { ModelToolChoice } from "@zcode/contracts";
 import type { EnvRecord } from "./model-execution.js";
 import { toAiSdkMessages } from "./transform.js";
-import { requireOpenAiDeveloperSystemMode } from "./openai-developer-role.js";
+import {
+  requireOpenAiDeveloperSystemMode,
+  withOpenAiPromptCacheKey,
+} from "./openai-developer-role.js";
 import { toAiSdkTools } from "./tool-transform.js";
 import type {
   AiSdkGenerateTextOptions,
@@ -51,13 +54,17 @@ export function createGenerateTextOptions(input: {
     providerKind: input.resolved.providerKind,
     providerOptions,
   });
-  const requestProviderOptions = requireOpenAiDeveloperSystemMode(
-    withNativeGenerateOutputFormat({
-      providerOptions: providerOptionsWithMetadata,
-      responseJsonSchema: input.request.responseJsonSchema,
-      resolved: input.resolved,
-    }),
-    input.resolved.instructionPlan !== undefined,
+  const requestProviderOptions = withOpenAiPromptCacheKey(
+    requireOpenAiDeveloperSystemMode(
+      withNativeGenerateOutputFormat({
+        providerOptions: providerOptionsWithMetadata,
+        responseJsonSchema: input.request.responseJsonSchema,
+        resolved: input.resolved,
+      }),
+      input.resolved.instructionPlan !== undefined,
+    ),
+    input.request.promptCacheKey,
+    input.resolved.providerKind,
   );
   return removeUndefined({
     model: input.resolved.model,
@@ -116,13 +123,17 @@ export function createStreamTextOptions(input: {
     input.resolved.providerOptions,
     input.request.providerOptions,
   );
-  const requestProviderOptions = requireOpenAiDeveloperSystemMode(
-    mergeAnthropicRequestMetadata({
-      metadataUserId: input.anthropicMetadataUserId,
-      providerKind: input.resolved.providerKind,
-      providerOptions,
-    }),
-    input.resolved.instructionPlan !== undefined,
+  const requestProviderOptions = withOpenAiPromptCacheKey(
+    requireOpenAiDeveloperSystemMode(
+      mergeAnthropicRequestMetadata({
+        metadataUserId: input.anthropicMetadataUserId,
+        providerKind: input.resolved.providerKind,
+        providerOptions,
+      }),
+      input.resolved.instructionPlan !== undefined,
+    ),
+    input.request.promptCacheKey,
+    input.resolved.providerKind,
   );
   return removeUndefined({
     model: input.resolved.model,
