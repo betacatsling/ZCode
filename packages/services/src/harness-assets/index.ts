@@ -4,14 +4,25 @@ import { iconAssetIdSchema } from "@zcode/shared/agent-host";
 export const MAX_HARNESS_PNG_BYTES = 256 * 1024;
 
 /** Metadata only: runtime adapter registration and availability belong to the Host. */
+const trustedManifest = {
+  zcode: { id: "builtin:zcode", packagedPath: "assets/zcode.png" },
+  pi: { id: "builtin:pi", packagedPath: "assets/pi.png" },
+} as const;
+
+/** The only trusted branding inventory; it is display metadata, not an adapter registry. */
 export const nativeHarnessAssetMetadata: Readonly<
   Record<string, { icon?: { light: string; dark: string } }>
 > = {
-  zcode: { icon: { light: "builtin:zcode", dark: "builtin:zcode" } },
-  pi: {},
+  zcode: { icon: { light: trustedManifest.zcode.id, dark: trustedManifest.zcode.id } },
+  pi: { icon: { light: trustedManifest.pi.id, dark: trustedManifest.pi.id } },
   codex: {},
   claude: {},
 };
+
+/** Paths relative to this module, required by a packaged runtime (no renderer URLs). */
+export const harnessAssetPackagePaths: readonly string[] = Object.values(trustedManifest).map(
+  ({ packagedPath }) => packagedPath,
+);
 
 export interface TrustedPngDescriptor {
   readonly kind: "trusted-png";
@@ -79,9 +90,12 @@ export function validateTrustedPng(bytes: Uint8Array): {
   return { mimeType: "image/png", width, height };
 }
 
-const packagedAssets: Readonly<Record<string, URL>> = {
-  "builtin:zcode": new URL("./assets/zcode.png", import.meta.url),
-};
+const packagedAssets: Readonly<Record<string, URL>> = Object.fromEntries(
+  Object.values(trustedManifest).map(({ id, packagedPath }) => [
+    id,
+    new URL(`./${packagedPath}`, import.meta.url),
+  ]),
+);
 
 /** Static allowlist only; untrusted IDs are never interpreted as paths or fetched URLs. */
 export async function resolveHarnessAsset(id: string): Promise<TrustedPngDescriptor | undefined> {
