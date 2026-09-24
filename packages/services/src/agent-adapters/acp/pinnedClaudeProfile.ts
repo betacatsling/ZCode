@@ -26,12 +26,13 @@ export async function probePinnedClaudeAcp(descriptor: AcpDescriptor): Promise<s
   ) throw new Error("ACP pinned package descriptor mismatch");
   const root = resolve(dirname(entry), "..");
   const dist = join(root, "dist");
-  const [actualEntry, manifest, filenames] = await Promise.all([
+  const [actualEntry, actualDist, manifest, filenames] = await Promise.all([
     realpath(entry),
+    realpath(dist),
     readFile(join(root, "package.json")),
     readdir(dist),
   ]);
-  if (actualEntry !== join(dist, "index.js"))
+  if (actualEntry !== join(actualDist, "index.js"))
     throw new Error("ACP pinned entrypoint escaped package");
   const parsed: unknown = JSON.parse(manifest.toString("utf8"));
   if (
@@ -45,7 +46,8 @@ export async function probePinnedClaudeAcp(descriptor: AcpDescriptor): Promise<s
   const digest = createHash("sha256");
   for (const name of runtimeFiles) {
     const path = join(dist, name);
-    if ((await realpath(path)) !== path) throw new Error("ACP pinned runtime symlink rejected");
+    if ((await realpath(path)) !== join(actualDist, name))
+      throw new Error("ACP pinned runtime symlink rejected");
     digest.update(name).update(Buffer.from([0])).update(await readFile(path));
   }
   if (!timingSafeEqual(digest.digest(), Buffer.from(PIN.runtimeSha256, "hex")))
