@@ -375,12 +375,23 @@ export class Supervisor {
             () => (this.bootFence ? "ready" : this.state),
             this.options.coreReadyTimeoutMs ?? 15_000,
           );
-          await this.releaseBootFence(this.requireBootFence());
         } catch (rollbackError) {
-          log.error("previous release rollback failed", rollbackError);
-          // 旧 release ready 超时只改状态会让仍存活的 Core、PID 和 lock 与 stopped 脱节；复用 stopCore 等待 exit/close，失败则保持 stop-failed。
+          log.error("previous release rollback failed before opening", rollbackError);
+          // 中文：只有启动冻结仍未请求释放时才允许终止不健康的旧 release。
           if (this.core) await this.stopCore("update-rollback");
           this.state = "stopped";
+        }
+        if (this.bootFence && this.state === "starting") {
+          try {
+            await this.releaseBootFence(this.requireBootFence());
+          } catch (releaseError) {
+            // 中文：release 已发出但回执丢失，回滚 Core 可能已接纳业务；
+            // 不得把它归入启动失败并杀死，保留旧指针、活 child 和锁供显式恢复。
+            this.state = "stop-failed";
+            this.lastExitReason = `rollback admission uncertain: ${updateErrorMessage(releaseError)}`;
+            await this.persistStatusSnapshot();
+            throw releaseError;
+          }
         }
       }
       await this.persistStatusSnapshot();

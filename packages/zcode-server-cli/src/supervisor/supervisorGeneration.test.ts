@@ -534,3 +534,78 @@ process.on('message',m=>{
     }
   }
 });
+
+test("rollback opening ACK loss retains possibly admitting previous Core and lock", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "supervisor-rollback-ack-"));
+  const layout = resolveServerLayout(join(dir, "server"));
+  const source = join(dir, "core.cjs");
+  await writeFile(
+    source,
+    `
+const {randomUUID}=require('node:crypto');
+const generation=Number(process.argv[2]);
+let lease=process.argv[3]==='held'?randomUUID():undefined;
+const idle={running:0,waiting:0,uncertain:0};
+if(generation!==2)process.send({type:'ready',host:'127.0.0.1',port:40042,version:'fixture',generation,...(lease&&{bootLeaseId:lease})});
+process.on('message',m=>{
+ if(m.command==='shutdown')process.exit(0);
+ if(m.command==='maintenance-begin'){lease=randomUUID();process.send({type:'maintenance',requestId:m.requestId,leaseId:lease,nativeActivity:idle,externalActivity:idle});}
+ if(m.command==='maintenance-release'){
+   const ok=m.leaseId===lease;if(ok)lease=undefined;
+   if(generation!==3)process.send({type:'maintenance',requestId:m.requestId,...(ok&&{leaseId:m.leaseId})});
+ }
+ if(m.command==='fixture-admit')process.send({type:'fixture-admitted',accepted:!lease});
+});
+`,
+  );
+  const previousDir = join(layout.releasesDir, "previous");
+  const candidateDir = join(layout.releasesDir, "candidate");
+  await mkdir(previousDir, { recursive: true });
+  await mkdir(candidateDir, { recursive: true });
+  const supervisor = new Supervisor({
+    layout,
+    version: "test",
+    coreReadyTimeoutMs: 200,
+    launcher: {
+      launch: (generation, _release, mode) =>
+        fork(source, [String(generation), mode], { stdio: ["ignore", "ignore", "ignore", "ipc"] }),
+    },
+  });
+  const releases = (supervisor as unknown as { releaseManager: ReleaseManager }).releaseManager;
+  try {
+    await releases.ensure();
+    await releases.restoreCurrent({ version: "previous", releaseDir: previousDir });
+    await releases.writePending({ version: "candidate", releaseDir: candidateDir });
+    await supervisor.start();
+    await until(() => supervisor.status().state === "ready");
+    await assert.rejects(requestControl(layout.controlEndpoint, { command: "apply-update" }));
+    assert.equal((await releases.readCurrent())?.version, "previous");
+    assert.equal(supervisor.status().generation, 3);
+    assert.equal(supervisor.status().state, "stop-failed");
+    const child = (supervisor as unknown as { core: import("node:child_process").ChildProcess })
+      .core;
+    assert.ok(child.pid && child.exitCode === null);
+    const admission = new Promise<boolean>((resolve) => {
+      child.once("message", (message: unknown) =>
+        resolve((message as { accepted: boolean }).accepted),
+      );
+      child.send({ command: "fixture-admit" });
+    });
+    assert.equal(await bounded(admission), true);
+    await assert.rejects(
+      new Supervisor({ layout, version: "test", launcher: { launch: () => child } }).start(),
+      /lock|orphan/i,
+    );
+    assert.equal(supervisor.status().pid, child.pid);
+    assert.equal(
+      await readFile(layout.updateTransactionFile, "utf8").then(
+        () => true,
+        () => false,
+      ),
+      false,
+    );
+  } finally {
+    await supervisor.stop("fixture-cleanup");
+    await rm(dir, { recursive: true, force: true });
+  }
+});

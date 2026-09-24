@@ -47,32 +47,11 @@ export class DataRootLock {
   public async acquire(): Promise<void> {
     await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
     if (await this.tryAcquireOnce()) return;
-    const recoveryPath = `${this.path}.recovery`;
-    for (let attempt = 0; attempt < 100; attempt++) {
-      const observed = await this.readOwner(this.path);
-      if (observed && this.isHolderAlive(observed.record.pid)) {
-        throw new Error("Another ZCode Server instance is already running");
-      }
-      const recoveryToken = await this.tryAcquireRecoveryGate(recoveryPath);
-      if (!recoveryToken) {
-        await new Promise<void>((resolve) => setTimeout(resolve, 5));
-        continue;
-      }
-      try {
-        const current = await this.readOwner(this.path);
-        if (current && this.isHolderAlive(current.record.pid)) {
-          throw new Error("Another ZCode Server instance is already running");
-        }
-        if (current) {
-          await this.claimStalePath(this.path, current.raw);
-        }
-        if (await this.tryAcquireOnce()) return;
-      } finally {
-        await this.releaseOwnedPath(recoveryPath, recoveryToken);
-      }
-      await new Promise<void>((resolve) => setTimeout(resolve, 5));
-    }
-    throw new Error("Another ZCode Server instance is already running");
+    // 中文：旧 Supervisor 的 PID 死亡不证明其 Core/worker 已退出；即使 recovery gate
+    // 串行化两个新 Supervisor，也不能提供旧进程树的终态证据。保留原锁供人工核验。
+    throw new Error(
+      "Server lock remains; orphan Core cannot be ruled out; manual recovery required",
+    );
   }
 
   public async release(): Promise<void> {
@@ -142,53 +121,6 @@ export class DataRootLock {
       // ESRCH 表示进程不存在（stale）；EPERM 表示进程存在但无权限，保守视为存活。
       return error instanceof Error && "code" in error && error.code === "EPERM";
     }
-  }
-
-  private async tryAcquireRecoveryGate(path: string): Promise<string | null> {
-    const ownerToken = randomUUID();
-    let handle: FileHandle | undefined;
-    try {
-      handle = await open(path, "wx", 0o600);
-      await handle.writeFile(
-        `${JSON.stringify({ pid: process.pid, acquiredAt: Date.now(), ownerToken })}\n`,
-      );
-      await handle.close();
-      return ownerToken;
-    } catch (error: unknown) {
-      if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) {
-        await handle?.close().catch(() => undefined);
-        const observed = await this.readOwner(path);
-        if (observed?.record.ownerToken === ownerToken) {
-          await this.releaseOwnedPath(path, ownerToken);
-        }
-        throw error;
-      }
-    } finally {
-      await handle?.close().catch(() => undefined);
-    }
-    const observed = await this.readOwner(path);
-    if (!observed || !this.isHolderAlive(observed.record.pid)) {
-      if (observed) await this.claimStalePath(path, observed.raw);
-      return null;
-    }
-    return null;
-  }
-
-  private async claimStalePath(path: string, expectedRaw: string): Promise<void> {
-    const quarantine = `${path}.stale-${process.pid}-${randomUUID()}`;
-    try {
-      await rename(path, quarantine);
-    } catch (error: unknown) {
-      if (error instanceof Error && "code" in error && error.code === "ENOENT") return;
-      throw error;
-    }
-    const claimedRaw = await readFile(quarantine, "utf8").catch(() => null);
-    if (claimedRaw === expectedRaw) {
-      await rm(quarantine, { force: true });
-      return;
-    }
-    // 陈旧观察误 claim 了后来者时必须恢复，不能删除新 owner 的 lock。
-    await rename(quarantine, path).catch(() => undefined);
   }
 
   private async releaseOwnedPath(path: string, ownerToken: string): Promise<void> {

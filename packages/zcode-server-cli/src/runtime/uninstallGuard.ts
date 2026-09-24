@@ -9,7 +9,11 @@ export async function acquireUninstallLock(layout: ServerLayout): Promise<DataRo
   if (inspection.state === "active") {
     throw new Error(`Cannot uninstall while Server lock is held by pid ${inspection.pid}`);
   }
-  if (inspection.state === "invalid" || inspection.state === "unreadable") {
+  if (
+    inspection.state === "invalid" ||
+    inspection.state === "unreadable" ||
+    inspection.state === "stale"
+  ) {
     throw new Error(`Cannot acquire uninstall lock (${describeLockInspection(inspection)})`);
   }
   await lock.acquire();

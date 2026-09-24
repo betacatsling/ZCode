@@ -398,7 +398,11 @@ async function runUninstall(
         cause: error,
       });
     }
-    if (lockInspection.state === "invalid" || lockInspection.state === "unreadable") {
+    if (
+      lockInspection.state === "invalid" ||
+      lockInspection.state === "unreadable" ||
+      lockInspection.state === "stale"
+    ) {
       throw new Error(
         `Cannot verify Server shutdown before uninstall (${describeLockInspection(lockInspection)})`,
         { cause: error },

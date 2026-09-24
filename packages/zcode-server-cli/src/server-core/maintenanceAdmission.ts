@@ -10,6 +10,8 @@ export interface CoreMaintenanceAdmissionPort {
 
 export class CoreMaintenanceAdmission {
   private lease: { id: string; release(): Promise<void> } | undefined;
+  private lastReleasedId: string | undefined;
+  private releasePending: Promise<void> | undefined;
   private pending = false;
   private closed = false;
   private pendingSettled: Promise<void> | undefined;
@@ -22,6 +24,7 @@ export class CoreMaintenanceAdmission {
     if (this.pending || this.lease || this.closed)
       throw new Error("Core admission lease already held or closing");
     const id = randomUUID();
+    this.lastReleasedId = undefined;
     this.lease = { id, release: lease.release };
     return id;
   }
@@ -43,6 +46,7 @@ export class CoreMaintenanceAdmission {
         throw new Error("Core closed during maintenance freeze");
       }
       const id = randomUUID();
+      this.lastReleasedId = undefined;
       this.lease = { id, release: lease.release };
       try {
         const activity = await this.port.readActivity();
@@ -77,8 +81,24 @@ export class CoreMaintenanceAdmission {
 
   async release(id: string): Promise<void> {
     const lease = this.lease;
-    if (!lease || lease.id !== id) throw new Error("Runtime maintenance lease mismatch");
-    await lease.release();
-    if (this.lease === lease) this.lease = undefined;
+    if (!lease || lease.id !== id) {
+      if (!lease && this.lastReleasedId === id) return;
+      throw new Error("Runtime maintenance lease mismatch");
+    }
+    // 中文：IPC 回执可能丢失，同 token 并发/重试必须共享一次真正的释放；
+    // 只有底层 release 成功才记为已完成，下一代 lease 会使旧 token 失效。
+    if (!this.releasePending) {
+      this.releasePending = lease.release().then(() => {
+        if (this.lease === lease) {
+          this.lease = undefined;
+          this.lastReleasedId = id;
+        }
+      });
+    }
+    try {
+      await this.releasePending;
+    } finally {
+      this.releasePending = undefined;
+    }
   }
 }

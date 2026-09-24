@@ -87,6 +87,30 @@ test("missing source blocks; failed activity read returns uncertain while retain
   assert.equal(released, true);
 });
 
+test("failed release retries same token; concurrent releases do not release twice", async () => {
+  let releaseCount = 0;
+  let complete!: () => void;
+  const barrier = new Promise<void>((resolve) => {
+    complete = resolve;
+  });
+  const gate = new CoreMaintenanceAdmission(undefined);
+  const id = gate.adoptBootLease({
+    async release() {
+      releaseCount++;
+      if (releaseCount === 1) throw new Error("transient release failure");
+      await barrier;
+    },
+  });
+  await assert.rejects(gate.release(id), /transient/);
+  const first = gate.release(id);
+  const second = gate.release(id);
+  assert.equal(releaseCount, 2);
+  complete();
+  await Promise.all([first, second]);
+  await gate.release(id);
+  assert.equal(releaseCount, 2);
+});
+
 test("factory boot hold is adopted once and released only by its token", async () => {
   let releases = 0;
   const admission = new CoreMaintenanceAdmission({
@@ -107,5 +131,14 @@ test("factory boot hold is adopted once and released only by its token", async (
   assert.equal(releases, 0);
   await admission.release(id);
   assert.equal(releases, 1);
+  await admission.release(id); // exact token retry after lost IPC acknowledgment
+  assert.equal(releases, 1);
+  const next = admission.adoptBootLease({
+    async release() {
+      releases++;
+    },
+  });
   await assert.rejects(admission.release(id), /mismatch/);
+  await admission.release(next);
+  assert.equal(releases, 2);
 });

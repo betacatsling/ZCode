@@ -18,7 +18,7 @@ export async function waitForServerStopped(
     if (lockInspection.state === "invalid" || lockInspection.state === "unreadable") {
       throw new Error(`Cannot verify Server shutdown (${describeLockInspection(lockInspection)})`);
     }
-    const lockReleased = lockInspection.state === "missing" || lockInspection.state === "stale";
+    const lockReleased = lockInspection.state === "missing";
     const stopped =
       persisted.status?.state === "stopped" || persisted.status?.state === "uninstalled";
     const freshSnapshot = persisted.status !== null && persisted.status.updatedAt > minUpdatedAt;
