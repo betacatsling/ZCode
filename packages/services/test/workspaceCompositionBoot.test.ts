@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -29,7 +30,7 @@ const facts = {
     },
   },
   nativeActivity: async () => ({ running: 0, waiting: 0, tools: 0, uncertain: 0, offline: false }),
-  nativeAdmissionFence: async () => async () => {},
+  nativeAdmissionFence: async () => ({ verify: async () => true, release: async () => {} }),
 };
 
 test("real lazy Target/Catalog factory serves reads during pending reconciliation but fences NEW admissions", async () => {
@@ -72,6 +73,87 @@ test("real lazy Target/Catalog factory serves reads during pending reconciliatio
     assert.equal((await composition.agentHost.getAvailability()).admissionEnabled, true);
   } finally {
     release();
+    await composition.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("real Catalog import cannot overtake held maintenance lease", async () => {
+  const root = await mkdtemp(join(tmpdir(), "workspace-maintenance-catalog-"));
+  const repo = join(root, "repo");
+  await mkdir(repo);
+  const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args]);
+  git("init", "-q");
+  git(
+    "-c",
+    "user.name=Test",
+    "-c",
+    "user.email=test@example.invalid",
+    "commit",
+    "-q",
+    "--allow-empty",
+    "-m",
+    "base",
+  );
+  let nativeHeld = false;
+  const composition = createLazyWorkspaceComposition({
+    root,
+    target: {
+      id: "local",
+      kind: "local",
+      platform: process.platform as "darwin" | "linux" | "win32",
+      available: true,
+    },
+    registry,
+    identity: (_id, cwd) => cwd,
+    ...facts,
+    nativeAdmissionFence: async () => {
+      nativeHeld = true;
+      return {
+        verify: async () => nativeHeld,
+        release: async () => {
+          nativeHeld = false;
+        },
+      };
+    },
+    newAdmissionsEnabled: () => true,
+    reconcileBoot: async (catalog) => {
+      await catalog.reconcilePending();
+      await catalog.reconcileArchivePolicies();
+    },
+  });
+  const request = {
+    id: "p",
+    bindingId: "b",
+    targetId: "local",
+    name: "Repo",
+    repositoryPath: repo,
+  };
+  try {
+    await composition.ready();
+    const lease = await composition.maintenance.freezeAdmissions();
+    assert.equal(nativeHeld, true);
+    await assert.rejects(composition.catalog.importProject(request), /frozen/);
+    assert.equal((await composition.catalog.sidebarSnapshot()).projects.length, 0);
+    await composition.maintenance.releaseAdmissions(lease);
+    assert.equal(nativeHeld, false);
+    await composition.catalog.importProject(request);
+    assert.equal((await composition.catalog.sidebarSnapshot()).projects.length, 1);
+    const workspace = await composition.catalog.adopt({
+      bindingId: "b",
+      workspaceId: "w",
+      title: "Main",
+      worktreePath: repo,
+    });
+    assert.deepEqual(await composition.hierarchy.pendingRecovery({ workspaceId: "w" }), {
+      workspaceId: "w",
+      status: "confirmed",
+      reason: "target-receipt-confirmed",
+      generation: workspace.worktreeGeneration,
+      receiptKind: "adopt",
+      actions: ["inspect"],
+    });
+  } finally {
     await composition.dispose();
     await rm(root, { recursive: true, force: true });
   }

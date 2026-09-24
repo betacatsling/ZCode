@@ -9,9 +9,12 @@ import type { LegacyMapping } from "../project-workspaces/migrationContract.js";
 import type { TargetRuntimeActivity } from "../project-workspaces/worktreeService.js";
 import type { WorkspaceNavigationScope, SessionOwner } from "./serviceContract.js";
 import type { NativeHierarchyPort } from "./hierarchyService.js";
+import type { NativeAdmissionFence } from "./maintenance.js";
 
 /** Live V4 owner; no SQLite status or inferred idle value can implement this contract. */
 export interface NativeRuntimeFactsPort {
+  /** Explicit live V4 command-ID receipt certification; absent keeps new native create disabled. */
+  readonly certifiedCreate?: boolean;
   create(input: {
     scope: WorkspaceNavigationScope;
     commandId: string;
@@ -20,14 +23,14 @@ export interface NativeRuntimeFactsPort {
   }): Promise<{ originalSessionId: string }>;
   capabilities(owner: Extract<SessionOwner, { kind: "native" }>): Promise<HarnessCapabilitiesV2>;
   activity(workspaceId?: string): Promise<TargetRuntimeActivity>;
-  fenceAdmissions(): Promise<() => Promise<void>>;
+  fenceAdmissions(): Promise<NativeAdmissionFence>;
 }
 
 export interface NativeProductionBridge {
   nativeIndex: NativeSessionDirectory;
   native: NativeHierarchyPort;
   nativeActivity(workspaceId?: string): Promise<TargetRuntimeActivity>;
-  nativeAdmissionFence(): Promise<() => Promise<void>>;
+  nativeAdmissionFence(): Promise<NativeAdmissionFence>;
 }
 
 /**
@@ -101,6 +104,7 @@ export function createNativeProductionBridge(options: {
 }): NativeProductionBridge {
   if (!options.targetId.trim()) throw new Error("native-target-required");
   const native: NativeHierarchyPort = {
+    certifiedCreate: options.runtime.certifiedCreate === true,
     async resolveOwner({ targetId, workspaceId, sessionId }) {
       if (targetId !== options.targetId) return undefined;
       const navigation = await options.directory.resolveOwner({ treeSessionId: sessionId });
@@ -117,6 +121,8 @@ export function createNativeProductionBridge(options: {
         originalSessionId: scoped.owner.nativeSessionId,
         sourceWorkspacePath: scoped.owner.sourceWorkspacePath,
         workspaceIdentity: scoped.owner.sourceWorkspaceKey,
+        worktreeGeneration: scoped.owner.worktreeGeneration,
+        repositoryBindingId: scoped.owner.repositoryBindingId,
       };
     },
     create: (request) => options.runtime.create(request),

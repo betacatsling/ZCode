@@ -18,6 +18,7 @@ export interface NativeSessionOwnerRef {
   projectId: string;
   workspaceId: string;
   worktreeGeneration: string;
+  repositoryBindingId?: string;
   sourceWorkspaceKey: string;
   sourceWorkspacePath: string;
   nativeSessionId: string;
@@ -88,6 +89,7 @@ export class NativeSessionDirectory implements NativeSessionCatalogPort {
       projectId: mapping.projectId,
       workspaceId: mapping.workspaceId,
       worktreeGeneration: mapping.worktreeGeneration,
+      repositoryBindingId: mapping.repositoryBindingId,
       sourceWorkspaceKey: mapping.sourceWorkspaceKey,
       sourceWorkspacePath: mapping.sourceWorkspacePath,
       nativeSessionId: mapping.nativeSessionId,

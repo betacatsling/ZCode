@@ -48,14 +48,22 @@ export interface IWorkspaceHierarchyService {
     workspaceId: string;
     expectedGeneration: string;
   }): Promise<RemovalPreview>;
-  /** Explicit, read-only operator inspection; missing receipts remain unresolved. */
+  /** Read-only Target receipt/intent facts; inspection never retries Git or adopts an instance. */
   pendingRecovery(input: { workspaceId: string }): Promise<{
     workspaceId: string;
-    status: "unresolved";
-    reason: "target-receipts-unavailable";
+    status: "unresolved" | "confirmed";
+    reason: "target-receipts-unavailable" | "target-result-unknown" | "target-receipt-confirmed";
+    generation?: string;
+    receiptKind?: "adopt" | "create" | "remove";
     actions: readonly ["inspect"];
   }>;
   listHarnesses(workspaceId: string): Promise<readonly HarnessCatalogEntry[]>;
+  /** Certified live Target/Registry options; no client-supplied catalog or path fallback. */
+  listCreateOptions(workspaceId: string): Promise<{
+    workspaceId: string;
+    worktreeGeneration: string;
+    options: readonly { harnessId: string; label: string; binding: ModelBindingRequest }[];
+  }>;
   createAgent(input: {
     workspaceId: string;
     harnessId: string;

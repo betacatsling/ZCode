@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtemp, mkdir, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -125,6 +125,67 @@ test("process crash after real Git create preserves intent, denies replay and ex
       }
     } finally {
       await restarted.close();
+    }
+  } finally {
+    await f.service.close();
+    await rm(f.dir, { recursive: true, force: true });
+  }
+});
+
+test("reviewed orphan cannot adopt a replaced Git administrative instance", async () => {
+  const f = await fixture();
+  const linkedPath = path.join(f.dir, "linked");
+  try {
+    await f.service.close();
+    const target = await openTargetWorktreeService({
+      storageDirectory: f.storageDirectory,
+      executionTargetId: "local-a",
+      activity: f.activity,
+      afterGitCreate: async () => {
+        throw new Error("crash after Git effect");
+      },
+    });
+    try {
+      await assert.rejects(
+        target.create({
+          bindingId: "b",
+          workspaceId: "w",
+          worktreePath: linkedPath,
+          branch: "feature",
+          mode: "new",
+          baseRef: "HEAD",
+          receipt: { title: "W", sortOrder: 0, requestKey: "create-w" },
+        }),
+        /crash after Git effect/,
+      );
+      assert.equal(target.pendingCreations().length, 1);
+      const admin = await realpath(
+        git(linkedPath, "rev-parse", "--path-format=absolute", "--absolute-git-dir"),
+      );
+      const original = await stat(admin);
+      const reviewedAdminIdentity = { device: original.dev, inode: original.ino };
+      // 中文：两次 Git 检查之间真正移除并重建同路径、同分支的 worktree。
+      // 延迟调用 inspectBinding 而不是伪造候选数据，让第二次扫描读取真实新实例。
+      const internal = target as unknown as {
+        inspectBinding(binding: unknown): Promise<unknown>;
+      };
+      const inspect = internal.inspectBinding.bind(target);
+      let scans = 0;
+      internal.inspectBinding = async (binding) => {
+        if (++scans === 2) {
+          git(f.main, "worktree", "remove", "--force", linkedPath);
+          git(f.main, "worktree", "add", "-q", linkedPath, "feature");
+        }
+        return inspect(binding);
+      };
+      await assert.rejects(
+        target.recoverCreation("w", { reviewedAdminIdentity }),
+        /Reviewed Git administrative instance changed/,
+      );
+      assert.equal(target.history("w"), undefined);
+      assert.equal(target.pendingCreations().length, 1);
+    } finally {
+      await target.close();
     }
   } finally {
     await f.service.close();
