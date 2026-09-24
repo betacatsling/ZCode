@@ -39,6 +39,14 @@ export const serverStatusSchema = z
     lastExitReason: z.string().max(500).nullable().default(null),
     serviceRegistered: z.boolean(),
     runningTaskCount: z.number().int().nonnegative(),
+    externalActivity: z
+      .object({
+        running: z.number().int().nonnegative(),
+        waiting: z.number().int().nonnegative(),
+        uncertain: z.number().int().nonnegative(),
+      })
+      .strict()
+      .default({ running: 0, waiting: 0, uncertain: 1 }),
     crashBudget: crashBudgetSchema,
     updatedAt: z.number().int().nonnegative(),
   })
@@ -72,6 +80,7 @@ export function createStoppedServerStatus(
     lastExitReason: null,
     serviceRegistered: options.serviceRegistered ?? false,
     runningTaskCount: 0,
+    externalActivity: { running: 0, waiting: 0, uncertain: 0 },
     crashBudget: {
       crashCount: 0,
       nextRestartDelayMs: CRASH_BACKOFF_MS[0],
@@ -111,6 +120,15 @@ export const controlResponseSchema = z
   .strict();
 export type ControlResponse = z.infer<typeof controlResponseSchema>;
 
+export const runtimeActivitySchema = z
+  .object({
+    running: z.number().int().nonnegative(),
+    waiting: z.number().int().nonnegative(),
+    uncertain: z.number().int().nonnegative(),
+  })
+  .strict();
+export type RuntimeActivity = z.infer<typeof runtimeActivitySchema>;
+
 export const coreMessageSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("ready"),
@@ -123,10 +141,18 @@ export const coreMessageSchema = z.discriminatedUnion("type", [
     type: z.literal("heartbeat"),
     at: z.number().int().nonnegative(),
     runningTaskCount: z.number().int().nonnegative(),
+    externalActivity: runtimeActivitySchema.optional(),
   }),
   z.object({
     type: z.literal("task-activity"),
     runningTaskCount: z.number().int().nonnegative(),
+    externalActivity: runtimeActivitySchema.optional(),
+  }),
+  z.object({
+    type: z.literal("activity"),
+    requestId: z.string().uuid(),
+    runningTaskCount: z.number().int().nonnegative(),
+    externalActivity: runtimeActivitySchema,
   }),
   z.object({ type: z.literal("shutdown-ack") }),
   z.object({ type: z.literal("fatal"), message: z.string().max(500) }),
@@ -136,6 +162,7 @@ export type CoreMessage = z.infer<typeof coreMessageSchema>;
 
 export const coreCommandSchema = z.discriminatedUnion("command", [
   z.object({ command: z.literal("shutdown") }),
+  z.object({ command: z.literal("activity"), requestId: z.string().uuid() }),
 ]);
 export type CoreCommand = z.infer<typeof coreCommandSchema>;
 

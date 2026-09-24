@@ -12,9 +12,12 @@ function stdout(io: UpdateCliIO, value: unknown): void {
   io.stdout?.write(`${typeof value === "string" ? value : JSON.stringify(value)}\n`);
 }
 
-function isRunningTaskUpdateGuard(error: unknown): boolean {
+function isUnsafeActivityUpdateGuard(error: unknown): boolean {
+  // Core 最终 admission 的错误现在也包含外部等待/不确定活动；准备产物必须同样回滚。
   return (
-    error instanceof Error && error.message.includes("Running tasks require --force for update")
+    error instanceof Error &&
+    (error.message.includes("Running tasks require --force for update") ||
+      error.message.includes("Active or uncertain tasks require --force for update"))
   );
 }
 
@@ -70,7 +73,7 @@ export async function runUpdateCommand(
         throw new Error("Running tasks require --force for update");
       }
     } catch (error: unknown) {
-      if (isRunningTaskUpdateGuard(error)) throw error;
+      if (isUnsafeActivityUpdateGuard(error)) throw error;
       await discardPreparedUpdateBestEffort(discard);
       discardPreparedUpdate = undefined;
       throw error;
@@ -81,7 +84,7 @@ export async function runUpdateCommand(
     discardPreparedUpdate = undefined;
     return result;
   } catch (error: unknown) {
-    if (isRunningTaskUpdateGuard(error)) {
+    if (isUnsafeActivityUpdateGuard(error)) {
       await discardPreparedUpdateBestEffort(discardPreparedUpdate);
       discardPreparedUpdate = undefined;
     }
