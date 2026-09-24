@@ -58,6 +58,19 @@ Operator recovery inspection reads current Target receipt/pending intent under T
 
 Native bridge's maintenance interface requires a verifiable same-worker lease (`verify` + `release`); the old release-only callback is not a production port. Controlled test fixtures may return a verified lease, never stand in for global process enumeration or a real CLI epoch.
 
+## Authenticated attachment metadata and pure command inspection
+
+Desktop's current registry validates `{workspacePath,workspaceIdentity,remoteSessionId,generation}` against online scoped services and actual generation before and after awaits. This JSON-safe metadata is a view selection hint, NOT authentication. Target-local Core checks the shape and exact Catalog workspace path/identity (identity key is trim||path), never queries Desktop's in-memory registry and never SSHes to itself. CLI execution uses target-local workspace path and stable workspace identity, not the attachment's session/generation. The original attachment ID is immutable optional creation provenance in the Core journal; a renewed connection cannot change original command intent or promote an uncertified pending/corrupt mapping.
+
+`inspectCreateCommand({workspaceId,commandId,attachment?})` is a pure read of immutable Core intent + completed source SQLite certificate + existing Catalog reference and current Target generation. It never writes a mapping/reference, starts a worker, allocates, submits input, or automatically retries `createAgent`. Return `unknown`, `pending`, `unavailable` (hashed source diagnostic), or `completed` with current owner and `historyOnly` if current Target/identity/generation/reference is not certified. A completed certified owner with view metadata is only usable after trusted Desktop registry validation; Core alone cannot assert current attachment generation. Any ambiguous after-effect transport failure remains uncertain until this read, never blindly resend.
+
+```text
+Desktop current registry lease -> target-local Core metadata preflight -> Target admission -> CLI CommandInbox
+  -> source certificate + fsynced mapping + Catalog reference -> original ID
+reconnect current registry lease -> pure Core inspection of same stable command -> current view scope
+pending/corrupt/unreferenced -> no writable owner, no automatic repair/replay
+```
+
 ## Core ingress authority: pre-native initialization hold
 
 Held Core boot reserves the workspace gate synchronously and the Node worker-spawn gate before storage startup. Only the single boot storage worker may start; its CLI constructor freezes the existing CommandInbox before any protocol request or session residency runs. The initial CLI lease is claimed by the same Node process, not obtained by a later idle-only maintenance freeze; an old CLI lacking the claim method fails Core construction closed. All other lanes remain unable to spawn. CLI boot lease is never a second accepted command queue. An ordinary maintenance check while boot held verifies the original worker's frozen census, requires fresh zero idle and does not release the boot lease. A boot release waits for reconciliation and releases that exact CLI lease, then reopens spawn and workspace admission; a lost release ACK retains the Node/workspace hold and reports uncertainty, never authorizes rollback. Disposing/stale Core cannot reopen. Default open behavior unchanged.
@@ -74,6 +87,8 @@ Read-only receipt recovery is not promotion of pending commands. Startup hooks o
 ## Native factory pass 2: boot fence, diagnostics and negative boundaries
 
 Core alone owns an optional initial admission hold. When `admissionFence: 'held'`, create the composition gate synchronously _before_ any asynchronous Target/Catalog initialization, before native storage preparation, and before boot reconciliation. Its instance-owned release is idempotent after successful `ready()`, but disposal or a failed reconciliation rejects release. An ordinary maintenance lease may be acquired/released while boot is held and cannot clear that hold; a stale instance cannot open its successor. Default is `open`. The gate covers Catalog mutation, Host new accepted work and Target-mediated native create; autonomous CLI work that does not cross this gate is **not** certified fenced by this change. Read-only queries and completed native receipt recovery remain available. Sequence: initial hold → storage/Target/Catalog boot → reconcile → supervisor commit decision → release same-instance hold → new admission; maintenance leases nest without clearing the boot hold. No timer-based unlocking.
+
+Availability advertises only the already-preflighted Pi and optional trusted Node manifests (never arbitrary config), without constructing adapters for a read. Duplicate/invalid manifests fail before any factory or asynchronous Registry work; production Pi-only model-option qualification remains unchanged.
 
 An optional Node-only trusted harness list forwards manifest/factory through Core → local services → lazy composition → existing Host HarnessRegistry, defaults empty and rejects malformed/duplicate IDs via `registerTrusted`, preserving Pi. Factories never cross RPC or load from workspace metadata. It is a fixture event producer, not a second Core, Target, Host or native allocator.
 

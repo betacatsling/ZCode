@@ -15,6 +15,8 @@ import type {
   IWorkspaceHierarchyService,
   SessionOwner,
   WorkspaceNavigationScope,
+  WorkspaceAttachmentMetadata,
+  CreateCommandInspection,
 } from "./serviceContract.js";
 
 /** Native V4 is the only authority for original session IDs, creation and capability truth. */
@@ -23,7 +25,27 @@ export interface NativeHierarchyPort {
   readonly certifiedCreate?: boolean;
   recover?(
     input: Parameters<NativeHierarchyPort["create"]>[0],
-  ): Promise<{ originalSessionId: string } | undefined>;
+  ): Promise<{ originalSessionId: string; creationRemoteSessionId?: string } | undefined>;
+  inspect?(commandId: string): Promise<
+    | { status: "unknown" | "pending" }
+    | {
+        status: "unavailable";
+        diagnostic: { entryId: string; reason: "uncertified-mapping" | "unreferenced-completion" };
+      }
+    | {
+        status: "completed";
+        originalSessionId: string;
+        intent: {
+          targetId: string;
+          projectId: string;
+          workspaceId: string;
+          repositoryBindingId: string;
+          worktreeGeneration: string;
+          workspaceIdentity: string;
+          workspacePath: string;
+        };
+      }
+  >;
   resolveOwner(input: { targetId: string; workspaceId: string; sessionId: string }): Promise<
     | {
         originalSessionId: string;
@@ -90,6 +112,22 @@ export function createWorkspaceHierarchyService(input: {
       workspacePath: workspace.worktreePath,
     };
   };
+  const scopeWithAttachment = (
+    scope: WorkspaceNavigationScope,
+    attachment?: WorkspaceAttachmentMetadata,
+  ): WorkspaceNavigationScope => {
+    if (!attachment) return scope;
+    // 中文：这是 Target 本地事实核对，不是远端 Registry 鉴权；当前 lease 只能由 Desktop 担保。
+    if (
+      attachment.workspacePath !== scope.workspacePath ||
+      attachment.workspaceIdentity.trim() !== scope.workspaceIdentity ||
+      !attachment.remoteSessionId.trim() ||
+      !Number.isSafeInteger(attachment.generation) ||
+      attachment.generation < 1
+    )
+      throw new Error("attachment scope does not match target workspace");
+    return { ...scope, remoteSessionId: attachment.remoteSessionId };
+  };
   const ownerForSpec = async (spec: SessionSpecV2): Promise<SessionOwner> => {
     const snapshot = await input.catalog.sidebarSnapshot();
     const workspace = snapshot.workspaces.find((row) => row.id === spec.workspaceId);
@@ -143,8 +181,9 @@ export function createWorkspaceHierarchyService(input: {
     const project = snapshot.projects.find((row) => row.id === workspace?.projectId);
     if (!workspace || !binding || !project || binding.executionTargetId !== input.targetId)
       throw new Error("Unknown target workspace");
-    const scope = await scopeFor(workspace.id);
-    if (!scope) throw new Error("Workspace scope changed");
+    const catalogScope = await scopeFor(workspace.id);
+    if (!catalogScope) throw new Error("Workspace scope changed");
+    const scope = scopeWithAttachment(catalogScope, request.attachment);
     if (request.harnessId === "zcode") {
       const nativeRequest = {
         scope,
@@ -155,7 +194,10 @@ export function createWorkspaceHierarchyService(input: {
         modelBinding: request.modelBinding,
         cwdRelativeToWorktree: request.cwdRelativeToWorktree ?? ".",
       };
-      const commitReference = async (originalSessionId: string) => {
+      const commitReference = async (
+        originalSessionId: string,
+        creationRemoteSessionId: string | null = scope.remoteSessionId ?? null,
+      ) => {
         if (!input.commitNativeReference) return;
         await input.commitNativeReference({
           commandId: request.commandId,
@@ -167,19 +209,23 @@ export function createWorkspaceHierarchyService(input: {
           worktreeGeneration: workspace.worktreeGeneration,
           workspaceIdentity: scope.workspaceIdentity,
           workspacePath: scope.workspacePath,
-          ...(scope.remoteSessionId ? { remoteSessionId: scope.remoteSessionId } : {}),
+          ...(creationRemoteSessionId ? { remoteSessionId: creationRemoteSessionId } : {}),
         });
       };
       // 中文：已提交的完成收据重连是只读行为，不能因为新创建门禁关闭而重新分配 ID。
       const recovered = await input.native?.recover?.(nativeRequest);
       if (recovered) {
-        await commitReference(recovered.originalSessionId);
+        await commitReference(
+          recovered.originalSessionId,
+          recovered.creationRemoteSessionId ?? null,
+        );
         // 中文：Core 原始 ID 的只读恢复无需重开创建 admission；可执行性仍须
         // Target 当下确认同代实例，Catalog 路径相等不能签发 writable owner。
         const target = await input.recoveryFacts?.(workspace.id);
-        const currentAttachment = scope.remoteSessionId
-          ? await input.resolveRemoteSession?.(scope.workspaceIdentity)
-          : undefined;
+        const currentAttachment =
+          scope.remoteSessionId && !request.attachment
+            ? await input.resolveRemoteSession?.(scope.workspaceIdentity)
+            : scope.remoteSessionId;
         return {
           owner: {
             kind: "native" as const,
@@ -490,12 +536,57 @@ export function createWorkspaceHierarchyService(input: {
       }
       return { workspaceId, worktreeGeneration: workspace.worktreeGeneration, options };
     },
+    async inspectCreateCommand(request): Promise<CreateCommandInspection> {
+      if (!request.commandId?.trim()) throw new Error("Stable creation command ID required");
+      const scope = await scopeFor(request.workspaceId);
+      if (!scope) throw new Error("Unknown target workspace");
+      const view = scopeWithAttachment(scope, request.attachment);
+      const inspected = await input.native?.inspect?.(request.commandId);
+      if (!inspected) throw new Error("Native read-only inspection unavailable");
+      if (inspected.status !== "completed") return inspected;
+      const snapshot = await input.catalog.sidebarSnapshot();
+      const workspace = snapshot.workspaces.find((row) => row.id === request.workspaceId);
+      const binding = snapshot.bindings.find((row) => row.id === workspace?.repositoryBindingId);
+      const project = snapshot.projects.find((row) => row.id === workspace?.projectId);
+      const { intent } = inspected;
+      if (
+        intent.targetId !== view.targetId ||
+        intent.workspaceId !== view.workspaceId ||
+        intent.workspaceIdentity !== view.workspaceIdentity ||
+        intent.workspacePath !== view.workspacePath ||
+        !binding ||
+        !project ||
+        intent.projectId !== project.id ||
+        intent.repositoryBindingId !== binding.id
+      )
+        throw new Error("native-create-intent-conflict");
+      const target = await input.recoveryFacts?.(workspace!.id);
+      const current =
+        target?.status === "confirmed" &&
+        target.generation === workspace!.worktreeGeneration &&
+        intent.worktreeGeneration === workspace!.worktreeGeneration &&
+        !workspace!.archived &&
+        workspace!.lifecycle === "active" &&
+        !project.archived;
+      return {
+        status: "completed",
+        owner: {
+          kind: "native",
+          scope: view,
+          originalSessionId: inspected.originalSessionId,
+          historyOnly: !current,
+        },
+      };
+    },
     createAgent(request) {
       const intent = JSON.stringify([
         request.workspaceId,
         request.harnessId,
         request.modelBinding,
         request.cwdRelativeToWorktree ?? ".",
+        // 中文：view generation 不属于稳定命令意图，重连后的有效 scope 可以只读查询原命令。
+        request.attachment?.workspaceIdentity.trim() || "",
+        request.attachment?.workspacePath || "",
       ]);
       const flight = pending.get(request.commandId);
       if (flight) {

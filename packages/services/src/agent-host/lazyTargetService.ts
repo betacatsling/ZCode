@@ -102,7 +102,8 @@ export function createLazyTargetAgentHostService(input: {
     onEvent: events.event,
     getAvailability: async () => ({
       target: input.target,
-      harnesses: [piManifest.id],
+      // 中文：读取只公布构造阶段已验证的受信清单；不启动 Registry/adapter，也不新增生产 Pi 以外的模型资格。
+      harnesses: [...seen],
       admissionEnabled: input.allowNewSessions() && input.target.available,
     }),
     catalogForTarget: async (targetId) => (await getTarget()).catalogForTarget(targetId),

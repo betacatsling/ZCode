@@ -31,6 +31,22 @@ export type SessionOwner =
       historyOnly: boolean;
     };
 
+export interface WorkspaceAttachmentMetadata {
+  workspacePath: string;
+  workspaceIdentity: string;
+  remoteSessionId: string;
+  /** Desktop registry generation, NOT Target worktree generation or Core authentication. */
+  generation: number;
+}
+
+export type CreateCommandInspection =
+  | { status: "unknown" | "pending" }
+  | {
+      status: "unavailable";
+      diagnostic: { entryId: string; reason: "uncertified-mapping" | "unreferenced-completion" };
+    }
+  | { status: "completed"; owner: Extract<SessionOwner, { kind: "native" }> };
+
 export interface IWorkspaceHierarchyService {
   resolveWorkspace(input: {
     workspacePath: string;
@@ -70,7 +86,15 @@ export interface IWorkspaceHierarchyService {
     modelBinding: ModelBindingRequest;
     cwdRelativeToWorktree?: string;
     commandId: string;
+    /** Optional view provenance from Desktop's independently authenticated current registry. */
+    attachment?: WorkspaceAttachmentMetadata;
   }): Promise<{ owner: SessionOwner; snapshot?: ConversationSnapshot }>;
+  /** Pure completed-only inspection; never repairs, allocates, sends or starts CLI. */
+  inspectCreateCommand(input: {
+    workspaceId: string;
+    commandId: string;
+    attachment?: WorkspaceAttachmentMetadata;
+  }): Promise<CreateCommandInspection>;
   capabilities(owner: SessionOwner): Promise<HarnessCapabilitiesV2>;
   /** Opaque packaged resource only; never accepts client-supplied URL or SVG. */
   asset(assetId: string): Promise<TrustedPngDescriptor | undefined>;

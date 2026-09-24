@@ -20,7 +20,8 @@ export interface NativeRuntimeFactsPort {
   readonly certifiedCreate?: boolean;
   recover?(
     input: Parameters<NativeRuntimeFactsPort["create"]>[0],
-  ): Promise<{ originalSessionId: string } | undefined>;
+  ): Promise<{ originalSessionId: string; creationRemoteSessionId?: string } | undefined>;
+  inspect?: NativeHierarchyPort["inspect"];
   create(input: {
     scope: WorkspaceNavigationScope;
     projectId: string;
@@ -162,6 +163,9 @@ export function createNativeProductionBridge(options: {
     },
     create: (request) => options.runtime.create(request),
     recover: (request) => options.runtime.recover?.(request) ?? Promise.resolve(undefined),
+    inspect: (commandId) =>
+      options.runtime.inspect?.(commandId) ??
+      Promise.reject(new Error("Native inspection unavailable")),
     capabilities: (owner) => options.runtime.capabilities(owner),
   };
   return {

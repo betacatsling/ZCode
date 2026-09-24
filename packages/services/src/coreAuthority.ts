@@ -176,17 +176,67 @@ export async function createCoreAuthority(
         intent.worktreeGeneration !== input.worktreeGeneration ||
         intent.workspaceIdentity !== input.scope.workspaceIdentity ||
         intent.workspacePath !== input.scope.workspacePath ||
-        intent.remoteSessionId !== input.scope.remoteSessionId ||
+        // 中文：transport attachment 会在重连时轮换；不能把旧 view ID 当作稳定 CLI 命令身份。
         intent.cwdRelativeToWorktree !== input.cwdRelativeToWorktree ||
         JSON.stringify(intent.modelBinding) !== JSON.stringify(input.modelBinding)
       )
         throw new Error("native-create-intent-conflict");
       const mapping = state.mapping ?? (await journal.complete(input.commandId));
-      return { originalSessionId: mapping.originalSessionId };
+      return {
+        originalSessionId: mapping.originalSessionId,
+        ...(intent.remoteSessionId ? { creationRemoteSessionId: intent.remoteSessionId } : {}),
+      };
     };
     const runtime: NativeRuntimeFactsPort = {
       certifiedCreate: nativeEnabled,
       recover,
+      async inspect(commandId) {
+        const entryId = createHash("sha256").update(commandId).digest("hex");
+        let state: Awaited<ReturnType<typeof journal.read>>;
+        try {
+          state = await journal.read(commandId);
+        } catch {
+          // 中文：坏映射/源库不能升级成当前 owner；报告脱敏单项诊断，不修盘也不启动 CLI。
+          return { status: "unavailable", diagnostic: { entryId, reason: "uncertified-mapping" } };
+        }
+        if (!state) return { status: "unknown" };
+        if (!state.mapping) return { status: "pending" };
+        const { intent, mapping } = state;
+        const refs = await readNativeCatalogReferences(
+          join(configRoot, "workspace-hierarchy", "profile", "catalog.json"),
+        );
+        const referenced = refs.some(
+          (ref) =>
+            ref.commandId === intent.commandId &&
+            ref.originalSessionId === mapping.originalSessionId &&
+            ref.targetId === intent.targetId &&
+            ref.projectId === intent.projectId &&
+            ref.workspaceId === intent.workspaceId &&
+            ref.repositoryBindingId === intent.repositoryBindingId &&
+            ref.worktreeGeneration === intent.worktreeGeneration &&
+            ref.workspaceIdentity === intent.workspaceIdentity &&
+            ref.workspacePath === intent.workspacePath &&
+            ref.remoteSessionId === intent.remoteSessionId,
+        );
+        if (!referenced)
+          return {
+            status: "unavailable",
+            diagnostic: { entryId, reason: "unreferenced-completion" },
+          };
+        return {
+          status: "completed",
+          originalSessionId: mapping.originalSessionId,
+          intent: {
+            targetId: intent.targetId,
+            projectId: intent.projectId,
+            workspaceId: intent.workspaceId,
+            repositoryBindingId: intent.repositoryBindingId,
+            worktreeGeneration: intent.worktreeGeneration,
+            workspaceIdentity: intent.workspaceIdentity,
+            workspacePath: intent.workspacePath,
+          },
+        };
+      },
       async create(input) {
         if (!nativeEnabled || !creation)
           throw new Error("Native durable creation receipt unavailable");
@@ -194,10 +244,10 @@ export async function createCoreAuthority(
           throw new Error("native-create-unverifiable-binding-or-cwd");
         const existing = await recover(input);
         if (existing) return existing;
+        // 中文：Desktop attachment 只是来源/view；目标 Core 的 CLI 已在本机运行，绝不再 SSH 自己。
         const target = {
           workspacePath: input.scope.workspacePath,
           workspaceIdentity: input.scope.workspaceIdentity,
-          ...(input.scope.remoteSessionId ? { remoteSessionId: input.scope.remoteSessionId } : {}),
         };
         const description = await creation.describe(target);
         const payload = commandPayloadSchemas.createSession.parse({
@@ -247,7 +297,7 @@ export async function createCoreAuthority(
         await creation.describe({
           workspacePath: owner.scope.workspacePath,
           workspaceIdentity: owner.scope.workspaceIdentity,
-          ...(owner.scope.remoteSessionId ? { remoteSessionId: owner.scope.remoteSessionId } : {}),
+          // 当前 CLI 由目标 Core 本地拥有；历史 attachment ID 不参与进程选址。
         });
         const supported = { support: "supported" as const };
         const unknown = {

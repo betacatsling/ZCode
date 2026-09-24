@@ -2,7 +2,11 @@
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { createCoreAuthority } from "@zcode/services/node";
-import { IProjectCatalogRpcService, IZCodeAgentService } from "@zcode/services";
+import {
+  IProjectCatalogRpcService,
+  IWorkspaceHierarchyService,
+  IZCodeAgentService,
+} from "@zcode/services";
 import { join } from "node:path";
 
 let core: Awaited<ReturnType<typeof createCoreAuthority>> | undefined;
@@ -17,10 +21,51 @@ try {
   assert.ok(core.bootAdmissionLease);
   const service = core.services.get(IZCodeAgentService);
   const catalog = core.services.get(IProjectCatalogRpcService);
+  const hierarchy = core.services.get(IWorkspaceHierarchyService);
   const db = new DatabaseSync(process.env.ZCODE_SESSION_DB_PATH!, { readOnly: true });
   const count = () =>
     (db.prepare("select count(*) as total from session").get() as { total: number }).total;
   const before = count();
+  const original = await hierarchy.inspectCreateCommand({
+    workspaceId: "workspace",
+    commandId: "native-create-1",
+  });
+  assert.equal(original.status, "completed");
+  if (original.status === "completed") {
+    assert.equal(original.owner.historyOnly, false);
+    const wrong = {
+      workspacePath: original.owner.scope.workspacePath,
+      workspaceIdentity: "foreign-identity",
+      remoteSessionId: "attachment-current",
+      generation: 2,
+    };
+    await assert.rejects(
+      hierarchy.inspectCreateCommand({
+        workspaceId: "workspace",
+        commandId: "native-create-1",
+        attachment: wrong,
+      }),
+      /attachment scope/,
+    );
+    const currentView = await hierarchy.inspectCreateCommand({
+      workspaceId: "workspace",
+      commandId: "native-create-1",
+      attachment: { ...wrong, workspaceIdentity: original.owner.scope.workspaceIdentity },
+    });
+    assert.equal(currentView.status, "completed");
+    if (currentView.status === "completed") {
+      assert.equal(currentView.owner.originalSessionId, original.owner.originalSessionId);
+      assert.equal(currentView.owner.scope.remoteSessionId, "attachment-current");
+    }
+  }
+  assert.deepEqual(
+    await hierarchy.inspectCreateCommand({
+      workspaceId: "workspace",
+      commandId: "never-submitted",
+    }),
+    { status: "unknown" },
+  );
+  assert.equal(count(), before, "pure inspection must not allocate");
   const target = { workspacePath: process.cwd() };
   const command = (id: string) => ({
     commandId: id,
@@ -61,6 +106,33 @@ try {
   await ordinary.release();
   await core.bootAdmissionLease.release();
   await core.bootAdmissionLease.release();
+  if (original.status === "completed") {
+    const retry = await hierarchy.createAgent({
+      workspaceId: "workspace",
+      harnessId: "zcode",
+      commandId: "native-create-1",
+      modelBinding: {
+        kind: "host-managed",
+        selection: {
+          providerId: "fixture",
+          modelId: "fixture-model",
+          options: { reasoningLevel: "off" },
+        },
+      },
+      attachment: {
+        workspacePath: original.owner.scope.workspacePath,
+        workspaceIdentity: original.owner.scope.workspaceIdentity,
+        remoteSessionId: "attachment-renewed",
+        generation: 3,
+      },
+    });
+    assert.equal(retry.owner.kind, "native");
+    if (retry.owner.kind === "native") {
+      assert.equal(retry.owner.originalSessionId, original.owner.originalSessionId);
+      assert.equal(retry.owner.scope.remoteSessionId, "attachment-renewed");
+    }
+    assert.equal(count(), before, "new attachment cannot allocate to recover old command");
+  }
   const accepted = await service.sendConversationCommandV4({
     ...target,
     envelope: command("boot-open"),
