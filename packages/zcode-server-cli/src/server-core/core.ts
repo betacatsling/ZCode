@@ -12,10 +12,17 @@ import { createCoreHttpServer } from "./http.js";
 import { installParentDisconnectHandler } from "./parentDisconnect.js";
 import { resolveCoreServerId } from "./serverIdentity.js";
 import { createTaskActivityTracker, readExternalActivity } from "./taskActivityTracker.js";
+import {
+  CoreMaintenanceAdmission,
+  type CoreMaintenanceAdmissionPort,
+} from "./maintenanceAdmission.js";
 
 declare const __ZCODE_BUILTIN_PROVIDER_CONFIG_JSON__: string | undefined;
 
-export async function runServerCore(generation: number): Promise<void> {
+export async function runServerCore(
+  generation: number,
+  maintenancePort?: CoreMaintenanceAdmissionPort,
+): Promise<void> {
   let shutdown: ((reason: string) => Promise<void>) | undefined;
   let parentDisconnected = false;
   let disposeParentDisconnectHandler = (): void => undefined;
@@ -45,6 +52,8 @@ export async function runServerCore(generation: number): Promise<void> {
     agentHostTargetId: serverId,
   });
   const taskActivityTracker = createTaskActivityTracker(services.getOptional(IZCodeAgentService));
+  // Missing composition port blocks automatic maintenance; never infer safe idle from a heartbeat.
+  const maintenance = new CoreMaintenanceAdmission(maintenancePort);
   // V2 Host 由集成层挂载；旧 Host 若无法报告外部活动必须视为不确定，不能假定空闲。
   const host = services.getOptional(IAgentHostService) as
     | (IAgentHostService & { getRuntimeActivity?: () => Promise<RuntimeActivity> })
@@ -138,14 +147,24 @@ export async function runServerCore(generation: number): Promise<void> {
   process.on("message", (raw: unknown) => {
     const parsed = coreCommandSchema.safeParse(raw);
     if (!parsed.success) return;
-    if (parsed.data.command === "shutdown") {
+    const command = parsed.data;
+    if (command.command === "shutdown") {
       void shutdown("requested");
-    } else if (!shutdownStarted) {
-      const requestId = parsed.data.requestId;
+    } else if (!shutdownStarted && command.command === "maintenance-begin") {
+      void maintenance.begin().then(
+        (activity) => send({ type: "maintenance", requestId: command.requestId, ...activity }),
+        () => send({ type: "maintenance", requestId: command.requestId }),
+      );
+    } else if (!shutdownStarted && command.command === "maintenance-release") {
+      void maintenance.release(command.leaseId).then(
+        () => send({ type: "maintenance", requestId: command.requestId, leaseId: command.leaseId }),
+        () => send({ type: "maintenance", requestId: command.requestId }),
+      );
+    } else if (!shutdownStarted && command.command === "activity") {
       void externalActivity().then((activity) =>
         send({
           type: "activity",
-          requestId,
+          requestId: command.requestId,
           runningTaskCount: taskActivityTracker.readRunningTaskCount(),
           externalActivity: activity,
         }),

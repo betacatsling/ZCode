@@ -99,6 +99,8 @@ export const controlRequestSchema = z.discriminatedUnion("command", [
   requestBase.extend({ command: z.literal("prepare-update") }),
   requestBase.extend({ command: z.literal("apply-update"), force: z.boolean().optional() }),
   requestBase.extend({ command: z.literal("prepare-uninstall") }),
+  requestBase.extend({ command: z.literal("begin-fallback-migration") }),
+  requestBase.extend({ command: z.literal("end-fallback-migration") }),
   requestBase.extend({ command: z.literal("confirm-uninstall"), confirmation: z.string() }),
 ]);
 export type ControlRequest = z.infer<typeof controlRequestSchema>;
@@ -154,6 +156,13 @@ export const coreMessageSchema = z.discriminatedUnion("type", [
     runningTaskCount: z.number().int().nonnegative(),
     externalActivity: runtimeActivitySchema,
   }),
+  z.object({
+    type: z.literal("maintenance"),
+    requestId: z.string().uuid(),
+    leaseId: z.string().uuid().optional(),
+    nativeActivity: runtimeActivitySchema.optional(),
+    externalActivity: runtimeActivitySchema.optional(),
+  }),
   z.object({ type: z.literal("shutdown-ack") }),
   z.object({ type: z.literal("fatal"), message: z.string().max(500) }),
   z.object({ type: z.literal("exit"), reason: z.string().max(500) }),
@@ -163,6 +172,12 @@ export type CoreMessage = z.infer<typeof coreMessageSchema>;
 export const coreCommandSchema = z.discriminatedUnion("command", [
   z.object({ command: z.literal("shutdown") }),
   z.object({ command: z.literal("activity"), requestId: z.string().uuid() }),
+  z.object({ command: z.literal("maintenance-begin"), requestId: z.string().uuid() }),
+  z.object({
+    command: z.literal("maintenance-release"),
+    requestId: z.string().uuid(),
+    leaseId: z.string().uuid(),
+  }),
 ]);
 export type CoreCommand = z.infer<typeof coreCommandSchema>;
 

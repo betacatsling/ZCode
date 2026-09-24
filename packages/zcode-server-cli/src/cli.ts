@@ -167,26 +167,24 @@ async function runServe(
       }
       // 旧 fallback 会持有 data-root lock，直接注册并启动 OS service 只能
       // 拉起一个立即锁冲突的 Supervisor。空闲时先收口 fallback，再重试真实注册。
-      // Core 的最新 Host admission 可能发生在 status 心跳之后；停止旧 daemon 前再向
-      // 其 owner 同步询问一次，避免迁移窗口用过期快照中断审批或在途工具。
-      const readiness = await requestControl(layout.controlEndpoint, {
-        command: "prepare-uninstall",
-      });
-      if (
-        !readiness ||
-        typeof readiness !== "object" ||
-        !("status" in readiness) ||
-        readiness.status !== "ready"
-      ) {
-        throw new Error("Cannot verify fallback Server is idle before migration");
+      // 中文：旧流程先读活动再 stop，两步之间可能受理新命令。Core 必须先冻结
+      // 原生和 Host admission、排空在途受理、再读最新活动；成功后持有栅栏直至退出。
+      await requestControl(layout.controlEndpoint, { command: "begin-fallback-migration" });
+      try {
+        const persistedBeforeStop = await readPersistedStatusDetailed(layout);
+        if (persistedBeforeStop.state === "invalid" || persistedBeforeStop.state === "unreadable") {
+          throw new Error("Cannot verify fallback Server status before migration");
+        }
+        const stopBaselineUpdatedAt = persistedBeforeStop.status?.updatedAt ?? 0;
+        await requestControl(layout.controlEndpoint, { command: "stop" });
+        await waitForServerStopped(layout, stopBaselineUpdatedAt, true);
+      } catch (error) {
+        // 若 Core 尚存，释放须经其匹配 ACK；ACK 丢失保留 fence 而不是宣称 idle。
+        await requestControl(layout.controlEndpoint, { command: "end-fallback-migration" }).catch(
+          () => undefined,
+        );
+        throw error;
       }
-      const persistedBeforeStop = await readPersistedStatusDetailed(layout);
-      if (persistedBeforeStop.state === "invalid" || persistedBeforeStop.state === "unreadable") {
-        throw new Error("Cannot verify fallback Server status before migration");
-      }
-      const stopBaselineUpdatedAt = persistedBeforeStop.status?.updatedAt ?? 0;
-      await requestControl(layout.controlEndpoint, { command: "stop" });
-      await waitForServerStopped(layout, stopBaselineUpdatedAt, true);
     }
     const baselineUpdatedAt = (await readPersistedStatus(layout))?.updatedAt ?? 0;
     let serviceStarted = false;

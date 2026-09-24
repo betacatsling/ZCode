@@ -8,7 +8,10 @@ export interface HostAttachmentTicket {
 }
 
 /** Window close only closes this socket; the target Supervisor/Core and accepted commands stay alive. */
-export async function openTargetHostSocket(attachment: HostAttachmentTicket): Promise<WebSocket> {
+export async function openTargetHostSocket(
+  attachment: HostAttachmentTicket,
+  onSocketCreated?: (socket: WebSocket) => void,
+): Promise<WebSocket> {
   const url = new URL(attachment.websocketUrl);
   if (
     url.protocol !== "ws:" ||
@@ -25,6 +28,9 @@ export async function openTargetHostSocket(attachment: HostAttachmentTicket): Pr
     handshakeTimeout: 10_000,
   });
   try {
+    // Core 可在 upgrade 后立即发送 RPC Initialize；必须在等待 open 之前接好
+    // SocketProtocol/ChannelClient，否则第一帧丢失后所有请求会无限等初始化。
+    onSocketCreated?.(socket);
     await new Promise<void>((resolve, reject) => {
       socket.once("open", resolve);
       socket.once("error", reject);
