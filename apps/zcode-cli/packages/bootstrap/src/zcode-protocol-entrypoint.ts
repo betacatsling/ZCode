@@ -62,11 +62,7 @@ function applyProtocolPresentationSurface(
   };
 }
 
-/**
- * 进程级 Registry 已就绪后，它就是当前 Environment 的模型事实源。
- *
- * 旧 workspace snapshot 不再参与 Provider 和 Model 执行。
- */
+/** Registry 是当前 Environment 的模型事实源；旧 workspace snapshot 不参与执行。 */
 function applyProtocolProviderRegistry(
   options: Omit<ZCodeAppOptions, "providerRegistry">,
   providerRegistry: ZCodeAppOptions["providerRegistry"],
