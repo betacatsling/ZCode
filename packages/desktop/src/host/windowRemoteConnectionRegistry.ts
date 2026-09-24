@@ -659,7 +659,7 @@ export function createWindowRemoteConnectionRegistry<TServices, TCapabilities = 
     expectedGeneration: number,
     action: (
       services: TServices,
-      lease: { remoteSessionId: string; generation: number },
+      lease: { remoteSessionId: string; generation: number; assertCurrent(): void },
     ) => Promise<T>,
   ): Promise<
     | { status: "committed"; value: T }
@@ -672,10 +672,23 @@ export function createWindowRemoteConnectionRegistry<TServices, TCapabilities = 
     if (generation !== expectedGeneration) {
       throw new Error("remote attachment generation mismatch");
     }
+    const assertCurrent = () => {
+      if (
+        sessionsById.get(scope.remoteSessionId) !== session ||
+        session.generation !== generation ||
+        resolveScopedHandle(scope).services !== services
+      ) {
+        throw new Error("remote attachment generation mismatch");
+      }
+    };
     // 中文：远端异步提交后换代时不能根据旧连接重试；只能用稳定 commandId 在新认证视图只读查询。
     let value: T;
     try {
-      value = await action(services, { remoteSessionId: scope.remoteSessionId, generation });
+      value = await action(services, {
+        remoteSessionId: scope.remoteSessionId,
+        generation,
+        assertCurrent,
+      });
     } catch {
       return { status: "uncertain", recovery: "query-by-stable-command-id" };
     }

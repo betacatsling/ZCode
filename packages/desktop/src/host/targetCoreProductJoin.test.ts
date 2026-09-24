@@ -23,6 +23,7 @@ import {
   IWorkspaceHierarchyService,
 } from "@zcode/services";
 import { mountLocalCore } from "./targetCoreMount.js";
+import { createRemoteHierarchyAttachment } from "./remoteHierarchyAttachment.js";
 
 /** Isolated real Core → one-use ticket → public RPC → window service collection. No authority fixture. */
 test("real Core RPC mounts Git Catalog and hierarchy across window detach/restart", async () => {
@@ -212,6 +213,44 @@ test("real Core RPC mounts Git Catalog and hierarchy across window detach/restar
         "main",
       );
       assert.equal((await hierarchy.listCreateOptions("main")).workspaceId, "main");
+      // 中文：旧路由只校验 createAgent 的返回 owner，错误 workspace 已经执行完；
+      // 这里用两个实际 Core Catalog worktree 证明拒绝发生在 allocation 之前。
+      const foreignPath = join(dir, "foreign-worktree");
+      await git("git", ["-C", repo, "worktree", "add", "-qb", "foreign", foreignPath]);
+      const foreign = await catalog.adopt({
+        bindingId: "binding",
+        workspaceId: "foreign",
+        title: "Foreign checkout",
+        worktreePath: foreignPath,
+      });
+      const scoped = createRemoteHierarchyAttachment(
+        hierarchy,
+        {
+          kind: "remote",
+          remoteSessionId: "isolated-regression-view",
+          workspacePath: workspace.worktreePath,
+          workspaceIdentity: workspace.workspaceIdentity,
+        },
+        async (action) => ({ status: "committed", value: await action(mount.services, () => {}) }),
+      );
+      const creation = {
+        workspaceId: foreign.id,
+        harnessId: "pi",
+        modelBinding: {
+          kind: "host-managed" as const,
+          selection: { providerId: "fixture", modelId: "fixture" },
+        },
+        commandId: "foreign-worktree-must-never-allocate",
+      } as Parameters<typeof scoped.createAgent>[0];
+      await assert.rejects(scoped.createAgent(creation), /Remote target scope denied/);
+      assert.equal(
+        (await mount.services.get(IAgentHostService).listWorkspaceSessions(foreign.id)).length,
+        0,
+      );
+      assert.equal(
+        await mount.services.get(IAgentHostService).queryCreationCommand(creation.commandId),
+        undefined,
+      );
       assert.equal(
         (await mount.services.get(IAgentHostService).getAvailability()).target.id,
         first.installationId,

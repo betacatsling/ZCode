@@ -2046,7 +2046,7 @@ function exposeServicesOnMessagePort(
           windowRemoteConnectionRegistry.withCurrentScopedServices(
             attachmentScope,
             attachmentGeneration,
-            (targetServices) => action(targetServices),
+            (targetServices, lease) => action(targetServices, lease.assertCurrent),
           ),
         ),
       );
