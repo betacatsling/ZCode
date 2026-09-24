@@ -1,4 +1,5 @@
 import { fork, type ChildProcess } from "node:child_process";
+import { createHmac, randomBytes } from "node:crypto";
 import { constants } from "node:fs";
 import { open, type FileHandle } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep, basename } from "node:path";
@@ -37,6 +38,7 @@ export async function createPortablePiBoundary(
   );
   const rootStat = await rootHandle.stat({ bigint: true });
   const prepared = new Map<string, Prepared>();
+  const reviewKey = randomBytes(32);
   let closed = false;
   function absolutePath(raw: unknown) {
     if (typeof raw !== "string" || !raw || raw.includes("\0")) throw new Error("Invalid Pi path");
@@ -134,13 +136,23 @@ export async function createPortablePiBoundary(
             done();
             return;
           }
-          const timeout = setTimeout(() => child.kill(), 500);
-          timeout.unref();
-          child.once("exit", () => {
-            clearTimeout(timeout);
+          // 修复：单次 SIGTERM 无法证明 broker 退出；升级后仍无退出则报错。
+          const term = setTimeout(() => child.kill("SIGTERM"), 250);
+          const kill = setTimeout(() => child.kill("SIGKILL"), 750);
+          const deadline = setTimeout(() => {
+            child.off("exit", onExit);
             done();
-          });
+          }, 1500);
+          const onExit = () => {
+            clearTimeout(term);
+            clearTimeout(kill);
+            clearTimeout(deadline);
+            done();
+          };
+          child.once("exit", onExit);
         });
+        if (child.exitCode === null && child.signalCode === null)
+          throw new Error("Pi broker did not exit after forced cleanup");
       },
     };
     prepared.set(id, entry);
@@ -159,8 +171,30 @@ export async function createPortablePiBoundary(
   }
   async function close() {
     closed = true;
-    await releaseAll();
-    await rootHandle.close();
+    try {
+      await releaseAll();
+    } finally {
+      await rootHandle.close();
+    }
+  }
+  function review(id: string) {
+    const entry = prepared.get(id);
+    if (!entry || entry.closed) throw new Error("Pi approval lacks a prepared operation");
+    const target = relative(root, entry.path);
+    if (
+      !target ||
+      target.length > 180 ||
+      [...target].some(
+        (character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127,
+      )
+    )
+      throw new Error("Pi file target is not reviewable");
+    return {
+      mode: entry.mode,
+      target,
+      bytes: Buffer.byteLength(entry.input),
+      digest: createHmac("sha256", reviewKey).update(entry.input).digest("hex").slice(0, 16),
+    };
   }
   const tools = (["read", "edit", "write"] as const).map((mode) => {
     const base =
@@ -190,8 +224,10 @@ export async function createPortablePiBoundary(
           if (entry) await entry.close();
           throw new Error("Pi file operation lacks matching prepared approval");
         }
+        const readAlias = `/dev/fd/${rootHandle.fd}`;
         const same = (path: string) => {
-          if (path !== entry.path) throw new Error("Pi SDK changed the prepared path");
+          if (path !== (mode === "read" ? readAlias : entry.path))
+            throw new Error("Pi SDK changed the prepared path");
         };
         const ops = {
           access: async (path: string) => {
@@ -232,7 +268,10 @@ export async function createPortablePiBoundary(
               ? createEditToolDefinition(cwd, { operations: ops })
               : createWriteToolDefinition(cwd, { operations: ops });
         try {
-          return await definition.execute(id, input, signal, update, { cwd } as never);
+          // 修复：SDK Read 在 operations 之前会按 pathname 探测存在性。
+          // 只让它探测本 worker 持有的 root FD，内容仍来自准备时的 broker 文件 FD。
+          const sdkInput = mode === "read" ? { ...(input as object), path: readAlias } : input;
+          return await definition.execute(id, sdkInput as never, signal, update, { cwd } as never);
         } finally {
           await release(id);
         }
@@ -245,6 +284,7 @@ export async function createPortablePiBoundary(
     release,
     releaseAll,
     close,
+    review,
     pendingCount: () => prepared.size,
     brokerPids: () =>
       [...prepared.values()]

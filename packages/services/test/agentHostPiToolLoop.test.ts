@@ -123,17 +123,22 @@ test(
         catalog: { fingerprint: "fixture-v1", validateSelection: () => ({ ok: true }) },
       });
       const approvals: string[] = [];
+      const summaries = new Map<string, string>();
       const requested = new Set<string>();
       host.subscribe((event) => {
         if (event.kind === "interaction.requested") {
           assert.equal(event.turnId, "first-turn");
           assert.equal(event.toolCallId, event.interactionId);
-          assert.equal(
-            event.summary,
-            event.toolCallId === "bash-1"
-              ? "Run Pi bash command: test -f output.txt"
-              : `Allow Pi ${event.toolCallId === "edit-1" ? "edit" : "write"} in this worktree?`,
-          );
+          if (event.toolCallId === "bash-1")
+            assert.equal(event.summary, "Run Pi bash command: test -f output.txt");
+          else {
+            assert.match(
+              event.summary,
+              /^Allow Pi (write|edit) output\.txt \([0-9]+ bytes, HMAC-SHA-256 [a-f0-9]{16}\)\?$/,
+            );
+            assert.doesNotMatch(event.summary, /denied|fixture written|SECRET_OUTSIDE/);
+          }
+          summaries.set(event.interactionId, event.summary);
           approvals.push(event.interactionId);
           requested.add(event.interactionId);
         }
@@ -169,6 +174,7 @@ test(
       await waitFor(2);
       await assert.rejects(readFile(join(worktree, "output.txt")), { code: "ENOENT" });
       assert.equal(approvals[1], "write-1");
+      assert.notEqual(summaries.get("write-denied"), summaries.get("write-1"));
       await host.dispatch({
         type: "resolveInteraction",
         commandId: "allow-write",

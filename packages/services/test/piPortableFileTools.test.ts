@@ -1,14 +1,69 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, fork } from "node:child_process";
+import { stat } from "node:fs/promises";
 import { promisify } from "node:util";
 import { mkdtemp, mkdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { createPortablePiBoundary } from "../src/agent-adapters/pi/piPortableFileTools.js";
 
 const run = promisify(execFile);
 const supported = process.platform === "darwin" || process.platform === "linux";
+
+test(
+  "broker exits after unexpected worker IPC disconnect without creating a pending file",
+  { skip: !supported, timeout: 8000 },
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-broker-exit-"));
+    const source = import.meta.url.endsWith(".ts");
+    const broker = fork(
+      fileURLToPath(
+        new URL(
+          source
+            ? "../src/agent-adapters/pi/piFileBroker.ts"
+            : "../src/agent-adapters/pi/piFileBroker.js",
+          import.meta.url,
+        ),
+      ),
+      [],
+      {
+        cwd: root,
+        execPath: process.execPath,
+        execArgv: source ? ["--experimental-strip-types"] : [],
+        env: {},
+        stdio: ["ignore", "ignore", "ignore", "ipc"],
+      },
+    );
+    try {
+      const exit = new Promise<void>((resolve, reject) => {
+        broker.once("exit", () => resolve());
+        broker.once("error", reject);
+      });
+      const inode = await stat(root, { bigint: true });
+      const init = new Promise<unknown>((resolve, reject) => {
+        broker.once("message", resolve);
+        broker.once("error", reject);
+      });
+      broker.send({
+        id: 1,
+        op: "init",
+        leaf: "pending.txt",
+        mode: "write",
+        rootDev: inode.dev.toString(),
+        rootIno: inode.ino.toString(),
+      });
+      assert.deepEqual(await init, { id: 1, result: null });
+      broker.disconnect();
+      await exit; // ChildProcess 'exit' receipt, not PID enumeration.
+      await assert.rejects(readFile(join(root, "pending.txt")), { code: "ENOENT" });
+    } finally {
+      if (broker.exitCode === null && broker.signalCode === null) broker.kill("SIGKILL");
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
 test(
   "portable mounted operations pin parent and leaf before approval, refuse substitutions and reap broker",
   { skip: !supported, timeout: 20000 },
