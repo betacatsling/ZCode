@@ -3,11 +3,15 @@ import type { SessionSummary, WorktreeWorkspace } from "@zcode/shared/project-wo
 import type { NativeSessionCatalogPort, NativeSessionNavigation } from "./nativeComposition.js";
 import type { LegacyMapping } from "../project-workspaces/migrationContract.js";
 import type { NativeIndexFact } from "./nativePersistentSessionIndex.js";
+import type { NativeSessionMetadataReader } from "./nativeSessionMetadata.js";
 
 export interface NativeSessionDirectorySource {
   onChange?(listener: () => void): () => void;
   listMappings(): Promise<readonly LegacyMapping[]>;
   readFacts(): Promise<readonly NativeIndexFact[]>;
+  verifySource?(): Promise<void>;
+  /** Production joins require a current native-store scope attestation; no path containment inference. */
+  metadata?: NativeSessionMetadataReader;
 }
 export interface NativeSessionOwnerRef {
   targetId: string;
@@ -37,6 +41,7 @@ export class NativeSessionDirectory implements NativeSessionCatalogPort {
   }
 
   private async joined(): Promise<Array<{ mapping: LegacyMapping; fact: NativeIndexFact }>> {
+    await this.source.verifySource?.();
     const [mappings, facts] = await Promise.all([
       this.source.listMappings(),
       this.source.readFacts(),
@@ -47,12 +52,69 @@ export class NativeSessionDirectory implements NativeSessionCatalogPort {
       if (byScope.has(key)) throw new Error("duplicate-native-scope");
       byScope.set(key, fact);
     }
-    return mappings.flatMap((mapping) => {
-      const fact = byScope.get(
-        JSON.stringify([mapping.sourceWorkspaceKey, mapping.nativeSessionId]),
-      );
-      return fact && !fact.deleted ? [{ mapping, fact }] : [];
-    });
+    const verified = await Promise.all(
+      mappings.map(async (mapping) => {
+        const fact = byScope.get(
+          JSON.stringify([mapping.sourceWorkspaceKey, mapping.nativeSessionId]),
+        );
+        if (
+          !fact ||
+          fact.deleted ||
+          (fact.sourceWorkspacePath
+            ? fact.sourceWorkspacePath !== mapping.sourceWorkspacePath
+            : !!this.source.metadata)
+        )
+          return undefined;
+        if (this.source.metadata) {
+          const native = await this.source.metadata.read({
+            workspaceKey: mapping.sourceWorkspaceKey,
+            workspacePath: mapping.sourceWorkspacePath,
+            nativeSessionId: mapping.nativeSessionId,
+          });
+          // 中文：缺 workspaceID 的旧记录可供迁移预览，不能凭相等/包含的 cwd 冒充在线 owner。
+          if (!native?.scopeVerified || native.targetId !== mapping.targetId) return undefined;
+        }
+        return { mapping, fact };
+      }),
+    );
+    return verified.filter(
+      (row): row is { mapping: LegacyMapping; fact: NativeIndexFact } => !!row,
+    );
+  }
+
+  private ownerFromMapping(mapping: LegacyMapping): NativeSessionOwnerRef {
+    return {
+      targetId: mapping.targetId,
+      projectId: mapping.projectId,
+      workspaceId: mapping.workspaceId,
+      worktreeGeneration: mapping.worktreeGeneration,
+      sourceWorkspaceKey: mapping.sourceWorkspaceKey,
+      sourceWorkspacePath: mapping.sourceWorkspacePath,
+      nativeSessionId: mapping.nativeSessionId,
+      cwdRelativeToWorktree: mapping.cwdRelativeToWorktree,
+    };
+  }
+
+  /** Unscoped V4 ID is only usable after narrowing to the exact target and mapped workspace. */
+  async resolveOriginalOwner(input: {
+    targetId: string;
+    workspaceId: string;
+    nativeSessionId: string;
+  }): Promise<NativeSessionNavigation | undefined> {
+    const matches = (await this.joined()).filter(
+      ({ mapping }) =>
+        mapping.targetId === input.targetId &&
+        mapping.workspaceId === input.workspaceId &&
+        mapping.nativeSessionId === input.nativeSessionId,
+    );
+    if (matches.length > 1) throw new Error("ambiguous-native-owner");
+    const mapping = matches[0]?.mapping;
+    if (!mapping) return undefined;
+    return {
+      transport: "native-v4",
+      treeSessionId: nativeTreeSessionId(mapping),
+      owner: this.ownerFromMapping(mapping),
+    };
   }
 
   async resolveOwner(
@@ -80,17 +142,7 @@ export class NativeSessionDirectory implements NativeSessionCatalogPort {
     if (matches.length > 1) throw new Error("ambiguous-native-owner");
     const found = matches[0];
     if (!found) return undefined;
-    const { mapping } = found;
-    const owner: NativeSessionOwnerRef = {
-      targetId: mapping.targetId,
-      projectId: mapping.projectId,
-      workspaceId: mapping.workspaceId,
-      worktreeGeneration: mapping.worktreeGeneration,
-      sourceWorkspaceKey: mapping.sourceWorkspaceKey,
-      sourceWorkspacePath: mapping.sourceWorkspacePath,
-      nativeSessionId: mapping.nativeSessionId,
-      cwdRelativeToWorktree: mapping.cwdRelativeToWorktree,
-    };
+    const owner = this.ownerFromMapping(found.mapping);
     return { transport: "native-v4", treeSessionId: nativeTreeSessionId(owner), owner };
   }
 
