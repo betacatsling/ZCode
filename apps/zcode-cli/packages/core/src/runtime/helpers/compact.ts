@@ -69,6 +69,21 @@ export function compactFailureReasonFromError(error: unknown): string {
   return error instanceof Error && error.message.length > 0 ? error.message : "unknown";
 }
 
+export function assertCompactDeveloperPrefix(entries: readonly RuntimeMessageEntry[]): void {
+  const prefixCount = countContextPrefixMessages(entries);
+  // 修复：交错 developer 指令既不在连续 prefix，也不能由普通 summary 保持角色与顺序；
+  // 先拒绝压缩，避免生成看似成功但丢失指令的会话历史。
+  if (
+    entries
+      .slice(prefixCount)
+      .some((entry) => !isRuntimeAttachmentEntry(entry) && entry.message.role === "developer")
+  ) {
+    throw new Error(
+      "Cannot compact interleaved developer instructions without preserving their order",
+    );
+  }
+}
+
 export function buildPostCompactRuntimeEntries(
   activeEntries: readonly RuntimeMessageEntry[],
   summaryEntry: RuntimeMessageEntry,
@@ -77,6 +92,7 @@ export function buildPostCompactRuntimeEntries(
     preservedEntries?: readonly RuntimeMessageEntry[];
   } = {},
 ): RuntimeMessageEntry[] {
+  assertCompactDeveloperPrefix(activeEntries);
   // compact 后只保留 metadata 标记的 prefix，避免用户 literal <system-reminder> 被文本规则误留。
   const prefixCount = countContextPrefixMessages(activeEntries);
   return [
