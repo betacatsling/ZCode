@@ -5,6 +5,7 @@ import { isAbsolute, relative, resolve, join } from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
 import {
   createAgentSession,
+  createBashToolDefinition,
   DefaultResourceLoader,
   ModelRuntime,
   SessionManager,
@@ -28,6 +29,64 @@ const approvals = new Map<
   string,
   { turnId: string; settle: (decision: "allow" | "deny") => void }
 >();
+const brokerRequests = new Map<
+  string,
+  { resolve: (value: unknown) => void; reject: (error: Error) => void }
+>();
+const bashRequests = new Map<
+  string,
+  {
+    onData: (data: Buffer) => void;
+    resolve: (value: { exitCode: number | null }) => void;
+    reject: (error: Error) => void;
+  }
+>();
+const readPauses = new Map<string, () => void>();
+function brokerRequest(
+  call: Omit<Extract<FromPiWorker, { type: "broker.request" }>, "requestId" | "type">,
+): Promise<unknown> {
+  const requestId = randomUUID();
+  return new Promise((resolve, reject) => {
+    brokerRequests.set(requestId, { resolve, reject });
+    post({ type: "broker.request", requestId, ...call });
+  });
+}
+function bashExec(
+  command: string,
+  dir: string,
+  options: {
+    onData: (data: Buffer) => void;
+    signal?: AbortSignal;
+    timeout?: number;
+    env?: NodeJS.ProcessEnv;
+  },
+): Promise<{ exitCode: number | null }> {
+  const requestId = randomUUID();
+  return new Promise((resolve, reject) => {
+    const abort = () => post({ type: "bash.abort", requestId });
+    bashRequests.set(requestId, {
+      onData: options.onData,
+      resolve: (result) => {
+        options.signal?.removeEventListener("abort", abort);
+        resolve(result);
+      },
+      reject: (error) => {
+        options.signal?.removeEventListener("abort", abort);
+        reject(error);
+      },
+    });
+    options.signal?.addEventListener("abort", abort, { once: true });
+    post({
+      type: "bash.request",
+      requestId,
+      command,
+      cwd: dir,
+      timeout: options.timeout,
+      env: options.env ?? {},
+    });
+    if (options.signal?.aborted) abort();
+  });
+}
 const modelStreams = new Map<
   string,
   {
@@ -107,7 +166,20 @@ async function main(): Promise<void> {
   const { createPortablePiBoundary } = await import(
     sourceMode ? "./piPortableFileTools.ts" : "./piPortableFileTools.js"
   );
-  const fileBoundary = await createPortablePiBoundary(root, cwd, () => activeTurn);
+  const fileBoundary = await createPortablePiBoundary(
+    root,
+    cwd,
+    () => activeTurn,
+    brokerRequest,
+    boot.pauseBeforeReadResolver
+      ? (alias: string) =>
+          new Promise<void>((resolve) => {
+            const requestId = randomUUID();
+            readPauses.set(requestId, resolve);
+            post({ type: "read.pause", requestId, alias });
+          })
+      : undefined,
+  );
   const { createPiHostProvider } = await import(
     sourceMode ? "./piModelStream.ts" : "./piModelStream.js"
   );
@@ -227,7 +299,10 @@ async function main(): Promise<void> {
     modelRuntime,
     model,
     tools: ["read", "write", "edit", "bash"],
-    customTools: fileBoundary.tools,
+    customTools: [
+      ...fileBoundary.tools,
+      createBashToolDefinition(cwd, { operations: { exec: bashExec } }),
+    ],
   });
   if (session.getActiveToolNames().sort().join(",") !== "bash,edit,read,write")
     throw new Error("Pi mounted tool registry mismatch");
@@ -333,6 +408,35 @@ async function main(): Promise<void> {
   });
   post({ type: "ready", backendSessionId: manager.getSessionId() });
   port.on("message", (raw: ToPiWorker) => {
+    if (raw.type === "nodeTest.crash" && boot.enableNodeTestCrash) {
+      // Node-only fixture: exit without SDK disposal/approval resolution to test parent ownership.
+      process.exit(77);
+    }
+    if (raw.type === "broker.reply") {
+      const pending = brokerRequests.get(raw.requestId);
+      if (pending) {
+        brokerRequests.delete(raw.requestId);
+        if (raw.error) pending.reject(new Error(raw.error));
+        else pending.resolve(raw.result);
+      }
+      return;
+    }
+    if (raw.type === "bash.data" || raw.type === "bash.reply") {
+      const pending = bashRequests.get(raw.requestId);
+      if (!pending) return;
+      if (raw.type === "bash.data") pending.onData(Buffer.from(raw.data));
+      else {
+        bashRequests.delete(raw.requestId);
+        if (raw.error) pending.reject(new Error(raw.error));
+        else pending.resolve({ exitCode: raw.exitCode ?? null });
+      }
+      return;
+    }
+    if (raw.type === "read.resume") {
+      readPauses.get(raw.requestId)?.();
+      readPauses.delete(raw.requestId);
+      return;
+    }
     if (raw.type === "model.event" || raw.type === "model.done" || raw.type === "model.failure") {
       const state = modelStreams.get(raw.requestId);
       if (!state) return;
