@@ -1,4 +1,6 @@
 import { querySessionDebug } from "./session-debug.js";
+import { createHash } from "node:crypto";
+import { isAbsolute } from "node:path";
 import {
   nativeMaintenanceLeaseSchema, zcodeProtocolEmptyResultSchema,
   type NativeMaintenanceLease, type NativeMaintenanceActivity,
@@ -212,6 +214,7 @@ const MAINTENANCE_READ_METHODS = new Set<string>([
   zcodeProtocolMethods.workflowsList, zcodeProtocolMethods.workflowsGet,
   zcodeProtocolMethods.workflowsRuns, zcodeProtocolMethods.pluginsOverview,
   zcodeProtocolMethods.processChildProcesses, zcodeProtocolMethods.runtimeCapabilities,
+  zcodeProtocolMethods.nativeOwnerDescription,
   zcodeProtocolMethods.usageStats, zcodeProtocolMethods.sessionDebug,
   zcodeProtocolMethods.sessionUsage,
 ]);
@@ -772,6 +775,15 @@ export class ZCodeProtocolAgentServer {
         return await getPluginsOverview(this.context, request.params);
       case zcodeProtocolMethods.processChildProcesses:
         return listChildProcesses(this.context.deps.mcpTelemetry?.listProcesses() ?? []);
+      case zcodeProtocolMethods.nativeOwnerDescription: {
+        const store = this.context.deps.sessionStore;
+        // 中文：只报告当前 CLI 已打开的实际数据库；没有 storage owner 的旧实例不能推断路径。
+        if (!store || !("getDatabasePath" in store) || typeof store.getDatabasePath !== "function")
+          throw new Error("native-storage-owner-unavailable");
+        const path = store.getDatabasePath() as string;
+        if (!isAbsolute(path)) throw new Error("native-storage-path-not-absolute");
+        return { nativeDatabasePath: path, databaseId: createHash("sha256").update(path).digest("hex") };
+      }
       case zcodeProtocolMethods.runtimeCapabilities:
         // 中文：旧 worker 不能被 Core 当成可认证 create owner；只有本 worker 真正
         // 挂载 receipt 写端与实际配置持久化端时才声明增量能力。

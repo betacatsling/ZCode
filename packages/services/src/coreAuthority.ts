@@ -15,7 +15,13 @@ import {
   createNativeProductionBridge,
 } from "./workspace-hierarchy/nativeProductionBridge.js";
 import type { NativeRuntimeFactsPort } from "./workspace-hierarchy/nativeProductionBridge.js";
-import { getNativeProcessControlPort } from "./zcode-agent/zcodeAgentService.js";
+import {
+  getNativeProcessControlPort,
+  getNativeCreationControlPort,
+} from "./zcode-agent/zcodeAgentService.js";
+import { NativeCreateJournal } from "./workspace-hierarchy/nativeCreateJournal.js";
+import { nativeCreatePayloadFingerprint } from "@zcode/shared/zcode-protocol-v4/native-create-fingerprint-node";
+import { commandPayloadSchemas } from "@zcode/shared/zcode-protocol-v4";
 import { IZCodeAgentService } from "./zcode-agent/zcodeAgent.js";
 import type { ServiceCollection } from "./collection.js";
 import {
@@ -59,22 +65,26 @@ export async function createCoreAuthority(
   let services: ServiceCollection | undefined;
   try {
     // 中文：与 CLI 共享配置解释器；读取目录不能启动 CLI 或偷偷迁移不存在的 SQLite。
-    const nativeDb = resolveNativeSessionDbPath({ cwd: process.cwd(), env: process.env });
+    let nativeDb = resolveNativeSessionDbPath({ cwd: process.cwd(), env: process.env });
     const taskDb = getTasksIndexDatabasePath();
     // 中文：旧工厂把首次 sidebar 的缺库误当只读故障；在 Core 持有 profile writer
     // 的启动写阶段运行同一 tasks migration owner，读路径本身绝不迁移。
     await prepareTasksIndexStorage(taskDb, () => {});
     const backups = join(configRoot, "native-migration", "backups");
-    const metadata = new NativeSqliteMetadataReader(
-      new ReadonlyNativeSessionMetadataView(nativeDb),
-      async () => options.installationId,
-    );
+    const metadata = {
+      read: (scope: Parameters<NativeSqliteMetadataReader["read"]>[0]) =>
+        new NativeSqliteMetadataReader(
+          new ReadonlyNativeSessionMetadataView(nativeDb),
+          async () => options.installationId,
+        ).read(scope),
+    };
     const reader = new NativePersistentSessionIndex(
       taskDb,
       backups,
       options.installationId,
       metadata,
     );
+    const journal = new NativeCreateJournal(join(configRoot, "native-create"));
     const sidecar = join(configRoot, "native-migration", "mapping.json");
     const listMappings = async () => {
       let text: string;
@@ -96,20 +106,133 @@ export async function createCoreAuthority(
     };
     const directory = createReadonlyNativeDirectory({
       taskIndexDatabasePath: taskDb,
-      nativeSessionDatabasePath: nativeDb,
+      nativeSessionDatabasePath: () => nativeDb,
       backupDirectory: backups,
       profileId: options.installationId,
       listMappings,
+      listNewMappings: async () =>
+        (await journal.listCompleted()).map(({ intent, originalSessionId }) => ({
+          commandId: intent.commandId,
+          nativeDatabasePath: intent.nativeDatabasePath,
+          databaseId: intent.databaseId,
+          nativeSessionId: originalSessionId,
+          sourceWorkspaceKey: intent.workspaceIdentity,
+          sourceWorkspacePath: intent.workspacePath,
+          targetId: intent.targetId,
+          projectId: intent.projectId,
+          workspaceId: intent.workspaceId,
+          repositoryBindingId: intent.repositoryBindingId,
+          worktreeGeneration: intent.worktreeGeneration,
+          cwdRelativeToWorktree: intent.cwdRelativeToWorktree,
+          modelBinding: intent.modelBinding,
+        })),
     });
     // The live native process port binds to the real service after collection construction.
     let live: ReturnType<typeof getNativeProcessControlPort> | undefined;
+    let creation: ReturnType<typeof getNativeCreationControlPort> | undefined;
+    const nativeEnabled = process.env.ZCODE_CORE_NATIVE_CREATE_TEST_ONLY === "1";
+    type CreateRequest = Parameters<NativeRuntimeFactsPort["create"]>[0];
+    const recover = async (input: CreateRequest) => {
+      const state = await journal.read(input.commandId);
+      if (!state) return undefined;
+      const { intent } = state;
+      // 中文：先核对 Catalog 与 Target 当前绑定和原命令，不按路径近似匹配；
+      // 完成重试只读 SQLite，pending 不允许向 CommandInbox 再提交一次。
+      if (
+        intent.targetId !== input.scope.targetId ||
+        intent.projectId !== input.projectId ||
+        intent.workspaceId !== input.scope.workspaceId ||
+        intent.repositoryBindingId !== input.repositoryBindingId ||
+        intent.worktreeGeneration !== input.worktreeGeneration ||
+        intent.workspaceIdentity !== input.scope.workspaceIdentity ||
+        intent.workspacePath !== input.scope.workspacePath ||
+        intent.remoteSessionId !== input.scope.remoteSessionId ||
+        intent.cwdRelativeToWorktree !== input.cwdRelativeToWorktree ||
+        JSON.stringify(intent.modelBinding) !== JSON.stringify(input.modelBinding)
+      )
+        throw new Error("native-create-intent-conflict");
+      const mapping = state.mapping ?? (await journal.complete(input.commandId));
+      return { originalSessionId: mapping.originalSessionId };
+    };
     const runtime: NativeRuntimeFactsPort = {
-      // 中文：V4 原生 durable create 收据/sidecar 写入尚无已认证路径；禁止声明可创建。
-      async create() {
-        throw new Error("Native durable creation receipt unavailable");
+      certifiedCreate: nativeEnabled,
+      recover,
+      async create(input) {
+        if (!nativeEnabled || !creation)
+          throw new Error("Native durable creation receipt unavailable");
+        if (input.modelBinding.kind !== "host-managed" || input.cwdRelativeToWorktree !== ".")
+          throw new Error("native-create-unverifiable-binding-or-cwd");
+        const existing = await recover(input);
+        if (existing) return existing;
+        const target = {
+          workspacePath: input.scope.workspacePath,
+          workspaceIdentity: input.scope.workspaceIdentity,
+          ...(input.scope.remoteSessionId ? { remoteSessionId: input.scope.remoteSessionId } : {}),
+        };
+        const description = await creation.describe(target);
+        const payload = commandPayloadSchemas.createSession.parse({
+          workspaceId: input.scope.workspaceIdentity,
+          config: { modelSelection: input.modelBinding.selection, mode: "build" },
+        });
+        await journal.stage({
+          schemaVersion: 1,
+          commandId: input.commandId,
+          targetId: input.scope.targetId,
+          projectId: input.projectId,
+          workspaceId: input.scope.workspaceId,
+          repositoryBindingId: input.repositoryBindingId,
+          worktreeGeneration: input.worktreeGeneration,
+          workspaceIdentity: input.scope.workspaceIdentity,
+          workspacePath: input.scope.workspacePath,
+          ...(input.scope.remoteSessionId ? { remoteSessionId: input.scope.remoteSessionId } : {}),
+          cwdRelativeToWorktree: input.cwdRelativeToWorktree,
+          modelBinding: input.modelBinding,
+          nativeDatabasePath: description.nativeDatabasePath,
+          databaseId: description.databaseId,
+          intentFingerprint: nativeCreatePayloadFingerprint(payload),
+        });
+        // 中文：写入意图后 ACK 可能丢失；只读取已完成的 CLI 收据，绝不重发 pending 命令。
+        try {
+          await creation.create(target, description, { commandId: input.commandId, payload });
+        } catch (error) {
+          try {
+            return {
+              originalSessionId: (await journal.complete(input.commandId)).originalSessionId,
+            };
+          } catch {
+            throw error;
+          }
+        }
+        return { originalSessionId: (await journal.complete(input.commandId)).originalSessionId };
       },
-      async capabilities() {
-        throw new Error("Native capabilities unavailable without certified owner");
+      async capabilities(owner) {
+        if (!nativeEnabled || !creation) throw new Error("Native capability unavailable");
+        await creation.describe({
+          workspacePath: owner.scope.workspacePath,
+          workspaceIdentity: owner.scope.workspaceIdentity,
+          ...(owner.scope.remoteSessionId ? { remoteSessionId: owner.scope.remoteSessionId } : {}),
+        });
+        const supported = { support: "supported" as const };
+        const unknown = {
+          support: "unknown" as const,
+          reason: "not certified by native create owner",
+        };
+        return {
+          text: supported,
+          tools: unknown,
+          approvals: unknown,
+          cancelTurn: unknown,
+          resumeExecution: unknown,
+          history: supported,
+          images: unknown,
+          modelSwitch: unknown,
+          detach: supported,
+          terminateSession: unknown,
+          viewHistory: supported,
+          hostManagedModel: supported,
+          fork: unknown,
+          subagents: unknown,
+        };
       },
       async activity() {
         if (!live) return { running: 0, waiting: 0, tools: 0, uncertain: 1, offline: true };
@@ -135,10 +258,17 @@ export async function createCoreAuthority(
     });
     const nativeService = services.get(IZCodeAgentService);
     live = getNativeProcessControlPort(nativeService);
+    creation = getNativeCreationControlPort(nativeService);
     // 中文：session DB 只能由真实 CLI storage-startup 创建。显式在启动时使用
     // 配置解析所用 cwd 的 worker；不能让 sidebar 查询暗中启动迁移或制造空库。
     await nativeService.prepareStorage({ workspacePath: process.cwd() });
     const storage = await nativeService.getStorageStartupState({ workspacePath: process.cwd() });
+    // 中文：只有 CLI 已打开的真实 storage owner 可说明自定义 cwd/env 的相对 DB；
+    // Core 的 launch cwd 不能代替它。默认关闭创建时保持旧 worker 的只读启动兼容。
+    if (nativeEnabled) {
+      const bootOwner = await creation.describe({ workspacePath: process.cwd() });
+      nativeDb = bootOwner.nativeDatabasePath;
+    }
     // 中文：不带 storage-startup 控制帧的旧/自定义 CLI 会让 prepareStorage 立即
     // 返回；只有同一个配置路径的真实 CLI 完成写端迁移后，Core 才能发布只读目录。
     if (

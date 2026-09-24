@@ -76,6 +76,8 @@ import {
   summarizeOfficialMcpIdentityHeaders,
   zcodeProtocolEmptyResultSchema,
   zcodeProtocolMethods,
+  zcodeRuntimeCapabilitiesSchema,
+  zcodeNativeOwnerDescriptionSchema,
   zcodeProtocolNotifications,
   zcodeMcpTelemetryEventSchema,
   zcodeMcpResourceSamplesSchema,
@@ -1091,6 +1093,30 @@ export interface NativeProcessActivity {
 export interface NativeProcessControlPort {
   activity(): Promise<NativeProcessActivity>;
   fenceAdmissions(): Promise<{ verify(): Promise<boolean>; release(): Promise<void> }>;
+}
+export interface NativeCreationControlPort {
+  describe(target: ZCodeAgentWorkspaceTarget): Promise<{
+    nativeDatabasePath: string;
+    databaseId: string;
+    runtimeIdentity: string;
+    generation: number;
+  }>;
+  create(
+    target: ZCodeAgentWorkspaceTarget,
+    expected: { runtimeIdentity: string; databaseId: string },
+    envelope: {
+      commandId: string;
+      payload: ReturnType<typeof commandPayloadSchemas.createSession.parse>;
+    },
+  ): Promise<void>;
+}
+const nativeCreationPorts = new WeakMap<IZCodeAgentService, NativeCreationControlPort>();
+export function getNativeCreationControlPort(
+  service: IZCodeAgentService,
+): NativeCreationControlPort {
+  const port = nativeCreationPorts.get(service);
+  if (!port) throw new Error("native creation port unavailable");
+  return port;
 }
 const nativeProcessPorts = new WeakMap<IZCodeAgentService, NativeProcessControlPort>();
 export function getNativeProcessControlPort(service: IZCodeAgentService): NativeProcessControlPort {
@@ -5855,6 +5881,74 @@ export function createZCodeAgentService(
           spawnFrozen = false;
         },
       };
+    },
+  });
+  nativeCreationPorts.set(service, {
+    async describe(target) {
+      const client = (await getOrStartReadOnlyClient(target)).client;
+      const key = resolveWorkspaceKey(target);
+      assertCurrent(key, client);
+      await client.storageStartup.wait();
+      const capability = await client.request(
+        zcodeProtocolMethods.runtimeCapabilities,
+        {},
+        zcodeRuntimeCapabilitiesSchema,
+      );
+      assertCurrent(key, client);
+      if (capability.nativeCoreCreateV1 !== true)
+        throw new Error("native-create-capability-unavailable");
+      const description = await client.request(
+        zcodeProtocolMethods.nativeOwnerDescription,
+        {},
+        zcodeNativeOwnerDescriptionSchema,
+        { lifecycle: "observation" },
+      );
+      assertCurrent(key, client);
+      if (
+        description.databaseId !== client.storageStartup.snapshot?.databaseId ||
+        client.storageStartup.snapshot?.phase !== "ready"
+      )
+        throw new Error("native-create-storage-epoch-mismatch");
+      const runtime = await processManager.getRuntimeIdentity(target);
+      assertCurrent(key, client);
+      return { ...description, runtimeIdentity: runtime.identity, generation: runtime.generation };
+    },
+    async create(target, expected, envelope) {
+      const current = await this.describe(target);
+      if (
+        current.runtimeIdentity !== expected.runtimeIdentity ||
+        current.databaseId !== expected.databaseId
+      )
+        throw new Error("native-create-worker-changed-before-effect");
+      await getClient(target); // existing readiness owner validates real Registry before enabling a writable native command
+      const { key, client } = await currentClient(target);
+      const runtime = await processManager.getRuntimeIdentity(target);
+      assertCurrent(key, client);
+      if (
+        runtime.identity !== expected.runtimeIdentity ||
+        client.storageStartup.snapshot?.databaseId !== expected.databaseId ||
+        client.storageStartup.snapshot?.phase !== "ready"
+      )
+        throw new Error("native-create-stale-client-before-effect");
+      const ack = await client.request(
+        V4_METHODS.command,
+        {
+          commandId: envelope.commandId,
+          clientId: "core-native-create",
+          sessionId: null,
+          type: "createSession",
+          issuedAt: Date.now(),
+          payload: envelope.payload,
+        },
+        commandAckSchema,
+      );
+      assertCurrent(key, client);
+      // 中文：仅隔离进程中的测试故障注入：CLI 已写 completed，Node 服务在 Core
+      // 收到 ACK 之前丢弃结果；Core 只能凭只读收据恢复，不能重发 CommandInbox。
+      if (process.env.ZCODE_CORE_NATIVE_DROP_ACK_TEST_ONLY === envelope.commandId)
+        throw new Error("native-create-completed-ack-dropped-test-only");
+      if (ack.status !== "accepted" && ack.status !== "duplicate")
+        throw new Error(`native-create-command-${ack.status}`);
     },
   });
   nativeMaintenancePorts.set(service, {

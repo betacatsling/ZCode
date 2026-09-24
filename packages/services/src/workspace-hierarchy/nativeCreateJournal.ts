@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir, unlink, open } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { ReadonlyNativeSessionMetadataView } from "@zcode/adapters/storage";
 import { modelBindingRequestSchema, cwdRelativeToWorktreeSchema } from "@zcode/shared/agent-host";
@@ -142,6 +142,27 @@ export class NativeCreateJournal {
     return { intent, mapping };
   }
 
+  /** Only committed, still source-certified mappings; no CLI spawn or migration on directory reads. */
+  async listCompleted(): Promise<Array<{ intent: NativeCreateIntent; originalSessionId: string }>> {
+    let files: string[];
+    try {
+      files = await readdir(this.root);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+    const rows: Array<{ intent: NativeCreateIntent; originalSessionId: string }> = [];
+    for (const file of files.filter((name) => /^[a-f0-9]{64}\.mapping\.json$/.test(name))) {
+      const mapping = mappingSchema.parse(await readJson(join(this.root, file)));
+      if (file !== `${digest(mapping.commandId)}.mapping.json`)
+        throw new Error("native-create-mapping-name-conflict");
+      const state = await this.read(mapping.commandId);
+      if (!state?.mapping) throw new Error("native-create-mapping-source-conflict");
+      rows.push({ intent: state.intent, originalSessionId: mapping.originalSessionId });
+    }
+    return rows;
+  }
+
   /** Only a real completed SQLite fact can produce the durable NEW mapping. */
   async complete(commandId: string): Promise<NativeCreateMapping> {
     return this.serial(commandId, async () => {
@@ -150,7 +171,34 @@ export class NativeCreateJournal {
       if (state.mapping) return state.mapping;
       const mapping = await this.certified(state.intent);
       if (!mapping) throw new Error("native-create-receipt-uncertain");
-      await atomicJsonWrite(this.path(commandId, "mapping"), mapping);
+      const path = this.path(commandId, "mapping");
+      try {
+        await atomicJsonWrite(path, mapping, () => {
+          // 中文：故障必须发生在 rename 后、父目录 fsync 前；不能把未同步目录项报告为成功。
+          if (process.env.ZCODE_CORE_NATIVE_MAPPING_FSYNC_FAULT_TEST_ONLY === commandId)
+            throw new Error("native-create-mapping-directory-sync-fault-test-only");
+        });
+      } catch (error) {
+        // 中文：旧实现失败时 rename 后的文件仍可能被随后 sidebar 当成成功映射；
+        // 尽力回滚新目录项并同步清理。回滚失败保持 uncertain，绝不返回原始 ID。
+        try {
+          await unlink(path).catch((failure: NodeJS.ErrnoException) => {
+            if (failure.code !== "ENOENT") throw failure;
+          });
+          const directory = await open(this.root, "r");
+          try {
+            await directory.sync();
+          } finally {
+            await directory.close();
+          }
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [error, cleanupError],
+            "native-create-mapping-commit-and-rollback-uncertain",
+          );
+        }
+        throw error;
+      }
       return mapping;
     });
   }

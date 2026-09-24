@@ -1,3 +1,4 @@
+/* oxlint-disable eslint(max-lines) -- Target/Catalog 原生 admission 与外部 Host 创建共享同一 scoped owner；拆分需保留并发 receipt 边界。 */
 import { randomUUID } from "node:crypto";
 import type { ProviderRegistryService } from "@zcode/provider";
 import { createRegistryPiHarness } from "../agent-adapters/pi/createPiHarness.js";
@@ -20,6 +21,9 @@ import type {
 export interface NativeHierarchyPort {
   /** Certified original-ID allocator with durable create command receipt. */
   readonly certifiedCreate?: boolean;
+  recover?(
+    input: Parameters<NativeHierarchyPort["create"]>[0],
+  ): Promise<{ originalSessionId: string } | undefined>;
   resolveOwner(input: { targetId: string; workspaceId: string; sessionId: string }): Promise<
     | {
         originalSessionId: string;
@@ -34,6 +38,9 @@ export interface NativeHierarchyPort {
   >;
   create(input: {
     scope: WorkspaceNavigationScope;
+    projectId: string;
+    repositoryBindingId: string;
+    worktreeGeneration: string;
     commandId: string;
     modelBinding: ModelBindingRequest;
     cwdRelativeToWorktree: string;
@@ -135,7 +142,41 @@ export function createWorkspaceHierarchyService(input: {
     const scope = await scopeFor(workspace.id);
     if (!scope) throw new Error("Workspace scope changed");
     if (request.harnessId === "zcode") {
+      const nativeRequest = {
+        scope,
+        projectId: project.id,
+        repositoryBindingId: binding.id,
+        worktreeGeneration: workspace.worktreeGeneration,
+        commandId: request.commandId,
+        modelBinding: request.modelBinding,
+        cwdRelativeToWorktree: request.cwdRelativeToWorktree ?? ".",
+      };
+      // 中文：已提交的完成收据重连是只读行为，不能因为新创建门禁关闭而重新分配 ID。
+      const recovered = await input.native?.recover?.(nativeRequest);
+      if (recovered) {
+        // 中文：Core 原始 ID 的只读恢复无需重开创建 admission；可执行性仍须
+        // Target 当下确认同代实例，Catalog 路径相等不能签发 writable owner。
+        const target = await input.recoveryFacts?.(workspace.id);
+        return {
+          owner: {
+            kind: "native" as const,
+            scope,
+            originalSessionId: recovered.originalSessionId,
+            historyOnly:
+              target?.status !== "confirmed" ||
+              target.generation !== workspace.worktreeGeneration ||
+              project.archived ||
+              workspace.archived ||
+              workspace.lifecycle !== "active",
+          },
+        };
+      }
       if (!input.native?.certifiedCreate) throw new Error("Native V4 creation receipt unavailable");
+      if (
+        request.modelBinding.kind !== "host-managed" ||
+        !input.registry?.validateSelection(request.modelBinding.selection).ok
+      )
+        throw new Error("Native model not in current Registry");
       if (
         !input.newAdmissionsEnabled() ||
         project.archived ||
@@ -153,12 +194,7 @@ export function createWorkspaceHierarchyService(input: {
         request.cwdRelativeToWorktree ?? ".",
         async () => {
           if (!input.newAdmissionsEnabled()) throw new Error("New native admission frozen");
-          return input.native!.create({
-            scope,
-            commandId: request.commandId,
-            modelBinding: request.modelBinding,
-            cwdRelativeToWorktree: request.cwdRelativeToWorktree ?? ".",
-          });
+          return input.native!.create(nativeRequest);
         },
       );
       return {
@@ -315,6 +351,21 @@ export function createWorkspaceHierarchyService(input: {
       const scope = await scopeFor(workspaceId);
       if (!scope) throw new Error("Unknown target workspace");
       const external = await input.host.catalogForTarget(scope.targetId);
+      let certified = false;
+      if (input.native?.certifiedCreate) {
+        try {
+          const report = await input.native.capabilities({
+            kind: "native",
+            scope,
+            originalSessionId: "",
+            historyOnly: false,
+          });
+          certified =
+            report.text.support === "supported" && report.hostManagedModel.support === "supported";
+        } catch {
+          /* old/changed CLI is unavailable, not an advertised native allocator */
+        }
+      }
       return [
         {
           manifest: {
@@ -324,12 +375,8 @@ export function createWorkspaceHierarchyService(input: {
             adapterVersion: "native-v4",
             icon: nativeHarnessAssetMetadata.zcode?.icon,
           },
-          availability: input.native?.certifiedCreate
-            ? ("supported" as const)
-            : ("unknown" as const),
-          ...(!input.native?.certifiedCreate
-            ? { reason: "native creation receipt not certified" }
-            : {}),
+          availability: certified ? ("supported" as const) : ("unknown" as const),
+          ...(!certified ? { reason: "native creation receipt not certified" } : {}),
         },
         ...external,
       ];
@@ -354,6 +401,35 @@ export function createWorkspaceHierarchyService(input: {
       // 不从 Registry 模型表推导可执行选项，更不能把原生模型误绑到外部 Host。
       const pi = certified.length ? createRegistryPiHarness({ root: "", registry }) : undefined;
       const options: { harnessId: string; label: string; binding: ModelBindingRequest }[] = [];
+      if (input.native?.certifiedCreate) {
+        const capabilities = await input.native.capabilities({
+          kind: "native",
+          scope,
+          originalSessionId: "",
+          historyOnly: false,
+        });
+        if (
+          capabilities.hostManagedModel.support === "supported" &&
+          capabilities.text.support === "supported"
+        ) {
+          for (const provider of registry.listProviders())
+            for (const model of provider.models) {
+              for (const reasoningLevel of model.config.optionSpecs.reasoningLevel.values) {
+                const selection = {
+                  providerId: provider.providerId,
+                  modelId: model.modelId,
+                  options: { reasoningLevel },
+                };
+                if (!registry.validateSelection(selection).ok) continue;
+                options.push({
+                  harnessId: "zcode",
+                  label: `${provider.providerName} / ${model.modelId} · ${reasoningLevel}`,
+                  binding: { kind: "host-managed", selection },
+                });
+              }
+            }
+        }
+      }
       if (pi) {
         for (const provider of registry.listProviders()) {
           for (const model of provider.models) {

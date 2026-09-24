@@ -74,6 +74,10 @@ export const ZCODE_PROTOCOL_NAME = "ZCode Protocol" as const;
 export const ZCODE_PROTOCOL_VERSION = 1 as const;
 // V4 wire 与 legacy 主协议并存；禁止为了 V4 physical framing 改写 legacy 版本。
 export const ZCODE_PROTOCOL_V4_WIRE_VERSION = 3 as const;
+export const zcodeNativeOwnerDescriptionSchema = z.strictObject({
+  nativeDatabasePath: z.string().min(1),
+  databaseId: z.string().regex(/^[a-f0-9]{64}$/),
+});
 export const zcodeRuntimeCapabilitiesSchema = z.object({
   independentPlanState: z.boolean().optional(),
   /** CLI-owned receipt + durable actual draft selection/execution; absent on older workers. */
@@ -3594,6 +3598,7 @@ export const zcodeProtocolMethods = {
   nativeMaintenanceGetActivity: "native/maintenance/getActivity",
   nativeMaintenanceRelease: "native/maintenance/release",
   runtimeCapabilities: "runtime/capabilities",
+  nativeOwnerDescription: "runtime/nativeOwnerDescription",
   computerUseOperationEvent: "computer-use/operation-event",
   sessionCreate: "session/create",
   sessionResume: "session/resume",

@@ -5,9 +5,18 @@ import type { LegacyMapping } from "../project-workspaces/migrationContract.js";
 import type { NativeIndexFact } from "./nativePersistentSessionIndex.js";
 import type { NativeSessionMetadataReader } from "./nativeSessionMetadata.js";
 
+export type NativeCreatedMapping = Omit<LegacyMapping, "legacyId"> & {
+  commandId: string;
+  nativeDatabasePath: string;
+  databaseId: string;
+};
+type DirectoryMapping = LegacyMapping | NativeCreatedMapping;
+
 export interface NativeSessionDirectorySource {
   onChange?(listener: () => void): () => void;
   listMappings(): Promise<readonly LegacyMapping[]>;
+  /** Separate certified new-create source; never masquerades as backup-verified legacy migration. */
+  listNewMappings?(): Promise<readonly NativeCreatedMapping[]>;
   readFacts(): Promise<readonly NativeIndexFact[]>;
   verifySource?(): Promise<void>;
   /** Production joins require a current native-store scope attestation; no path containment inference. */
@@ -41,7 +50,7 @@ export class NativeSessionDirectory implements NativeSessionCatalogPort {
     return this.source.onChange?.(listener) ?? (() => {});
   }
 
-  private async joined(): Promise<Array<{ mapping: LegacyMapping; fact: NativeIndexFact }>> {
+  private async joined(): Promise<Array<{ mapping: DirectoryMapping; fact: NativeIndexFact }>> {
     await this.source.verifySource?.();
     const [mappings, facts] = await Promise.all([
       this.source.listMappings(),
@@ -78,12 +87,45 @@ export class NativeSessionDirectory implements NativeSessionCatalogPort {
         return { mapping, fact };
       }),
     );
-    return verified.filter(
+    const legacy = verified.filter(
       (row): row is { mapping: LegacyMapping; fact: NativeIndexFact } => !!row,
     );
+    const fresh = (await this.source.listNewMappings?.()) ?? [];
+    // 中文：创建时 CLI 已有 session row，task-index 可能随后投影同一 ID；它不是第二个旧任务。
+    // 新映射来源已由每个源 DB 的完成收据认证，不要求不相关的 legacy backup 证明。
+    for (const mapping of fresh) {
+      if (
+        legacy.some(
+          (row) =>
+            row.mapping.nativeSessionId === mapping.nativeSessionId &&
+            row.mapping.sourceWorkspaceKey === mapping.sourceWorkspaceKey,
+        )
+      )
+        throw new Error("duplicate-native-mapping-producer");
+    }
+    return [
+      ...legacy,
+      ...fresh.map((mapping) => ({
+        mapping,
+        fact: byScope.get(
+          JSON.stringify([mapping.sourceWorkspaceKey, mapping.nativeSessionId]),
+        ) ?? {
+          workspaceKey: mapping.sourceWorkspaceKey,
+          sourceWorkspacePath: mapping.sourceWorkspacePath,
+          nativeSessionId: mapping.nativeSessionId,
+          title: mapping.nativeSessionId,
+          updatedAt: 0,
+          status: null,
+          archived: false,
+          deleted: false,
+          unread: false,
+          nativeModel: null,
+        },
+      })),
+    ];
   }
 
-  private ownerFromMapping(mapping: LegacyMapping): NativeSessionOwnerRef {
+  private ownerFromMapping(mapping: DirectoryMapping): NativeSessionOwnerRef {
     return {
       targetId: mapping.targetId,
       projectId: mapping.projectId,
