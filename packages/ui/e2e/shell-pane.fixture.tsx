@@ -7,6 +7,7 @@ import type { SidebarSnapshot } from "@zcode/shared/project-workspaces";
 import type { SessionSpecV2 } from "@zcode/shared/agent-host";
 import { conversationSnapshotSchema } from "@zcode/shared/zcode-protocol-v4";
 import { WorkspaceShellLayout } from "../src/app-shell/WorkspaceShellLayout.js";
+import { usePaneLayoutStore, V4_PRIMARY_PANE_ID } from "../src/v4/paneLayoutStore.js";
 import type { WorkspaceShellLayoutProps } from "../src/app-shell/types.js";
 import { ServiceProvider } from "../src/hooks/useServices.js";
 import { PlatformProvider } from "../src/hooks/usePlatform.js";
@@ -348,6 +349,18 @@ function Fixture() {
       <output data-testid="native-calls">{nativeCalls}</output>
       <output data-testid="native-subscriptions">{nativeSubscriptions}</output>
       <output data-testid="create-calls">{createCalls}</output>
+      <button
+        type="button"
+        onClick={() =>
+          usePaneLayoutStore.getState().splitPaneWithBinding(V4_PRIMARY_PANE_ID, "right", {
+            workspaceScope: { workspacePath: path, workspaceIdentity: identity },
+            sessionId: "untrusted-host",
+            restoredUnvalidated: true,
+          })
+        }
+      >
+        Restore unproven binding
+      </button>
       <WorkspaceShellLayout {...props} />
     </main>
   );
