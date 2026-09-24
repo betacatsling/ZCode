@@ -1,0 +1,11 @@
+# pi-file-boundary: bounded delivery
+
+Commits: `79a4d15bb0e6199420b2b5370aa6dc925e84e16b` (early spec/interface), `251e22dd47b999844eb5c3129f3478e7b89c0c6c` (descriptor-bound custom tools + tests), final handoff/report commit follows.
+
+Owned files: `packages/services/src/agent-adapters/pi/piFileTools.ts`, `piCapabilities.ts`, `packages/services/test/piFileTools.test.ts`, `docs/agent-host/PI-FILE-BOUNDARY.md`, `PI-WORKER.md`, `.tmp/interface-handoff.md`. No worker/usage/model changes and no paid calls, global configuration, or push.
+
+Interface: `createPiFileTools(root): Promise<PiFileTool[]>`, where `PiFileTool = NonNullable<CreateAgentSessionOptions['customTools']>[number]`. Linux-only, descriptor-relative `/proc/self/fd` traversal with no-follow directories/files and pinned worktree root inode. Read/edit/write reuse a per-execution descriptor; new files created only on actual write, no recursive directory creation, no image support. Unsupported platform/proc rejects. Hardlinks and approved Bash remain outside filesystem confinement.
+
+Validation: `mise exec -- node scripts/mise-run.mjs pnpm exec tsx --test packages/services/test/piFileTools.test.ts` 1 pass (macOS fail-closed), 1 **skipped** (Linux real-FS before/after-open symlink-race fixture not runnable on Darwin). `pnpm architecture:check --changed` OK (0 violations). `pnpm lint` exit 0 (70 existing warnings, 0 errors). `pnpm typecheck` exit 2: existing unresolved `@zcode/contracts`, `@zcode/adapters/model` declarations and missing `admission` in `packages/services/src/node.ts:2644`; zero piFileTools errors. No Linux run or whole-worker proof claimed.
+
+**Integration blocker (semantic owner pi-canonical)**: pinned SDK 0.87.1 does not accept `toolOptions`; `piWorker.ts` still loads default ambient-pathname Pi read/write/edit. That owner must pass `customTools: await createPiFileTools(verifiedRoot)` to `createAgentSession`, and never fall back to SDK defaults if constructor fails on macOS/Windows/restricted Linux. SDK custom tool registry overrides built-ins with the same names. `tools: ['read','write','edit','bash']` retains native tool names and approval loop. Until mounted and tested in actual worker, production is NOT race-proof and this lane is not production acceptance. The approval hook is not a Bash/process sandbox. Full typed seam and SHAs: `.tmp/interface-handoff.md`.
