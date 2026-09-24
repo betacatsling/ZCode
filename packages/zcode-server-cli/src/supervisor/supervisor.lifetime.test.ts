@@ -33,6 +33,8 @@ process.send({ type: 'heartbeat', at: Date.now(), runningTaskCount: 0, externalA
 process.on('message', message => {
   if (message.command === 'shutdown') { clearInterval(timer); process.exit(0); }
   if (message.command === 'activity') process.send({ type: 'activity', requestId: message.requestId, runningTaskCount: 0, externalActivity: { running: 0, waiting: 1, uncertain: 0 } });
+  if (message.command === 'maintenance-begin') process.send({ type: 'maintenance', requestId: message.requestId, leaseId: '11111111-1111-4111-8111-111111111111', nativeActivity: { running: 0, waiting: 0, uncertain: 0 }, externalActivity: { running: 0, waiting: 1, uncertain: 0 } });
+  if (message.command === 'maintenance-release') process.send({ type: 'maintenance', requestId: message.requestId, leaseId: message.leaseId });
 });
 `,
   );
@@ -90,6 +92,11 @@ socket.on('data', () => socket.end());
       }),
       /active, waiting or uncertain/,
     );
+    await assert.rejects(
+      requestControl(layout.controlEndpoint, { command: "begin-fallback-migration" }),
+      /active, waiting or uncertain/,
+    );
+    assert.equal(supervisor.status().state, "ready");
     process.kill(supervisor.status().pid!, "SIGKILL");
     await until(() => supervisor.status().state === "crashed");
     assert.equal(supervisor.status().externalActivity.uncertain, 1);
