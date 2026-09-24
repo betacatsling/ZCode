@@ -14,17 +14,11 @@ import type { ReasoningMetadata } from "./piReasoningSignature.js";
 
 // Pi's source worker loads .ts directly; the packaged worker loads compiled .js.
 const sourceMode = import.meta.url.endsWith(".ts");
-const { EMPTY_COST, toUsage } = await import(
+const { EMPTY_COST, toUsage, markMeasuredUsage } = await import(
   sourceMode ? "./piModelUsage.ts" : "./piModelUsage.js"
 );
-const {
-  HOST_API,
-  HOST_PROVIDER_ID,
-  SIGNATURE_KIND,
-  appendReasoningMetadata,
-  metadataFailure,
-  readSignature,
-} = await import(sourceMode ? "./piReasoningSignature.ts" : "./piReasoningSignature.js");
+const { HOST_API, HOST_PROVIDER_ID, SIGNATURE_KIND, appendReasoningMetadata, readSignature } =
+  await import(sourceMode ? "./piReasoningSignature.ts" : "./piReasoningSignature.js");
 
 function toMessages(
   context: TranscriptContext,
@@ -305,6 +299,9 @@ export function createPiHostProvider(
             if (!reason) throw new Error("unsupported model finish reason");
             response.stopReason = reason;
             response.usage = toUsage(event.usage);
+            // 修复：Pi 必须初始化 SDK usage 为零，但空的 Model 报告并非测量零。
+            // 只在成功终帧标记实际字段（显式 0 仍是测量），失败/中止不能计费。
+            markMeasuredUsage(response, event.usage);
             finished = true;
             stream.push({ type: "done", reason, message: response });
             break;
@@ -329,8 +326,8 @@ export function createPiHostProvider(
             if (index === undefined || !part || part.type !== "thinking")
               throw new Error("unrepresentable reasoning delta");
             appendReasoningMetadata(reasoningSignatures, index, event.providerMetadata);
-            if (part.redacted && event.text)
-              metadataFailure("anthropic.redactedData.text", event.text);
+            // 此 delta 可能只是后续 redactedData 的私有占位；保留在原生 Model
+            // 状态中供 SDK 完整收尾，worker 只从最终非 redacted block 投影可见文本。
             part.thinking += event.text;
             stream.push({
               type: "thinking_delta",
