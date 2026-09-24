@@ -1,5 +1,6 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage } from "node:http";
+import type { Model, ModelOptions } from "@zcode/contracts";
 import { modelSelectionSchema } from "@zcode/shared/model-selection";
 import type { GatewayProtocolAdapter, GatewayProtocolId, GatewayTokenBinding } from "./contract.js";
 
@@ -13,6 +14,10 @@ export class GatewayError extends Error {
 }
 export interface TokenState {
   readonly binding: Readonly<GatewayTokenBinding>;
+  readonly model: Model;
+  readonly streamText: Model["streamText"];
+  readonly modelOptions: Readonly<ModelOptions>;
+  reservedGenerationTokens: number;
   requests: number;
   outputBytes: number;
   readonly active: Set<AbortController>;
@@ -34,7 +39,9 @@ export function validateBinding(binding: GatewayTokenBinding): void {
     !positive(binding.expiresAt) ||
     binding.expiresAt <= Date.now() ||
     !positive(binding.maxRequests) ||
-    !positive(binding.maxOutputBytes)
+    !positive(binding.maxOutputBytes) ||
+    !positive(binding.maxGenerationTokens) ||
+    !positive(binding.maxOutputTokensPerRequest)
   ) {
     throw new GatewayError(400, "invalid_binding");
   }
@@ -46,6 +53,16 @@ export function validateProtocols(
   for (const protocol of protocols) {
     if (protocol.id !== "responses" && protocol.id !== "anthropic-messages")
       throw new GatewayError(400, "invalid_protocol");
+    for (const [key, values] of Object.entries(protocol.allowedQueryParameters ?? {})) {
+      if (
+        !/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(key) ||
+        /^(?:key|token|api_key|authorization|access_token)$/i.test(key) ||
+        !values.length ||
+        values.some((value) => !/^[a-zA-Z0-9_-]+$/.test(value)) ||
+        new Set(values).size !== values.length
+      )
+        throw new GatewayError(400, "invalid_route");
+    }
     for (const path of protocol.paths) {
       if (!/^\/[a-zA-Z0-9/_-]+$/.test(path) || paths.has(path))
         throw new GatewayError(400, "invalid_route");
@@ -82,7 +99,60 @@ export function authorize(
   }
   if (!state || state.binding.expiresAt <= Date.now()) throw new GatewayError(401, "unauthorized");
   if (state.binding.protocol !== protocol) throw new GatewayError(403, "protocol_mismatch");
-  if (state.requests >= state.binding.maxRequests)
-    throw new GatewayError(429, "request_budget_exceeded");
   return state;
+}
+
+export function routeForRawUrl(
+  rawUrl: string,
+  routes: Map<string, GatewayProtocolAdapter>,
+): GatewayProtocolAdapter {
+  if (rawUrl.includes("#")) throw new GatewayError(400, "invalid_transport");
+  const separator = rawUrl.indexOf("?");
+  const protocol = routes.get(separator < 0 ? rawUrl : rawUrl.slice(0, separator));
+  if (!protocol) throw new GatewayError(404, "unsupported_endpoint");
+  if (separator >= 0) {
+    const query = rawUrl.slice(separator + 1);
+    const seen = new Set<string>();
+    for (const pair of query.split("&")) {
+      const delimiter = pair.indexOf("=");
+      if (delimiter < 1 || pair.indexOf("=", delimiter + 1) >= 0)
+        throw new GatewayError(400, "invalid_transport");
+      const key = pair.slice(0, delimiter);
+      const value = pair.slice(delimiter + 1);
+      if (
+        seen.has(key) ||
+        !Object.hasOwn(protocol.allowedQueryParameters ?? {}, key) ||
+        !protocol.allowedQueryParameters?.[key]?.includes(value)
+      )
+        throw new GatewayError(400, "invalid_transport");
+      seen.add(key);
+    }
+  }
+  return protocol;
+}
+
+export function reserveGeneration(
+  state: TokenState,
+  options: ModelOptions | undefined,
+): ModelOptions {
+  const requested = options?.maxOutputTokens;
+  if (
+    options?.reasoningLevel !== undefined &&
+    options.reasoningLevel !== state.modelOptions.reasoningLevel
+  )
+    throw new GatewayError(422, "model_options_mismatch");
+  if (
+    requested !== undefined &&
+    (!Number.isSafeInteger(requested) ||
+      requested <= 0 ||
+      requested > state.binding.maxOutputTokensPerRequest)
+  )
+    throw new GatewayError(422, "invalid_output_tokens");
+  const remaining = state.binding.maxGenerationTokens - state.reservedGenerationTokens;
+  if (remaining <= 0 || (requested !== undefined && requested > remaining))
+    throw new GatewayError(429, "generation_budget_exceeded");
+  const maxOutputTokens = requested ?? Math.min(state.binding.maxOutputTokensPerRequest, remaining);
+  // 中文修复依据：先为并发调用预留最大可生成量，失败也不退款，避免实际用量异步回报造成超售。
+  state.reservedGenerationTokens += maxOutputTokens;
+  return { ...state.modelOptions, maxOutputTokens };
 }
