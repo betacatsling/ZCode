@@ -47,20 +47,24 @@ function cacheMarker(value: unknown): ModelInputMessage["cacheControl"] {
   if (value === undefined) return undefined;
   const marker = object(value);
   fields(marker, ["type", "ttl", "scope"]);
-  if (marker.type !== "ephemeral" || (marker.ttl !== undefined && marker.ttl !== "5m" && marker.ttl !== "1h") ||
-    (marker.scope !== undefined && marker.scope !== "global" && marker.scope !== "org")) unsupported("unsupported_cache_control");
-  return { type: "ephemeral", ...(marker.ttl ? { ttl: marker.ttl as "5m" | "1h" } : {}), ...(marker.scope ? { scope: marker.scope as "global" | "org" } : {}) };
+  if (marker.type !== "ephemeral" || (marker.ttl !== undefined && marker.ttl !== "5m" && marker.ttl !== "1h") || marker.scope !== undefined) unsupported("unsupported_cache_control");
+  return { type: "ephemeral", ...(marker.ttl ? { ttl: marker.ttl as "5m" | "1h" } : {}) };
 }
 function userContent(value: unknown): Pick<ModelInputMessage, "content" | "cacheControl"> {
   if (typeof value === "string") return { content: value };
   if (!Array.isArray(value)) invalid("invalid_content");
   const blocks: ModelMessageContentBlock[] = [];
   let cacheControl: ModelInputMessage["cacheControl"];
+  let hasPartCache = false;
   for (const raw of value) {
     const part = object(raw);
     if (part.type === "text") {
       fields(part, ["type", "text", "cache_control"]);
-      blocks.push({ type: "text", text: text(part.text) });
+      const marker = cacheMarker(part.cache_control);
+      const blockText = text(part.text);
+      if (marker && !blockText) unsupported("empty_cached_text");
+      blocks.push({ type: "text", text: blockText, ...(value.length > 1 && marker ? { cacheControl: marker } : {}) });
+      if (value.length > 1 && marker) hasPartCache = true;
     } else if (part.type === "image") {
       fields(part, ["type", "source"]);
       const source = object(part.source);
@@ -70,13 +74,10 @@ function userContent(value: unknown): Pick<ModelInputMessage, "content" | "cache
         unsupported("unsupported_image");
       blocks.push({ type: "image", mediaType: source.media_type as string, dataUrl: `data:${source.media_type};base64,${source.data}` });
     } else unsupported("unsupported_content_block");
-    if (part.cache_control !== undefined) {
-      // 修复原因：Model 缓存标记属于整条消息，不能把多块内容的局部边界提升为整条消息缓存。
-      if (value.length !== 1) unsupported("unsupported_cache_boundary");
-      cacheControl = cacheMarker(part.cache_control);
-    }
+    if (part.cache_control !== undefined && value.length === 1) cacheControl = cacheMarker(part.cache_control);
+    if (part.cache_control !== undefined && value.length > 1 && part.type !== "text") unsupported("unsupported_cache_boundary");
   }
-  return { content: blocks.every((block) => block.type === "text") ? blocks.map((block) => (block as { text: string }).text).join("") : blocks, ...(cacheControl ? { cacheControl } : {}) };
+  return { content: !hasPartCache && blocks.every((block) => block.type === "text") ? blocks.map((block) => (block as { text: string }).text).join("") : blocks, ...(cacheControl ? { cacheControl } : {}) };
 }
 
 /** Validate before invoking the model: no unrepresentable wire fields may be dropped. */
@@ -98,7 +99,23 @@ export function decodeAnthropicMessagesRequest(
   )
     unsupported("unsupported_header");
   const input = object(body);
-  fields(input, ["model", "max_tokens", "stream", "system", "messages", "tools"]);
+  fields(input, ["model", "max_tokens", "stream", "system", "messages", "tools", "temperature", "metadata", "output_config"]);
+  if (input.temperature !== undefined && (typeof input.temperature !== "number" || !Number.isFinite(input.temperature) || input.temperature < 0 || input.temperature > 1))
+    invalid("invalid_temperature");
+  let userId: string | undefined;
+  if (input.metadata !== undefined) {
+    const metadata = object(input.metadata);
+    fields(metadata, ["user_id"]);
+    if (typeof metadata.user_id !== "string" || !metadata.user_id.trim() || metadata.user_id.length > 256 || Array.from(metadata.user_id).some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)) invalid("invalid_metadata_user_id");
+    userId = metadata.user_id;
+  }
+  let effort: ModelRequest["anthropicEffort"];
+  if (input.output_config !== undefined) {
+    const config = object(input.output_config);
+    fields(config, ["effort"]);
+    if (typeof config.effort !== "string" || !["low", "medium", "high", "xhigh", "max"].includes(config.effort)) invalid("invalid_effort");
+    effort = config.effort as ModelRequest["anthropicEffort"];
+  }
   const modelId = name(input.model);
   if (input.stream !== true) unsupported("stream_required");
   if (!Number.isSafeInteger(input.max_tokens) || (input.max_tokens as number) < 1)
@@ -210,6 +227,9 @@ export function decodeAnthropicMessagesRequest(
       messages,
       ...(tools === undefined ? {} : { tools }),
       options: { maxOutputTokens: input.max_tokens as number },
+      ...(input.temperature === undefined ? {} : { temperature: input.temperature as number }),
+      ...(userId === undefined ? {} : { anthropicMetadataUserId: userId }),
+      ...(effort === undefined ? {} : { anthropicEffort: effort }),
     },
     modelId,
     stream: true,

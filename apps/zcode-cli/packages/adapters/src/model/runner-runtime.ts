@@ -1,5 +1,6 @@
 import { generateText as aiGenerateText, streamText as aiStreamText } from "ai";
 import type {
+  AnthropicEffort,
   ModelProperties,
   ModelRequestAuth,
   ModelTextRequest,
@@ -26,6 +27,8 @@ export interface AiSdkModelRuntime {
 
 export interface AiSdkModelTextRequest extends ModelTextRequest {
   promptCacheKey?: string;
+  anthropicMetadataUserId?: string;
+  anthropicEffort?: AnthropicEffort;
   abortSignal?: AbortSignal;
   traceContext?: TraceContext;
   // Start Plan 的账号鉴权材料按 attempt 刷新；adapter 内部 retry 也是真实模型请求，

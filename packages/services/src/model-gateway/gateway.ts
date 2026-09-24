@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { modelRequestJsonSchema } from "@zcode/contracts";
+import { z } from "zod";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type {
   ModelGateway,
@@ -16,6 +18,8 @@ import {
   validateProtocols,
   type TokenState,
 } from "./routeAuthorization.js";
+
+const gatewayRequestSchema = z.fromJSONSchema(modelRequestJsonSchema as Parameters<typeof z.fromJSONSchema>[0]);
 
 function safeError(error: unknown): GatewayError {
   if (error instanceof GatewayError) return error;
@@ -192,6 +196,9 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
           ]),
         ),
       );
+      // 修复原因：协议 decode 只负责 wire 语义；Model 请求必须在调用真实执行器前通过独立严格 Schema。
+      if (!gatewayRequestSchema.safeParse(decoded.request).success)
+        throw new GatewayError(422, "invalid_model_request");
       if (decoded.stream !== true || decoded.modelId !== state.binding.requestedModelAlias)
         throw new GatewayError(422, "model_or_stream_mismatch");
       if (controller.signal.aborted) throw new GatewayError(401, "unauthorized");

@@ -154,6 +154,8 @@ export class AiSdkModelAdapter {
     };
     const optionSpecs = options.modelConfig.optionSpecs;
     const toLegacyRequest = (request: ModelExecutionRequest): AiSdkModelTextRequest => {
+      if (resolved.providerKind !== "anthropic" && (request.temperature !== undefined || request.anthropicEffort !== undefined || request.anthropicMetadataUserId !== undefined))
+        throw new ModelProtocolError(ModelErrorCode.InvalidModelRequest, "Anthropic native options require an Anthropic model");
       const context = getCurrentModelInvocationContext();
       const {
         refreshRuntimeHeadersBeforeAttempt: contextRefreshRuntimeHeadersBeforeAttempt,
@@ -195,6 +197,9 @@ export class AiSdkModelAdapter {
         responseJsonSchema: request.responseJsonSchema,
         abortSignal: request.abortSignal,
         maxOutputTokens: request.options.maxOutputTokens,
+        temperature: request.temperature,
+        anthropicMetadataUserId: request.anthropicMetadataUserId,
+        anthropicEffort: request.anthropicEffort,
         ...invocationContext,
         ...(shouldAttachReasoningTelemetry
           ? {

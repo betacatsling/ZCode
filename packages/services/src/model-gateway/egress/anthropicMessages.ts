@@ -200,7 +200,7 @@ export async function* encodeAnthropicMessagesStream(
             !reason ||
             (reason === "tool_use" && !completedTools) ||
             (completedTools && reason !== "tool_use") ||
-            (event.providerMetadata && Object.keys(event.providerMetadata).length)
+            (event.providerMetadata && (Object.keys(event.providerMetadata).length !== 1 || event.providerMetadata.rawFinishReason !== reason))
           )
             fail("unsupported_finish_reason");
           const {

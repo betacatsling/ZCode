@@ -49,11 +49,7 @@ export function createGenerateTextOptions(input: {
     input.resolved.providerOptions,
     input.request.providerOptions,
   );
-  const providerOptionsWithMetadata = mergeAnthropicRequestMetadata({
-    metadataUserId: input.anthropicMetadataUserId,
-    providerKind: input.resolved.providerKind,
-    providerOptions,
-  });
+  const providerOptionsWithMetadata = mergeAnthropicNativeOptions(input, providerOptions);
   const requestProviderOptions = withOpenAiPromptCacheKey(
     requireOpenAiDeveloperSystemMode(
       withNativeGenerateOutputFormat({
@@ -125,11 +121,7 @@ export function createStreamTextOptions(input: {
   );
   const requestProviderOptions = withOpenAiPromptCacheKey(
     requireOpenAiDeveloperSystemMode(
-      mergeAnthropicRequestMetadata({
-        metadataUserId: input.anthropicMetadataUserId,
-        providerKind: input.resolved.providerKind,
-        providerOptions,
-      }),
+      mergeAnthropicNativeOptions(input, providerOptions),
       input.resolved.instructionPlan !== undefined,
     ),
     input.request.promptCacheKey,
@@ -226,25 +218,32 @@ function withNativeGenerateOutputFormat(input: {
   };
 }
 
-function mergeAnthropicRequestMetadata(input: {
-  metadataUserId: string | undefined;
-  providerKind: ResolvedAiSdkModel["providerKind"];
-  providerOptions: Record<string, unknown> | undefined;
-}): Record<string, unknown> | undefined {
-  if (input.providerKind !== "anthropic" || input.metadataUserId === undefined) {
-    return input.providerOptions;
+function mergeAnthropicNativeOptions(input: {
+  anthropicMetadataUserId?: string;
+  request: AiSdkModelTextRequest;
+  resolved: ResolvedAiSdkModel;
+}, providerOptions: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  const nativeId = input.request.anthropicMetadataUserId;
+  const effort = input.request.anthropicEffort;
+  if (input.resolved.providerKind !== "anthropic") {
+    if (nativeId !== undefined || effort !== undefined || input.request.temperature !== undefined) throw new Error("anthropic_native_options_require_anthropic_model");
+    return providerOptions;
   }
-
-  const anthropicOptions = asPlainRecord(input.providerOptions?.anthropic) ?? {};
-  const metadata = asPlainRecord(anthropicOptions.metadata) ?? {};
-  return {
-    ...input.providerOptions,
+  const bound = asPlainRecord(input.resolved.providerOptions?.anthropic);
+  const boundMetadata = asPlainRecord(bound?.metadata);
+  // 修复原因：Gateway 原生参数不能覆盖 Host 冻结的 Provider 选项；自动生成的归因仅在无原生归因时使用。
+  if ((effort !== undefined && bound?.effort !== undefined && bound.effort !== effort) ||
+      (nativeId !== undefined && boundMetadata?.userId !== undefined && boundMetadata.userId !== nativeId))
+    throw new Error("anthropic_native_option_conflict");
+  const anthropic = asPlainRecord(providerOptions?.anthropic) ?? {};
+  const metadata = asPlainRecord(anthropic.metadata) ?? {};
+  const selectedId = nativeId ?? input.anthropicMetadataUserId;
+  return selectedId === undefined && effort === undefined ? providerOptions : {
+    ...providerOptions,
     anthropic: {
-      ...anthropicOptions,
-      metadata: {
-        ...metadata,
-        userId: input.metadataUserId,
-      },
+      ...anthropic,
+      ...(effort === undefined ? {} : { effort }),
+      ...(selectedId === undefined ? {} : { metadata: { ...metadata, userId: selectedId } }),
     },
   };
 }
