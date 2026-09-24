@@ -9,7 +9,11 @@ export const capabilityReportSchema = z
   })
   .superRefine((report, context) => {
     if (report.support !== "supported" && !report.reason) {
-      context.addIssue({ code: "custom", path: ["reason"], message: "unsupported or unverified capabilities need a reason" });
+      context.addIssue({
+        code: "custom",
+        path: ["reason"],
+        message: "unsupported or unverified capabilities need a reason",
+      });
     }
   });
 export type CapabilityReport = z.infer<typeof capabilityReportSchema>;
@@ -25,6 +29,16 @@ export const harnessCapabilitiesSchema = z.strictObject({
   modelSwitch: capabilityReportSchema,
 });
 export type HarnessCapabilities = z.infer<typeof harnessCapabilitiesSchema>;
+/** Target inspection for next-generation sessions; optional operations are never inferred from method presence. */
+export const harnessCapabilitiesV2Schema = harnessCapabilitiesSchema.extend({
+  detach: capabilityReportSchema,
+  terminateSession: capabilityReportSchema,
+  viewHistory: capabilityReportSchema,
+  hostManagedModel: capabilityReportSchema,
+  fork: capabilityReportSchema,
+  subagents: capabilityReportSchema,
+});
+export type HarnessCapabilitiesV2 = z.infer<typeof harnessCapabilitiesV2Schema>;
 
 export const executionTargetSchema = z.strictObject({
   id: z.string().trim().min(1),
