@@ -724,7 +724,68 @@ test("external older-page cache stays bounded with >2000 committed rows", async 
     assert.ok(lease.store.countProjectionRows() <= 2000);
   }
   assert.equal(lease.store.countProjectionRows(), 2000);
+  const cappedFirst = lease.store.getState().snapshot?.rows.window[0]?.rowId;
+  await lease.store.loadOlder(200);
+  assert.equal(lease.store.getState().snapshot?.rows.window[0]?.rowId, cappedFirst);
   assert.equal(lease.store.getState().snapshot?.rows.window.at(-1)?.rowId, 2200);
+  lease.release();
+  layer.dispose();
+  transport.dispose();
+});
+
+test("new subscription generation discards an older-page response from its predecessor", async () => {
+  const { service, history, transport } = harness([spec]);
+  const { SessionDataLayer } = await import("../src/v4/SessionDataLayer.js");
+  const events = history.get(spec.hostSessionId)!.events;
+  for (let i = 1; i <= 4; i++) {
+    events.push({ ...turn(spec.hostSessionId, 2 * i - 1), turnId: `t${i}` });
+    events.push({
+      ...turn(spec.hostSessionId, 2 * i),
+      turnId: `t${i}`,
+      kind: "turn.finished",
+      outcome: "success",
+    });
+  }
+  service.snapshot = async () =>
+    projectHostConversation({ spec, runtimeEpoch: "epoch", events, windowSize: 2 });
+  let release: (() => void) | undefined;
+  let began: (() => void) | undefined;
+  const started = new Promise<void>((resolve) => {
+    began = resolve;
+  });
+  service.rowsRange = async () => {
+    const result = projectHostConversation({
+      spec,
+      runtimeEpoch: "epoch",
+      events,
+      rowRange: { beforeRowId: 3, limit: 2 },
+    });
+    await new Promise<void>((resolve) => {
+      release = resolve;
+      began?.();
+    });
+    return {
+      rows: result.rows.window,
+      atSeq: result.seq,
+      atRevision: result.revision,
+      atLogEpoch: result.logEpoch,
+      hasMore: true,
+    };
+  };
+  const layer = new SessionDataLayer({ transport, keepWarmMs: 0 });
+  const lease = layer.acquire(spec.hostSessionId);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const oldId = lease.store.getState().subscriptionId;
+  const oldPage = lease.store.loadOlder(2);
+  await started;
+  await lease.store.connect({ forceSnapshot: true });
+  assert.notEqual(lease.store.getState().subscriptionId, oldId);
+  release?.();
+  await oldPage;
+  assert.deepEqual(
+    lease.store.getState().snapshot?.rows.window.map((r) => r.rowId),
+    [3, 4],
+  );
   lease.release();
   layer.dispose();
   transport.dispose();

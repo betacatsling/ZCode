@@ -34,6 +34,7 @@ import { uiMemoryDiagnosticsRegistry } from "@/lib/memoryDiagnostics.js";
  * 所以这里按 sessionsIndexStore 的既定模式做有界退避。
  */
 const RUNTIME_RECYCLE_RETRY_DELAYS_MS = [250, 1_000, 3_000] as const;
+export const EXTERNAL_ROWS_CACHE_LIMIT = 2000;
 
 /**
  * accepted ACK 后等待权威输入投影的宽限期。
@@ -229,6 +230,13 @@ export function hasOlderRows(snapshot: ConversationSnapshot | null): boolean {
   const first = snapshot.rows.window[0];
   if (!first || snapshot.rows.firstRowId === null) return false;
   return first.rowId > snapshot.rows.firstRowId;
+}
+
+/** A full renderer cache must not refetch an older page only to evict it again. */
+export function canLoadExternalOlder(snapshot: ConversationSnapshot | null): boolean {
+  return (
+    hasOlderRows(snapshot) && !!snapshot && snapshot.rows.window.length < EXTERNAL_ROWS_CACHE_LIMIT
+  );
 }
 
 /**
@@ -717,7 +725,10 @@ export class ConversationProjectionStore {
           const prefix = oldRows.filter((row) => row.rowId < newFirst!);
           projected = {
             ...incoming,
-            rows: { ...incoming.rows, window: [...prefix, ...newRows].slice(-2000) },
+            rows: {
+              ...incoming.rows,
+              window: [...prefix, ...newRows].slice(-EXTERNAL_ROWS_CACHE_LIMIT),
+            },
           };
         }
       }
@@ -1045,7 +1056,11 @@ export class ConversationProjectionStore {
   async loadOlder(limit: number = PROTOCOL_V4_LIMITS.snapshotTailWindowRows): Promise<void> {
     if (this.closed || this.state.loadingOlder) return;
     const snapshot = this.state.snapshot;
-    if (!hasOlderRows(snapshot) || !snapshot) return;
+    if (
+      !snapshot ||
+      (snapshot.agentHost ? !canLoadExternalOlder(snapshot) : !hasOlderRows(snapshot))
+    )
+      return;
     const sessionId = parseConversationTopic(this.topic);
     if (!sessionId) return;
     const beforeRowId = snapshot.rows.window[0]?.rowId;
@@ -1099,7 +1114,10 @@ export class ConversationProjectionStore {
       this.setState({
         snapshot: {
           ...current,
-          rows: { ...current.rows, window: current.agentHost ? window.slice(-2000) : window },
+          rows: {
+            ...current.rows,
+            window: current.agentHost ? window.slice(-EXTERNAL_ROWS_CACHE_LIMIT) : window,
+          },
         },
       });
     } catch (error) {

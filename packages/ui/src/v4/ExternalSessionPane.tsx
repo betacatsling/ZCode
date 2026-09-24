@@ -3,6 +3,7 @@ import { TID_V4_SESSION_PANE, testId } from "@zcode/shared";
 import { Button } from "@/components/ui/button.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { useExternalSessionController } from "@/v4/useExternalSessionController.js";
+import { canLoadExternalOlder } from "@/v4/conversationProjectionStore.js";
 import { ConversationTimeline } from "@/v4/ConversationTimeline.js";
 import { ConversationHeader, type PaneWorkspaceBadge } from "@/v4/ConversationHeader.js";
 import { DEFAULT_CODE_PREVIEW_SETTINGS } from "@/lib/codePreviewSettings.js";
@@ -175,7 +176,7 @@ export function ExternalSessionPane({
           )}
         </div>
       )}
-      {snapshot && snapshot.rows.window.length < snapshot.rows.totalCount && (
+      {canLoadExternalOlder(snapshot) && (
         <Button
           type="button"
           variant="ghost"
@@ -201,9 +202,7 @@ export function ExternalSessionPane({
             totalCount={snapshot?.rows.totalCount ?? 0}
             sessionKey={spec.hostSessionId}
             rowContext={rowContext}
-            canLoadOlder={Boolean(
-              snapshot && snapshot.rows.window.length < snapshot.rows.totalCount,
-            )}
+            canLoadOlder={canLoadExternalOlder(snapshot)}
             loadingOlder={state.loadingOlder}
             onLoadOlder={() => lease?.store.loadOlder()}
           />
