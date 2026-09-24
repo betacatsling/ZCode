@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { access, mkdir, readFile, rm, mkdtemp } from "node:fs/promises";
+import { access, mkdir, readFile, realpath, rm, mkdtemp } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +12,7 @@ import { HarnessRegistry } from "../src/agent-host/harnessRegistry.js";
 import { SessionHost } from "../src/agent-host/sessionHost.js";
 import { CodexHarnessAdapter } from "../src/agent-adapters/codex/codexHarnessAdapter.js";
 import { codexTrustedManifest } from "../src/agent-adapters/codex/codexAdapterContract.js";
+import { codexSessionProfile } from "../src/agent-adapters/codex/codexBinding.js";
 import { createCodexGatewayLeaseIssuer } from "../src/agent-adapters/codex/createCodexGatewayLeaseIssuer.js";
 import { createModelGateway } from "../src/model-gateway/gateway.js";
 import { responsesProtocol } from "../src/model-gateway/ingress/responses.js";
@@ -79,9 +81,14 @@ test(
   async () => {
     const root = await mkdtemp(join(tmpdir(), "codex-host-native-"));
     const cwd = join(root, "worktree");
-    await mkdir(cwd);
-    const denied = join(cwd, "denied.txt");
-    const allowed = join(cwd, "allowed.txt");
+    const subdir = join(cwd, "sub");
+    await mkdir(subdir, { recursive: true });
+    const denied = join(subdir, "denied.txt");
+    const allowed = join(subdir, "allowed.txt");
+    const nativeCwds: string[] = [];
+    const nativeFrames: Array<{ method: string; hasTurnId: boolean; completionId: boolean }> = [];
+    const nativeChildren: ReturnType<typeof spawn>[] = [];
+    const firstTurnFrames = new Map<string, Buffer>();
     const failures: string[] = [];
     const requests: Array<{ phase: string; body: Record<string, unknown> }> = [];
     let phase: "deny" | "allow" | "cancel" | "resume" = "deny";
@@ -230,6 +237,52 @@ test(
       const issuer = createCodexGatewayLeaseIssuer({ gateway, gatewayUrl: `${url}/v1` });
       adapter = new CodexHarnessAdapter({
         root: join(root, "profiles"),
+        spawnProcess: ((command, args, options) => {
+          const child = spawn(command, args, options);
+          if (args[0] !== "--version") {
+            nativeCwds.push(options.cwd ?? "");
+            nativeChildren.push(child);
+            let tail = "";
+            child.stdout.on("data", (chunk: Buffer) => {
+              tail += chunk.toString("utf8");
+              // Test-only observation of actual pinned CLI bytes; no synthetic native IDs.
+              while (tail.includes("\n")) {
+                const index = tail.indexOf("\n");
+                const line = tail.slice(0, index);
+                tail = tail.slice(index + 1);
+                try {
+                  const frame = JSON.parse(line) as {
+                    method?: string;
+                    params?: { turnId?: unknown; turn?: { id?: unknown } };
+                  };
+                  if (frame.method) {
+                    const oldFamily = [
+                      "item/started",
+                      "item/completed",
+                      "item/agentMessage/delta",
+                      "thread/tokenUsage/updated",
+                    ];
+                    if (
+                      nativeChildren.length === 1 &&
+                      oldFamily.includes(frame.method) &&
+                      !firstTurnFrames.has(frame.method) &&
+                      Buffer.byteLength(line) < 1024 * 1024
+                    )
+                      firstTurnFrames.set(frame.method, Buffer.from(`${line}\n`));
+                    nativeFrames.push({
+                      method: frame.method,
+                      hasTurnId: typeof frame.params?.turnId === "string",
+                      completionId: typeof frame.params?.turn?.id === "string",
+                    });
+                  }
+                } catch {
+                  /* Transport owns malformed-frame rejection. */
+                }
+              }
+            });
+          }
+          return child;
+        }) as typeof spawn,
         lease: {
           ...issuer,
           issue: async (input) => {
@@ -251,7 +304,7 @@ test(
           workspaceIdentity: "isolated-native-control",
           worktreePath: cwd,
           worktreeGeneration: "generation",
-          cwdRelativeToWorktree: ".",
+          cwdRelativeToWorktree: "sub",
         },
         harness: { id: "codex", adapterVersion: "0.156.1" },
         modelBinding: {
@@ -303,6 +356,20 @@ test(
             .pendingInteractions.some((entry) => entry.interactionId === requested.interactionId),
           true,
         );
+        if (turnId === "allow") {
+          // Reinject bounded, verbatim bytes emitted by the previous pinned CLI turn.
+          // No fabricated turn IDs; the newer live child must not project old item/usage.
+          for (const method of [
+            "item/started",
+            "item/completed",
+            "item/agentMessage/delta",
+            "thread/tokenUsage/updated",
+          ])
+            if (firstTurnFrames.has(method))
+              nativeChildren.at(-1)!.stdout.emit("data", firstTurnFrames.get(method)!);
+          assert.ok(firstTurnFrames.has("item/completed"));
+          assert.ok(firstTurnFrames.has("thread/tokenUsage/updated"));
+        }
         const stale = await current.dispatch({
           type: "resolveInteraction",
           commandId: `stale-${turnId}`,
@@ -382,6 +449,18 @@ test(
       assert.equal(await readFile(allowed, "utf8"), "");
       assert.equal(
         current
+          .eventsSince(0)
+          .some(
+            (event) =>
+              event.turnId === "allow" &&
+              event.kind === "text.delta" &&
+              event.text.includes("Denied safely."),
+          ),
+        false,
+        "verbatim previous-turn native text must not enter the next Host turn",
+      );
+      assert.equal(
+        current
           .snapshot()
           .rows.window.some(
             (row) => row.kind === "assistantText" && row.text === "Native command completed.",
@@ -440,6 +519,26 @@ test(
         ["success", "success", "cancelled", "success"],
       );
       assert.deepEqual(issued.length, 4);
+      assert.deepEqual(nativeCwds, Array(4).fill(await realpath(subdir)));
+      // Metadata-only inventory; thread-only usage is not attributed to a turn by this test.
+      const families = [...new Set(nativeFrames.map((entry) => entry.method))]
+        .sort()
+        .map((method) => ({
+          method,
+          explicitTurnIds: nativeFrames.filter(
+            (entry) => entry.method === method && entry.hasTurnId,
+          ).length,
+          nestedCompletionIds: nativeFrames.filter(
+            (entry) => entry.method === method && entry.completionId,
+          ).length,
+          total: nativeFrames.filter((entry) => entry.method === method).length,
+        }));
+      assert.ok(
+        families.some(
+          (entry) => entry.method === "turn/completed" && entry.nestedCompletionIds > 0,
+        ),
+      );
+      console.info("CODEX_PINNED_NATIVE_FRAME_FAMILIES", JSON.stringify(families));
       assert.deepEqual(
         requests.filter((entry) => entry.phase === "resume").map((entry) => entry.body.model),
         ["first"],
@@ -478,6 +577,32 @@ test(
       });
       assert.deepEqual(reopened.snapshot().rows.window, current.snapshot().rows.window);
       await reopened.close();
+      // 修复：已提交 Host 历史不能成为遗失 native thread 的重建许可。
+      await rm(
+        join(
+          codexSessionProfile(join(root, "profiles"), spec),
+          `${reopened.binding.backendSessionId}.thread`,
+        ),
+      );
+      const lostAdapter = new CodexHarnessAdapter({ root: join(root, "profiles"), lease: issuer });
+      const lostRegistry = new HarnessRegistry();
+      lostRegistry.registerTrusted(codexTrustedManifest, () => lostAdapter);
+      await assert.rejects(
+        SessionHost.open({
+          root: join(root, "journals"),
+          spec,
+          target: {
+            id: "local",
+            kind: "local",
+            platform: process.platform as "darwin" | "linux",
+            available: true,
+          },
+          registry: lostRegistry,
+          catalog: { fingerprint: "fixture", validateSelection: () => ({ ok: true }) },
+        }),
+        /native ownership unknown/,
+      );
+      await lostAdapter.shutdown();
       const history = await SessionHost.snapshotHistory(join(root, "journals"), spec);
       assert.equal(
         history.rows.window.some(

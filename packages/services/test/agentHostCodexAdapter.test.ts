@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { CodexHarnessAdapter } from "../src/agent-adapters/codex/codexHarnessAdapter.js";
+import { codexSessionProfile } from "../src/agent-adapters/codex/codexBinding.js";
 import type { AgentEvent, BindingPlan, SessionSpecV2 } from "@zcode/shared/agent-host";
 
 class FakeProcess extends EventEmitter {
@@ -813,6 +814,121 @@ test("V2 creation/attach scopes binding and launches verified subdirectory cwd",
       launches.at(-1),
       await (await import("node:fs/promises")).realpath(join(worktree, "src")),
     );
+  } finally {
+    await adapter.shutdown();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("durable native provenance: never-started draft reopens; missing, ambiguous or lost established context refuses before native IO", async () => {
+  const root = await mkdtemp(join(tmpdir(), "codex-provenance-"));
+  const f = fakeCodex();
+  const make = () =>
+    new CodexHarnessAdapter({
+      root,
+      spawnProcess: f.spawnProcess as any,
+      lease: {
+        gatewayUrl: "http://127.0.0.1:54321/v1",
+        gateway: { issueToken: async () => "", revokeToken: () => {} },
+        issue: async () => ({
+          token: `t-${f.processes.length}`,
+          modelAlias: `alias-${f.processes.length + 1}`,
+        }),
+      },
+    });
+  const profile = codexSessionProfile(root, spec);
+  let adapter = make();
+  try {
+    const binding = await adapter.create(spec, plan);
+    await adapter.shutdown();
+    adapter = make();
+    // Host sequence may already include session-created, despite zero native turns.
+    await adapter.attach(spec, binding, 1, plan);
+    await adapter.shutdown();
+    const provenance = join(profile, `${binding.backendSessionId}.ownership.json`);
+    const initial = await readFile(provenance, "utf8");
+    await writeFile(provenance, JSON.stringify({ ...JSON.parse(initial), state: "starting" }));
+    adapter = make();
+    await assert.rejects(adapter.attach(spec, binding, 1, plan), /native.*unknown|ownership/i);
+    await writeFile(provenance, initial);
+    await adapter.attach(spec, binding, 1, plan);
+    await adapter.prepareTurn(spec, { turnId: "first", runtimeEpoch: binding.runtimeEpoch, plan });
+    const send = adapter.send({
+      type: "send",
+      commandId: "first",
+      hostSessionId: spec.hostSessionId,
+      turnId: "first",
+      text: "first",
+    });
+    await until(() => f.requests.some((r) => r.method === "turn/start"));
+    f.processes[0]!.send({
+      method: "turn/completed",
+      params: { threadId: "native-thread", turn: { id: "native-turn-1", status: "completed" } },
+    });
+    await send;
+    await adapter.shutdown();
+    adapter = make();
+    await adapter.attach(spec, binding, 4, plan);
+    await adapter.shutdown();
+    await rm(join(profile, `${binding.backendSessionId}.thread`));
+    adapter = make();
+    await assert.rejects(adapter.attach(spec, binding, 4, plan), /native.*unknown|ownership/i);
+    await mkdir(profile, { recursive: true });
+    await rm(profile, { recursive: true });
+    await assert.rejects(adapter.attach(spec, binding, 4, plan), /native.*unknown|ownership/i);
+    assert.equal(
+      f.processes.length,
+      1,
+      "lost state must never allocate a replacement native context",
+    );
+  } finally {
+    await adapter.shutdown();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("pre-ACK pending event bytes fail closed before 128 count despite valid individual frames", async () => {
+  const root = await mkdtemp(join(tmpdir(), "codex-early-bytes-"));
+  const f = fakeCodex({ delayStart: true });
+  const revoked: string[] = [];
+  const adapter = new CodexHarnessAdapter({
+    root,
+    spawnProcess: f.spawnProcess as any,
+    lease: {
+      gatewayUrl: "http://127.0.0.1:54321/v1",
+      gateway: { issueToken: async () => "", revokeToken: (t) => revoked.push(t) },
+      issue: async () => ({ token: "early-byte-token", modelAlias: "alias-1" }),
+    },
+  });
+  try {
+    const binding = await adapter.create(spec, plan);
+    await adapter.prepareTurn(spec, { turnId: "early", runtimeEpoch: binding.runtimeEpoch, plan });
+    const sent = adapter.send({
+      type: "send",
+      commandId: "early",
+      hostSessionId: spec.hostSessionId,
+      turnId: "early",
+      text: "input",
+    });
+    const unknown = assert.rejects(sent, /unknown|transport closed/);
+    await until(() => f.requests.some((r) => r.method === "turn/start"));
+    for (let i = 0; i < 2; i++)
+      f.processes[0]!.send({
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "native-thread",
+          turnId: "native-turn-1",
+          itemId: "item",
+          delta: "x".repeat(600_000),
+        },
+      });
+    await unknown;
+    await assert.rejects(
+      adapter.prepareTurn(spec, { turnId: "retry", runtimeEpoch: binding.runtimeEpoch, plan }),
+      /unknown|stale/,
+    );
+    assert.deepEqual(revoked, ["early-byte-token"]);
+    assert.equal(f.processes[0]!.exitCode, 0);
   } finally {
     await adapter.shutdown();
     await rm(root, { recursive: true, force: true });

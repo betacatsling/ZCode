@@ -15,3 +15,9 @@ Pending picks: target receipts; service/native facts/lease/core; controls/hierar
 # protocol-v2-closure early public API handoff
 
 Base 6456283 already supplies Host V2 and shared `SessionSpecV2`/`BackendBindingV2`. This lane owns `@zcode/services/agent-host/codex` and `/claude` public trusted factories, not a replacement Host. Codex V2 adapter will reject V1 writes, bind target/workspace/generation, use verified relative cwd and fence all native events by turn ID. Claude final assistant is authoritative over partial text. No paid calls; native fake plus Host replay tests required before certification. No production enablement implied.
+
+---
+
+# protocol-final-1 early boundary (base 15e5b682)
+
+Owned: services Codex/Claude adapters, adapter-local provenance, tests/spec. Host/Target/Git read-only subjects, no Host business edits. Codex adapter persists immutable V2 binding + never-started/starting/established; missing/unknown fails attach, Host history remains readable. Byte-bounded pre-ACK/stdio; pinned CLI/Git and SDK fixture evidence remains scoped. No public seam requested. No paid calls or credentials.

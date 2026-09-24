@@ -166,6 +166,52 @@ test("rejects a mismatched native model binding and concurrent turns", async () 
   }
 });
 
+test("many individually valid native approvals cannot exceed pending approval byte budget", async () => {
+  const f = fixture();
+  const transport = await f.open();
+  try {
+    const thread = transport.startThread();
+    f.receive({
+      id: (await f.next(2)).id,
+      result: { thread: { id: "a" }, model: "fixture", modelProvider: "zcode" },
+    });
+    await thread;
+    const turn = transport.startTurn("a", "prompt");
+    f.receive({ id: (await f.next(3)).id, result: { turn: { id: "t" } } });
+    await turn;
+    const pending = transport.startThread();
+    await f.next(4);
+    for (let i = 0; i < 2; i++)
+      f.receive({
+        id: i + 91,
+        method: "item/commandExecution/requestApproval",
+        params: { threadId: "a", turnId: "t", itemId: `${i}${"x".repeat(600_000)}` },
+      });
+    await assert.rejects(pending, /approval.*limit/);
+    await assert.rejects(transport.startThread());
+  } finally {
+    await transport.close();
+    await f.cleanup();
+  }
+});
+
+test("aggregate stdout bytes reject a single oversized multi-line chunk before dispatch", async () => {
+  const f = fixture();
+  let delivered = 0;
+  const transport = await f.open(() => delivered++);
+  try {
+    const pending = transport.startThread();
+    await f.next(2);
+    const line = `${JSON.stringify({ method: "thread/name/updated", params: { payload: "x".repeat(2000) } })}\n`;
+    f.child.stdout.write(line.repeat(600));
+    await assert.rejects(pending, /frame too large/);
+    assert.equal(delivered, 0);
+  } finally {
+    await transport.close();
+    await f.cleanup();
+  }
+});
+
 test("rejects malformed and oversized frames; exit clears pending calls", async () => {
   for (const frame of ["{bad}\n", `${"x".repeat(1024 * 1024 + 1)}\n`]) {
     const f = fixture();
