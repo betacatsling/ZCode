@@ -1,0 +1,16 @@
+# Pi v2 target model and native session seam
+
+The target Host verifies Git membership/generation at admission; the target-local Pi adapter accepts only `SessionSpecV2`, verifies realpath-contained `cwdRelativeToWorktree` on create and attach, and opens Pi's native session against that exact cwd. The Host owns workspace admission, turn IDs, epoch and durable frozen route; Pi owns one isolated native session, approval waiters, and a prepared executor per session/epoch/turn. Multiple Pi sessions in the same worktree share files, not conversation or stop state. No global Pi configuration or credentials are read.
+
+`prepareTurn(spec, {turnId,runtimeEpoch,plan})` validates identity, selection and fresh Registry fingerprint and constructs the actual executor **before** Host persists acceptance and dispatches send. The Host must call it for each turn, then persist accepted command and frozen route before `send`. During the turn all model IPC requests (including Pi auxiliary requests) use that captured executor; catalog updates cannot replace it. After settlement it is discarded. A subsequent turn requires a new plan and preparation; a missing/stale preparation fails closed, not by using the create-time model. The immutable route does not persist credentials. No prompt or tool runs in prepare.
+
+```
+Host verify/admit → Pi prepare(fresh registry/model) → Host persist route/command → Pi send
+                          ↓                                     ↓
+                    executor for turn ← model IPC requests ← native Pi loop
+Host approval decision → exact pending toolCallId + turn + epoch → tool starts (or denied)
+```
+
+Only read is unattended; edit/write/bash require a prior interaction. Cancel or worker failure denies pending approval and aborts model requests; stale reply cannot execute. A crash after accepted send is execution-unknown, not an automatic resume or replay. Attach restores only the matching native session identity and matching cwd; it does not certify an interrupted turn as finished. Tool input deltas are display-only; Pi executes only the authoritative final `tool_call.input` object. Unsupported provider-executed tools, opaque signatures, images and unrepresentable payload transformations fail explicitly rather than being silently dropped. Text, tool JSON, usage and ordinary reasoning (including the redacted StepFun event ordering observed with `reasoningLevel=off`) are translated when the existing model contract can express them. SDK native history remains the source for Pi context; Host journal remains the projection source.
+
+Acceptance: two independent Pi sessions and another native/mock scope on one worktree; read/edit/bash/follow-up and denied-write before side effects; cancellation rejects late approvals; create/attach subdir traversal and symlink escape are rejected; fresh per-turn model selection and within-turn catalog drift do not silently switch; model stream with real executor-compatible tool events (including incomplete streamed JSON followed by authoritative final tool input) produces approvals and truthful failures.
