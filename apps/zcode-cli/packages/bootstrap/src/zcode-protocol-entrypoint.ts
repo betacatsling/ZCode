@@ -171,7 +171,10 @@ export async function runZCodeProtocolAgent(
       signal: options.lifecycle?.signal,
       logger,
       // 只有可信 Node 调用方能注入真实 Registry runtime；默认启动/账号权益协议不变。
-      create: () => (dependencies.startProviderRegistryRuntime ?? startProcessProviderRegistryRuntime)(runtimeEnv),
+      create: () =>
+        (dependencies.startProviderRegistryRuntime ?? startProcessProviderRegistryRuntime)(
+          runtimeEnv,
+        ),
       disposeLate: (runtime) => runtime.dispose(),
     });
     options.lifecycle?.signal.throwIfAborted();

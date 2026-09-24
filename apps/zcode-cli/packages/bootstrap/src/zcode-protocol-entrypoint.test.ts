@@ -22,7 +22,9 @@ test("prepare and normal startup select the same configured relative database at
     const input = new PassThrough();
     const output = new PassThrough();
     let text = "";
-    output.on("data", (chunk: Buffer) => { text += chunk.toString(); });
+    output.on("data", (chunk: Buffer) => {
+      text += chunk.toString();
+    });
     const prepare = runZCodeProtocolAgent({ cwd, env, input, output, prepareStorageOnly: true });
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error("prepare path not emitted")), 5000);
@@ -32,7 +34,10 @@ test("prepare and normal startup select the same configured relative database at
         resolve();
       });
     });
-    const pathFrame = text.split("\n").map((line) => line && JSON.parse(line)).find((frame) => frame?.method === "startup/storagePath");
+    const pathFrame = text
+      .split("\n")
+      .map((line) => line && JSON.parse(line))
+      .find((frame) => frame?.method === "startup/storagePath");
     assert.equal(pathFrame.params.path, path);
     input.write(JSON.stringify({ method: "startup/storagePathReady", reuse: false }) + "\n");
     await prepare;
@@ -40,12 +45,15 @@ test("prepare and normal startup select the same configured relative database at
 
     let factoryCalled = 0;
     await assert.rejects(
-      runZCodeProtocolAgent({ cwd, env, input: new PassThrough(), output: new PassThrough() }, {
-        startProviderRegistryRuntime: async () => {
-          factoryCalled++;
-          throw new Error("after-storage-open");
+      runZCodeProtocolAgent(
+        { cwd, env, input: new PassThrough(), output: new PassThrough() },
+        {
+          startProviderRegistryRuntime: async () => {
+            factoryCalled++;
+            throw new Error("after-storage-open");
+          },
         },
-      }),
+      ),
       /after-storage-open/,
     );
     assert.equal(factoryCalled, 1);
