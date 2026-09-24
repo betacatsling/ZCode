@@ -1,4 +1,5 @@
 import { isAbsolute } from "node:path";
+import { resolveNativeSessionDbPath } from "@zcode/adapters/config";
 import { ReadonlyNativeSessionMetadataView } from "@zcode/adapters/storage";
 import type { HarnessCapabilitiesV2, ModelBindingRequest } from "@zcode/shared/agent-host";
 import { NativePersistentSessionIndex } from "../session/nativePersistentSessionIndex.js";
@@ -73,6 +74,22 @@ export function createReadonlyNativeDirectory(options: {
     },
     onChange: (listener) => index.onChange(listener),
     metadata,
+  });
+}
+
+/** Resolve the identical config/cwd used by native CLI bootstrap; no default-path reconstruction here. */
+export function createConfiguredNativeDirectory(
+  options: Omit<
+    Parameters<typeof createReadonlyNativeDirectory>[0],
+    "nativeSessionDatabasePath"
+  > & {
+    nativeConfig: Parameters<typeof resolveNativeSessionDbPath>[0];
+  },
+): NativeSessionDirectory {
+  const { nativeConfig, ...sources } = options;
+  return createReadonlyNativeDirectory({
+    ...sources,
+    nativeSessionDatabasePath: resolveNativeSessionDbPath(nativeConfig),
   });
 }
 
