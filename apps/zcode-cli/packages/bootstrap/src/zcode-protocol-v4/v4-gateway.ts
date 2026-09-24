@@ -706,11 +706,11 @@ export class ConversationV4Gateway {
       if (state.pendingByRawSeq.size > 0) unknown = true;
     }
     for (const id of this.detachedLiveSessions) {
-      if (!this.hydratedSessions.has(id)) unknown = true;
+      if (!this.hydratedSessions.has(id) || snapshot.control.phase === "error") unknown = true;
     }
     for (const [id, publisher] of this.publishers) {
       const snapshot = publisher.getSnapshot();
-      if (!this.hydratedSessions.has(id)) unknown = true;
+      if (!this.hydratedSessions.has(id) || snapshot.control.phase === "error") unknown = true;
       if (snapshot.control.phase === "running" || snapshot.control.phase === "prewarming" ||
           snapshot.control.activeWorks.length > 0 || snapshot.control.canStop) active++;
       if (snapshot.control.stopTargetKind === "unknown" &&
@@ -720,6 +720,7 @@ export class ConversationV4Gateway {
       approvals += snapshot.pendingInteractions.length;
       tools += snapshot.backgroundWorks.filter(work => work.status === "running" || work.status === "resultPending").length;
       if (snapshot.workflowRuns?.runs.some(run => run.status === "running")) active++;
+      pending += snapshot.workflowRuns?.runs.filter(run => run.status === "pending").length ?? 0;
     }
     return { epoch: state.epoch, frozen: state.frozen, active, accepted, pending, tools, approvals, unknown };
   }
