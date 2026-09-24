@@ -1,3 +1,5 @@
+import { getCurrentModelInvocationContext } from "@zcode/contracts";
+
 // Trusted Node-only transport observer. No request body, headers, endpoint or exception is retained.
 export function createPrivateObservation(input: {
   providerId: string;
@@ -7,10 +9,14 @@ export function createPrivateObservation(input: {
   maxAttempts?: number;
   allowedToolNames?: readonly string[];
   fetch: typeof globalThis.fetch;
+  modelCallId?: (context: ReturnType<typeof getCurrentModelInvocationContext>) => number | null;
+  onProviderUsage?: (fact: { callId: number | null; dispatchId: number; metrics: Record<string, number>; complete: boolean }) => void;
   notify: (event: {
     kind: "model" | "http" | "dispatch";
     count: number;
     operation?: "generate" | "stream";
+    callId?: number | null;
+    reservationId?: number;
   }) => void;
 }) {
   const base = new URL(input.baseUrl);
@@ -42,7 +48,9 @@ export function createPrivateObservation(input: {
       const target = new URL(request instanceof Request ? request.url : String(request));
       const method = (init?.method ?? (request instanceof Request ? request.method : "GET")).toUpperCase();
       if (httpAttempts >= limit) throw new Error("HTTP budget denied before IO");
-      input.notify({ kind: "http", count: ++httpAttempts });
+      const callId = input.modelCallId?.(getCurrentModelInvocationContext()) ?? null;
+      const reservationId = ++httpAttempts;
+      input.notify({ kind: "http", count: reservationId, callId });
       if (
         target.origin !== base.origin || target.pathname !== path || target.search !== "" ||
         target.username !== "" || target.password !== "" || method !== "POST" ||
@@ -63,7 +71,8 @@ export function createPrivateObservation(input: {
       // 解码错误可能含上游私有字符串（尤其 200 malformed/SSE decoder failure）。
       try {
         ++httpDispatches;
-        input.notify({ kind: "dispatch", count: httpDispatches });
+        const dispatchId = httpDispatches;
+        input.notify({ kind: "dispatch", count: httpDispatches, callId, reservationId });
         const response = await input.fetch(request, { ...init, redirect: "manual" });
         if (response.ok) {
           if (!response.body) return response;
@@ -74,18 +83,22 @@ export function createPrivateObservation(input: {
             try { json = JSON.parse(Buffer.from(bytes).toString("utf8")); }
             catch { throw new Error("private upstream JSON invalid"); }
             if (json.error) throw new Error("private upstream JSON error");
+            input.onProviderUsage?.({ callId, dispatchId, metrics: readProviderUsage((json as { usage?: unknown }).usage), complete: true });
             if (json.content?.some((part) => part.type === "tool_use" && !input.allowedToolNames?.includes(part.name ?? "")))
               throw new Error("private tool denied before execution");
             return new Response(bytes, { status: response.status, headers: response.headers });
           }
           const reader = response.body.getReader();
           let pending = Buffer.alloc(0);
+          const providerMetrics: Record<string, number> = {};
+          let usageReported = false;
           const stream = new ReadableStream<Uint8Array>({
             async pull(controller) {
               try {
                 const { done, value } = await reader.read();
                 if (done) {
                   if (pending.toString("utf8").trim()) throw new Error("private upstream incomplete frame");
+                  if (!usageReported) input.onProviderUsage?.({ callId, dispatchId, metrics: providerMetrics, complete: true });
                   controller.close();
                 } else {
                   // 修复：session tool allowlist 在 V4 create 时被 schema 丢弃；
@@ -111,9 +124,15 @@ export function createPrivateObservation(input: {
                       }
                     }
                     if (!dataLines.length) throw new Error("private upstream frame invalid");
-                    let parsed: { type?: string; content_block?: { type?: string; name?: string } };
+                    let parsed: { type?: string; content_block?: { type?: string; name?: string }; message?: { usage?: unknown }; usage?: unknown };
                     try { parsed = JSON.parse(dataLines.join("\n")); }
                     catch { throw new Error("private upstream frame invalid"); }
+                    if (parsed.type === "message_start" || parsed.type === "message_delta")
+                      Object.assign(providerMetrics, readProviderUsage(parsed.type === "message_start" ? parsed.message?.usage : parsed.usage));
+                    if (parsed.type === "message_stop" && !usageReported) {
+                      usageReported = true;
+                      input.onProviderUsage?.({ callId, dispatchId, metrics: providerMetrics, complete: true });
+                    }
                     if (parsed.type === "content_block_start" && parsed.content_block?.type === "tool_use" &&
                         !input.allowedToolNames?.includes(parsed.content_block.name ?? ""))
                       throw new Error("private tool denied before execution");
@@ -152,4 +171,20 @@ export function createPrivateObservation(input: {
       }
     },
   };
+}
+
+function readProviderUsage(value: unknown): Record<string, number> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const raw = value as Record<string, unknown>;
+  const result: Record<string, number> = {};
+  for (const [source, target] of [
+    ["input_tokens", "inputTokens"], ["output_tokens", "outputTokens"],
+    ["cache_read_input_tokens", "cacheReadTokens"],
+    ["cache_creation_input_tokens", "cacheWriteTokens"],
+    ["total_tokens", "totalTokens"],
+  ]) {
+    const token = raw[source];
+    if (Number.isSafeInteger(token) && (token as number) >= 0) result[target] = token as number;
+  }
+  return result;
 }

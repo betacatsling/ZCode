@@ -17,6 +17,8 @@ import type {
   ModelStatusSink,
   ModelStreamEvent,
   ModelTextResult,
+  ModelUsage,
+  ModelInvocationContext,
 } from "@zcode/contracts";
 import type { RegistryModelConfig, RegistryProviderConfig } from "@zcode/provider";
 import {
@@ -68,6 +70,14 @@ export interface AiSdkModelAdapterOptions {
   transport?: typeof globalThis.fetch;
   /** 仅可信 Node 装配：Model executor 调用（与 HTTP attempts 分开计数）。 */
   onModelCall?: (kind: "generate" | "stream", providerId: string, modelId: string) => void;
+  /** Trusted Node-only diagnostic: existing Model result/finish, never request content. */
+  onModelObservation?: (event: {
+    callId: number;
+    kind: "generate" | "stream";
+    phase: "start" | "finish" | "error";
+    context: ModelInvocationContext | undefined;
+    usage?: ModelUsage;
+  }) => void;
   streamIdleTimeoutMs?: number;
   modelIoFullRetentionEnabled?: boolean;
 }
@@ -90,6 +100,8 @@ export class AiSdkModelAdapter {
   private readonly logger?: Logger;
   private readonly retry: ResolvedAiSdkModelRetryOptions;
   private readonly onModelCall?: AiSdkModelAdapterOptions["onModelCall"];
+  private readonly onModelObservation?: AiSdkModelAdapterOptions["onModelObservation"];
+  private nextObservationId = 0;
   private statusSink?: ModelStatusSink;
   private readonly streamIdleTimeoutMs: number;
   private modelIoFullRetentionEnabled: boolean;
@@ -112,6 +124,7 @@ export class AiSdkModelAdapter {
     this.logger = options.logger;
     this.retry = resolveAiSdkModelRetryOptions(options.retry, this.env);
     this.onModelCall = options.onModelCall;
+    this.onModelObservation = options.onModelObservation;
     this.statusSink = options.statusSink;
     this.streamIdleTimeoutMs = options.streamIdleTimeoutMs ?? DEFAULT_MODEL_STREAM_IDLE_TIMEOUT_MS;
     this.modelIoFullRetentionEnabled = options.modelIoFullRetentionEnabled ?? false;
@@ -294,20 +307,47 @@ export class AiSdkModelAdapter {
         generateText: (request) => {
           this.onModelCall?.("generate", options.providerId, options.modelId);
           const legacyRequest = toLegacyRequest(request);
+          const context = getCurrentModelInvocationContext();
+          const callId = ++this.nextObservationId;
+          this.onModelObservation?.({ callId, kind: "generate", phase: "start", context });
           return this.generateTextWithResolved(
             legacyRequest,
             resolved,
             resolveForRequest(legacyRequest, request.options),
-          );
+          ).then((result) => {
+            this.onModelObservation?.({ callId, kind: "generate", phase: "finish", context, usage: result.usage });
+            return result;
+          }, (error: unknown) => {
+            this.onModelObservation?.({ callId, kind: "generate", phase: "error", context });
+            throw error;
+          });
         },
         streamText: (request) => {
           this.onModelCall?.("stream", options.providerId, options.modelId);
           const legacyRequest = toLegacyRequest(request);
-          return this.streamTextWithResolved(
+          const context = getCurrentModelInvocationContext();
+          const callId = ++this.nextObservationId;
+          this.onModelObservation?.({ callId, kind: "stream", phase: "start", context });
+          const source = this.streamTextWithResolved(
             legacyRequest,
             resolved,
             resolveForRequest(legacyRequest, request.options),
           );
+          const observer = this.onModelObservation;
+          return (async function* () {
+            let finished = false;
+            try {
+              for await (const event of source) {
+                if (event.type === "finish") {
+                  finished = true;
+                  observer?.({ callId, kind: "stream", phase: "finish", context, usage: event.usage });
+                }
+                yield event;
+              }
+            } finally {
+              if (!finished) observer?.({ callId, kind: "stream", phase: "error", context });
+            }
+          })();
         },
       },
     });

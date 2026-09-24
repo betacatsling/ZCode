@@ -14,6 +14,7 @@ const originalHome = process.env.HOME;
 const fixtureUrl = fake ? process.env.ZCODE_NATIVE_FAKE_URL : undefined;
 const exposeWebFetch = fake && process.env.ZCODE_NATIVE_FAKE_EXPOSE_WEBFETCH === "1";
 const hangScan = fake && process.env.ZCODE_NATIVE_FAKE_HANG_SCAN === "1";
+const transportFault = fake ? process.env.ZCODE_NATIVE_FAKE_TRANSPORT_FAULT : undefined;
 const isolated = process.cwd();
 // 修复：父环境的密钥、代理、项目配置和运行时开关不能进入私有原生执行器。
 for (const key of Object.keys(process.env)) {
@@ -162,12 +163,15 @@ try {
   await registry.start();
   const snapshot = registry.getSnapshot()!;
   const { createPrivateNoopLoggerFactory } = await import("./native-private-logger.js");
+  const modelContextCalls = new WeakMap<object, number>();
   observation = createPrivateObservation({
     providerId,
     modelId,
     baseUrl: selected.baseUrl,
     api,
     fetch: globalThis.fetch.bind(globalThis),
+    modelCallId: (context) => context ? modelContextCalls.get(context) ?? null : null,
+    onProviderUsage: (fact) => notify({ kind: "provider-usage", ...fact }),
     notify,
     allowedToolNames: exposeWebFetch ? ["Read", "Write", "Bash", "WebFetch"] : ["Read", "Write", "Bash"],
   });
@@ -200,7 +204,35 @@ try {
     env: {},
     retry: { maxAttempts: 1 },
     onModelCall: observation.onModelCall,
-    transport: observation.transport,
+    onModelObservation: ({ callId, kind, phase, context, usage }) => {
+      if (phase === "start" && context) modelContextCalls.set(context, callId);
+      // 修复：只发送既有 Model 执行上下文的身份/用途及规范化数字；不发请求、
+      // 原始 usage 元数据、响应、URL 或密钥。aux 完成时保留启动时捕获的 trace。
+      const metrics = phase === "finish" ? {
+        inputTokens: usage?.inputTokens, outputTokens: usage?.outputTokens,
+        totalTokens: usage?.totalTokens, cacheReadTokens: usage?.cacheReadTokens,
+        cacheWriteTokens: usage?.cacheWriteTokens, reasoningTokens: usage?.reasoningTokens,
+      } : undefined;
+      notify({ kind: "model-observation", callId, operationKind: kind, phase,
+        purpose: context?.modelCall?.operation ?? null,
+        operationId: context?.modelCall?.operationId ?? null,
+        runtimeTurnId: context?.traceContext?.turnId ?? null,
+        sessionId: context?.traceContext?.sessionId ?? null,
+        metrics });
+    },
+    transport: transportFault ? (request, init) => {
+      // 修复：同一个真实 Model/SDK 子进程的序列化请求在可信闸门前注入故障，
+      // 必须在 fetch 前拒绝；不是另造 executor 或仅测试隔离的 observer。
+      const url = new URL(request instanceof Request ? request.url : String(request));
+      const body = JSON.parse(String(init?.body));
+      if (transportFault === "wrong-model-body") body.model = "foreign-model";
+      if (transportFault === "missing-tokens") delete body.max_tokens;
+      if (transportFault === "oversized-tokens") body.max_tokens = 4097;
+      if (transportFault === "wrong-query") url.search = "?unexpected=1";
+      if (transportFault === "wrong-route") url.pathname += "/foreign";
+      return observation!.transport(url, { ...init, body: JSON.stringify(body),
+        ...(transportFault === "wrong-method" ? { method: "GET" } : {}) });
+    } : observation.transport,
   });
 
   stage = "runtime";
@@ -220,6 +252,7 @@ try {
         // 修复：preapproved WebFetch 可跳过 permission；必须在真实 HTTP port 入口拒绝。
         httpClientPort: { request: async () => { forbiddenToolRequests++; throw new Error("private nonfixture network denied"); } },
         privateToolAllowlist: exposeWebFetch ? ["Read", "Write", "Bash", "WebFetch"] : ["Read", "Write", "Bash"],
+        privateNativeTurnObservation: (fact) => notify({ kind: "native-turn", ...fact }),
         startProviderRegistryRuntime: async () => ({
           runtime: { registryService: registry },
           snapshot,

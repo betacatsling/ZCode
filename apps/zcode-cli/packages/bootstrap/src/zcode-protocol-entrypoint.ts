@@ -99,6 +99,10 @@ export interface NativeProtocolBootstrapDependencies {
   readonly httpClientPort?: HttpClientPort;
   /** Trusted disposable native run only: constrain registered tools before any handler executes. */
   readonly privateToolAllowlist?: readonly string[];
+  /** Trusted Node-only private observation of native TurnStarted (not a wire/session projection). */
+  readonly privateNativeTurnObservation?: (fact: {
+    sessionId: string; runtimeTurnId: string; sourceCommandId: string; productMessageId: string;
+  }) => void;
   readonly startProviderRegistryRuntime?: (
     env: Readonly<Record<string, string | undefined>>,
   ) => Promise<NativeProtocolRegistryRuntime>;
@@ -363,7 +367,28 @@ export async function runZCodeProtocolAgent(
       output,
       takePostResponseBatch: (requestId) => server.takePostResponseBatch(requestId),
     });
-    server.setNotificationSink((notification) => connection.send(notification));
+    server.setNotificationSink((notification) => {
+      if (dependencies.privateNativeTurnObservation && notification.method === "session/event") {
+        // 修复：legacy 订阅只用于可信 Native 身份事实；其他 session/event 可能含
+        // provider 配置或原文，绝不能为了读取 turn.started 顺带写入私有 stdout。
+        const event = notification.params as {
+          type?: unknown; sessionId?: unknown; turnId?: unknown;
+          payload?: { intent?: { sourceCommandId?: unknown }; inputId?: unknown; messageId?: unknown };
+        };
+        if (event?.type === "turn.started") {
+          const sourceCommandId = event.payload?.intent?.sourceCommandId ?? event.payload?.inputId;
+          const productMessageId = event.payload?.messageId;
+          if (typeof event.sessionId === "string" && typeof event.turnId === "string" &&
+              typeof sourceCommandId === "string" && typeof productMessageId === "string")
+            dependencies.privateNativeTurnObservation({
+              sessionId: event.sessionId, runtimeTurnId: event.turnId,
+              sourceCommandId, productMessageId,
+            });
+        }
+        return;
+      }
+      connection.send(notification);
+    });
     mcpResourceSink = (samples) =>
       connection.send({
         method: zcodeProtocolNotifications.mcpResourceSamples,

@@ -1,3 +1,5 @@
+import { readFile, realpath } from "node:fs/promises";
+import { delimiter, dirname, join } from "node:path";
 import { createNodeFileSystemAdapter } from "@zcode/adapters/fs";
 import { createNodeExecutionAdapter } from "@zcode/adapters/exec";
 import type { ExecutionPort, FileSystemPort } from "@zcode/contracts";
@@ -19,8 +21,9 @@ export function createPrivateEffectPorts(input: {
 } {
   let phase = 0;
   const fs = createNodeFileSystemAdapter();
+  const nodeBinary = process.execPath;
   const exec = createNodeExecutionAdapter({
-    processEnv: { PATH: input.processEnv.PATH, HOME: input.processEnv.HOME },
+    processEnv: { PATH: [dirname(nodeBinary), input.processEnv.PATH ?? ""].join(delimiter), HOME: input.processEnv.HOME },
     outputRootDir: input.cwd,
   });
   const reject = (): never => {
@@ -73,6 +76,13 @@ export function createPrivateEffectPorts(input: {
         request.env !== undefined ||
         request.sandbox?.dangerouslyDisableSandbox === true
       )
+        return reject();
+      // 修复：命令文本相同不保证 PATH 解析同一个 node；固定当前 Node 24 二进制、
+      // 脚本字节和隔离 cwd，再借用现有执行端口。此处不是通用 shell 沙箱。
+      if (!/^v24\./u.test(process.version) ||
+          (await realpath(join(input.cwd, "verify.cjs"))) !== join(input.cwd, "verify.cjs") ||
+          (await readFile(join(input.cwd, "verify.cjs"), "utf8")) !==
+            "require('node:fs').writeFileSync('bash-effect.txt', 'bash-verified|' + process.execPath); console.log('exit=0')\n")
         return reject();
       return exec.run(request, options);
     },

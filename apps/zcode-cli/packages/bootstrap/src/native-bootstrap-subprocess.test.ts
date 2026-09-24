@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { createInterface } from "node:readline";
-import { mkdtemp, mkdir, rm, writeFile, readFile, access, readdir } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile, readFile, realpath, access, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -167,7 +167,8 @@ if (childMode) {
     "native V4 matrix uses real Registry/Model: Read, denied/allowed Write, Bash and post-terminal fresh Read",
     { timeout: 40000 },
     async () => {
-      const root = await mkdtemp(join(tmpdir(), "native-boot-v4-"));
+      // 修复：macOS /var 是 /private/var 链接；已知 fixture 的脚本须在 canonical cwd 中验证。
+      const root = await realpath(await mkdtemp(join(tmpdir(), "native-boot-v4-")));
       const cwd = join(root, "worktree");
       await mkdir(cwd);
       const fixturePath = join(cwd, "input.txt");
@@ -176,7 +177,7 @@ if (childMode) {
       const bashPath = join(cwd, "bash-effect.txt");
       await writeFile(
         join(cwd, "verify.cjs"),
-        "require('node:fs').writeFileSync('bash-effect.txt', 'bash-verified'); console.log('exit=0')\n",
+        "require('node:fs').writeFileSync('bash-effect.txt', 'bash-verified|' + process.execPath); console.log('exit=0')\n",
       );
       const bashCommand = "node verify.cjs";
       const changedContent = "seed=amber-unknown-until-turn-three";
@@ -486,7 +487,7 @@ if (childMode) {
             assert.equal(allowedWrites, 1);
             assert.equal(bashApprovals, 1);
             assert.equal(await readFile(writePath, "utf8"), "allowed-write-content");
-            assert.equal(await readFile(bashPath, "utf8"), "bash-verified");
+            assert.equal(await readFile(bashPath, "utf8"), `bash-verified|${process.execPath}`);
           }
           // 外部变更只能发生在第二轮真实 terminal 之后，不能由旧聚合上下文冒充。
           if (turn === 2) await writeFile(fixturePath, changedContent);
