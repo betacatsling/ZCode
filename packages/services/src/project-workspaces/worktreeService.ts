@@ -43,6 +43,9 @@ export interface TargetWorktreeOptions {
   recoverStaleOwner?: boolean;
   /** Must aggregate native AND external runtime activity; an absent/unknown owner is unsafe. */
   activity: (workspaceId: string) => Promise<TargetRuntimeActivity>;
+  /** Local fault-injection seam for crash testing; never supplied by RPC clients. */
+  afterGitCreate?: () => Promise<void>;
+  afterGitRemove?: () => Promise<void>;
 }
 export interface CreateTargetWorktreeRequest {
   bindingId: string;
@@ -190,7 +193,21 @@ export class TargetWorktreeService {
   /** Explicitly claims the verifiable Git candidate without running Git create again. */
   recoverCreation(workspaceId: string): Promise<TargetWorkspaceRecord> {
     return this.exclusive(async () => {
-      throw new Error(`Creation recovery not yet implemented: ${workspaceId}`);
+      const intent = this.state.pendingCreations?.find((item) => item.workspaceId === workspaceId);
+      if (!intent) throw new Error("No pending creation intent");
+      const inspected = await this.inspectBinding(this.binding(intent.bindingId));
+      const candidates = inspected.candidates.filter(
+        (item) =>
+          item.path === intent.worktreePath &&
+          item.branch === `refs/heads/${intent.branch}` &&
+          item.kind === "linked" &&
+          item.prunable === null &&
+          item.adminIdentity !== null &&
+          item.adminPath !== null,
+      );
+      if (candidates.length !== 1) throw new Error("Creation candidate missing or ambiguous");
+      // 中文：不重放结果未知的 Git create；仅显式认领同仓库、同路径/分支的实例。
+      return this.adoptCandidate(intent.bindingId, workspaceId, intent.worktreePath, true);
     });
   }
   history(workspaceId: string): TargetWorkspaceRecord | undefined {
@@ -235,19 +252,36 @@ export class TargetWorktreeService {
     bindingId: string,
     workspaceId: string,
     requestedPath: string,
+    recoverPending = false,
   ): Promise<TargetWorkspaceRecord> {
     if (!workspaceId || this.state.workspaces.some((item) => item.id === workspaceId))
       throw new Error("Workspace ID already registered");
+    const pending = this.state.pendingCreations?.find((item) => item.workspaceId === workspaceId);
+    if (recoverPending !== !!pending)
+      throw new Error("Pending creation requires explicit recovery");
+    if (pending && (pending.bindingId !== bindingId || pending.worktreePath !== requestedPath))
+      throw new Error("Creation intent does not match candidate");
     if ((this.state.archivedBindings ?? []).includes(bindingId))
       throw new Error("Repository binding archived");
     const inspected = await this.inspectBinding(this.binding(bindingId));
     const candidate = findCandidate(inspected, await realpath(requestedPath));
     if (
+      !recoverPending &&
+      this.state.pendingCreations?.some(
+        (intent) => intent.bindingId === bindingId && intent.worktreePath === candidate?.path,
+      )
+    )
+      throw new Error("Candidate reserved by pending creation; explicit recovery required");
+    if (
       !candidate ||
       !candidate.adminIdentity ||
       !candidate.adminPath ||
       candidate.prunable !== null ||
-      candidate.kind === "bare"
+      candidate.kind === "bare" ||
+      (pending &&
+        (candidate.kind !== "linked" ||
+          candidate.path !== pending.worktreePath ||
+          candidate.branch !== `refs/heads/${pending.branch}`))
     )
       throw new Error("No verifiable runnable worktree at requested path");
     const adminIdentity = candidate.adminIdentity;
@@ -272,7 +306,13 @@ export class TargetWorktreeService {
       head: candidate.head,
       lifecycle: "active",
     };
-    await this.save({ ...this.state, workspaces: [...this.state.workspaces, record] });
+    await this.save({
+      ...this.state,
+      workspaces: [...this.state.workspaces, record],
+      pendingCreations: recoverPending
+        ? (this.state.pendingCreations ?? []).filter((item) => item.workspaceId !== workspaceId)
+        : this.state.pendingCreations,
+    });
     return record;
   }
 
@@ -293,18 +333,48 @@ export class TargetWorktreeService {
       await this.inspectBinding(binding);
       if (
         !request.workspaceId ||
-        this.state.workspaces.some((item) => item.id === request.workspaceId)
+        this.state.workspaces.some((item) => item.id === request.workspaceId) ||
+        this.state.pendingCreations?.some((item) => item.workspaceId === request.workspaceId)
       )
-        throw new Error("Workspace ID already registered");
+        throw new Error("Workspace ID already registered or creation result unknown");
+      if (
+        !path.isAbsolute(request.worktreePath) ||
+        !request.branch ||
+        !["new", "existing"].includes(request.mode)
+      )
+        throw new Error("Invalid creation request");
+      const destination = path.join(
+        await realpath(path.dirname(request.worktreePath)),
+        path.basename(request.worktreePath),
+      );
+      if (
+        this.state.pendingCreations?.some(
+          (item) => item.bindingId === binding.id && item.worktreePath === destination,
+        )
+      )
+        throw new Error("Destination reserved by pending creation");
+      const intent: PendingTargetCreation = {
+        workspaceId: request.workspaceId,
+        bindingId: binding.id,
+        worktreePath: destination,
+        branch: request.branch,
+        mode: request.mode,
+        ...(request.baseRef === undefined ? {} : { baseRef: request.baseRef }),
+      };
+      await this.save({
+        ...this.state,
+        pendingCreations: [...(this.state.pendingCreations ?? []), intent],
+      });
       await createGitWorktree({
         repositoryPath: binding.repositoryPath,
-        path: request.worktreePath,
+        path: destination,
         branch: request.branch,
         mode: request.mode,
         baseRef: request.baseRef,
       });
-      // Git 成功而登记失败时不回滚用户的树/分支；扫描会重新发现未登记候选。
-      return this.adoptCandidate(request.bindingId, request.workspaceId, request.worktreePath);
+      await this.options.afterGitCreate?.();
+      // 中文：Git 成功后登记失败保留意图和分支/目录；重试不能再次运行 Git。
+      return this.adoptCandidate(request.bindingId, request.workspaceId, destination, true);
     });
   }
 
@@ -444,54 +514,49 @@ export class TargetWorktreeService {
     if (!this.previews.delete(key)) return Promise.reject(new Error("Removal preview required"));
     this.frozen.add(workspaceId);
     return this.exclusive(async () => {
-      try {
-        const record = await this.current(this.workspace(workspaceId), expectedGeneration);
-        if (record.kind !== "linked") throw new Error("Only linked worktrees may be removed");
-        await this.safeActivity(workspaceId);
-        const binding = this.binding(record.bindingId);
-        const preflight = await preflightRemoveGitWorktree(binding.repositoryPath, record.path);
-        if (
-          preflight.isMain ||
-          preflight.dirty ||
-          preflight.untracked ||
-          preflight.submodules ||
-          preflight.locked ||
-          preflight.prunable ||
-          preflight.gitLocks
-        )
-          throw new Error("Worktree removal has Git risks");
-        await this.safeActivity(workspaceId);
-        // 中文：预览后文件可改变；冻结 admission 后仍须重新检查，绝不以旧预览执行删除。
-        const again = await preflightRemoveGitWorktree(binding.repositoryPath, record.path);
-        if (
-          again.isMain ||
-          again.dirty ||
-          again.untracked ||
-          again.submodules ||
-          again.locked ||
-          again.prunable ||
-          again.gitLocks
-        )
-          throw new Error("Worktree removal changed after preview");
-        const pending: TargetWorkspaceRecord = { ...record, lifecycle: "pendingRemoval" };
-        await this.save({
-          ...this.state,
-          workspaces: this.state.workspaces.map((item) =>
-            item.id === workspaceId ? pending : item,
-          ),
-        });
-        await removeGitWorktree(binding.repositoryPath, record.path);
-        const removed: TargetWorkspaceRecord = { ...pending, lifecycle: "removed" };
-        await this.save({
-          ...this.state,
-          workspaces: this.state.workspaces.map((item) =>
-            item.id === workspaceId ? removed : item,
-          ),
-        });
-        return removed;
-      } finally {
-        this.frozen.delete(workspaceId);
-      }
+      const record = await this.current(this.workspace(workspaceId), expectedGeneration);
+      if (record.kind !== "linked") throw new Error("Only linked worktrees may be removed");
+      await this.safeActivity(workspaceId);
+      const binding = this.binding(record.bindingId);
+      const preflight = await preflightRemoveGitWorktree(binding.repositoryPath, record.path);
+      if (
+        preflight.isMain ||
+        preflight.dirty ||
+        preflight.untracked ||
+        preflight.submodules ||
+        preflight.locked ||
+        preflight.prunable ||
+        preflight.gitLocks
+      )
+        throw new Error("Worktree removal has Git risks");
+      await this.safeActivity(workspaceId);
+      // 中文：预览后文件可改变；冻结 admission 后仍须重新检查，绝不以旧预览执行删除。
+      const again = await preflightRemoveGitWorktree(binding.repositoryPath, record.path);
+      if (
+        again.isMain ||
+        again.dirty ||
+        again.untracked ||
+        again.submodules ||
+        again.locked ||
+        again.prunable ||
+        again.gitLocks
+      )
+        throw new Error("Worktree removal changed after preview");
+      const pending: TargetWorkspaceRecord = { ...record, lifecycle: "pendingRemoval" };
+      await this.save({
+        ...this.state,
+        workspaces: this.state.workspaces.map((item) => (item.id === workspaceId ? pending : item)),
+      });
+      await removeGitWorktree(binding.repositoryPath, record.path);
+      await this.options.afterGitRemove?.();
+      const removed: TargetWorkspaceRecord = { ...pending, lifecycle: "removed" };
+      await this.save({
+        ...this.state,
+        workspaces: this.state.workspaces.map((item) => (item.id === workspaceId ? removed : item)),
+      });
+      return removed;
+    }).finally(() => {
+      this.frozen.delete(workspaceId);
     });
   }
 
@@ -501,6 +566,9 @@ export class TargetWorktreeService {
       const inspected = await this.inspectBinding(this.binding(bindingId));
       return inspected.candidates.filter(
         (candidate) =>
+          !this.state.pendingCreations?.some(
+            (intent) => intent.bindingId === bindingId && intent.worktreePath === candidate.path,
+          ) &&
           !this.state.workspaces.some(
             (item) =>
               item.bindingId === bindingId &&
@@ -551,6 +619,9 @@ export class TargetWorktreeService {
         status: "ok" as const,
         candidates: inspected.candidates.filter(
           (candidate) =>
+            !this.state.pendingCreations?.some(
+              (intent) => intent.bindingId === bindingId && intent.worktreePath === candidate.path,
+            ) &&
             !workspaces.some(
               (item) =>
                 item.bindingId === bindingId &&

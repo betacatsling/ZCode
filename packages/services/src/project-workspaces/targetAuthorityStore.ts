@@ -25,6 +25,7 @@ export interface TargetSnapshot {
 
 /** One target namespace has one writer; stale locks fail closed until explicitly recovered. */
 export class TargetAuthorityStore {
+  private durabilityFailed = false;
   private constructor(
     private readonly dataFile: string,
     private readonly leaseFile: string,
@@ -98,6 +99,26 @@ export class TargetAuthorityStore {
         !Array.isArray(state.bindings) ||
         !Array.isArray(state.workspaces) ||
         !Number.isSafeInteger(state.revision) ||
+        (state.pendingCreations !== undefined &&
+          (!Array.isArray(state.pendingCreations) ||
+            !state.pendingCreations.every(
+              (intent) =>
+                intent &&
+                typeof intent.workspaceId === "string" &&
+                intent.workspaceId.length > 0 &&
+                typeof intent.bindingId === "string" &&
+                intent.bindingId.length > 0 &&
+                typeof intent.worktreePath === "string" &&
+                path.isAbsolute(intent.worktreePath) &&
+                typeof intent.branch === "string" &&
+                intent.branch.length > 0 &&
+                ["new", "existing"].includes(intent.mode) &&
+                (intent.baseRef === undefined || typeof intent.baseRef === "string"),
+            ) ||
+            new Set(state.pendingCreations.map((item) => item.workspaceId)).size !==
+              state.pendingCreations.length ||
+            new Set(state.pendingCreations.map((item) => `${item.bindingId}\0${item.worktreePath}`))
+              .size !== state.pendingCreations.length)) ||
         ![state.archivedBindings, state.archivedWorkspaces].every(
           (ids) =>
             ids === undefined ||
@@ -129,7 +150,13 @@ export class TargetAuthorityStore {
             ),
         ) ||
         new Set(state.bindings.map((binding) => binding.id)).size !== state.bindings.length ||
-        new Set(state.workspaces.map((workspace) => workspace.id)).size !== state.workspaces.length
+        new Set(state.workspaces.map((workspace) => workspace.id)).size !==
+          state.workspaces.length ||
+        state.pendingCreations?.some(
+          (intent) =>
+            state.workspaces.some((workspace) => workspace.id === intent.workspaceId) ||
+            !state.bindings.some((binding) => binding.id === intent.bindingId),
+        )
       )
         throw new Error("Invalid target registry snapshot");
       return new TargetAuthorityStore(dataFile, leaseFile, token, state);
@@ -142,6 +169,8 @@ export class TargetAuthorityStore {
   }
 
   async assertLease(): Promise<void> {
+    if (this.durabilityFailed)
+      throw new Error("Target registry durability is unknown; restart owner");
     const lease = JSON.parse(await readFile(this.leaseFile, "utf8")) as { token: string };
     if (lease.token !== this.leaseToken) throw new Error("Target owner lease lost");
   }
@@ -160,6 +189,18 @@ export class TargetAuthorityStore {
       }
       await rename(temp, this.dataFile);
       this.state = updated;
+      // 中文：仅同步临时文件不足以保证 rename 后的意图在崩溃时存活；同步失败后禁止该 owner 继续写入/Git 效果。
+      try {
+        const directory = await open(path.dirname(this.dataFile), "r");
+        try {
+          await directory.sync();
+        } finally {
+          await directory.close();
+        }
+      } catch (error) {
+        this.durabilityFailed = true;
+        throw error;
+      }
     } finally {
       await rm(temp, { force: true });
     }
