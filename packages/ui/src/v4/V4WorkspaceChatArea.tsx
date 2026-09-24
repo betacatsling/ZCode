@@ -36,6 +36,7 @@ import {
 } from "@/v4/paneLayoutStore.js";
 import { collectWorkbenchLayout, dividerStyle, SPLIT_VAR_PREFIX } from "@/v4/workbenchLayout.js";
 import { WorkbenchLeafPane, type WorkbenchShellBinding } from "@/v4/WorkbenchPane.js";
+import type { MountedSessionOwner } from "@/v4/mountedSessionOwner.js";
 import { WorkbenchSplitDivider } from "@/v4/WorkbenchSplitDivider.js";
 import type { ConversationDropTargetController } from "@/v4/composer/conversationDropTarget.js";
 import type {
@@ -67,6 +68,9 @@ function dragPayloadSessionTarget(payload: WorkbenchSessionDragPayload): Workben
 }
 
 interface V4WorkspaceChatAreaProps {
+  /** Hierarchy-scoped navigation proofs; never inferred from workbench's local session IDs. */
+  mountedOwners?: readonly MountedSessionOwner[];
+  mountedSessionRouting?: "native" | "scoped";
   workspacePath: string;
   workspaceIdentity?: string;
   /** Prompt 模板埋点当前仅覆盖 Desktop；Web / 手机远控保留 UI 行为但不触发该事件。 */
@@ -140,6 +144,8 @@ interface V4WorkspaceChatAreaProps {
  * - 恢复守卫：restoredUnvalidated pane 各自经其 scope 的 sessions-index 验证。
  */
 export function V4WorkspaceChatArea({
+  mountedOwners = [],
+  mountedSessionRouting = "native",
   workspacePath,
   workspaceIdentity,
   isDesktop = false,
@@ -567,6 +573,8 @@ export function V4WorkspaceChatArea({
             leaf.paneId === V4_PRIMARY_PANE_ID ? (activeGroup?.primaryBinding ?? null) : null
           }
           shell={shell}
+          mountedOwners={mountedOwners}
+          mountedSessionRouting={mountedSessionRouting}
           onFocusRequest={handleFocusRequest}
           onSplit={activeGroup ? undefined : splitPaneAction}
           onClosePane={handleClosePane}
