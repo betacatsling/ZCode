@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { conversationSnapshotSchema } from "@zcode/shared/zcode-protocol-v4";
 import type { AgentEvent } from "@zcode/shared/agent-host";
 import { projectHostConversation } from "../src/agent-ui-projection/projector.js";
+import { UsageAccounting } from "../src/agent-ui-projection/usageAccounting.js";
 
 const spec = {
   schemaVersion: 1 as const, hostSessionId: "host-1",
@@ -59,6 +60,54 @@ test("a bounded external rows window exposes its real first row for pagination",
 test("projection refuses gaps, foreign events or duplicated sequence", () => {
   assert.throws(() => projectHostConversation({ spec, runtimeEpoch: epoch, events: [event(2, "turn.started", { turnId: "t" })] }), /sequence/);
   assert.throws(() => projectHostConversation({ spec, runtimeEpoch: epoch, events: [event(1, "turn.started", { turnId: "t" }), event(1, "turn.started", { turnId: "t" })] }), /sequence/);
+});
+
+test("legacy terminal-only, repeated and late child facts remain readable without fabricating starts", () => {
+  const facts = [
+    event(1, "turn.started", { turnId: "t1" }),
+    event(2, "subagent.updated", { turnId: "t1", childSessionId: "old", status: "finished", summary: "done" }),
+    event(3, "turn.finished", { turnId: "t1", outcome: "success" }),
+    event(4, "turn.started", { turnId: "t2" }),
+    event(5, "subagent.updated", { turnId: "t1", childSessionId: "old", status: "finished", summary: "updated" }),
+    event(6, "turn.finished", { turnId: "t2", outcome: "success" }),
+  ];
+  const snapshot = projectHostConversation({ spec, runtimeEpoch: epoch, events: facts, rowRange: { beforeRowId: 2, limit: 1 } });
+  assert.equal(snapshot.rows.totalCount, 3);
+  const page = projectHostConversation({ spec, runtimeEpoch: epoch, events: facts, rowRange: { beforeRowId: 3, limit: 1 } });
+  const child = page.rows.window[0];
+  assert.equal(child?.kind, "subagent");
+  if (child?.kind !== "subagent") return;
+  assert.equal(child.status, "success");
+  assert.equal(child.startedAt, undefined);
+  assert.equal(child.endedAt, 2000);
+  assert.equal(child.summaryText, "updated");
+  assert.equal(snapshot.subagents.endedTotal, 1);
+  assert.throws(() => projectHostConversation({ spec, runtimeEpoch: epoch, events: [facts[0]!, event(2, "subagent.updated", { turnId: "t1", childSessionId: "bad", status: "started" }), event(3, "subagent.updated", { turnId: "t1", childSessionId: "bad", status: "started" })] }), /duplicate child/);
+  assert.throws(() => projectHostConversation({ spec, runtimeEpoch: epoch, events: [facts[0]!, event(2, "subagent.updated", { turnId: "t1", childSessionId: "started", status: "started" }), event(3, "turn.finished", { turnId: "t1", outcome: "success" }), event(4, "turn.started", { turnId: "t2" }), event(5, "subagent.updated", { turnId: "t1", childSessionId: "started", status: "finished" })] }), /running child completed outside active/);
+  assert.throws(() => projectHostConversation({ spec, runtimeEpoch: epoch, events: [facts[0]!, event(2, "subagent.updated", { turnId: "t1", childSessionId: "shared", status: "finished" }), event(3, "turn.finished", { turnId: "t1", outcome: "success" }), event(4, "turn.started", { turnId: "t2" }), event(5, "subagent.updated", { turnId: "t2", childSessionId: "shared", status: "started" })] }), /child reused across turns/);
+});
+
+test("mixed usage requires explicit call identities; absence is not measured zero", () => {
+  const ledger = new UsageAccounting();
+  ledger.record({ kind: "usage.accounted", turnId: "t", sourceId: "call", accounting: "absolute", inputTokens: 0, cacheReadTokens: 4, reasoningTokens: 2 });
+  assert.deepEqual(ledger.totals(), { inputTokens: 0, cacheReadTokens: 4, reasoningTokens: 2 });
+  ledger.record({ kind: "usage.accounted", turnId: "t", sourceId: "call", accounting: "absolute", inputTokens: 3, cacheReadTokens: 5, reasoningTokens: 2 });
+  ledger.record({ kind: "usage.reported", turnId: "t", sourceId: "other", accounting: "delta", inputTokens: 7, outputTokens: 1 });
+  assert.deepEqual(ledger.totals(), { inputTokens: 10, outputTokens: 1, cacheReadTokens: 5, reasoningTokens: 2 });
+  const snapshot = projectHostConversation({ spec, runtimeEpoch: epoch, events: [event(1, "turn.started", { turnId: "t" }),
+    event(2, "usage.accounted", { turnId: "t", sourceId: "call", accounting: "absolute", inputTokens: 0, cacheReadTokens: 4, reasoningTokens: 2 }),
+    event(3, "usage.accounted", { turnId: "t", sourceId: "call", accounting: "absolute", inputTokens: 3, cacheReadTokens: 5, reasoningTokens: 2 }),
+    event(4, "usage.reported", { turnId: "t", sourceId: "other", accounting: "delta", inputTokens: 7, outputTokens: 1 })] });
+  assert.deepEqual(snapshot.usage.cumulative, { inputTokens: 10, outputTokens: 1, cacheReadTokens: 5, cacheWriteTokens: 0 });
+  assert.throws(() => ledger.record({ kind: "usage.reported", turnId: "t", sourceId: "call", accounting: "delta", inputTokens: 3, outputTokens: 0 }), /collision/);
+  assert.throws(() => ledger.record({ kind: "usage.reported", turnId: "t", inputTokens: 1, outputTokens: 1 }), /ambiguous/);
+  const legacy = new UsageAccounting();
+  legacy.record({ kind: "usage.reported", turnId: "t", inputTokens: 1, outputTokens: 0 });
+  assert.deepEqual(legacy.totals(), { inputTokens: 1, outputTokens: 0 });
+  assert.throws(() => legacy.record({ kind: "usage.accounted", turnId: "t", sourceId: "call", accounting: "delta", inputTokens: 1 }), /ambiguous/);
+  assert.throws(() => new UsageAccounting().record({ kind: "usage.reported", turnId: "t", sourceId: "call", inputTokens: 1, outputTokens: 0 }), /identity/);
+  const events = [event(1, "turn.started", { turnId: "t" }), event(2, "usage.reported", { turnId: "t", inputTokens: 2, outputTokens: 1 }), event(3, "usage.accounted", { turnId: "t", accounting: "absolute", sourceId: "call", inputTokens: 2 })];
+  assert.throws(() => projectHostConversation({ spec, runtimeEpoch: epoch, events }), /ambiguous/);
 });
 
 test("mixed transcript projects visible reasoning, structured plan, child, question and source-accounted cache without duplicate totals", () => {
