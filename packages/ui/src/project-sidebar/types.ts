@@ -1,4 +1,5 @@
 import type { SessionSummary, SidebarSnapshot } from "@zcode/shared/project-workspaces";
+import type { IWorkspaceHierarchyService } from "@zcode/services";
 import type { HarnessCatalogEntry, ModelBindingRequest } from "@zcode/shared/agent-host";
 import type { SidebarIconAsset } from "../agent-host/harnessAssetResolver.js";
 
@@ -38,8 +39,10 @@ export interface SidebarActions {
   onArchiveWorkspace: (workspaceId: string) => Promise<void>;
   onUnarchiveWorkspace?: (workspaceId: string) => Promise<void>;
   onShowWorkspace?: (workspaceId: string) => Promise<void>;
-  /** Must read target Git/activity facts; undefined means removal is not admitted. */
+  /** Legacy unmounted confirmation preview; no safe removal from this without server recheck. */
   onPreviewRemove?: (workspaceId: string, expectedGeneration: string) => Promise<RemovalPreview>;
+  /** Must forward to the server hierarchy/Target; absent port fails closed. */
+  onPreviewRemoval?: (workspaceId: string, expectedGeneration: string) => ReturnType<IWorkspaceHierarchyService["previewRemoval"]>;
   onRemoveWorkspace: (workspaceId: string, expectedGeneration: string) => Promise<void>;
 }
 export interface RemovalPreview {

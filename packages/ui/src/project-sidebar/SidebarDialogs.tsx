@@ -23,6 +23,7 @@ export function ConfirmationDialog({
   onConfirm,
   onClose,
   onPreview,
+  disabled = false,
 }: {
   title: string;
   description: string;
@@ -31,6 +32,7 @@ export function ConfirmationDialog({
   onConfirm: () => Promise<void>;
   onClose: () => void;
   onPreview?: () => Promise<RemovalPreview>;
+  disabled?: boolean;
 }) {
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
@@ -51,7 +53,7 @@ export function ConfirmationDialog({
     };
   }, [onPreview]);
   async function submit() {
-    if (onPreview && !preview?.allowed) return;
+    if (disabled || pending || (onPreview && !preview?.allowed)) return;
     setPending(true);
     try {
       await onConfirm();
@@ -104,7 +106,7 @@ export function ConfirmationDialog({
             type="button"
             variant="destructive"
             onClick={submit}
-            disabled={pending || Boolean(onPreview && !preview?.allowed)}
+            disabled={pending || disabled || Boolean(onPreview && !preview?.allowed)}
           >
             {confirmLabel}
           </Button>
