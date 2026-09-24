@@ -3,14 +3,24 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createFixture, runLoad, validateOptions } from './runner.mjs';
+import { createFixture, runLoad, validateOptions, validateProductFacts } from './runner.mjs';
 
 const temp = () => mkdtemp(join(tmpdir(), 'load-contract-test-'));
+
+test('acceptance facts require separate host and renderer process metrics while mounted', () => {
+  const facts = {durableEvents:0,backlog:0,backlogHighWater:0,implicitCliStarts:0,fullHistorySidebarReads:0,worktreeMutations:0,childProcesses:0,acceptedPrompts:0,focusStable:true,draftStable:true,selectedStable:true,heapBytes:1,rssBytes:1};
+  assert.throws(() => validateProductFacts(facts,{mode:'acceptance',phase:'mounted'}), /product process/);
+  facts.processes = {host:{heapBytes:100,rssBytes:200},renderer:{heapBytes:80,rssBytes:150}};
+  assert.doesNotThrow(() => validateProductFacts(facts,{mode:'acceptance',phase:'mounted'}));
+  delete facts.processes.renderer;
+  assert.doesNotThrow(() => validateProductFacts(facts,{mode:'acceptance',phase:'post-idle'}));
+});
 
 test('acceptance cannot be downgraded to smoke minimums', () => {
   assert.throws(() => validateOptions({ mode: 'acceptance', durationMs: 50, eventCount: 30 }), /8 hours/);
   assert.throws(() => validateOptions({ mode: 'acceptance', durationMs: 28_800_000, eventCount: 30 }), /100000/);
   assert.throws(() => validateOptions({ mode: 'acceptance', durationMs: 28_800_000, eventCount: 100000, worktreeCount: 4, expandedCount: 4 }), /50/);
+  assert.throws(() => validateOptions({ mode: 'acceptance', idleMs: 0 }), /idle/);
 });
 
 test('50 Git candidates are real disposable worktrees including main; no project path', async () => {

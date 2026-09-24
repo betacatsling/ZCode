@@ -24,6 +24,7 @@ export function validateOptions(input = {}) {
     if (options.durationMs < HOUR8) throw new Error('acceptance requires 8 hours elapsed');
     if (options.eventCount < 100_000) throw new Error('acceptance requires 100000 events');
     if (options.worktreeCount < 50) throw new Error('acceptance requires 50 worktrees');
+    if (options.idleMs < 60_000) throw new Error('acceptance requires 60 seconds post-cleanup idle');
     if (options.sessionCount < 10 || options.expandedCount < 5) throw new Error('acceptance requires 10 sessions across 5 expanded workspaces');
   }
   return options;
@@ -69,6 +70,17 @@ function checkFacts(facts) {
   for (const key of ['implicitCliStarts','fullHistorySidebarReads','worktreeMutations','acceptedPrompts']) if (facts[key] !== 0) throw new Error(`unexpected owner side effect ${key}: ${facts[key]}`);
   return facts;
 }
+export function validateProductFacts(facts, {mode, phase}) {
+  checkFacts(facts);
+  if (mode === 'acceptance') {
+    const required = phase.startsWith('post-') ? ['host'] : ['host','renderer'];
+    for (const processName of required) {
+      const processFacts = facts.processes?.[processName];
+      if (!processFacts || !Number.isFinite(processFacts.heapBytes) || processFacts.heapBytes <= 0 || !Number.isFinite(processFacts.rssBytes) || processFacts.rssBytes <= 0) throw new Error(`missing product process memory: ${processName}`);
+    }
+  }
+  return facts;
+}
 function checkSample(sample) {
   for (const key of ['typedInputMs','sessionSwitchMs']) number(sample, key);
   for (const key of ['focusStable','draftStable','selectedStable','worktreesStable']) if (sample[key] !== true) throw new Error(`unstable mounted UI ${key}`);
@@ -112,7 +124,7 @@ export async function runLoad(input = {}) {
   const result = { mode:o.mode, status:'failed', artifacts:root, machine, config:configOf(o), metadata:null, discovered:0, expanded:0, sessions:0, committedEvents:0, reconnects:0, elapsedMs:0, samples:{typedInputMs:[],sessionSwitchMs:[],sessionIds:[]}, p95:{typedInputMs:null,sessionSwitchMs:null}, backlog:[], backlogSummary:null, memory:[], cleanup:null, comparison:{status:'missing-baseline'}, gateway:{status:'unsupported'}, unsupported:['live-provider-latency-not-measured','paid-provider-not-used','ssh-not-used','desktop-and-web-require-separate-runs'], failures:[] };
   let mount, start, startingEvents = 0, phase = 'fixture';
   const takeFacts = async phase => {
-    const facts = checkFacts(await mount.facts());
+    const facts = validateProductFacts(await mount.facts(), {mode:o.mode,phase});
     if (facts.backlogHighWater > o.maxBacklog || facts.childProcesses > o.maxOwnedChildren) throw new Error('owner backlog/process bound exceeded');
     result.backlog.push({phase,elapsedMs:start ? performance.now()-start : 0, count:facts.backlog, highWater:facts.backlogHighWater});
     result.memory.push({phase,elapsedMs:start ? performance.now()-start : 0,heapBytes:facts.heapBytes,rssBytes:facts.rssBytes,processes:facts.processes ?? null,childProcesses:facts.childProcesses});
@@ -134,6 +146,7 @@ export async function runLoad(input = {}) {
     phase = 'mount';
     const mounted = await mount.mount({expandedWorktrees:expanded,sessions});
     if (JSON.stringify(mounted?.mountedSurfaces) !== JSON.stringify(['Shell','ProjectSidebar','SessionPane']) || mounted.owner !== 'durable-host' || mounted.delivery !== o.delivery) throw new Error('real mounted Shell/ProjectSidebar/SessionPane + durable Host required');
+    if (o.mode === 'acceptance' && ['shellVisible','sidebarVisible','paneVisible','hostJournalReopened'].some(key=>mounted.mountEvidence?.[key] !== true)) throw new Error('missing mounted product evidence');
     result.metadata.delivery = mounted.delivery;
     result.expanded = expanded.length; result.sessions = sessions.length;
     startingEvents = (await takeFacts('start')).durableEvents;
