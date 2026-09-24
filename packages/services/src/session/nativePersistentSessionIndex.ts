@@ -46,6 +46,8 @@ const expectedColumns = [
 ];
 export interface NativeIndexFact {
   workspaceKey: string;
+  /** Exact source scope path from the task-index row, not the mapped worktree root. */
+  sourceWorkspacePath?: string;
   nativeSessionId: string;
   title: string;
   updatedAt: number;
@@ -179,13 +181,14 @@ export class NativePersistentSessionIndex implements LegacyPersistentSessionInde
       assertNativeTasksSchema(db);
       // 中文：侧边栏不能为每次读取备份整个 WAL 库或拉取 searchable_text 正文；只读当前摘要。
       const rows = db
-        .prepare(`SELECT workspace_key, task_id, title, updated_at, task_status,
+        .prepare(`SELECT workspace_key, workspace_path, task_id, title, updated_at, task_status,
         archived, deleted, unread_at, model,
         CASE WHEN json_valid(meta_json) THEN json_extract(meta_json, '$.thoughtLevel') ELSE NULL END AS thought_level,
         CASE WHEN json_valid(meta_json) THEN json_type(meta_json, '$.thoughtLevel') ELSE 'invalid' END AS thought_type
         FROM tasks ORDER BY workspace_key, task_id`)
         .all() as Array<{
         workspace_key: string;
+        workspace_path: string;
         task_id: string;
         title: string;
         updated_at: number;
@@ -205,6 +208,7 @@ export class NativePersistentSessionIndex implements LegacyPersistentSessionInde
         );
         return {
           workspaceKey: row.workspace_key,
+          sourceWorkspacePath: row.workspace_path,
           nativeSessionId: row.task_id,
           title: String(row.title),
           updatedAt: Number(row.updated_at),

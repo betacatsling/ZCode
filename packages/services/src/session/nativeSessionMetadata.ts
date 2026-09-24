@@ -15,6 +15,8 @@ export interface NativeSessionMetadataReader {
     | {
         cwd: string;
         targetId: string;
+        /** Explicit native workspaceID equals the task-index source scope; cwd alone is not attestation. */
+        scopeVerified?: boolean;
         modelBinding?: ModelBindingRequest;
         /** A malformed explicit native selection must never fall back to the stale task-index model. */
         suppressIndexModelFallback?: boolean;
@@ -40,10 +42,10 @@ export class NativeSessionStoreMetadataReader implements NativeSessionMetadataRe
     if (!session || !isAbsolute(session.directory) || !isAbsolute(scope.workspacePath))
       return undefined;
     const child = relative(scope.workspacePath, session.directory);
-    // 中文：SessionStore 的 id 是全库主键；同名 task 在另一个原生 scope 下不能被误认领。
+    // 中文：迁移预览仍可读取缺 workspaceID 的旧 cwd，但在线目录只能接受显式 scopeVerified。
     if (child === ".." || child.startsWith(`..${sep}`) || isAbsolute(child)) return undefined;
-    if (isRemoteWorkspaceIdentity(scope.workspaceKey) && session.workspaceID !== scope.workspaceKey)
-      return undefined;
+    if (session.workspaceID && session.workspaceID !== scope.workspaceKey) return undefined;
+    if (!session.workspaceID && isRemoteWorkspaceIdentity(scope.workspaceKey)) return undefined;
     const targetId = await this.targetForScope(scope);
     if (!targetId) return undefined;
     const entries = await this.store.sessionEntries?.({
@@ -55,6 +57,7 @@ export class NativeSessionStoreMetadataReader implements NativeSessionMetadataRe
     return {
       cwd: session.directory,
       targetId,
+      scopeVerified: session.workspaceID === scope.workspaceKey,
       ...(parsed
         ? {
             modelBinding: modelBindingRequestSchema.parse({
@@ -84,12 +87,11 @@ export class NativeSqliteMetadataReader implements NativeSessionMetadataReader {
     if (!stored || !isAbsolute(stored.session.directory) || !isAbsolute(scope.workspacePath))
       return undefined;
     const child = relative(scope.workspacePath, stored.session.directory);
-    // 中文：session id 是全库主键；同名 task 不能仅凭 id 绑定到另一原生 scope。
+    // 中文：兼容缺 workspaceID 的迁移元数据，但无显式归属的目录 join 必须保持 pending。
     if (child === ".." || child.startsWith(`..${sep}`) || isAbsolute(child)) return undefined;
-    if (
-      isRemoteWorkspaceIdentity(scope.workspaceKey) &&
-      stored.session.workspaceID !== scope.workspaceKey
-    )
+    if (stored.session.workspaceID && stored.session.workspaceID !== scope.workspaceKey)
+      return undefined;
+    if (!stored.session.workspaceID && isRemoteWorkspaceIdentity(scope.workspaceKey))
       return undefined;
     const targetId = await this.targetForScope(scope);
     if (!targetId) return undefined;
@@ -99,6 +101,7 @@ export class NativeSqliteMetadataReader implements NativeSessionMetadataReader {
     return {
       cwd: stored.session.directory,
       targetId,
+      scopeVerified: stored.session.workspaceID === scope.workspaceKey,
       ...(parsed
         ? {
             modelBinding: modelBindingRequestSchema.parse({
