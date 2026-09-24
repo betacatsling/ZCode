@@ -1,6 +1,6 @@
 # ui-convergence wave2 — scoped handoff, not product acceptance
 
-Clean commits on cf217c5: `2e94faf` (authority 4baf2c1), `096db29` (protocol 49c9391), `6f69ea2` (this lane), plus this handoff commit. `pnpm architecture:check --changed`: 0 new / 0 baseline violations. Source outside this lane (Core factory, native-private, adapters/Gateway/runtime) not edited. No profile enabling, paid calls, push, or other-worktree writes.
+Clean commits on cf217c5: `2e94faf` (authority 4baf2c1), `096db29` (protocol 49c9391), `6f69ea2` (mounted behavior), `ebc8d7e` (capped history/subscription), `31edc01`/`a2a36ff` (handoffs). `pnpm architecture:check --changed`: 0 new / 0 baseline violations. Source outside this lane (Core factory, native-private, adapters/Gateway/runtime) not edited. No profile enabling, paid calls, push, or other-worktree writes.
 
 ## Ownership and proof
 
