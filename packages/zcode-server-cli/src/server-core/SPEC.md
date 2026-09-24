@@ -1,0 +1,9 @@
+# Persistent Core authority (core-boot)
+
+Core is the sole process-level owner of the local service collection and its persistent profile/target catalog; each window attaches over a scoped transport and disconnecting a window does not stop Core. The installation marker under `ZCODE_SERVER_ROOT` supplies the stable target identity. The profile/target root is selected by the services composition in Core, not by an individual window.
+
+Boot sequence: validate installation identity -> construct collection with native source ports and maintenance coordinator -> reconcile pending target receipts/archive policy before enabling *new* admission -> expose RPC -> send ready to Supervisor. Read/history/diagnostics remain available if reconciliation is uncertain. Boot failure must close partially constructed resources and must never send ready. Missing native fence or activity source is uncertainty, not idle.
+
+Maintenance sequence: Supervisor IPC begin -> freeze native and external new admission with one owned lease -> drain in-flight admission -> read fresh native and external activity -> if unsafe reject and release the same lease; otherwise hold until update/uninstall/fallback Core stop (or explicit release on failure). Client detach never releases the fence; stale release fails closed. Explicit operator stop is separate and always allowed. On shutdown release service resources and close transport. Desktop continuous and mobile replayable connections share Core owner but not delivery semantics.
+
+Acceptance: a real subprocess Core/Supervisor control roundtrip can detach a client without killing Core, reject maintenance racing an accepted command, retain fence through lifecycle stop, permit explicit stop, and reject a stale token. No packaged-release claim without its own smoke test.
