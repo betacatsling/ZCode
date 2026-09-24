@@ -14,7 +14,11 @@
 
 Desktop 1280×800 与 mobile 390×844 各自挂载真实 UI Button；键盘 Tab 可聚焦并用 Enter 激活按钮，输入草稿在按钮重渲染后保持，操作不抢走正在编辑的 textarea 焦点；显式捕获截图。测试失败自动保存 Playwright trace 和截图。此项不能证明 app navigation、ProjectSidebar、Host/facade 状态或移动远控可用。
 
-## §13 后续验收清单（尚无可执行测试，不计通过）
+## 新增 §13 组件 fixture（非产品挂载）
+
+`packages/ui/e2e/hierarchy.html` 挂载实际 `ProjectSidebar`、真实 selector/dialog 和 view store；`hierarchy.spec.ts` 在桌面及手机 Chromium 测两项目、含空主检出的工作区、同 Harness 双会话、隐藏待处理、缺资产 fallback、背景 50 个工作区的十次摘要更新、草稿/光标保持与区分创建/发现/接管/隐藏/归档/删除的 callback。fixture 的回调只记录事件，不是 Host Catalog，也未证明 Git 删除安全。执行：`mise exec -- node scripts/mise-run.mjs pnpm exec playwright test -c scripts/e2e/multi-harness/playwright.config.ts hierarchy.spec.ts`。
+
+## §13 后续产品集成验收清单（尚无可执行测试，不计通过）
 
 1. 用真实 ProjectSidebar/facade + 两项目/每项目至少两个 worktree/同一 workspace 三个会话（两个 Pi）的隔离 fixture 测树与身份；新会话不增加 worktree；Pi 改模型不改 Harness 图标。
 2. 在真实 composer 输入草稿并聚焦，分别注入后台 Agent 进度、发现 worktree、SSH 重连与异步恢复；断言 DOM focus、草稿和已选 sessionId 不变；只显式点击 session 行才切换。
