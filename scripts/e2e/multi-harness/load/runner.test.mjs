@@ -124,7 +124,7 @@ test('baseline absent cannot produce a <=10% regression claim', async () => {
   assert.equal(result.comparison.typedInputRatio,undefined);
 });
 
-const short = { mode:'smoke',durationMs:10,eventCount:4,worktreeCount:2,sessionCount:2,expandedCount:1,sampleEveryMs:1,reconnectEveryMs:1,idleMs:0 };
+const short = { mode:'benchmark',benchmarkDatasetId:'fixed-fixture-v1',durationMs:10,eventCount:4,worktreeCount:2,sessionCount:2,expandedCount:1,sampleEveryMs:1,reconnectEveryMs:1,idleMs:0 };
 async function preservedSource() {
   const {repo} = await createFixture(await temp(),1);
   const commit = execFileSync('git',['rev-parse','HEAD'],{cwd:repo,encoding:'utf8'}).trim();
@@ -139,7 +139,7 @@ async function baselinePair({candidateLatency = 5, baselineMutate, candidateMuta
   execFileSync('git',['-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','--allow-empty','-qm','candidate revision'],{cwd:candidate.repo});
   candidate.commit = execFileSync('git',['rev-parse','HEAD'],{cwd:candidate.repo,encoding:'utf8'}).trim();
   const baselineRun = await runLoad({...short, driver:driver({productionCommit:baseline.commit}),artifactBase:await temp(), sourceCheckout:baseline.repo, buildArtifactPath:baseline.buildArtifactPath});
-  assert.equal(baselineRun.status,'smoke-only');
+  assert.equal(baselineRun.status,'latency-baseline-pending');
   const baselinePath = join(baselineRun.artifacts,'result.json');
   if (baselineMutate) {
     const edited = JSON.parse(await readFile(baselinePath,'utf8'));
@@ -232,5 +232,76 @@ test('controlled short latency window over budget is failed, not 8h', async () =
 test('preserved baseline with matching short controlled window is comparable but not 8h', async () => {
   const {result} = await baselinePair();
   assert.equal(result.comparison.status,'within-budget');
-  assert.equal(result.status,'smoke-only');
+  assert.equal(result.status,'latency-measured');
+});
+
+// A real process, not a mocked kill/exit, must be reaped even if every untrusted cleanup hook hangs.
+test('never-resolving close, registered cleanup and disposer cannot strand partial-open real child', {timeout: 8000}, async () => {
+  for (const at of ['partial-open','mounted-close']) {
+    let child; const never = () => new Promise(() => {});
+    const owned = {
+      dispose: never,
+      async open({registerCleanup,registerChild,isolation}) {
+        registerCleanup(never);
+        child = spawn(process.execPath,['-e','setInterval(() => {}, 10000)'],{stdio:'ignore'});
+        registerChild(child);
+        if (at === 'partial-open') throw new Error('partial');
+        const mount = await driver().open({isolation});
+        return {...mount,close:never};
+      },
+    };
+    const started = Date.now();
+    const result = await runLoad({...short,driver:owned,artifactBase:await temp()});
+    assert.ok(Date.now()-started < 6500, 'cleanup did not meet emergency deadline');
+    assert.equal(result.status,'failed');
+    assert.ok(result.failures.includes('gate-failed:cleanup-or-idle'));
+    assert.equal(result.cleanup?.registeredChildrenExited,1);
+    assert.ok(child.exitCode !== null || child.signalCode !== null);
+    assert.equal(JSON.parse(await readFile(join(result.artifacts,'result.json'),'utf8')).status,'failed');
+  }
+});
+
+test('benchmark must declare controlled measurement window and dataset; acceptance minima remain intact', () => {
+  assert.throws(() => validateOptions({mode:'benchmark',durationMs:10}), /benchmarkDatasetId/);
+  assert.throws(() => validateOptions({mode:'benchmark',benchmarkDatasetId:'x',durationMs:0}), /durationMs/);
+  assert.throws(() => validateOptions({mode:'acceptance',durationMs:10,benchmarkDatasetId:'x'}), /8 hours/);
+  assert.throws(() => validateOptions({mode:'acceptance',eventCount:10,benchmarkDatasetId:'x'}), /100000/);
+});
+
+test('smoke baseline is incomparable to controlled benchmark, mismatched window and dataset cannot pass', async () => {
+  for (const change of [
+    json => { json.mode='smoke'; },
+    json => { json.config.durationMs++; },
+    json => { json.config.benchmarkDatasetId='different'; },
+    json => { json.elapsedMs=0; },
+    json => { json.samples.typedInputMs=[]; },
+    json => { json.samples.elapsedMs.fill(0); },
+    json => { json.measurement.windowMs++; },
+    json => { json.config.eventCount++; },
+  ]) {
+    const {result} = await baselinePair({baselineMutate:async json => change(json)});
+    assert.equal(result.comparison.status,'incomparable-baseline');
+    assert.equal(result.status,'latency-baseline-pending');
+  }
+});
+
+test('unmarked fast smoke cannot make a latency claim even with preserved source and matching config', async () => {
+  const {result} = await baselinePair({baselineMutate:async json => { json.mode='smoke'; }});
+  assert.equal(result.comparison.status,'incomparable-baseline');
+});
+
+test('session-switch budget fails independently and exact benchmark provenance survives artifact', async () => {
+  const {result} = await baselinePair({candidateLatency:5,baselineMutate:async json => {
+    // Keep typed p95 intact; change only switch samples and its p95 to a valid lower baseline.
+    json.samples.sessionSwitchMs = json.samples.sessionSwitchMs.map(() => 5);
+    json.p95.sessionSwitchMs = 5;
+  }});
+  assert.equal(result.status,'failed');
+  assert.equal(result.comparison.status,'over-budget');
+  assert.equal(result.comparison.typedInputRatio,1);
+  assert.equal(result.comparison.sessionSwitchRatio,1.4);
+  const saved = JSON.parse(await readFile(join(result.artifacts,'result.json'),'utf8'));
+  assert.equal(saved.measurement.windowMs,short.durationMs);
+  assert.equal(saved.measurement.datasetId,short.benchmarkDatasetId);
+  assert.ok(saved.samples.elapsedMs.at(-1) >= saved.measurement.windowMs);
 });
