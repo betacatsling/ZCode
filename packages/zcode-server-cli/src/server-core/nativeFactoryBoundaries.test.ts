@@ -330,6 +330,9 @@ for (const variant of [
       server.closeAllConnections();
       if (server.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
       await removeIsolatedProfile(root);
-      for (const result of childResults) if (result.status === "rejected") throw result.reason;
+      for (const result of childResults) {
+        // eslint-disable-next-line no-unsafe-finally -- unreaped owned child is more serious than the assertion it interrupts.
+        if (result.status === "rejected") throw result.reason;
+      }
     }
   });
