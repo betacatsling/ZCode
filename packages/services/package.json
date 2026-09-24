@@ -17,7 +17,8 @@
     "./session/native-directory": "./src/session/nativeSessionDirectory.ts",
     "./session/native-composition": "./src/session/nativeComposition.ts",
     "./project-workspaces/migration": "./src/project-workspaces/legacyWorkspaceMigration.ts",
-    "./project-workspaces/migration-contract": "./src/project-workspaces/migrationContract.ts"
+    "./project-workspaces/migration-contract": "./src/project-workspaces/migrationContract.ts",
+    "./maintenance-lease": "./src/maintenance-lease.ts"
   },
   "scripts": {
     "lint": "oxlint",
