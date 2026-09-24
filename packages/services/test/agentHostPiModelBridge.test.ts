@@ -4,6 +4,13 @@ import { normalizeContext } from "@earendil-works/pi-ai";
 import { createPiHostProvider } from "../src/agent-adapters/pi/piModelStream.js";
 import type { Model } from "@zcode/contracts";
 
+const route = {
+  providerId: "provider-a",
+  modelId: "model-a",
+  apiType: "anthropic-messages",
+  endpointFingerprint: "a".repeat(64),
+};
+
 function model(onRequest: (request: Parameters<Model["streamText"]>[0]) => void): Model {
   return {
     providerId: "provider-a",
@@ -105,29 +112,46 @@ test("Pi bridge accepts committed tool input after non-JSON partial delta and re
 
 test("Pi Anthropic signature survives native-style history and returns to the same Model route", async () => {
   const requests: Array<Parameters<Model["streamText"]>[0]> = [];
-  const provider = createPiHostProvider({
-    ...model((request) => requests.push(request)),
-    async *streamText(request) {
-      requests.push(request);
-      yield { type: "start" } as const;
-      yield { type: "reasoning_start", id: "r" } as const;
-      yield { type: "reasoning_delta", id: "r", text: "thought" } as const;
-      yield {
-        type: "reasoning_delta", id: "r", text: "", providerMetadata: { anthropic: { signature: "opaque-fixture" } },
-      } as const;
-      yield { type: "reasoning_end", id: "r" } as const;
-      yield { type: "tool_input_start", id: "read-1", toolName: "read" } as const;
-      yield { type: "tool_input_delta", id: "read-1", delta: '{"path":"input.txt"}' } as const;
-      yield { type: "tool_input_end", id: "read-1" } as const;
-      yield { type: "tool_call", toolCall: { id: "read-1", name: "read", input: { path: "input.txt" } } } as const;
-      yield { type: "finish", finishReason: "tool-calls", usage: { inputTokens: 2, outputTokens: 3 } } as const;
-    },
-  } as Model);
+  const provider = createPiHostProvider(
+    {
+      ...model((request) => requests.push(request)),
+      async *streamText(request) {
+        requests.push(request);
+        yield { type: "start" } as const;
+        yield { type: "reasoning_start", id: "r" } as const;
+        yield { type: "reasoning_delta", id: "r", text: "thought" } as const;
+        yield {
+          type: "reasoning_delta",
+          id: "r",
+          text: "",
+          providerMetadata: { anthropic: { signature: "opaque-fixture" } },
+        } as const;
+        yield { type: "reasoning_end", id: "r" } as const;
+        yield { type: "tool_input_start", id: "read-1", toolName: "read" } as const;
+        yield { type: "tool_input_delta", id: "read-1", delta: '{"path":"input.txt"}' } as const;
+        yield { type: "tool_input_end", id: "read-1" } as const;
+        yield {
+          type: "tool_call",
+          toolCall: { id: "read-1", name: "read", input: { path: "input.txt" } },
+        } as const;
+        yield {
+          type: "finish",
+          finishReason: "tool-calls",
+          usage: { inputTokens: 2, outputTokens: 3 },
+        } as const;
+      },
+    } as Model,
+    route,
+  );
   const selected = (await provider.getModels())[0]!;
   const events = [];
-  for await (const event of provider.streamSimple!(selected, normalizeContext({
-    messages: [{ role: "user", content: "read", timestamp: Date.now() }],
-  }))) events.push(event);
+  for await (const event of provider.streamSimple!(
+    selected,
+    normalizeContext({
+      messages: [{ role: "user", content: "read", timestamp: Date.now() }],
+    }),
+  ))
+    events.push(event);
   const done = events.at(-1);
   assert.equal(done?.type, "done");
   if (done?.type !== "done") return;
@@ -137,47 +161,173 @@ test("Pi Anthropic signature survives native-style history and returns to the sa
   assert.ok(reasoning.thinkingSignature);
   assert.equal(reasoning.thinkingSignature.includes("opaque-fixture"), true);
   const followup = [];
-  for await (const event of provider.streamSimple!(selected, normalizeContext({ messages: [
-    { role: "user", content: "read", timestamp: Date.now() },
-    done.message,
-    { role: "toolResult", toolCallId: "read-1", toolName: "read", content: [{ type: "text", text: "ok" }], isError: false, timestamp: Date.now() },
-    { role: "user", content: "follow up", timestamp: Date.now() },
-  ] }))) followup.push(event);
+  for await (const event of provider.streamSimple!(
+    selected,
+    normalizeContext({
+      messages: [
+        { role: "user", content: "read", timestamp: Date.now() },
+        done.message,
+        {
+          role: "toolResult",
+          toolCallId: "read-1",
+          toolName: "read",
+          content: [{ type: "text", text: "ok" }],
+          isError: false,
+          timestamp: Date.now(),
+        },
+        { role: "user", content: "follow up", timestamp: Date.now() },
+      ],
+    }),
+  ))
+    followup.push(event);
   assert.equal(followup.at(-1)?.type, "done");
-  assert.deepEqual(requests[1]?.messages.find((m) => m.role === "assistant"), {
-    role: "assistant", providerId: "provider-a", modelId: "model-a",
-    content: [{ type: "reasoning", text: "thought", providerOptions: { anthropic: { signature: "opaque-fixture" } } }],
-    toolCalls: [{ id: "read-1", name: "read", input: { path: "input.txt" } }],
-  });
+  assert.deepEqual(
+    requests[1]?.messages.find((m) => m.role === "assistant"),
+    {
+      role: "assistant",
+      providerId: "provider-a",
+      modelId: "model-a",
+      content: [
+        {
+          type: "reasoning",
+          text: "thought",
+          providerOptions: { anthropic: { signature: "opaque-fixture" } },
+        },
+      ],
+      toolCalls: [{ id: "read-1", name: "read", input: { path: "input.txt" } }],
+    },
+  );
 });
 
 test("Pi signature rejects cross-route replay and unknown metadata without leaking values", async () => {
   let calls = 0;
-  const provider = createPiHostProvider(model(() => calls++));
+  const provider = createPiHostProvider(
+    model(() => calls++),
+    route,
+  );
   const selected = (await provider.getModels())[0]!;
-  const signed = { role: "assistant" as const, api: "zcode-model-executor" as const,
-    provider: "zcode-host", model: "provider-a/model-a", timestamp: Date.now(),
-    stopReason: "stop" as const, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0,
-      totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-    content: [{ type: "thinking" as const, thinking: "safe", thinkingSignature: JSON.stringify({
-      v: 1, kind: "zcode-reasoning", providerId: "other-provider", modelId: "model-a",
-      providerMetadata: { anthropic: { signature: "DO-NOT-LOG" } },
-    }) }],
+  const signed = {
+    role: "assistant" as const,
+    api: "zcode-model-executor" as const,
+    provider: "zcode-host",
+    model: "provider-a/model-a",
+    timestamp: Date.now(),
+    stopReason: "stop" as const,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    content: [
+      {
+        type: "thinking" as const,
+        thinking: "safe",
+        thinkingSignature: JSON.stringify({
+          v: 1,
+          kind: "zcode-reasoning",
+          providerId: "other-provider",
+          modelId: "model-a",
+          apiType: route.apiType,
+          endpointFingerprint: route.endpointFingerprint,
+          providerMetadata: { anthropic: { signature: "DO-NOT-LOG" } },
+        }),
+      },
+    ],
   };
   const rejected = [];
-  for await (const event of provider.streamSimple!(selected, normalizeContext({ messages: [
-    { role: "user", content: "start", timestamp: Date.now() }, signed,
-  ] }))) rejected.push(event);
+  for await (const event of provider.streamSimple!(
+    selected,
+    normalizeContext({
+      messages: [{ role: "user", content: "start", timestamp: Date.now() }, signed],
+    }),
+  ))
+    rejected.push(event);
   assert.equal(rejected.at(-1)?.type, "error");
   assert.equal(calls, 0);
-  const unknown = createPiHostProvider({ ...model(() => calls++), async *streamText() {
-    yield { type: "reasoning_start", id: "r" } as const;
-    yield { type: "reasoning_delta", id: "r", text: "", providerMetadata: { anthropic: { alien: "SECRET" } } } as const;
-  } } as Model);
+  // 同一 provider/model 的 API 协议或端点换路由，也不得重放旧签名。
+  for (const changed of [
+    { providerId: route.providerId, apiType: "openai-responses" },
+    { providerId: route.providerId, apiType: route.apiType, endpointFingerprint: "b".repeat(64) },
+  ]) {
+    const envelope = JSON.parse(signed.content[0]!.thinkingSignature);
+    const foreign = {
+      ...signed,
+      content: [
+        { ...signed.content[0]!, thinkingSignature: JSON.stringify({ ...envelope, ...changed }) },
+      ],
+    };
+    const events = [];
+    for await (const event of provider.streamSimple!(
+      selected,
+      normalizeContext({
+        messages: [{ role: "user", content: "start", timestamp: Date.now() }, foreign],
+      }),
+    ))
+      events.push(event);
+    assert.equal(events.at(-1)?.type, "error");
+    assert.equal(
+      events.at(-1)?.type === "error" && events.at(-1)?.error.errorMessage,
+      "reasoning signature route mismatch",
+    );
+    assert.equal(calls, 0);
+  }
+  const absentRoute = createPiHostProvider(model(() => calls++));
+  const noIdentity = [];
+  for await (const event of absentRoute.streamSimple!(
+    (await absentRoute.getModels())[0]!,
+    normalizeContext({
+      messages: [{ role: "user", content: "start", timestamp: Date.now() }, signed],
+    }),
+  ))
+    noIdentity.push(event);
+  assert.equal(noIdentity.at(-1)?.type, "error");
+  assert.equal(calls, 0);
+  const unsignedRoute = createPiHostProvider({
+    ...model(() => calls++),
+    async *streamText() {
+      yield { type: "reasoning_start", id: "r" } as const;
+      yield {
+        type: "reasoning_delta",
+        id: "r",
+        text: "",
+        providerMetadata: { anthropic: { signature: "hidden" } },
+      } as const;
+      yield { type: "reasoning_end", id: "r" } as const;
+      yield { type: "finish", finishReason: "stop", usage: {} } as const;
+    },
+  } as Model);
+  const unsignedEvents = [];
+  for await (const event of unsignedRoute.streamSimple!(
+    (await unsignedRoute.getModels())[0]!,
+    normalizeContext({ messages: [{ role: "user", content: "start", timestamp: Date.now() }] }),
+  ))
+    unsignedEvents.push(event);
+  assert.equal(unsignedEvents.at(-1)?.type, "error");
+  assert.equal(JSON.stringify(unsignedEvents).includes("hidden"), false);
+  const unknown = createPiHostProvider(
+    {
+      ...model(() => calls++),
+      async *streamText() {
+        yield { type: "reasoning_start", id: "r" } as const;
+        yield {
+          type: "reasoning_delta",
+          id: "r",
+          text: "",
+          providerMetadata: { anthropic: { alien: "SECRET" } },
+        } as const;
+      },
+    } as Model,
+    route,
+  );
   const failures = [];
-  for await (const event of unknown.streamSimple!((await unknown.getModels())[0]!, normalizeContext({ messages: [
-    { role: "user", content: "go", timestamp: Date.now() },
-  ] }))) failures.push(event);
+  for await (const event of unknown.streamSimple!(
+    (await unknown.getModels())[0]!,
+    normalizeContext({ messages: [{ role: "user", content: "go", timestamp: Date.now() }] }),
+  ))
+    failures.push(event);
   assert.equal(failures.at(-1)?.type, "error");
   assert.equal(JSON.stringify(failures).includes("SECRET"), false);
 });

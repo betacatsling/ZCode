@@ -1,11 +1,35 @@
 import type { Worker } from "node:worker_threads";
 import type { Model } from "@zcode/contracts";
+import type { CapturedHostModel } from "../../agent-host/modelBinding.js";
 import type { PiWorkerBoot, ToPiWorker } from "./piProtocol.js";
 
-export function piModelInfo(model: Model): PiWorkerBoot["model"] {
+export type ModelCapture = Model | CapturedHostModel;
+
+export function resolvedCapture(capture: ModelCapture): {
+  model: Model;
+  identity?: CapturedHostModel["identity"];
+} {
+  const model = "model" in capture ? capture.model : capture;
+  const identity = "model" in capture ? capture.identity : undefined;
+  if (
+    identity &&
+    (identity.providerId !== model.providerId ||
+      identity.modelId !== model.modelId ||
+      !identity.apiType ||
+      !/^[a-f0-9]{64}$/.test(identity.endpointFingerprint))
+  )
+    throw new Error("Pi frozen model route identity mismatch");
+  return { model, ...(identity ? { identity } : {}) };
+}
+
+export function piModelInfo(
+  model: Model,
+  identity?: CapturedHostModel["identity"],
+): PiWorkerBoot["model"] {
   return {
     providerId: model.providerId,
     modelId: model.modelId,
+    ...(identity ? { identity } : {}),
     ...(model.displayName ? { displayName: model.displayName } : {}),
     properties: { contextWindow: model.properties.contextWindow },
     optionSpecs: { maxOutputTokens: { max: model.optionSpecs.maxOutputTokens.max } },

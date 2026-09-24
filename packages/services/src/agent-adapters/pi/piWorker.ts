@@ -123,7 +123,7 @@ async function main(): Promise<void> {
     refreshOnCreate: false,
     allowModelNetwork: false,
   });
-  modelRuntime.registerNativeProvider(createPiHostProvider(modelProxy()));
+  modelRuntime.registerNativeProvider(createPiHostProvider(modelProxy(), boot.model.identity));
   const modelId = `${boot.model.providerId}/${boot.model.modelId}`;
   const model = modelRuntime.getModel("zcode-host", modelId);
   if (!model) throw new Error("Pi SDK failed to register the ZCode host provider");
@@ -315,7 +315,7 @@ async function main(): Promise<void> {
         return;
       }
       modelRuntime.registerNativeProvider(
-        createPiHostProvider({ ...modelProxy(), ...raw.model } as Model),
+        createPiHostProvider({ ...modelProxy(), ...raw.model } as Model, raw.model.identity),
       );
       const selected = modelRuntime.getModel("zcode-host", modelId);
       if (!selected) {

@@ -1,4 +1,5 @@
 import type { ModelRequest, ModelStreamEvent } from "@zcode/contracts";
+import type { CapturedHostModel } from "../../agent-host/modelBinding.js";
 import type {
   AgentEvent,
   BackendBindingV2,
@@ -17,6 +18,7 @@ export interface PiWorkerBoot {
   model: {
     providerId: string;
     modelId: string;
+    identity?: CapturedHostModel["identity"];
     displayName?: string;
     properties: { contextWindow: number };
     optionSpecs: { maxOutputTokens: { max: number } };
