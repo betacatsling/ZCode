@@ -1,26 +1,60 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { fork } from "node:child_process";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import { createMaintenanceCoordination } from "../src/workspace-hierarchy/maintenance.js";
+import { createNodeMaintenanceLeaseHandler } from "../src/maintenance-lease.js";
 
 test("maintenance freezes admission before fresh native+external activity and holds through action", async () => {
   const sequence: string[] = [];
   let releaseAdmission!: () => void;
-  const unfinished = new Promise<void>((resolve) => { releaseAdmission = resolve; });
-  let entered!: () => void;
-  const ready = new Promise<void>((resolve) => { entered = resolve; });
-  const coordination = createMaintenanceCoordination({
-    nativeFence: async () => { sequence.push("native:frozen"); return async () => { sequence.push("native:unfrozen"); }; },
-    activity: async () => { sequence.push("fresh:activity"); return { running: 0, waiting: 0, tools: 0, uncertain: 0, offline: false }; },
+  const unfinished = new Promise<void>((resolve) => {
+    releaseAdmission = resolve;
   });
-  const admitted = coordination.withAdmission(async () => { sequence.push("accepted"); entered(); await unfinished; sequence.push("finished"); });
+  let entered!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const coordination = createMaintenanceCoordination({
+    nativeFence: async () => {
+      sequence.push("native:frozen");
+      return async () => {
+        sequence.push("native:unfrozen");
+      };
+    },
+    activity: async () => {
+      sequence.push("fresh:activity");
+      return { running: 0, waiting: 0, tools: 0, uncertain: 0, offline: false };
+    },
+  });
+  const admitted = coordination.withAdmission(async () => {
+    sequence.push("accepted");
+    entered();
+    await unfinished;
+    sequence.push("finished");
+  });
   await ready;
-  const updating = coordination.withMaintenance(async () => { sequence.push("update"); assert.equal(coordination.admissionEnabled(), false); });
-  await assert.rejects(coordination.withAdmission(async () => {}), /frozen/);
+  const updating = coordination.withMaintenance(async () => {
+    sequence.push("update");
+    assert.equal(coordination.admissionEnabled(), false);
+  });
+  await assert.rejects(
+    coordination.withAdmission(async () => {}),
+    /frozen/,
+  );
   assert.equal(sequence.includes("fresh:activity"), false);
   releaseAdmission();
   await admitted;
   await updating;
-  assert.deepEqual(sequence, ["accepted", "native:frozen", "finished", "fresh:activity", "update", "native:unfrozen"]);
+  assert.deepEqual(sequence, [
+    "accepted",
+    "native:frozen",
+    "finished",
+    "fresh:activity",
+    "update",
+    "native:unfrozen",
+  ]);
   assert.equal(coordination.admissionEnabled(), true);
 });
 
@@ -28,11 +62,140 @@ test("unknown/offline activity rejects automatic maintenance and unfreezes nativ
   let released = false;
   let performed = false;
   const coordination = createMaintenanceCoordination({
-    nativeFence: async () => async () => { released = true; },
+    nativeFence: async () => async () => {
+      released = true;
+    },
     activity: async () => ({ running: 0, waiting: 0, tools: 1, uncertain: 1, offline: true }),
   });
-  await assert.rejects(coordination.withMaintenance(async () => { performed = true; }), /busy or uncertain/);
+  await assert.rejects(
+    coordination.withMaintenance(async () => {
+      performed = true;
+    }),
+    /busy or uncertain/,
+  );
   assert.equal(performed, false);
   assert.equal(released, true);
   assert.equal(coordination.admissionEnabled(), true);
+});
+
+test("RPC lease survives separate messages, rejects stale epochs/duplicates without unfreezing", async () => {
+  const sequence: string[] = [];
+  const port = createMaintenanceCoordination({
+    nativeFence: async () => {
+      sequence.push("native:frozen");
+      return async () => {
+        sequence.push("native:released");
+      };
+    },
+    activity: async () => {
+      sequence.push("activity");
+      return { running: 0, waiting: 0, tools: 0, uncertain: 0, offline: false };
+    },
+  });
+  const rpc = createNodeMaintenanceLeaseHandler(port);
+  const lease = await rpc(JSON.parse(JSON.stringify({ command: "freezeAdmissions" })));
+  assert.equal(typeof lease, "object");
+  assert.deepEqual(sequence, ["native:frozen", "activity"]);
+  await assert.rejects(
+    port.withAdmission(async () => {}),
+    /frozen/,
+  );
+  await assert.rejects(rpc({ command: "freezeAdmissions" }), /already/);
+  await assert.rejects(
+    rpc({ command: "releaseAdmissions", lease: { ...(lease as object), epoch: -1 } }),
+    /lease/,
+  );
+  assert.equal(port.admissionEnabled(), false);
+  await rpc(JSON.parse(JSON.stringify({ command: "releaseAdmissions", lease })));
+  assert.deepEqual(sequence, ["native:frozen", "activity", "native:released"]);
+  const next = await rpc({ command: "freezeAdmissions" });
+  await assert.rejects(rpc({ command: "releaseAdmissions", lease }), /lease/);
+  assert.equal(port.admissionEnabled(), false);
+  await rpc({ command: "releaseAdmissions", lease: next });
+  await assert.rejects(rpc({ command: "releaseAdmissions", lease: next }), /lease/);
+});
+
+test("native acquire ambiguity fails closed; release failure does not reopen workspace admission", async () => {
+  const acquire = createMaintenanceCoordination({
+    nativeFence: async () => {
+      throw new Error("unknown CLI fence state");
+    },
+    activity: async () => ({ running: 0, waiting: 0, tools: 0, uncertain: 0, offline: false }),
+  });
+  await assert.rejects(acquire.freezeAdmissions(), /unknown CLI fence state/);
+  assert.equal(acquire.admissionEnabled(), false);
+  const release = createMaintenanceCoordination({
+    nativeFence: async () => async () => {
+      throw new Error("CLI release uncertain");
+    },
+    activity: async () => ({ running: 0, waiting: 0, tools: 0, uncertain: 0, offline: false }),
+  });
+  const lease = await release.freezeAdmissions();
+  await assert.rejects(release.releaseAdmissions(lease), /CLI release uncertain/);
+  assert.equal(release.admissionEnabled(), false);
+  await assert.rejects(release.freezeAdmissions(), /already/);
+});
+
+test("failed fresh check releases only acquired fence and leaves admissions open", async () => {
+  let releases = 0;
+  const port = createMaintenanceCoordination({
+    nativeFence: async () => async () => {
+      releases++;
+    },
+    activity: async () => {
+      throw new Error("activity offline");
+    },
+  });
+  await assert.rejects(port.freezeAdmissions(), /activity offline/);
+  assert.equal(releases, 1);
+  assert.equal(port.admissionEnabled(), true);
+});
+
+test("child Core retains lease across IPC while Supervisor messages race with accepted admission", async () => {
+  const loader = createRequire(import.meta.url).resolve("tsx");
+  const child = fork(
+    fileURLToPath(new URL("./fixtures/maintenanceLeaseChild.ts", import.meta.url)),
+    [],
+    {
+      execArgv: ["--import", loader],
+      stdio: ["ignore", "ignore", "pipe", "ipc"],
+    },
+  );
+  let id = 0;
+  const pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
+  child.on("message", (message: unknown) => {
+    if (!message || typeof message !== "object" || !("id" in message)) return;
+    const reply = message as { id: number; result?: unknown; error?: string };
+    const item = pending.get(reply.id);
+    if (!item) return;
+    pending.delete(reply.id);
+    if (reply.error) item.reject(new Error(reply.error));
+    else item.resolve(reply.result);
+  });
+  const request = (payload: unknown): Promise<unknown> => {
+    const requestId = ++id;
+    return new Promise((resolve, reject) => {
+      pending.set(requestId, { resolve, reject });
+      child.send({ id: requestId, request: payload });
+    });
+  };
+  try {
+    assert.equal(await request("test:admit"), "accepted");
+    const freeze = request({ command: "freezeAdmissions" });
+    await assert.rejects(request({ command: "freezeAdmissions" }), /already/);
+    await assert.rejects(
+      request({ command: "releaseAdmissions", lease: { token: "wrong", epoch: 1 } }),
+      /lease/,
+    );
+    assert.equal(await request("test:finish"), "finished");
+    const lease = await freeze;
+    assert.equal(typeof (lease as { token: string }).token, "string");
+    await assert.rejects(request({ command: "freezeAdmissions" }), /already/);
+    assert.deepEqual(await request({ command: "releaseAdmissions", lease }), { released: true });
+    await assert.rejects(request({ command: "releaseAdmissions", lease }), /lease/);
+  } finally {
+    child.disconnect();
+    child.kill();
+    for (const item of pending.values()) item.reject(new Error("child closed"));
+  }
 });
