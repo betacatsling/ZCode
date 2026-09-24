@@ -56,6 +56,8 @@ let sessions: SidebarSnapshot["sessions"] = [
   },
 ];
 let offline = false;
+let rejectCreate = true;
+let rejectRemove = true;
 let revision = 1;
 function snapshot(): SidebarSnapshot {
   return {
@@ -124,6 +126,12 @@ const services: MountedHierarchyServices = {
     create: async () => {
       throw new Error("No target worktree");
     },
+    remove: async (input) => {
+      events.push(`remove:${input.workspaceId}:${input.expectedGeneration}`);
+      refresh();
+      if (rejectRemove) throw new Error("Target removal rejected: dirty worktree");
+      return workspaces.find((w) => w.id === input.workspaceId)!;
+    },
     updateWorkspace: async (id, update) => {
       events.push(`workspace:${id}:${JSON.stringify(update)}`);
       refresh();
@@ -152,9 +160,22 @@ const services: MountedHierarchyServices = {
         availability: "supported",
       },
     ],
-    createAgent: async (input) => {
-      events.push(`create:${input.workspaceId}:${input.commandId}`);
+    listCreateOptions: async (workspaceId) => ({
+      workspaceId,
+      worktreeGeneration: `gen-${workspaceId.slice(3)}`,
+      options: [
+        { harnessId: "zcode", label: "Provider A / Model B / high", binding: { kind: "host-managed", selection: { providerId: "provider-a", modelId: "model-b", options: { reasoningLevel: "high" } } } },
+      ],
+    }),
+    previewRemoval: async (workspaceId, generation) => {
+      events.push(`preview:${workspaceId}:${generation}`);
       refresh();
+      return { allowed: true, risks: ["External process may change the worktree"] };
+    },
+    createAgent: async (input) => {
+      events.push(`create:${input.workspaceId}:${input.commandId}:${JSON.stringify(input.modelBinding)}`);
+      refresh();
+      if (rejectCreate) throw new Error("Host rejected creation");
       const owner: MountedSessionOwner = {
         kind: "external",
         scope: {
@@ -212,6 +233,8 @@ function Fixture() {
         Toggle offline
       </button>
       <output data-testid="mounted-events">{events.join("|")}</output>
+      <button type="button" onClick={() => { rejectCreate = false; refresh(); }}>Allow create</button>
+      <button type="button" onClick={() => { rejectRemove = false; refresh(); }}>Allow removal</button>
       <span data-testid="tick">{tick}</span>
     </main>
   );
