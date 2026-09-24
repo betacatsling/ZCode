@@ -10,6 +10,18 @@ const PIN = {
   runtimeSha256: "f59841d0ff58bb9497849fca08b1cf06e5d803da7dce5ff99722e2ba7ec07f87",
 } as const;
 
+/** Recognize the pinned profile independently of the caller's asserted `certified` flag. */
+export function isPinnedClaudeAcpDescriptor(descriptor: AcpDescriptor): boolean {
+  return (
+    descriptor.version.exact === PIN.version &&
+    descriptor.executable === process.execPath &&
+    descriptor.argv.length === 1 &&
+    typeof descriptor.argv[0] === "string" &&
+    basename(descriptor.argv[0]) === "index.js" &&
+    basename(dirname(descriptor.argv[0])) === "dist"
+  );
+}
+
 /** Verify all shipped runtime JS, not a workspace executable or a non-existent --version flag.
  * Packaging must make this directory immutable after verification (probe-to-spawn race).
  */

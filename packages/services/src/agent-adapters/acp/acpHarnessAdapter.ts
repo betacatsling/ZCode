@@ -21,6 +21,7 @@ import {
 } from "./acpTransport.js";
 import { projectAcpUpdate, type AcpTurnProjection } from "./acpProjection.js";
 import { probeTrustedAcpProfile } from "./acpProbe.js";
+import { isPinnedClaudeAcpDescriptor } from "./pinnedClaudeProfile.js";
 const supported = { support: "supported" } as const;
 const unsupported = (reason: string): CapabilityReport => ({ support: "unsupported", reason });
 
@@ -297,6 +298,11 @@ export class AcpHarnessAdapter implements HarnessAdapter {
       !isAbsolute(descriptor.env.HOME ?? "")
     )
       throw new Error("ACP trusted descriptor cwd/executable/profile/version mismatch");
+    // 原生设置管理器在 canUseTool 之前读取工作树规则；未隔离时禁止绕过 probe 注入 supported plan。
+    if (isPinnedClaudeAcpDescriptor(descriptor))
+      throw new Error(
+        "ACP pinned Claude profile uncertified: project settings can bypass approval",
+      );
     const id = spec.hostSessionId;
     return AcpTransport.connect(descriptor, {
       ...this.profile.transport,
