@@ -22,6 +22,10 @@ import type { RegistryProviderConfig } from "@zcode/provider";
 import { withOpenRouterAttributionHeaders } from "@zcode/shared";
 import { createAnthropicCompatFetch } from "./anthropic-stream-compat.js";
 import { createOpenAIResponsesJsonCompatFetch } from "./openai-responses-json-compat.js";
+import {
+  createOpenAiDeveloperRoleFetch,
+  type OpenAiInstructionPlan,
+} from "./openai-developer-role.js";
 import { createModelOptionMapFetch, type RawRequestBodyCapture } from "./model-option-map-fetch.js";
 import { createNetworkProxyFetch } from "../network/proxy-fetch.js";
 import { createOfficialCodingPlanGatewayFetch } from "./official-coding-plan-gateway.js";
@@ -76,6 +80,7 @@ export interface AiSdkBoundModelResolution {
   resolveRequest(input: {
     readonly options: ModelOptionValues;
     readonly requestAuth?: ModelRequestAuth;
+    readonly instructionPlan?: OpenAiInstructionPlan;
   }): AiSdkResolvedModel;
 }
 
@@ -188,8 +193,8 @@ export class AiSdkModelExecution {
     return {
       // 这里只构造不执行请求的基础 Model；真正请求必须通过 resolveRequest 绑定完整 options。
       resolved: this.resolveSnapshot(snapshot, undefined, undefined, undefined),
-      resolveRequest: ({ options, requestAuth }) =>
-        this.resolveSnapshot(snapshot, requestAuth, optionMaps, options),
+      resolveRequest: ({ options, requestAuth, instructionPlan }) =>
+        this.resolveSnapshot(snapshot, requestAuth, optionMaps, options, instructionPlan),
     };
   }
 
@@ -227,6 +232,7 @@ export class AiSdkModelExecution {
     requestAuth: ModelRequestAuth | undefined,
     optionMaps: CompiledModelOptionMaps | undefined,
     optionValues: ModelOptionValues | undefined,
+    instructionPlan?: OpenAiInstructionPlan,
   ): AiSdkResolvedModel {
     const providerConfig = applyModelRequestAuth(snapshot.providerConfig, requestAuth);
     // Model 创建时的 Provider 事实必须被冻结在当前 binding 中。若按 providerId 缓存
@@ -239,6 +245,7 @@ export class AiSdkModelExecution {
       optionValues,
       rawRequestBodyCapture,
       snapshot.supportsJsonSchemaOutput,
+      instructionPlan,
     );
     return {
       baseURL: providerConfig.baseURL,
@@ -249,6 +256,7 @@ export class AiSdkModelExecution {
       providerKind: providerConfig.kind,
       providerOptions: providerConfig.providerOptions,
       rawRequestBodyCapture,
+      ...(instructionPlan ? { instructionPlan } : {}),
     };
   }
 
@@ -259,6 +267,7 @@ export class AiSdkModelExecution {
     optionValues: ModelOptionValues | undefined,
     rawRequestBodyCapture: RawRequestBodyCapture,
     supportsJsonSchemaOutput: boolean,
+    instructionPlan?: OpenAiInstructionPlan,
   ): LanguageModelFactory {
     const apiKey = this.resolveApiKey(providerConfig);
     const headers = providerConfig.headers;
@@ -283,7 +292,9 @@ export class AiSdkModelExecution {
         const provider = createOpenAI({
           apiKey,
           baseURL: providerConfig.baseURL,
-          fetch: createOpenAIResponsesJsonCompatFetch(optionFetch),
+          fetch: createOpenAIResponsesJsonCompatFetch(
+            createOpenAiDeveloperRoleFetch(optionFetch, instructionPlan),
+          ),
           headers,
         });
         return provider.responses as LanguageModelFactory;

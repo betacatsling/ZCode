@@ -2,6 +2,7 @@ import { Output, jsonSchema } from "ai";
 import type { ModelToolChoice } from "@zcode/contracts";
 import type { EnvRecord } from "./model-execution.js";
 import { toAiSdkMessages } from "./transform.js";
+import { requireOpenAiDeveloperSystemMode } from "./openai-developer-role.js";
 import { toAiSdkTools } from "./tool-transform.js";
 import type {
   AiSdkGenerateTextOptions,
@@ -50,14 +51,18 @@ export function createGenerateTextOptions(input: {
     providerKind: input.resolved.providerKind,
     providerOptions,
   });
-  const requestProviderOptions = withNativeGenerateOutputFormat({
-    providerOptions: providerOptionsWithMetadata,
-    responseJsonSchema: input.request.responseJsonSchema,
-    resolved: input.resolved,
-  });
+  const requestProviderOptions = requireOpenAiDeveloperSystemMode(
+    withNativeGenerateOutputFormat({
+      providerOptions: providerOptionsWithMetadata,
+      responseJsonSchema: input.request.responseJsonSchema,
+      resolved: input.resolved,
+    }),
+    input.resolved.instructionPlan !== undefined,
+  );
   return removeUndefined({
     model: input.resolved.model,
     messages: toAiSdkMessages(input.request.messages, {
+      developerRolePlanned: input.resolved.instructionPlan !== undefined,
       apiFormat: resolveProviderApiFormat(providerOptions),
       providerOptions,
       providerKind: input.resolved.providerKind,
@@ -111,14 +116,18 @@ export function createStreamTextOptions(input: {
     input.resolved.providerOptions,
     input.request.providerOptions,
   );
-  const requestProviderOptions = mergeAnthropicRequestMetadata({
-    metadataUserId: input.anthropicMetadataUserId,
-    providerKind: input.resolved.providerKind,
-    providerOptions,
-  });
+  const requestProviderOptions = requireOpenAiDeveloperSystemMode(
+    mergeAnthropicRequestMetadata({
+      metadataUserId: input.anthropicMetadataUserId,
+      providerKind: input.resolved.providerKind,
+      providerOptions,
+    }),
+    input.resolved.instructionPlan !== undefined,
+  );
   return removeUndefined({
     model: input.resolved.model,
     messages: toAiSdkMessages(input.request.messages, {
+      developerRolePlanned: input.resolved.instructionPlan !== undefined,
       apiFormat: resolveProviderApiFormat(providerOptions),
       providerOptions,
       providerKind: input.resolved.providerKind,
