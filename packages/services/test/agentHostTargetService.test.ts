@@ -31,8 +31,8 @@ test("target service admits only authorized workspaces, detaches without stoppin
       target: { id: "target-a", kind: "local", platform: process.platform, available: true },
       harnesses: ["mock"],
     });
-    await assert.rejects(service.create({ ...spec, execution: { ...spec.execution, workspaceIdentity: "foreign" } }), /unauthorized/);
-    const created = await service.create(spec);
+    await assert.rejects(service.create({ ...spec, execution: { ...spec.execution, workspaceIdentity: "foreign" } }, "foreign"), /unauthorized/);
+    const created = await service.create(spec, "create-host-a");
     assert.equal(created.agentHost?.harnessId, "mock");
     const send = { type: "send", commandId: "send-1", hostSessionId: "host-a", turnId: "turn-1", text: "mock text" } as const;
     assert.equal((await service.dispatch(spec, send)).status, "accepted");

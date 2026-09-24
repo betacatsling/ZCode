@@ -17,7 +17,7 @@ test("Pi rejects its unsupported native-account mode before a worker or journal 
   try {
     await assert.rejects(SessionHost.create({
       root: journalRoot,
-      spec: { schemaVersion: 1, hostSessionId: "pi-no-native", execution: { targetId: "local", workspaceIdentity: "w", worktreePath: worktree },
+      spec: { schemaVersion: 2, projectId: "fixture-project", workspaceId: "fixture-workspace", hostSessionId: "pi-no-native", execution: { targetId: "local", workspaceIdentity: "w", worktreePath: worktree, worktreeGeneration: "fixture-generation", cwdRelativeToWorktree: "." },
         harness: { id: "pi", adapterVersion: "0.87.1" }, modelBinding: { kind: "harness-managed" } },
       target: { id: "local", kind: "local", platform: process.platform as "darwin" | "linux", available: true },
       registry, catalog: { fingerprint: "v1", validateSelection: () => ({ ok: true }) },
