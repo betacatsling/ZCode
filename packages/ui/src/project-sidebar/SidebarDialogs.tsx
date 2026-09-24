@@ -132,7 +132,9 @@ export function AgentCreationDialog({
   const [pending, setPending] = useState(false);
   const draft = useProjectSidebarViewStore((state) => state.drafts[workspaceId] ?? "");
   const setDraft = useProjectSidebarViewStore((state) => state.setDraft);
-  const options = props.modelOptions?.filter((option) => option.harnessId === harnessId) ?? [];
+  const options = (props.modelOptionsByWorkspace
+    ? props.modelOptionsByWorkspace.get(workspaceId)
+    : props.modelOptions)?.filter((option) => option.harnessId === harnessId) ?? [];
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     const binding = options[modelIndex]?.binding;
