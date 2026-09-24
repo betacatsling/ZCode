@@ -7,6 +7,13 @@ export {
   type MaintenanceLeasePort,
 } from "./workspace-hierarchy/maintenance.js";
 import type { MaintenanceLease, MaintenanceLeasePort } from "./workspace-hierarchy/maintenance.js";
+export { createNativeAdmissionFence } from "./workspace-hierarchy/nativeMaintenanceFence.js";
+export type {
+  NativeMaintenanceControl,
+  NativeMaintenanceTarget,
+  NativeMaintenanceToken,
+  NativeMaintenanceSnapshot,
+} from "./workspace-hierarchy/nativeMaintenanceFence.js";
 
 export type MaintenanceLeaseRequest =
   | { command: "freezeAdmissions" }
