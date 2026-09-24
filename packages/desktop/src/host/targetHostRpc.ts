@@ -1,5 +1,12 @@
 import { RemoteServiceAccess } from "@zcode/client";
-import { ChannelClient, Emitter, SocketProtocol, VSBuffer, type ISocket } from "@zcode/rpc";
+import {
+  ChannelClient,
+  Emitter,
+  SocketProtocol,
+  VSBuffer,
+  type ISocket,
+  type IDisposable,
+} from "@zcode/rpc";
 import type { IServiceAccessor } from "@zcode/services";
 import WebSocket from "ws";
 import { openTargetHostSocket, type HostAttachmentTicket } from "./targetServerAttachment.js";
@@ -7,6 +14,7 @@ import { openTargetHostSocket, type HostAttachmentTicket } from "./targetServerA
 /** A window-scoped attachment; the Core/Supervisor are independent owners. */
 export interface TargetHostRpcAttachment {
   readonly services: IServiceAccessor;
+  onDidClose(listener: () => void): IDisposable;
   dispose(): void;
 }
 
@@ -59,6 +67,11 @@ export async function connectTargetHostRpc(
   let disposed = false;
   return {
     services: new RemoteServiceAccess(attachedClient),
+    onDidClose(listener) {
+      const subscription = close.event(listener);
+      if (ws.readyState !== WebSocket.OPEN) queueMicrotask(listener);
+      return subscription;
+    },
     dispose() {
       if (disposed) return;
       disposed = true;

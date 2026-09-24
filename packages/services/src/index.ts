@@ -8,6 +8,10 @@ export {
   IProjectCatalogRpcService,
   IProjectCatalogTargetRpcService,
 } from "./project-workspaces/serviceContract.js";
+export {
+  prepareTargetAttachment,
+  type TargetAttachmentTicket,
+} from "./agent-host-lifetime/targetHandshake.js";
 export type {
   IProjectCatalogService,
   ProjectCatalogRpcService,

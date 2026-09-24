@@ -14,6 +14,7 @@
  * 3. 后续远端 connect / scoped attachment 都由同一 Host 处理
  */
 import { createHostDatabaseStartup } from "./hostDatabaseStartup.js";
+import { mountLocalCore, type CoreAttachmentLocation } from "./targetCoreMount.js";
 import { randomUUID } from "node:crypto";
 import {
   MessagePortProtocol,
@@ -162,6 +163,7 @@ interface HostRemoteConnectionCapabilities {
   ) => RemoteMediaPreviewProxy;
 }
 
+let activeCoreAttachment: Awaited<ReturnType<typeof mountLocalCore>>["attachment"] | null = null;
 let activeRemoteMediaRequests = 0;
 const hostRemoteMediaRequestLimiter = {
   tryAcquire: () => {
@@ -2145,6 +2147,10 @@ async function disposeHostResources(reason: string): Promise<HostShutdownResult>
     hostSelfResourceTelemetry.stop();
     disposeLocalResourceTelemetry();
     disposeAttachedServicePorts();
+    // Core 的 service proxies 是借用的：窗口关闭只释放订阅/连接，不能调用远端 disposeAll。
+    const borrowedCoreServices = activeCoreAttachment !== null;
+    activeCoreAttachment?.dispose();
+    activeCoreAttachment = null;
     windowHostControllerRuntime.dispose();
     for (const key of Array.from(cronRunSubscriptions.keys())) {
       disposeCronRunSubscription(key);
@@ -2161,7 +2167,7 @@ async function disposeHostResources(reason: string): Promise<HostShutdownResult>
       activeSessionRealtimePort = null;
     }
 
-    const servicesToDispose = activeServices;
+    const servicesToDispose = borrowedCoreServices ? null : activeServices;
     activeServices = null;
     // Registry 是全部远端 connection 的唯一 owner；释放失败不能阻塞本地服务继续收口。
     const shutdownResult = await runHostShutdownPhases(
@@ -2214,6 +2220,10 @@ function disposeHostResourcesBestEffort(reason: string): void {
   stopHostNetworkTelemetry();
   disposeLocalResourceTelemetry();
   disposeAttachedServicePorts();
+  // 同步兜底也不能对借用的 Core service proxies 执行资源终止。
+  const borrowedCoreServices = activeCoreAttachment !== null;
+  activeCoreAttachment?.dispose();
+  activeCoreAttachment = null;
   windowHostControllerRuntime.dispose();
   for (const key of Array.from(cronRunSubscriptions.keys())) {
     disposeCronRunSubscription(key);
@@ -2226,16 +2236,15 @@ function disposeHostResourcesBestEffort(reason: string): void {
   offPeakTaskRepo.close();
   void windowRemoteConnectionRegistry.dispose();
 
-  if (activeServices) {
+  if (activeServices && !borrowedCoreServices) {
     try {
       disposeServiceResources(activeServices);
     } catch (error) {
       logger.error("failed to dispose local services:", error);
-    } finally {
-      activeServices = null;
-      activeHostApiNetworkTransport = null;
     }
   }
+  activeServices = null;
+  activeHostApiNetworkTransport = null;
 
   if (activeSessionRealtimePort) {
     activeSessionRealtimePort.dispose();
@@ -2793,6 +2802,7 @@ parentPort.on("message", async (e: Electron.MessageEvent) => {
     });
     databaseStartup = createHostDatabaseStartup({
       startupId: msg.databaseStartupId,
+      skipStoragePreparation: Boolean(process.env.ZCODE_DESKTOP_LOCAL_CORE_ATTACHMENT),
       cwd: msg.agentSpawnFallbackCwd ?? process.cwd(),
       workingDirectories:
         msg.agentWarmupTargets?.map((target) => target.workspacePath) ??
@@ -2817,6 +2827,34 @@ parentPort.on("message", async (e: Electron.MessageEvent) => {
           error,
         ),
       initializeServices: async () => {
+        const coreLocationJson = process.env.ZCODE_DESKTOP_LOCAL_CORE_ATTACHMENT;
+        if (coreLocationJson) {
+          // Core 是 native/external 的唯一执行者；窗口 Host 不创建本地 Agent 工厂。
+          // 故障不能回退 desktop-local，否则相同 session 会有两个独立 owner。
+          const coreLocation = JSON.parse(coreLocationJson) as CoreAttachmentLocation;
+          const mounted = await mountLocalCore(coreLocation);
+          activeCoreAttachment = mounted.attachment;
+          activeServices = mounted.services;
+          mounted.attachment.onDidClose(() => {
+            if (activeCoreAttachment !== mounted.attachment) return;
+            // Core 断线后旧 renderer 端口不能继续给失效 owner 发 RPC；远端 logical session 保留。
+            windowHostAttachmentRegistry.detachLocalAttachments();
+            activeServices = null;
+            activeCoreAttachment = null;
+            mounted.attachment.dispose();
+            logger.warn("persistent Core attachment lost; local renderer ports closed");
+          });
+          if (!basePortClosed)
+            windowHostAttachmentRegistry.attach({
+              requestId: `init-core-${randomUUID()}`,
+              attachmentId: `base-${randomUUID()}`,
+              clientMode: "desktop-continuous",
+              scope: { kind: "local" },
+              port,
+            });
+          logger.info("window Host attached to persistent Core");
+          return;
+        }
         logger.info("initializing local services");
         activeSessionRealtimePort = createTaskRealtimeBridgeForHostInit(msg, parentPort);
         // 旧 Team 补组织必须与网络代理读取共用同一个 Setting 实例及写队列。
