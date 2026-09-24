@@ -187,6 +187,40 @@ function getOperationId(params: unknown): string | undefined {
     : undefined;
 }
 
+/**
+ * 显式列举纯查询/订阅与已接受操作的取消入口；未知 method 默认为潜在写入。
+ * 不把 V4 command 放在白名单：入口计数跨 resident await，最终 admission 仍由现有 CommandInbox 决定。
+ */
+const MAINTENANCE_READ_METHODS = new Set<string>([
+  V4_METHODS.connectionFlow, V4_METHODS.conversationSubscribe, V4_METHODS.conversationResync,
+  V4_METHODS.conversationUnsubscribe, V4_METHODS.conversationRowsRange,
+  V4_METHODS.conversationPlans, V4_METHODS.backgroundBashOutput,
+  V4_METHODS.conversationFileChanges, V4_METHODS.conversationFileRewindPreview,
+  V4_METHODS.conversationWorkflowRunEvents, V4_METHODS.conversationWorkflowRuns,
+  V4_METHODS.conversationWorkflowRunArtifacts, V4_METHODS.conversationWorkflowRunArtifactData,
+  V4_METHODS.conversationWorkflowRunArtifactRead, V4_METHODS.conversationWorkflowRunWorkspace,
+  V4_METHODS.conversationWorkflowRunNodeResult, V4_METHODS.attachmentRead,
+  V4_METHODS.conversationAttachmentRead, V4_METHODS.conversationAttachmentStat,
+  V4_METHODS.attachmentPreviewSource, V4_METHODS.usageStats, V4_METHODS.conversationUsage,
+  V4_METHODS.commandsQuery,
+  zcodeProtocolMethods.sessionList, zcodeProtocolMethods.sessionSubagents,
+  zcodeProtocolMethods.sessionRead, zcodeProtocolMethods.sessionMessages,
+  zcodeProtocolMethods.sessionEvents, zcodeProtocolMethods.sessionSubscribe,
+  zcodeProtocolMethods.workspaceReadPresentation, zcodeProtocolMethods.mcpList,
+  zcodeProtocolMethods.pluginsList, zcodeProtocolMethods.pluginsReferenceCatalogWithCategory,
+  zcodeProtocolMethods.pluginsReferenceCatalog, zcodeProtocolMethods.skillsReferenceCatalog,
+  zcodeProtocolMethods.workflowsList, zcodeProtocolMethods.workflowsGet,
+  zcodeProtocolMethods.workflowsRuns, zcodeProtocolMethods.pluginsOverview,
+  zcodeProtocolMethods.processChildProcesses, zcodeProtocolMethods.runtimeCapabilities,
+  zcodeProtocolMethods.usageStats, zcodeProtocolMethods.sessionDebug,
+  zcodeProtocolMethods.sessionUsage,
+]);
+const MAINTENANCE_ACCEPTED_CONTROLS = new Set<string>([
+  zcodeProtocolMethods.sessionStop, zcodeProtocolMethods.sessionCancelBackgroundTask,
+  zcodeProtocolMethods.workspaceCancelGenerateText, zcodeProtocolMethods.pluginsCancelOperation,
+  V4_METHODS.attachmentAbort,
+]);
+
 interface ZCodeProtocolPostResponseBatch {
   readonly messages: readonly ZCodeProtocolOutboundMessage[];
   commit(): boolean;
@@ -207,7 +241,7 @@ interface PendingClientRequest<T> {
 export class ZCodeProtocolAgentServer {
   private readonly runtimeResources: ProtocolRuntimeResources;
   private shutdownPromise?: Promise<void>;
-  private legacyMutationInFlight = 0;
+  private protocolMutationInFlight = 0;
   private nativeLease: NativeMaintenanceLease | null = null;
 
   private nativeActivity(): NativeMaintenanceActivity {
@@ -222,7 +256,7 @@ export class ZCodeProtocolAgentServer {
     }
     return { ...v4, frozen: this.nativeLease !== null,
       active, tools, approvals,
-      pending: v4.pending + this.legacyMutationInFlight + this.workspaceGenerateTextControllers.size + this.pendingClientRequests.size,
+      pending: v4.pending + this.protocolMutationInFlight + this.workspaceGenerateTextControllers.size + this.pendingClientRequests.size,
       unknown };
   }
 
@@ -461,15 +495,14 @@ export class ZCodeProtocolAgentServer {
     // request id 可在前一请求完成后复用；新请求不能继承未消费的旧 outbox。
     this.postResponseOutbox.delete(request.id);
     let releaseResidencyOperation: (() => void) | undefined;
-    const legacyMutation = [
-      zcodeProtocolMethods.sessionCreate, zcodeProtocolMethods.sessionResume,
-      zcodeProtocolMethods.sessionSend, zcodeProtocolMethods.sessionFork,
-      zcodeProtocolMethods.sessionCompact, zcodeProtocolMethods.sessionGoal,
-      zcodeProtocolMethods.sessionClose, zcodeProtocolMethods.sessionSetModel,
-      zcodeProtocolMethods.sessionSetThoughtLevel, zcodeProtocolMethods.sessionSetMode,
-      zcodeProtocolMethods.workspaceGenerateText,
-    ].includes(request.method as typeof zcodeProtocolMethods.sessionCreate);
-    if (legacyMutation) this.legacyMutationInFlight++;
+    const protocolMutation = !MAINTENANCE_READ_METHODS.has(request.method) &&
+      !MAINTENANCE_ACCEPTED_CONTROLS.has(request.method) &&
+      request.method !== zcodeProtocolMethods.nativeMaintenanceFreeze &&
+      request.method !== zcodeProtocolMethods.nativeMaintenanceGetActivity &&
+      request.method !== zcodeProtocolMethods.nativeMaintenanceRelease;
+    // 中文：计数必须在第一个 await 前登记；否则 freeze 快照会把正在等 resident
+    // lease 的 trust/config/attachment/v4 command 写请求误判为空闲。
+    if (protocolMutation) this.protocolMutationInFlight++;
     try {
       if (request.method === zcodeProtocolMethods.nativeMaintenanceFreeze) {
         zcodeProtocolEmptyResultSchema.parse(request.params);
@@ -493,15 +526,18 @@ export class ZCodeProtocolAgentServer {
         this.nativeLease = null;
         return this.ok(request.id, { released: true });
       }
-      if (legacyMutation && this.nativeLease) throw new Error("guard.nativeMaintenanceFrozen");
+      if (protocolMutation && request.method !== V4_METHODS.command && this.nativeLease)
+        throw new Error("guard.nativeMaintenanceFrozen");
       // subscribe hydration、workspace 配置与 resume 都可能跨 await。若只看
       // session 当前状态，sampler 会在 handler 持有旧 record 时把它关闭。进程级 lease
       // 覆盖整个 request；能识别的 sessionIds 额外用于冷恢复闸门与 LRU touch。
       releaseResidencyOperation = await this.context.sessionResidentPool?.acquireOperation(
         collectResidencySessionIds(request.params),
       );
-      // 中文：旧命令在 acquireOperation 等待期间也可能刚被冻结，必须在实际派发前重查。
-      if (legacyMutation && this.nativeLease) throw new Error("guard.nativeMaintenanceFrozen");
+      // 中文：等待 residency 时可能刚被冻结，非 v4 写请求必须在派发前重查；
+      // v4 命令由 Inbox 在持久查询后裁决重复/控制与新 admission。
+      if (protocolMutation && request.method !== V4_METHODS.command && this.nativeLease)
+        throw new Error("guard.nativeMaintenanceFrozen");
       const result = await this.dispatchRequest(request);
       return this.ok(request.id, result);
     } catch (error) {
@@ -510,7 +546,7 @@ export class ZCodeProtocolAgentServer {
       return this.fail(request.id, protocolError.code, protocolError.message, protocolError.data);
     } finally {
       releaseResidencyOperation?.();
-      if (legacyMutation) this.legacyMutationInFlight--;
+      if (protocolMutation) this.protocolMutationInFlight--;
     }
   }
 

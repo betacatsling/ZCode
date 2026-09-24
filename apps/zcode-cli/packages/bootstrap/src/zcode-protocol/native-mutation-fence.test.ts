@@ -13,6 +13,7 @@ const requests = [
   [zcodeProtocolMethods.workspaceUpdateOffPeakToolPolicy, { workspace, enabled: true }],
   [zcodeProtocolMethods.workspaceUpdateDynamicWorkflowPolicy, { workspace, enabled: true }],
   [zcodeProtocolMethods.providerUpdateAccountConfig, { revision: 'r1', basedOnZCodeBuiltinRevision: 'builtin', providers: {}, states: {} }],
+  [V4_METHODS.command, { commandId: 'late', clientId: 'disposable', sessionId: null, type: 'createSession', payload: { workspaceId: 'disposable' }, issuedAt: Date.now() }],
 ] as const;
 
 test('pending trust/preference/policy writers are registered before residency await, then fenced without effects', async () => {
@@ -42,8 +43,17 @@ test('pending trust/preference/policy writers are registered before residency aw
     const fresh = await server.handleMessage({ id: 101, method: zcodeProtocolMethods.nativeMaintenanceGetActivity, params: lease });
     assert.ok(fresh && 'result' in fresh);
     assert.equal((fresh.result as { pending: number }).pending, 0);
-    const invalid = await server.handleMessage({ id: 102, method: 'future/unknownWriter', params: {} });
-    assert.match(JSON.stringify(invalid), /guard.nativeMaintenanceFrozen/);
+    // Inventory: new execution, persisted plugin/workflow edits, attachment upload, network probe
+    // and unknown future methods must all fail closed even when their payload is not yet parsed.
+    for (const method of [
+      'future/unknownWriter', zcodeProtocolMethods.sessionClose,
+      zcodeProtocolMethods.workflowsUpdateMeta, zcodeProtocolMethods.pluginsMarketplaceAdd,
+      zcodeProtocolMethods.pluginsInstall, V4_METHODS.attachmentBegin,
+      zcodeProtocolMethods.providerTestModelConnectivity,
+    ]) {
+      const invalid = await server.handleMessage({ id: 102, method, params: {} });
+      assert.match(JSON.stringify(invalid), /guard.nativeMaintenanceFrozen/, method);
+    }
     const read = await server.handleMessage({ id: 103, method: zcodeProtocolMethods.runtimeCapabilities, params: {} });
     assert.ok(read && 'result' in read);
     const query = await server.handleMessage({ id: 104, method: V4_METHODS.commandsQuery, params: { keys: [] } });
