@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -17,21 +17,32 @@ function scriptedModel(): Model {
     optionSpecs: { maxOutputTokens: { max: 1000 } },
     options: { reasoningLevel: "off" },
     async *streamText(request: Parameters<Model["streamText"]>[0]) {
+      if (JSON.stringify(request.messages).includes("SECRET_OUTSIDE"))
+        throw new Error("default SDK read escaped the mounted file boundary");
       const toolResults = request.messages.filter((message) => message.role === "tool").length;
       const lastUser = [...request.messages].reverse().find((message) => message.role === "user");
       const followUp = lastUser?.content === "Follow up";
       yield { type: "start", modelId: "test-model" };
-      if (!followUp && toolResults < 3) {
-        const calls = [
-          { id: "read-1", name: "read", input: { path: "input.txt" } },
-          {
-            id: "write-1",
-            name: "write",
-            input: { path: "output.txt", content: "fixture written" },
-          },
-          { id: "bash-1", name: "bash", input: { command: "test -f output.txt" } },
-        ];
-        const call = calls[toolResults]!;
+      const calls = followUp
+        ? [{ id: "read-later", name: "read", input: { path: "output.txt" } }]
+        : [
+            { id: "read-1", name: "read", input: { path: "input.txt" } },
+            { id: "write-denied", name: "write", input: { path: "output.txt", content: "denied" } },
+            {
+              id: "write-1",
+              name: "write",
+              input: { path: "output.txt", content: "fixture written" },
+            },
+            {
+              id: "edit-1",
+              name: "edit",
+              input: { path: "output.txt", edits: [{ oldText: "written", newText: "edited" }] },
+            },
+            { id: "bash-1", name: "bash", input: { command: "test -f output.txt" } },
+          ];
+      const index = followUp ? toolResults - 5 : toolResults;
+      if (index < calls.length) {
+        const call = calls[index]!;
         yield { type: "tool_input_start", id: call.id, toolName: call.name };
         yield { type: "tool_input_delta", id: call.id, delta: JSON.stringify(call.input) };
         yield { type: "tool_input_end", id: call.id };
@@ -42,6 +53,9 @@ function scriptedModel(): Model {
           usage: { inputTokens: 9, outputTokens: 5 },
         };
       } else {
+        // The later turn must observe the edited file content via the mounted native read.
+        if (followUp && !JSON.stringify(request.messages).includes("fixture edited"))
+          throw new Error("follow-up did not see edited file");
         yield { type: "text_start", id: "reply" };
         yield {
           type: "text_delta",
@@ -62,7 +76,9 @@ test(
     const root = await mkdtemp(join(tmpdir(), "zcode-pi-loop-"));
     const worktree = join(root, "worktree");
     await mkdir(worktree);
-    await writeFile(join(worktree, "input.txt"), "fixture input");
+    const outside = join(root, "outside.txt");
+    await writeFile(outside, "SECRET_OUTSIDE");
+    await symlink(outside, join(worktree, "input.txt"));
     const registry = new HarnessRegistry();
     const adapter = new PiHarnessAdapter({
       root: join(root, "workers"),
@@ -110,6 +126,14 @@ test(
       const requested = new Set<string>();
       host.subscribe((event) => {
         if (event.kind === "interaction.requested") {
+          assert.equal(event.turnId, "first-turn");
+          assert.equal(event.toolCallId, event.interactionId);
+          assert.equal(
+            event.summary,
+            event.toolCallId === "bash-1"
+              ? "Run Pi bash command: test -f output.txt"
+              : `Allow Pi ${event.toolCallId === "edit-1" ? "edit" : "write"} in this worktree?`,
+          );
           approvals.push(event.interactionId);
           requested.add(event.interactionId);
         }
@@ -132,30 +156,54 @@ test(
         );
       };
       await waitFor(1);
-      assert.equal(approvals[0], "write-1");
+      assert.equal(approvals[0], "write-denied");
+      await host.dispatch({
+        type: "resolveInteraction",
+        commandId: "deny-write",
+        hostSessionId: "pi-loop",
+        runtimeEpoch: host.binding.runtimeEpoch,
+        turnId: "first-turn",
+        interactionId: approvals[0]!,
+        decision: "deny",
+      });
+      await waitFor(2);
+      await assert.rejects(readFile(join(worktree, "output.txt")), { code: "ENOENT" });
+      assert.equal(approvals[1], "write-1");
       await host.dispatch({
         type: "resolveInteraction",
         commandId: "allow-write",
         hostSessionId: "pi-loop",
         runtimeEpoch: host.binding.runtimeEpoch,
         turnId: "first-turn",
-        interactionId: approvals[0]!,
+        interactionId: approvals[1]!,
         decision: "allow",
       });
-      await waitFor(2);
-      assert.equal(approvals[1], "bash-1");
+      await waitFor(3);
+      assert.equal(approvals[2], "edit-1");
+      await host.dispatch({
+        type: "resolveInteraction",
+        commandId: "allow-edit",
+        hostSessionId: "pi-loop",
+        runtimeEpoch: host.binding.runtimeEpoch,
+        turnId: "first-turn",
+        interactionId: approvals[2]!,
+        decision: "allow",
+      });
+      await waitFor(4);
+      assert.equal(approvals[3], "bash-1");
       await host.dispatch({
         type: "resolveInteraction",
         commandId: "allow-bash",
         hostSessionId: "pi-loop",
         runtimeEpoch: host.binding.runtimeEpoch,
         turnId: "first-turn",
-        interactionId: approvals[1]!,
+        interactionId: approvals[3]!,
         decision: "allow",
       });
       await host.whenIdle();
-      assert.equal(await readFile(join(worktree, "output.txt"), "utf8"), "fixture written");
-      assert.equal(requested.size, 2);
+      assert.equal(await readFile(outside, "utf8"), "SECRET_OUTSIDE");
+      assert.equal(await readFile(join(worktree, "output.txt"), "utf8"), "fixture edited");
+      assert.equal(requested.size, 4);
       assert.equal(
         host
           .snapshot()

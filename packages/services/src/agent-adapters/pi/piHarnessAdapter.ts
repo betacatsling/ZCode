@@ -83,7 +83,20 @@ export class PiHarnessAdapter implements HarnessAdapter {
       };
     return report;
   }
-  async capabilities(_target: ExecutionTarget) {
+  async capabilities(target: ExecutionTarget) {
+    const report = await this.probe(target);
+    if (report.support !== "supported") {
+      // 修复：仅在 create 阶段拒绝 Windows 会让能力查询错误宣传可安全运行的文件工具。
+      const unavailable = { support: "unsupported" as const, reason: report.reason };
+      return {
+        ...piCapabilities(),
+        text: unavailable,
+        tools: unavailable,
+        approvals: unavailable,
+        cancelTurn: unavailable,
+        history: unavailable,
+      };
+    }
     return piCapabilities();
   }
   async create(spec: SessionSpecV2, plan: BindingPlan): Promise<BackendBindingV2> {
