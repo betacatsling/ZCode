@@ -1,0 +1,7 @@
+# Trusted Harness registry contract (P1 freeze)
+
+Only a trusted built-in or explicitly enabled source may supply a manifest and factory. The manifest is identity/display metadata, NOT evidence of capability. Registry rejects duplicate IDs and mismatched factory adapter identity/version. Target Runtime Host probes adapter availability and capabilities for every target/version; unsupported, experimental and unknown reports have explicit reasons and never imply admission. Model availability is checked against the target's model catalog and actual adapter support, never inferred from a logo or harness name. Existing direct `register` remains legacy compatibility; migrate new registrations to `registerTrusted`.
+
+Icon descriptors are opaque allowlisted asset IDs, optionally light/dark, never URL, file path or SVG markup. The asset-serving host must authorize and validate bytes (especially SVG), MIME and redistribution rights; renderer must not interpret manifest content as HTML or infer brand from model. Missing assets use generic fallback, not GLM. Registry doesn't load arbitrary repository plugins or inspect credentials. Factory context is restricted to target description; adapters receive no implicit secrets.
+
+Mock faults are deterministic synthetic events for contract tests, not real process, model, SSH, permission or persistence certification. Mock approvals gate synthetic tool completion; duplicates/gaps remain deliberately malformed stream scenarios for the journal to detect. No mock test certifies native behavior.
