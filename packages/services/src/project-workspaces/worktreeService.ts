@@ -53,6 +53,16 @@ export interface CreateTargetWorktreeRequest {
   baseRef?: string;
 }
 
+export interface PendingTargetCreation {
+  workspaceId: string;
+  bindingId: string;
+  /** Canonical parent plus requested basename, captured before Git mutation. */
+  worktreePath: string;
+  branch: string;
+  mode: "new" | "existing";
+  baseRef?: string;
+}
+
 export interface RemovalPreview {
   workspaceId: string;
   generation: string;
@@ -172,6 +182,16 @@ export class TargetWorktreeService {
   }
   records(): readonly TargetWorkspaceRecord[] {
     return this.state.workspaces.map((item) => ({ ...item }));
+  }
+  /** Incomplete Git effects require an explicit, evidence-checked recovery; not a retry. */
+  pendingCreations(): readonly PendingTargetCreation[] {
+    return (this.state.pendingCreations ?? []).map((item) => ({ ...item }));
+  }
+  /** Explicitly claims the verifiable Git candidate without running Git create again. */
+  recoverCreation(workspaceId: string): Promise<TargetWorkspaceRecord> {
+    return this.exclusive(async () => {
+      throw new Error(`Creation recovery not yet implemented: ${workspaceId}`);
+    });
   }
   history(workspaceId: string): TargetWorkspaceRecord | undefined {
     const record = this.state.workspaces.find((item) => item.id === workspaceId);

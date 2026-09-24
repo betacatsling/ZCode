@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import path from "node:path";
-import type { TargetBindingRecord } from "./worktreeService.js";
+import type { PendingTargetCreation, TargetBindingRecord } from "./worktreeService.js";
 import type { TargetWorkspaceRecord } from "./worktreeReconciler.js";
 
 function validIdentity(value: unknown): boolean {
@@ -16,6 +16,8 @@ export interface TargetSnapshot {
   executionTargetId: string;
   bindings: TargetBindingRecord[];
   workspaces: TargetWorkspaceRecord[];
+  /** Durable intent written before Git mutation; never replay an uncertain create automatically. */
+  pendingCreations?: PendingTargetCreation[];
   /** Deny sets are target-owned; older snapshots without these fields default to empty. */
   archivedBindings?: string[];
   archivedWorkspaces?: string[];
