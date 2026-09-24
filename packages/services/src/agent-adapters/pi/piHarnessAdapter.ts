@@ -14,7 +14,7 @@ import type {
 } from "@zcode/shared/agent-host";
 import type { HarnessAdapter } from "../../agent-host/harnessRegistry.js";
 import type { FromPiWorker, PiWorkerBoot, ToPiWorker } from "./piProtocol.js";
-import { piCapabilities } from "./piCapabilities.js";
+import { piTargetCapabilities, piTargetSupport } from "./piTargetSupport.js";
 import {
   forwardPiModelRequest,
   piModelInfo,
@@ -59,19 +59,7 @@ export class PiHarnessAdapter implements HarnessAdapter {
   }
 
   async probe(target: ExecutionTarget) {
-    if (!target.available)
-      return { support: "unsupported" as const, reason: target.reason ?? "target unavailable" };
-    if (target.platform !== "darwin" && target.platform !== "linux")
-      return {
-        support: "unsupported" as const,
-        reason: "first release only supports macOS and Linux",
-      };
-    if (target.platform !== process.platform)
-      return {
-        support: "unsupported" as const,
-        reason: "Pi worker must run on the execution target, not across an SSH stdio attachment",
-      };
-    return { support: "supported" as const };
+    return piTargetSupport(target);
   }
   async hostManagedSupport(target: ExecutionTarget, selection: ModelSelection) {
     const report = await this.probe(target);
@@ -84,20 +72,7 @@ export class PiHarnessAdapter implements HarnessAdapter {
     return report;
   }
   async capabilities(target: ExecutionTarget) {
-    const report = await this.probe(target);
-    if (report.support !== "supported") {
-      // 修复：仅在 create 阶段拒绝 Windows 会让能力查询错误宣传可安全运行的文件工具。
-      const unavailable = { support: "unsupported" as const, reason: report.reason };
-      return {
-        ...piCapabilities(),
-        text: unavailable,
-        tools: unavailable,
-        approvals: unavailable,
-        cancelTurn: unavailable,
-        history: unavailable,
-      };
-    }
-    return piCapabilities();
+    return piTargetCapabilities(target);
   }
   async create(spec: SessionSpecV2, plan: BindingPlan): Promise<BackendBindingV2> {
     if (this.#sessions.has(spec.hostSessionId)) throw new Error("duplicate Pi session");

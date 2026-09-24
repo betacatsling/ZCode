@@ -173,5 +173,9 @@ process.on("message", (raw: unknown) => {
   })();
 });
 process.on("disconnect", () => {
-  void file?.close();
+  // 修复：worker 被意外终止时已无父进程可回收 broker；IPC 断开后
+  // 禁止继续接受 IO，并限时退出，避免异步文件句柄使子进程永久存活。
+  ready = false;
+  void file?.close().catch(() => {});
+  setTimeout(() => process.exit(1), 1000);
 });

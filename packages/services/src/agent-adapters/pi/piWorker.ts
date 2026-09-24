@@ -155,15 +155,24 @@ async function main(): Promise<void> {
             return { block: true, reason: "Pi turn ended before file preparation" };
           }
           if (call.toolName === "read") return undefined;
-          const summary =
-            call.toolName === "bash"
-              ? `Run Pi bash command: ${String((call.input as { command?: unknown }).command ?? "").slice(0, 512)}`
-              : `Allow Pi ${call.toolName} in this worktree?`;
+          let summary: string;
+          try {
+            if (call.toolName === "bash")
+              summary = `Run Pi bash command: ${String((call.input as { command?: unknown }).command ?? "").slice(0, 512)}`;
+            else {
+              const scope = fileBoundary.review(call.toolCallId);
+              summary = `Allow Pi ${scope.mode} ${scope.target} (${scope.bytes} bytes, HMAC-SHA-256 ${scope.digest})?`;
+            }
+          } catch {
+            await fileBoundary.release(call.toolCallId);
+            return { block: true, reason: "Pi file approval could not be reviewed" };
+          }
           if (
             summary.length > 700 ||
             (call.toolName === "bash" &&
               String((call.input as { command?: unknown }).command ?? "").length > 512)
           ) {
+            if (call.toolName !== "bash") await fileBoundary.release(call.toolCallId);
             return { block: true, reason: "Command too long for the approval preview" };
           }
           const decision = await new Promise<"allow" | "deny">((settle) => {
