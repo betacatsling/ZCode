@@ -7,6 +7,11 @@ export type {
 } from "./backend.js";
 export { createRemoteBackend } from "./create-backend.js";
 export {
+  attachInstalledSshCore,
+  type SshCoreAttachment,
+  type SshCoreAttachmentTransport,
+} from "./sshCoreAttachment.js";
+export {
   connectRemote,
   pickRemoteRuntimeEnv,
   type ConnectOptions,

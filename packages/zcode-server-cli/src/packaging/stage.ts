@@ -72,7 +72,7 @@ async function resolveProductionPackageClosure(
 ): Promise<Map<string, string>> {
   const closure = new Map<string, string>();
   const queue: Array<{ name: string; fromDir: string; optional: boolean }> = entryPackageNames.map(
-    (name) => ({ name, fromDir: dirname(resolve(nodeModulesDir)), optional: true }),
+    (name) => ({ name, fromDir: dirname(resolve(nodeModulesDir)), optional: false }),
   );
 
   while (queue.length > 0) {
@@ -499,6 +499,7 @@ export async function stageRelease(options: StageOptions): Promise<StagedRelease
     {
       id: "server-runtime",
       paths: [
+        "bin/zcode",
         "runtime/server-cli.js",
         "runtime/server-core.js",
         "runtime/piWorker.js",
