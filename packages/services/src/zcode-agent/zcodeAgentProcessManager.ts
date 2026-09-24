@@ -59,6 +59,8 @@ export type ZCodeAgentCommandResolver = (
 ) => Promise<ZCodeAgentCommand | null> | ZCodeAgentCommand | null;
 
 export interface ZCodeAgentProcessManagerOptions {
+  /** Node Core-only: CLI constructor installs its CommandInbox hold before serving requests. */
+  bootAdmissionHeld?: boolean;
   commandResolver?: ZCodeAgentCommandResolver;
   presentationSurface?: ZCodeAgentPresentationSurface;
   requestTimeoutMs?: number;
@@ -588,6 +590,7 @@ export class ZCodeAgentProcessManager {
   readonly onRuntimeLifecycle = this.runtimeLifecycleEmitter.event;
 
   constructor(options?: ZCodeAgentProcessManagerOptions) {
+    this.bootAdmissionHeld = options?.bootAdmissionHeld === true;
     this.commandResolver = options?.commandResolver ?? resolveDefaultZCodeAgentCommand;
     this.presentationSurface = options?.presentationSurface;
     this.requestTimeoutMs = options?.requestTimeoutMs;
@@ -599,6 +602,8 @@ export class ZCodeAgentProcessManager {
     this.idleTimeoutMs =
       options?.idleTimeoutMs && options.idleTimeoutMs > 0 ? options.idleTimeoutMs : undefined;
   }
+
+  private readonly bootAdmissionHeld: boolean;
 
   private reportProcessLifecycle(
     callback: (reporter: RuntimeProcessLifecycleReporter) => void,
@@ -1044,6 +1049,8 @@ export class ZCodeAgentProcessManager {
         // 身份/隔离语义使用 workspaceIdentity；cwd 继续使用 workspacePath。
         ...buildAgentWorkspaceIdentityEnv(params.workspaceIdentity),
         ...buildE2EAgentCoverageEnv(),
+        // 中文：最后写入受信 Core 的启动模式；自定义 command.env 不得覆盖门禁。
+        ...(this.bootAdmissionHeld ? { ZCODE_CORE_BOOT_ADMISSION: "held" } : {}),
       },
       stdio: ["pipe", "pipe", "pipe"],
     });

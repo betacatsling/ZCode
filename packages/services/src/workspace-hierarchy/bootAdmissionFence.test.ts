@@ -12,6 +12,7 @@ test("initial boot hold predates native startup, composes with maintenance and r
     },
     activity: async () => ({ running: 0, waiting: 0, tools: 0, uncertain: 0, offline: false }),
   });
+  coordinator.attachBootFence({ verify: async () => true, release: async () => {} });
   assert.equal(nativeFences, 0);
   assert.equal(coordinator.admissionEnabled(), false);
   await assert.rejects(
@@ -21,8 +22,8 @@ test("initial boot hold predates native startup, composes with maintenance and r
   const maintenance = await coordinator.freezeAdmissions();
   await coordinator.releaseAdmissions(maintenance);
   assert.equal(coordinator.admissionEnabled(), false);
-  coordinator.releaseInitialHold();
-  coordinator.releaseInitialHold();
+  await coordinator.releaseInitialHold();
+  await coordinator.releaseInitialHold();
   assert.equal(coordinator.admissionEnabled(), true);
   const next = await coordinator.freezeAdmissions();
   assert.equal(coordinator.admissionEnabled(), false);
@@ -36,9 +37,11 @@ test("release during another held maintenance lease does not reopen admission", 
     nativeFence: async () => ({ verify: async () => true, release: async () => {} }),
     activity: async () => ({ running: 0, waiting: 0, tools: 0, uncertain: 0, offline: false }),
   });
+  coordinator.attachBootFence({ verify: async () => true, release: async () => {} });
   const lease = await coordinator.freezeAdmissions();
-  coordinator.releaseInitialHold();
+  await assert.rejects(coordinator.releaseInitialHold(), /maintenance in progress/);
   assert.equal(coordinator.admissionEnabled(), false);
   await coordinator.releaseAdmissions(lease);
+  await coordinator.releaseInitialHold();
   assert.equal(coordinator.admissionEnabled(), true);
 });

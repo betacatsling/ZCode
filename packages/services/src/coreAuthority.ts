@@ -17,6 +17,7 @@ import {
 import type { NativeRuntimeFactsPort } from "./workspace-hierarchy/nativeProductionBridge.js";
 import {
   getNativeProcessControlPort,
+  getNativeMaintenanceControlPort,
   getNativeCreationControlPort,
   NativeCreationOwnershipChangedError,
 } from "./zcode-agent/zcodeAgentService.js";
@@ -292,6 +293,7 @@ export async function createCoreAuthority(
       workspaceCompositionRoot: join(configRoot, "workspace-hierarchy"),
       workspaceComposition: bridge,
       initiallyHeld: options.admissionFence === "held",
+      bootAdmissionHeld: options.admissionFence === "held",
       additionalTrustedHarnesses: options.additionalTrustedHarnesses,
     });
     const nativeService = services.get(IZCodeAgentService);
@@ -317,6 +319,30 @@ export async function createCoreAuthority(
     const collection = services;
     const coordinator = getWorkspaceMaintenanceCoordination(collection);
     if (!coordinator) throw new Error("Core maintenance coordinator missing");
+    if (options.admissionFence === "held") {
+      const control = getNativeMaintenanceControlPort(nativeService);
+      const target = { workspacePath: process.cwd() };
+      // 中文：claim 是读取 CLI 构造时已冻结的 Inbox，不是存储启动后才补做 freeze。
+      // 老 worker 不支持 claim 时构造失败，绝不能返回看似 held 的 Core。
+      const { lease, activity } = await control.claimBoot(target);
+      if (activity.epoch !== lease.epoch || !activity.frozen || activity.unknown)
+        throw new Error("Core boot worker lease uncertain");
+      coordinator.attachBootFence({
+        verify: async () => {
+          const current = await control.getActivity(target, lease);
+          if (current.epoch !== lease.epoch || !current.frozen || current.unknown)
+            throw new Error("Core boot worker changed");
+          return [
+            current.active,
+            current.accepted,
+            current.pending,
+            current.tools,
+            current.approvals,
+          ].every((count) => Number.isSafeInteger(count) && count === 0);
+        },
+        release: () => control.releaseBoot(target, lease),
+      });
+    }
     let disposing: Promise<void> | undefined;
     let disposed = false;
     const bootAdmissionLease =
@@ -327,7 +353,7 @@ export async function createCoreAuthority(
               await getWorkspaceCompositionReady(collection);
               if (disposed) throw new Error("Core boot admission owner disposed");
               // 中文：同一 Core 的启动门禁只解除一次；维护租约依旧独立持有，不能被旧启动令牌清空。
-              coordinator.releaseInitialHold();
+              await coordinator.releaseInitialHold();
             },
           }
         : undefined;

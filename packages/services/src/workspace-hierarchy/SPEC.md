@@ -58,6 +58,19 @@ Operator recovery inspection reads current Target receipt/pending intent under T
 
 Native bridge's maintenance interface requires a verifiable same-worker lease (`verify` + `release`); the old release-only callback is not a production port. Controlled test fixtures may return a verified lease, never stand in for global process enumeration or a real CLI epoch.
 
+## Core ingress authority: pre-native initialization hold
+
+Held Core boot reserves the workspace gate synchronously and the Node worker-spawn gate before storage startup. Only the single boot storage worker may start; its CLI constructor freezes the existing CommandInbox before any protocol request or session residency runs. The initial CLI lease is claimed by the same Node process, not obtained by a later idle-only maintenance freeze; an old CLI lacking the claim method fails Core construction closed. All other lanes remain unable to spawn. CLI boot lease is never a second accepted command queue. An ordinary maintenance check while boot held verifies the original worker's frozen census, requires fresh zero idle and does not release the boot lease. A boot release waits for reconciliation and releases that exact CLI lease, then reopens spawn and workspace admission; a lost release ACK retains the Node/workspace hold and reports uncertainty, never authorizes rollback. Disposing/stale Core cannot reopen. Default open behavior unchanged.
+
+```text
+Core workspace gate + Node spawn gate -> boot storage worker with CLI constructor Inbox freeze
+ -> claim same boot lease -> reconcile Catalog/Target -> Supervisor commit
+ -> exact CLI lease release ACK -> Node spawn gate -> workspace gate
+ordinary maintenance while boot held -> same worker verified idle -> nested lease only
+```
+
+Read-only receipt recovery is not promotion of pending commands. Startup hooks outside this CLI constructor and external independently started workers require separate evidence; no PID-only census is proof of admission closure.
+
 ## Native factory pass 2: boot fence, diagnostics and negative boundaries
 
 Core alone owns an optional initial admission hold. When `admissionFence: 'held'`, create the composition gate synchronously _before_ any asynchronous Target/Catalog initialization, before native storage preparation, and before boot reconciliation. Its instance-owned release is idempotent after successful `ready()`, but disposal or a failed reconciliation rejects release. An ordinary maintenance lease may be acquired/released while boot is held and cannot clear that hold; a stale instance cannot open its successor. Default is `open`. The gate covers Catalog mutation, Host new accepted work and Target-mediated native create; autonomous CLI work that does not cross this gate is **not** certified fenced by this change. Read-only queries and completed native receipt recovery remain available. Sequence: initial hold → storage/Target/Catalog boot → reconcile → supervisor commit decision → release same-instance hold → new admission; maintenance leases nest without clearing the boot hold. No timer-based unlocking.

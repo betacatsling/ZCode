@@ -29,6 +29,7 @@ for (const variant of [
   "completed",
   "schema",
   "source-db",
+  "boot-held",
 ] as const)
   test(`public native factory ${variant}`, async () => {
     const root = await mkdtemp(join(tmpdir(), "native-factory-boundaries-"));
@@ -252,16 +253,27 @@ for (const variant of [
         settings.config.defaultModelSelection.modelId = "fixture-other";
         await writeFile(personal, JSON.stringify(settings));
       }
-      const result = await boot("./nativeFactoryBoundariesChild.fixture.ts", {
-        ZCODE_MULTI_HARNESS_ENABLED: "0",
-        ZCODE_CORE_NATIVE_CREATE_TEST_ONLY: "0",
-        ZCODE_SESSION_DB_PATH: secondSource ?? dbPath,
-        CORE_NATIVE_IDS: JSON.stringify(recoveredIds),
-        CORE_NATIVE_VERIFY_INPUT: variant === "per-id-model" ? "1" : "0",
-        CORE_NATIVE_RECOVER_BOUNDARY_TEST_ONLY:
-          variant === "pending" || variant === "completed" ? variant : "",
-      });
-      if (variant === "pending" || variant === "completed") {
+      const result = await boot(
+        variant === "boot-held"
+          ? "./coreIngressAuthorityBootChild.fixture.ts"
+          : "./nativeFactoryBoundariesChild.fixture.ts",
+        {
+          ZCODE_MULTI_HARNESS_ENABLED: variant === "boot-held" ? "1" : "0",
+          ZCODE_CORE_NATIVE_CREATE_TEST_ONLY: "0",
+          ZCODE_SESSION_DB_PATH: secondSource ?? dbPath,
+          CORE_NATIVE_IDS: JSON.stringify(recoveredIds),
+          CORE_NATIVE_VERIFY_INPUT: variant === "per-id-model" ? "1" : "0",
+          CORE_NATIVE_RECOVER_BOUNDARY_TEST_ONLY:
+            variant === "pending" || variant === "completed" ? variant : "",
+        },
+      );
+      if (variant === "boot-held") {
+        assert.equal(result.type, "boot-held");
+        assert.equal(result.heldReason, "guard.nativeMaintenanceFrozen");
+        assert.equal(result.before, before);
+        assert.equal(result.after, before + 1);
+        assert.equal(calls.length, 0);
+      } else if (variant === "pending" || variant === "completed") {
         assert.equal(result.type, "boundary-read");
         assert.equal(result.status, variant);
         assert.equal(result.originalId, first.originalId);
@@ -308,7 +320,7 @@ for (const variant of [
           );
         }
       }
-      assert.equal(count(), before);
+      assert.equal(count(), before + (variant === "boot-held" ? 1 : 0));
     } finally {
       const childResults = await Promise.allSettled(
         children.map(async (child) => {

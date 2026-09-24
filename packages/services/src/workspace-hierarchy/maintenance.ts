@@ -28,7 +28,9 @@ export interface MaintenanceCoordination extends MaintenanceLeasePort {
   withMaintenance<T>(action: () => Promise<T>): Promise<T>;
   admissionEnabled(): boolean;
   /** Instance-local initial hold, independent of ordinary maintenance leases. */
-  releaseInitialHold(): void;
+  releaseInitialHold(): Promise<void>;
+  /** Attach the already-frozen boot worker, never perform an idle-gated late freeze. */
+  attachBootFence(fence: NativeAdmissionFence): void;
   withAdmission<T>(action: () => Promise<T>): Promise<T>;
 }
 
@@ -39,6 +41,7 @@ export function createMaintenanceCoordination(input: {
   initiallyHeld?: boolean;
 }): MaintenanceCoordination {
   let initialHold = input.initiallyHeld === true;
+  let bootFence: NativeAdmissionFence | undefined;
   let phase: "open" | "acquiring" | "held" | "releasing" | "poisoned" = "open";
   let epoch = 0;
   let held: MaintenanceLease | undefined;
@@ -60,9 +63,25 @@ export function createMaintenanceCoordination(input: {
   };
   const port: MaintenanceCoordination = {
     admissionEnabled: () => phase === "open" && !initialHold,
-    releaseInitialHold() {
-      // 中文：启动持有与后续维护令牌是不同所有权；旧 maintenance 释放不能解除启动冻结。
+    attachBootFence(fence) {
+      if (!initialHold || bootFence) throw new Error("Invalid boot fence owner");
+      bootFence = fence;
+    },
+    async releaseInitialHold() {
+      if (!initialHold) return;
+      if (phase !== "open" || !bootFence)
+        throw new Error("Boot fence missing or maintenance in progress");
+      // 中文：先解除同代 CLI 的实际 Inbox；丢 ACK 后保持 workspace 关闭，不能重发解除并回滚。
+      phase = "releasing";
+      try {
+        await bootFence.release();
+      } catch (error) {
+        phase = "poisoned";
+        throw error;
+      }
+      bootFence = undefined;
       initialHold = false;
+      phase = "open";
     },
     async withAdmission(action) {
       if (phase !== "open" || initialHold) throw new Error("New admission frozen for maintenance");
@@ -80,7 +99,9 @@ export function createMaintenanceCoordination(input: {
       phase = "acquiring";
       const nextEpoch = ++epoch;
       try {
-        const acquired = await input.nativeFence();
+        const acquired = bootFence
+          ? { verify: () => bootFence!.verify(), release: async () => {} }
+          : await input.nativeFence();
         native =
           typeof acquired === "function"
             ? {

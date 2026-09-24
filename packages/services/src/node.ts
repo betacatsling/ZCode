@@ -1422,6 +1422,8 @@ export function createLocalServices(options: {
   additionalTrustedHarnesses?: CompositionOptions["additionalTrustedHarnesses"];
   /** Boot hold is established synchronously by composition, before asynchronous initialization. */
   initiallyHeld?: boolean;
+  /** Core-only native worker/Inbox boot hold, established before storage preparation. */
+  bootAdmissionHeld?: boolean;
   /** Core's authenticated target; OS platform is not proof that a target is remote. */
   workspaceCompositionTarget?: CompositionOptions["target"];
   /** Required live native bridge, including the configured-path complete index and real CLI fence. */
@@ -2201,6 +2203,7 @@ export function createLocalServices(options: {
           resolveOffPeakTaskService: () => offPeakTaskServiceForAgent,
         };
   const zcodeAgentService = createZCodeAgentService({
+    bootAdmissionHeld: options?.bootAdmissionHeld,
     ...(agentAccountProviderConfigSource
       ? { accountProviderConfigSource: agentAccountProviderConfigSource }
       : {}),
