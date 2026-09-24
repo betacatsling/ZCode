@@ -11,9 +11,9 @@ export interface NativeMaintenanceTarget {
   workspaceIdentity?: string;
   remoteSessionId?: string;
 }
-export interface NativeMaintenanceToken { epoch: number; leaseId: string }
+export interface NativeMaintenanceToken { epoch: string; leaseId: string }
 export interface NativeMaintenanceSnapshot {
-  epoch: number;
+  epoch: string;
   frozen: boolean;
   active: number;
   accepted: number;
@@ -32,7 +32,7 @@ export function createNativeAdmissionFence(
     // 中文：freeze 仅接触现存 CLI worker；超时或不完整回执不能推断未冻结，交给协调器封锁 workspace。
     const { lease, activity } = await control.freeze(target);
     const check = (snapshot: NativeMaintenanceSnapshot): boolean => {
-      if (!lease || !Number.isSafeInteger(lease.epoch) || lease.epoch < 1 || !lease.leaseId ||
+      if (!lease || typeof lease.epoch !== "string" || !lease.epoch || !lease.leaseId ||
           snapshot?.epoch !== lease.epoch || snapshot.frozen !== true || snapshot.unknown !== false ||
           ![snapshot.active, snapshot.accepted, snapshot.pending, snapshot.tools, snapshot.approvals]
             .every((count) => Number.isSafeInteger(count) && count >= 0))
