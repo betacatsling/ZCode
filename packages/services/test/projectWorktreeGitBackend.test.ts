@@ -168,6 +168,8 @@ test("discovery reports externally missing worktrees as prunable without pruning
   await rm(missing, { recursive: true });
   const found = await discoverGitWorktrees(repo);
   assert.notEqual(found.worktrees.find((entry) => entry.path === missing)?.prunable, null);
+  assert.equal((await preflightRemoveGitWorktree(repo, missing)).prunable, true);
+  await assert.rejects(removeGitWorktree(repo, missing));
   assert.equal(found.worktrees.length, 2);
 });
 
