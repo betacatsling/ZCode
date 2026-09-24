@@ -24,7 +24,7 @@ export function AgentSessionRow({
       className={`flex min-h-8 w-full items-center gap-2 rounded-md px-2 text-left text-ui-base hover:bg-hover focus-visible:outline-2 focus-visible:outline-primary ${selected ? "bg-selected" : ""}`}
       onClick={() => {
         select(id);
-        props.actions.onSelectSession(id);
+        props.actions.onSelectSession(summary);
       }}
     >
       <SessionStatusIcon summary={summary} locale={props.locale} />

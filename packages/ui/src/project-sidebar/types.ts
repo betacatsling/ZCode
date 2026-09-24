@@ -1,4 +1,4 @@
-import type { SidebarSnapshot } from "@zcode/shared/project-workspaces";
+import type { SessionSummary, SidebarSnapshot } from "@zcode/shared/project-workspaces";
 import type { HarnessCatalogEntry, ModelBindingRequest } from "@zcode/shared/agent-host";
 import type { SidebarIconAsset } from "../agent-host/harnessAssetResolver.js";
 
@@ -22,15 +22,22 @@ export interface CreateAgentInput {
   draft: string;
 }
 export interface SidebarActions {
-  onSelectSession: (sessionId: string) => void;
-  onOpenAttention: (sessionId: string) => void;
+  /** Preserve the indexed workspace/target identity for authoritative owner resolution. */
+  onSelectSession: (summary: SessionSummary) => void;
+  onOpenAttention: (summary: SessionSummary) => void;
   onCreateAgent: (input: CreateAgentInput) => Promise<void>;
   onDiscover: (repositoryBindingId: string) => Promise<void>;
   onAdopt: (repositoryBindingId: string, path: string) => Promise<void>;
   onCreateWorkspace: (input: CreateWorkspaceInput) => Promise<void>;
   onHideWorkspace: (workspaceId: string) => Promise<void>;
   onArchiveWorkspace: (workspaceId: string) => Promise<void>;
+  /** Must read target Git/activity facts; undefined means removal is not admitted. */
+  onPreviewRemove?: (workspaceId: string, expectedGeneration: string) => Promise<RemovalPreview>;
   onRemoveWorkspace: (workspaceId: string, expectedGeneration: string) => Promise<void>;
+}
+export interface RemovalPreview {
+  readonly allowed: boolean;
+  readonly risks: readonly string[];
 }
 export interface ProjectSidebarProps {
   snapshot: SidebarSnapshot;
