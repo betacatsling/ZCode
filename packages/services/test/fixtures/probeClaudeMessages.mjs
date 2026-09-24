@@ -27,6 +27,11 @@ const gateway = createServer(async (request, response) => {
     messageRoles: Array.isArray(body?.messages) ? body.messages.map((message) => message?.role).slice(0, 16) : [],
     toolNames: Array.isArray(body?.tools) ? body.tools.map((tool) => tool?.name).slice(0, 32) : [],
     anthropicHeaders: Object.keys(request.headers).filter((key) => key.startsWith("anthropic-")).sort(),
+    anthropicVersion: request.headers["anthropic-version"],
+    betaNames: String(request.headers["anthropic-beta"] ?? "").split(",").map((value) => value.trim()).filter((value) => /^[a-z0-9-]+$/.test(value)).sort(),
+    contextManagementKeys: body?.context_management && typeof body.context_management === "object" ? Object.keys(body.context_management).sort() : [],
+    thinkingKeys: body?.thinking && typeof body.thinking === "object" ? Object.keys(body.thinking).sort() : [],
+    outputConfigKeys: body?.output_config && typeof body.output_config === "object" ? Object.keys(body.output_config).sort() : [],
   } }));
   response.writeHead(400, { "content-type": "application/json" });
   response.end(JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "fixture stops before model execution" } }));
