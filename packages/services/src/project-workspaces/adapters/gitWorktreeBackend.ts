@@ -212,10 +212,19 @@ export async function preflightRemoveGitWorktree(
   worktreePath: string,
 ): Promise<GitRemovePreflight> {
   const discovery = await discoverGitWorktrees(repositoryPath);
-  const requested = await realpath(worktreePath);
+  let requested: string;
+  try {
+    requested = await realpath(worktreePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    requested = path.resolve(worktreePath);
+  }
   const worktree = discovery.worktrees.find((entry) => entry.path === requested);
   if (!worktree) throw new Error("Path is not a worktree of this repository");
-  const gitLocks = await hasGitLocks(discovery.gitCommonDir, await gitDir(requested));
+  const gitLocks = await hasGitLocks(
+    discovery.gitCommonDir,
+    worktree.prunable !== null ? discovery.gitCommonDir : await gitDir(requested),
+  );
   if (worktree.kind === "bare" || worktree.prunable !== null) {
     return {
       worktree,
