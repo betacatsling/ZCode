@@ -54,7 +54,7 @@ test("a bounded external rows window exposes its real first row for pagination",
   const snapshot = projectHostConversation({ spec, runtimeEpoch: epoch, events, windowSize: 2 });
   assert.equal(snapshot.rows.totalCount, 3);
   assert.deepEqual(snapshot.rows.window.map((row) => row.rowId), [2, 3]);
-  assert.equal(snapshot.rows.firstRowId, 2);
+  assert.equal(snapshot.rows.firstRowId, 1);
 });
 
 test("projection refuses gaps, foreign events or duplicated sequence", () => {
@@ -99,6 +99,7 @@ test("mixed usage requires explicit call identities; absence is not measured zer
     event(3, "usage.accounted", { turnId: "t", sourceId: "call", accounting: "absolute", inputTokens: 3, cacheReadTokens: 5, reasoningTokens: 2 }),
     event(4, "usage.reported", { turnId: "t", sourceId: "other", accounting: "delta", inputTokens: 7, outputTokens: 1 })] });
   assert.deepEqual(snapshot.usage.cumulative, { inputTokens: 10, outputTokens: 1, cacheReadTokens: 5, cacheWriteTokens: 0 });
+  assert.deepEqual(snapshot.usage.measured, { inputTokens: true, outputTokens: true, cacheReadTokens: true, cacheWriteTokens: false });
   assert.throws(() => ledger.record({ kind: "usage.reported", turnId: "t", sourceId: "call", accounting: "delta", inputTokens: 3, outputTokens: 0 }), /collision/);
   assert.throws(() => ledger.record({ kind: "usage.reported", turnId: "t", inputTokens: 1, outputTokens: 1 }), /ambiguous/);
   const legacy = new UsageAccounting();

@@ -19,18 +19,15 @@ import { resolveMountedSidebarOwner } from "./mountedProjectSidebarNavigation.js
 
 /** The public hierarchy contract is the only owner type; never narrow away native historyOnly. */
 export type MountedSessionOwner = SessionOwner;
-// Until authority-product exports listCreateOptions, this required structural edge documents
-// the exact public DTO. hasMountedHierarchy refuses to mount without the real service method.
 export type MountedHierarchyService = Pick<
   IWorkspaceHierarchyService,
-  "resolveOwner" | "listHarnesses" | "createAgent" | "asset" | "previewRemoval"
-> & {
-  listCreateOptions(workspaceId: string): Promise<{
-    workspaceId: string;
-    worktreeGeneration: string;
-    options: readonly { harnessId: string; label: string; binding: ModelBindingRequest }[];
-  }>;
-};
+  | "resolveOwner"
+  | "listHarnesses"
+  | "listCreateOptions"
+  | "createAgent"
+  | "asset"
+  | "previewRemoval"
+>;
 export type MountedHierarchyServices = {
   projectCatalogService: Pick<
     IProjectCatalogService,
@@ -143,71 +140,72 @@ export function useMountedProjectSidebar({
     refreshReady.current = false;
     // Bug 原因：刷新中旧 generation 的选项在 I/O 等待期间仍可被点击。
     setWorkspaceOptions(new Map());
-    const raw = await catalogService.sidebarSnapshot();
-    const next = parseSidebarSnapshot(raw);
-    if (request !== refreshSequence.current) return;
-    const activeWorkspaces = next.workspaces.filter((w) => w.lifecycle === "active");
-    const harnessLists = await Promise.all(
-      activeWorkspaces.map((w) => hierarchy.listHarnesses(w.id)),
-    );
-    const entries = [
-      ...new Map(harnessLists.flat().map((entry) => [entry.manifest.id, entry])).values(),
-    ];
-    if (request !== refreshSequence.current) return;
-    // 修复旧 picker 为每个 supported Harness 伪造 harness-managed 选项：只接受目标
-    // 针对此 workspace/generation 验证过的 Model catalog + capability 结果，缺接口时不可创建。
-    const choices = await readMountedCreateChoices(activeWorkspaces, harnessLists, hierarchy);
-    if (request !== refreshSequence.current) return;
-    // 修复刷新中展示旧 generation 选项：将 snapshot/catalog/options 同批发布。
-    setSnapshot(next);
-    setCatalog(entries);
-    setCatalogByWorkspace(
-      new Map(activeWorkspaces.map((workspace, index) => [workspace.id, harnessLists[index]!])),
-    );
-    setWorkspaceOptions(choices);
-    refreshReady.current = true;
-    setError(undefined);
-    setStale(false);
-    const ids = [
-      ...new Set(
-        entries
-          .flatMap((entry) => [entry.manifest.icon?.light, entry.manifest.icon?.dark])
-          .filter((id): id is string => Boolean(id)),
-      ),
-    ];
-    const resolved = await Promise.all(
-      ids.map(async (id) => [id, await hierarchy.asset(id)] as const),
-    );
-    const available: Record<string, SidebarIconAsset> = {};
-    for (const [id, asset] of resolved) if (asset !== undefined) available[id] = asset;
-    if (request === refreshSequence.current) setAssets(available);
+    try {
+      const raw = await catalogService.sidebarSnapshot();
+      const next = parseSidebarSnapshot(raw);
+      if (request !== refreshSequence.current) return;
+      const activeWorkspaces = next.workspaces.filter((w) => w.lifecycle === "active");
+      const harnessLists = await Promise.all(
+        activeWorkspaces.map((w) => hierarchy.listHarnesses(w.id)),
+      );
+      const entries = [
+        ...new Map(harnessLists.flat().map((entry) => [entry.manifest.id, entry])).values(),
+      ];
+      if (request !== refreshSequence.current) return;
+      // 修复旧 picker 为每个 supported Harness 伪造 harness-managed 选项：只接受目标
+      // 针对此 workspace/generation 验证过的 Model catalog + capability 结果，缺接口时不可创建。
+      const choices = await readMountedCreateChoices(activeWorkspaces, harnessLists, hierarchy);
+      if (request !== refreshSequence.current) return;
+      // 修复刷新中展示旧 generation 选项：将 snapshot/catalog/options 同批发布。
+      setSnapshot(next);
+      setCatalog(entries);
+      setCatalogByWorkspace(
+        new Map(activeWorkspaces.map((workspace, index) => [workspace.id, harnessLists[index]!])),
+      );
+      setWorkspaceOptions(choices);
+      refreshReady.current = true;
+      setError(undefined);
+      setStale(false);
+      const ids = [
+        ...new Set(
+          entries
+            .flatMap((entry) => [entry.manifest.icon?.light, entry.manifest.icon?.dark])
+            .filter((id): id is string => Boolean(id)),
+        ),
+      ];
+      const resolved = await Promise.all(
+        ids.map(async (id) => [id, await hierarchy.asset(id).catch(() => undefined)] as const),
+      );
+      const available: Record<string, SidebarIconAsset> = {};
+      for (const [id, asset] of resolved) if (asset !== undefined) available[id] = asset;
+      if (request === refreshSequence.current) setAssets(available);
+    } catch (cause) {
+      // Bug 原因：旧刷新拒绝在新成功之后到达，不得覆盖新 Catalog 的在线状态。
+      if (request !== refreshSequence.current) return;
+      refreshReady.current = false;
+      setError(cause instanceof Error ? cause.message : String(cause));
+      setStale(true);
+    }
   }, [catalogService, hierarchy]);
   useEffect(() => {
-    let active = true;
-    void refresh().catch((cause) => {
-      if (active) {
-        setError(cause instanceof Error ? cause.message : String(cause));
-        setStale(true);
-      }
-    });
+    void refresh();
     const onFocus = () => {
-      void refresh().catch((cause) => {
-        if (active) {
-          setError(cause instanceof Error ? cause.message : String(cause));
-          setStale(true);
-        }
-      });
+      void refresh();
     };
     window.addEventListener("focus", onFocus);
     return () => {
-      active = false;
       window.removeEventListener("focus", onFocus);
+      // Bug 原因：scope 卸载后迟到的刷新拒绝不能更新已卸载树或新 scope。
+      refreshSequence.current += 1;
+      refreshReady.current = false;
     };
   }, [refresh]);
   const navigate = useCallback(
     async (summary: SessionSummary) => {
       // Bug 原因：较早的 owner lookup 晚完成会覆盖最后点击；旧请求的拒绝也不能报错。
       const request = ++navigationSequence.current;
+      // Bug 原因：离线保留的只读行仍可点击；不能用旧 Catalog 发起 owner 查询。
+      if (stale || !refreshReady.current) return;
       const catalogRequest = refreshSequence.current;
       const source = snapshot;
       const generation = source?.workspaces.find(
@@ -217,6 +215,7 @@ export function useMountedProjectSidebar({
         const owner = await resolveMountedSidebarOwner(summary, source, hierarchy);
         if (
           request !== navigationSequence.current ||
+          !refreshReady.current ||
           catalogRequest !== refreshSequence.current ||
           source !== snapshotRef.current ||
           source?.workspaces.find((w) => w.id === owner.scope.workspaceId)?.worktreeGeneration !==
@@ -227,6 +226,7 @@ export function useMountedProjectSidebar({
       } catch (cause) {
         if (
           request !== navigationSequence.current ||
+          !refreshReady.current ||
           catalogRequest !== refreshSequence.current ||
           source !== snapshotRef.current
         )
@@ -234,7 +234,7 @@ export function useMountedProjectSidebar({
         throw cause;
       }
     },
-    [hierarchy, onNavigate, snapshot],
+    [hierarchy, onNavigate, snapshot, stale],
   );
   const execute = useCallback(
     async (action: () => Promise<unknown>) => {

@@ -33,6 +33,13 @@ const externalLabels = {
     effective: "Effective",
     unknownModel: "unknown",
     loading: "Loading session…",
+    older: "Load earlier messages",
+    usage: {
+      inputTokens: "Input",
+      outputTokens: "Output",
+      cacheReadTokens: "Cache read",
+      cacheWriteTokens: "Cache write",
+    },
   },
   zh: {
     send: "发送",
@@ -49,6 +56,13 @@ const externalLabels = {
     effective: "实际",
     unknownModel: "未知",
     loading: "正在加载会话…",
+    older: "加载更早消息",
+    usage: {
+      inputTokens: "输入",
+      outputTokens: "输出",
+      cacheReadTokens: "缓存读取",
+      cacheWriteTokens: "缓存写入",
+    },
   },
 } as const;
 
@@ -140,6 +154,39 @@ export function ExternalSessionPane({
           model,
         }}
       />
+      {snapshot?.usage.measured && (
+        <div
+          aria-label={locale === "zh-CN" ? "累计令牌计量" : "Cumulative token usage"}
+          className="flex flex-wrap gap-2 px-3 text-ui-xs text-foreground-subtle"
+        >
+          {(["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens"] as const).map(
+            (field) => (
+              <span
+                key={field}
+                data-testid={`usage-${field}`}
+                data-measured={snapshot.usage.measured?.[field] ? "true" : "false"}
+              >
+                {labels.usage[field]}:{" "}
+                {snapshot.usage.measured?.[field]
+                  ? snapshot.usage.cumulative[field].toLocaleString(locale)
+                  : "—"}
+              </span>
+            ),
+          )}
+        </div>
+      )}
+      {snapshot && snapshot.rows.window.length < snapshot.rows.totalCount && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="self-start"
+          disabled={state.loadingOlder}
+          onClick={() => void lease?.store.loadOlder()}
+        >
+          {labels.older}
+        </Button>
+      )}
       <div className="min-h-0 flex-1 pt-8">
         {state.status === "error" ? (
           <div role="alert" className="p-4 text-ui-sm text-destructive">

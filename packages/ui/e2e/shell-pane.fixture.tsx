@@ -132,6 +132,21 @@ const snapshot: SidebarSnapshot = {
     },
   ],
 };
+const historyRows = [1, 2, 3, 4].map((rowId) => ({
+  kind: "assistantText" as const,
+  rowId,
+  turnId: `turn-${rowId}`,
+  createdAt: rowId,
+  createdAtSeq: rowId,
+  assistantResponseId: `msg-${rowId}`,
+  state: "complete" as const,
+  text: `History row ${rowId}`,
+}));
+const paneRows = (spec: SessionSpecV2) =>
+  spec.hostSessionId === "pi-one"
+    ? { window: historyRows.slice(-2), totalCount: historyRows.length, firstRowId: 1 }
+    : initialSnapshot.rows;
+let releaseOlder: (() => void) | undefined;
 const events: string[] = [];
 let changed = () => {};
 let nativeCalls = 0;
@@ -270,6 +285,17 @@ const services = {
       conversationSnapshotSchema.parse({
         ...initialSnapshot,
         sessionId: spec.hostSessionId,
+        rows: paneRows(spec),
+        usage: {
+          contextWindow: null,
+          cumulative: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          measured: {
+            inputTokens: true,
+            outputTokens: false,
+            cacheReadTokens: false,
+            cacheWriteTokens: true,
+          },
+        },
         agentHost: {
           ...initialSnapshot.agentHost,
           targetId: spec.execution.targetId,
@@ -285,6 +311,17 @@ const services = {
       conversationSnapshotSchema.parse({
         ...initialSnapshot,
         sessionId: spec.hostSessionId,
+        rows: paneRows(spec),
+        usage: {
+          contextWindow: null,
+          cumulative: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          measured: {
+            inputTokens: true,
+            outputTokens: false,
+            cacheReadTokens: false,
+            cacheWriteTokens: true,
+          },
+        },
         agentHost: {
           ...initialSnapshot.agentHost,
           targetId: spec.execution.targetId,
@@ -297,6 +334,20 @@ const services = {
         },
       }),
     eventsSince: async () => [],
+    rowsRange: async (_spec: SessionSpecV2, request: { beforeRowId?: number; limit: number }) => {
+      await new Promise<void>((resolve) => {
+        releaseOlder = resolve;
+      });
+      return {
+        rows: historyRows
+          .filter((row) => row.rowId < (request.beforeRowId ?? Infinity))
+          .slice(-request.limit),
+        atSeq: 0,
+        atRevision: 0,
+        atLogEpoch: "epoch",
+        hasMore: true,
+      };
+    },
     queryCommand: async () => undefined,
   },
   zcodeAgentService: native,
@@ -387,6 +438,15 @@ function Fixture() {
   } as unknown as WorkspaceShellLayoutProps;
   return (
     <main className="h-screen w-screen bg-background text-foreground text-ui-base">
+      <button
+        type="button"
+        onClick={() => {
+          releaseOlder?.();
+          releaseOlder = undefined;
+        }}
+      >
+        Release older page
+      </button>
       <output data-testid="shell-events">{events.join("|")}</output>
       <output data-testid="native-calls">{nativeCalls}</output>
       <output data-testid="native-subscriptions">{nativeSubscriptions}</output>

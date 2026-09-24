@@ -59,7 +59,10 @@ let offline = false;
 let rejectCreate = true;
 let rejectRemove = true;
 let optionsOffline = false;
+let wrongOptionsGeneration = false;
 let revision = 1;
+let pendingOldRefresh: ((error: Error) => void) | undefined;
+let holdNextRefresh = false;
 function snapshot(): SidebarSnapshot {
   return {
     schemaVersion: 1,
@@ -97,6 +100,12 @@ let refresh: () => void = () => {};
 const services: MountedHierarchyServices = {
   projectCatalogService: {
     sidebarSnapshot: async () => {
+      if (holdNextRefresh) {
+        holdNextRefresh = false;
+        return new Promise<SidebarSnapshot>((_resolve, reject) => {
+          pendingOldRefresh = reject;
+        });
+      }
       if (offline) throw new Error("offline");
       return snapshot();
     },
@@ -174,7 +183,10 @@ const services: MountedHierarchyServices = {
       }
       return {
         workspaceId,
-        worktreeGeneration: `gen-${workspaceId.slice(3)}`,
+        worktreeGeneration:
+          wrongOptionsGeneration && workspaceId === "ws-active"
+            ? "stale-generation"
+            : `gen-${workspaceId.slice(3)}`,
         options:
           workspaceId === "ws-active"
             ? [
@@ -301,6 +313,27 @@ function Fixture() {
       >
         Toggle offline
       </button>
+      <button
+        type="button"
+        onClick={() => {
+          holdNextRefresh = true;
+          window.dispatchEvent(new Event("focus"));
+        }}
+      >
+        Hold old refresh
+      </button>
+      <button type="button" onClick={() => window.dispatchEvent(new Event("focus"))}>
+        Refresh now
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          pendingOldRefresh?.(new Error("old offline"));
+          pendingOldRefresh = undefined;
+        }}
+      >
+        Reject old refresh
+      </button>
       <output data-testid="mounted-events">{events.join("|")}</output>
       <button
         type="button"
@@ -328,6 +361,24 @@ function Fixture() {
         }}
       >
         Disable active options
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          wrongOptionsGeneration = !wrongOptionsGeneration;
+          window.dispatchEvent(new Event("focus"));
+        }}
+      >
+        Toggle stale options generation
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          optionsOffline = false;
+          window.dispatchEvent(new Event("focus"));
+        }}
+      >
+        Restore active options
       </button>
       <span data-testid="tick">{tick}</span>
     </main>

@@ -686,9 +686,43 @@ export class ConversationProjectionStore {
         frame.payload.snapshot,
         "snapshot",
       );
-      // 规则 1：整体替换，扔掉手里的一切换新的。
+      // Bug 原因：外部 Host 每个 token 都发布完整尾窗；直接替换会抹掉已分页前缀。
+      // 仅对同一订阅/纪元、Host append-only rowId 连续且首行不变的投影保留有界缓存。
+      // Native 的 snapshot 重置语义保持不变。
+      const incoming = frame.payload.snapshot;
+      const previous = this.state.snapshot;
+      let projected = incoming;
+      if (
+        context.subscribeMode === null &&
+        hadAppliedBase &&
+        previous?.agentHost &&
+        incoming.agentHost &&
+        previous.agentHost.targetId === incoming.agentHost.targetId &&
+        previous.agentHost.hostSessionId === incoming.agentHost.hostSessionId &&
+        previous.sessionId === incoming.sessionId &&
+        previous.logEpoch === incoming.logEpoch &&
+        incoming.seq >= previous.seq &&
+        incoming.rows.firstRowId === previous.rows.firstRowId &&
+        incoming.rows.totalCount >= previous.rows.totalCount
+      ) {
+        const oldRows = previous.rows.window;
+        const newRows = incoming.rows.window;
+        const oldLast = oldRows.at(-1)?.rowId;
+        const newFirst = newRows[0]?.rowId;
+        if (
+          oldLast !== undefined &&
+          newFirst !== undefined &&
+          (newRows.some((row) => row.rowId === oldLast) || newFirst === oldLast + 1)
+        ) {
+          const prefix = oldRows.filter((row) => row.rowId < newFirst!);
+          projected = {
+            ...incoming,
+            rows: { ...incoming.rows, window: [...prefix, ...newRows].slice(-2000) },
+          };
+        }
+      }
       this.setState({
-        snapshot: frame.payload.snapshot,
+        snapshot: projected,
         planDirectoryRevision: this.state.planDirectoryRevision + 1,
         // snapshot 整体替换后 real-user query 集合可能已变，终态缓存必须失效。
         turnNavigatorDirectoryRevision: this.state.turnNavigatorDirectoryRevision + 1,
@@ -1040,7 +1074,9 @@ export class ConversationProjectionStore {
           requestedGeneration,
           currentGeneration: this.generation,
           requestedRevision,
-          currentRevision: this.state.turnNavigatorDirectoryRevision,
+          currentRevision: current.agentHost
+            ? requestedRevision
+            : this.state.turnNavigatorDirectoryRevision,
           requestedEpoch: snapshot.logEpoch,
           resultEpoch: result.atLogEpoch,
           currentEpoch: current.logEpoch,
@@ -1049,10 +1085,22 @@ export class ConversationProjectionStore {
         })
       )
         return;
+      // Host 同纪元 append-only 投影可跨在线完整快照合并；只接受旧水位的页。
+      if (
+        current.agentHost &&
+        (result.atSeq < snapshot.seq ||
+          result.atSeq > current.seq ||
+          result.atRevision > current.revision ||
+          current.rows.firstRowId !== snapshot.rows.firstRowId)
+      )
+        return;
       const window = mergeOlderRows(current.rows.window, result.rows);
       if (window === null) return;
       this.setState({
-        snapshot: { ...current, rows: { ...current.rows, window } },
+        snapshot: {
+          ...current,
+          rows: { ...current.rows, window: current.agentHost ? window.slice(-2000) : window },
+        },
       });
     } catch (error) {
       // query 只读且可重发：失败不进 error 态，留给下次触发重试。

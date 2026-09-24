@@ -197,6 +197,15 @@ export const sessionUsageStateSchema = z.object({
       breakdown: zcodeContextUsageBreakdownSchema.optional(),
     })
     .nullable(),
+  // 外部 Host 的显式计量存在性；旧 native/历史帧缺省，保留旧数值语义。
+  measured: z
+    .object({
+      inputTokens: z.boolean(),
+      outputTokens: z.boolean(),
+      cacheReadTokens: z.boolean(),
+      cacheWriteTokens: z.boolean(),
+    })
+    .optional(),
   cumulative: z.object({
     inputTokens: z.number(),
     outputTokens: z.number(),

@@ -104,3 +104,45 @@ test("model choices are scoped to the selected workspace, not the target interse
     "Provider A / Model B / high",
   );
 });
+
+test("late old refresh rejection cannot offline a newer snapshot; current offline blocks navigation and recovers", async ({
+  page,
+}) => {
+  await page.goto("/mounted-hierarchy.html");
+  await expect(page.getByTestId("workspace-ws-active")).toBeVisible();
+  await page.getByRole("button", { name: "Hold old refresh" }).click();
+  await page.getByRole("button", { name: "Refresh now" }).click();
+  await page.getByRole("button", { name: "Reject old refresh" }).click();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await page.getByRole("button", { name: /Attention: Native original ID/ }).click();
+  await expect(page.getByTestId("mounted-events")).toContainText("open:original-native-id");
+  await page.getByRole("button", { name: "Toggle offline" }).click();
+  await expect(page.getByRole("alert")).toContainText("offline");
+  const before = await page.getByTestId("mounted-events").textContent();
+  await page.getByRole("button", { name: /Attention: Native original ID/ }).click();
+  expect(await page.getByTestId("mounted-events").textContent()).toBe(before);
+  await page.getByRole("button", { name: "Toggle offline" }).click();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await page.getByRole("button", { name: /Attention: Native original ID/ }).click();
+  await expect(page.getByTestId("mounted-events")).not.toHaveText(before ?? "");
+});
+
+test("public hierarchy choices reject a mismatched generation and recover from Model outage", async ({
+  page,
+}) => {
+  await page.goto("/mounted-hierarchy.html");
+  await page.getByRole("button", { name: "Toggle stale options generation" }).click();
+  await page.getByRole("button", { name: /New agent in Workspace active/ }).click();
+  await expect(page.getByRole("button", { name: "Create agent" })).toBeDisabled();
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await page.getByRole("button", { name: "Toggle stale options generation" }).click();
+  await page.getByRole("button", { name: "Disable active options" }).click();
+  await page.getByRole("button", { name: /New agent in Workspace active/ }).click();
+  await expect(page.getByRole("button", { name: "Create agent" })).toBeDisabled();
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await page.getByRole("button", { name: "Restore active options" }).click();
+  await page.getByRole("button", { name: /New agent in Workspace active/ }).click();
+  await expect(page.getByRole("combobox", { name: "Model" })).toContainText(
+    "Provider A / Model B / high",
+  );
+});

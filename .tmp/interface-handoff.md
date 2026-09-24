@@ -21,3 +21,6 @@ Load-driver product selectors (controlled shell proof only): mount the actual `W
 # protocol-v2-closure early public API handoff
 
 Base 6456283 already supplies Host V2 and shared `SessionSpecV2`/`BackendBindingV2`. This lane owns `@zcode/services/agent-host/codex` and `/claude` public trusted factories, not a replacement Host. Codex V2 adapter will reject V1 writes, bind target/workspace/generation, use verified relative cwd and fence all native events by turn ID. Claude final assistant is authoritative over partial text. No paid calls; native fake plus Host replay tests required before certification. No production enablement implied.
+
+## ui-convergence wave2 early handoff
+Picked authority 4baf2c1 as 2e94faf and protocol 49c9391 as 096db29 on cf217c5. This is not a Core factory mount or product acceptance. UI owns mounted refresh/navigation, external transport paging and usage rendering; shared V4 and services projection own additive presence from committed usage events. Desktop continuous/mobile replayable share Host state but not delivery framing. Controlled full-Shell tests and actual transport+store regression are required; production Core proof remains dependent on the separately owned public factory. No native adapter/Gateway/runtime ownership in this lane.

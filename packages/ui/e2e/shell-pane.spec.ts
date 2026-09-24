@@ -127,3 +127,29 @@ test("workspace switch invalidates an older owner lookup before it resolves", as
   await expect(page.getByTestId("native-calls")).toHaveText("0");
   await expect(page.getByTestId("create-calls")).toHaveText("0");
 });
+
+test("full shell renders explicit external zero separately from unreported usage on desktop/mobile", async ({
+  page,
+}) => {
+  await page.goto("/shell-pane.html");
+  await page.getByRole("button", { name: /Pi one/ }).click();
+  await expect(page.getByTestId("usage-inputTokens")).toHaveAttribute("data-measured", "true");
+  await expect(page.getByTestId("usage-inputTokens")).toContainText("0");
+  await expect(page.getByTestId("usage-outputTokens")).toHaveAttribute("data-measured", "false");
+  await expect(page.getByTestId("usage-outputTokens")).toContainText("—");
+  await expect(page.getByTestId("native-subscriptions")).toHaveText("0");
+});
+
+test("full Shell external pane loads a real Host older page without native fallback", async ({
+  page,
+}) => {
+  await page.goto("/shell-pane.html");
+  await page.getByRole("button", { name: /Pi one/ }).click();
+  await expect(page.locator('[data-session-id="pi-one"]')).toContainText("History row 4");
+  await expect(page.locator('[data-session-id="pi-one"]')).not.toContainText("History row 1");
+  await page.getByRole("button", { name: "Release older page" }).click();
+  await expect(page.locator('[data-session-id="pi-one"]')).toContainText("History row 1");
+  await expect(page.locator('[data-session-id="pi-one"]')).toContainText("History row 4");
+  await expect(page.getByTestId("native-calls")).toHaveText("0");
+  await expect(page.getByTestId("native-subscriptions")).toHaveText("0");
+});

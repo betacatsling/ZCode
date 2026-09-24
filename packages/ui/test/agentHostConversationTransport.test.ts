@@ -449,14 +449,283 @@ test("create uses stable command ID, lost ACK queries durable Host, unsupported 
 
 test("scoped external question maps only a real answer, never permission approval", async () => {
   const { transport, history, calls } = harness([spec]);
-  history.get(spec.hostSessionId)!.events.push(
-    turn(spec.hostSessionId, 1),
-    { ...turn(spec.hostSessionId, 2), turnId: "turn-1", kind: "question.requested", interactionId: "question", prompt: "Which?", freeText: true,
-      options: [{ optionId: "first", label: "First option" }] },
+  history.get(spec.hostSessionId)!.events.push(turn(spec.hostSessionId, 1), {
+    ...turn(spec.hostSessionId, 2),
+    turnId: "turn-1",
+    kind: "question.requested",
+    interactionId: "question",
+    prompt: "Which?",
+    freeText: true,
+    options: [{ optionId: "first", label: "First option" }],
+  });
+  await assert.rejects(
+    transport.sendCommand({
+      ...envelope(
+        "host-one",
+        "resolveInteraction",
+        { interactionId: "question", answer: { optionId: "allow" } },
+        "fake-allow",
+      ),
+      baseLogEpoch: "epoch",
+    }),
+    /question answer/,
   );
-  await assert.rejects(transport.sendCommand({ ...envelope("host-one", "resolveInteraction", { interactionId: "question", answer: { optionId: "allow" } }, "fake-allow"), baseLogEpoch: "epoch" }), /question answer/);
-  await assert.rejects(transport.sendCommand({ ...envelope("host-one", "resolveInteraction", { interactionId: "question", answer: { freeText: "yes" } }, "old"), baseLogEpoch: "stale" }), /question answer/);
-  await transport.sendCommand({ ...envelope("host-one", "resolveInteraction", { interactionId: "question", answer: { optionId: "first" } }, "selected"), baseLogEpoch: "epoch" });
-  assert.deepEqual(calls.filter((call) => call.startsWith("dispatch:")), ["dispatch:host-one:answerInteraction:selected"]);
+  await assert.rejects(
+    transport.sendCommand({
+      ...envelope(
+        "host-one",
+        "resolveInteraction",
+        { interactionId: "question", answer: { freeText: "yes" } },
+        "old",
+      ),
+      baseLogEpoch: "stale",
+    }),
+    /question answer/,
+  );
+  await transport.sendCommand({
+    ...envelope(
+      "host-one",
+      "resolveInteraction",
+      { interactionId: "question", answer: { optionId: "first" } },
+      "selected",
+    ),
+    baseLogEpoch: "epoch",
+  });
+  assert.deepEqual(
+    calls.filter((call) => call.startsWith("dispatch:")),
+    ["dispatch:host-one:answerInteraction:selected"],
+  );
+  transport.dispose();
+});
+
+test("external Host transport and SessionDataLayer page through streaming full snapshots without losing loaded prefix", async () => {
+  const { service, publish, history, transport } = harness([spec]);
+  const { SessionDataLayer } = await import("../src/v4/SessionDataLayer.js");
+  const live = history.get(spec.hostSessionId)!;
+  const make = () =>
+    projectHostConversation({ spec, runtimeEpoch: live.epoch, events: live.events, windowSize: 2 });
+  service.snapshot = async () => make();
+  let release: (() => void) | undefined;
+  let started: (() => void) | undefined;
+  const pending = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  service.rowsRange = async (_owner, request) => {
+    const result = projectHostConversation({
+      spec,
+      runtimeEpoch: live.epoch,
+      events: [...live.events],
+      rowRange: { beforeRowId: request.beforeRowId, limit: request.limit },
+    });
+    if (!release)
+      await new Promise<void>((resolve) => {
+        release = resolve;
+        started?.();
+      });
+    return {
+      rows: result.rows.window,
+      atSeq: result.seq,
+      atRevision: result.revision,
+      atLogEpoch: result.logEpoch,
+      hasMore: true,
+    };
+  };
+  for (let i = 1; i <= 8; i++) {
+    publish(spec, { ...turn(spec.hostSessionId, 2 * i - 1), turnId: `t${i}` });
+    publish(spec, {
+      ...turn(spec.hostSessionId, 2 * i),
+      turnId: `t${i}`,
+      kind: "turn.finished",
+      outcome: "success",
+    });
+  }
+  const layer = new SessionDataLayer({ transport, keepWarmMs: 0 });
+  const lease = layer.acquire(spec.hostSessionId);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(
+    lease.store.getState().snapshot?.rows.window.map((r) => r.rowId),
+    [7, 8],
+  );
+  const loading = lease.store.loadOlder(2);
+  await pending;
+  publish(spec, { ...turn(spec.hostSessionId, 17), turnId: "t9" });
+  publish(spec, {
+    ...turn(spec.hostSessionId, 18),
+    turnId: "t9",
+    kind: "text.delta",
+    messageId: "msg",
+    text: "stream",
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  release?.();
+  await loading;
+  assert.deepEqual(
+    lease.store.getState().snapshot?.rows.window.map((r) => r.rowId),
+    [5, 6, 7, 8, 9, 10],
+  );
+  publish(spec, {
+    ...turn(spec.hostSessionId, 19),
+    turnId: "t9",
+    kind: "text.delta",
+    messageId: "msg",
+    text: " more",
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(
+    lease.store.getState().snapshot?.rows.window.map((r) => r.rowId),
+    [5, 6, 7, 8, 9, 10],
+  );
+  const latestText = lease.store.getState().snapshot?.rows.window.find((row) => row.rowId === 10);
+  assert.equal(latestText?.kind, "assistantText");
+  if (latestText?.kind !== "assistantText") throw new Error("missing latest text row");
+  assert.equal(latestText.text, "stream more");
+  await lease.store.loadOlder(2);
+  assert.deepEqual(
+    lease.store
+      .getState()
+      .snapshot?.rows.window.map((r) => r.rowId)
+      .slice(0, 2),
+    [3, 4],
+  );
+  // 旧页请求跨 runtime epoch：绝不能复活旧前缀。
+  let releaseOld: (() => void) | undefined;
+  let oldRead: (() => void) | undefined;
+  const oldReading = new Promise<void>((resolve) => {
+    oldRead = resolve;
+  });
+  const oldRange = service.rowsRange.bind(service);
+  service.rowsRange = async (owner, request) => {
+    const result = await oldRange(owner, request);
+    await new Promise<void>((resolve) => {
+      releaseOld = resolve;
+      oldRead?.();
+    });
+    return result;
+  };
+  const stalePage = lease.store.loadOlder(2);
+  await oldReading;
+  live.epoch = "next-epoch";
+  live.events = [];
+  publish(spec, turn(spec.hostSessionId, 1, "next-epoch"));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  releaseOld?.();
+  await stalePage;
+  assert.equal(lease.store.getState().snapshot?.logEpoch, "next-epoch");
+  assert.deepEqual(
+    lease.store.getState().snapshot?.rows.window.map((r) => r.rowId),
+    [1],
+  );
+  assert.ok(lease.store.countProjectionRows() <= 2000);
+  lease.release();
+  layer.dispose();
+  transport.dispose();
+});
+
+test("owner lease switch closes an in-flight external page rather than adding stale rows to a new owner", async () => {
+  const { service, history, transport } = harness([spec, second]);
+  const { SessionDataLayer } = await import("../src/v4/SessionDataLayer.js");
+  for (let i = 1; i <= 4; i++) {
+    history
+      .get(spec.hostSessionId)!
+      .events.push({ ...turn(spec.hostSessionId, 2 * i - 1), turnId: `t${i}` });
+    history.get(spec.hostSessionId)!.events.push({
+      ...turn(spec.hostSessionId, 2 * i),
+      turnId: `t${i}`,
+      kind: "turn.finished",
+      outcome: "success",
+    });
+  }
+  service.snapshot = async (owner) =>
+    projectHostConversation({
+      spec: owner,
+      runtimeEpoch: "epoch",
+      events: history.get(owner.hostSessionId)!.events,
+      windowSize: 2,
+    });
+  let release: (() => void) | undefined;
+  let began: (() => void) | undefined;
+  const started = new Promise<void>((resolve) => {
+    began = resolve;
+  });
+  service.rowsRange = async () => {
+    await new Promise<void>((resolve) => {
+      release = resolve;
+      began?.();
+    });
+    const view = projectHostConversation({
+      spec,
+      runtimeEpoch: "epoch",
+      events: history.get(spec.hostSessionId)!.events,
+      rowRange: { beforeRowId: 3, limit: 2 },
+    });
+    return {
+      rows: view.rows.window,
+      atSeq: view.seq,
+      atRevision: view.revision,
+      atLogEpoch: view.logEpoch,
+      hasMore: false,
+    };
+  };
+  const first = new SessionDataLayer({ transport, keepWarmMs: 0 });
+  const old = first.acquire(spec.hostSessionId);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const loading = old.store.loadOlder(2);
+  await started;
+  old.release();
+  first.dispose();
+  const next = new SessionDataLayer({ transport, keepWarmMs: 0 });
+  const current = next.acquire(second.hostSessionId);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  release?.();
+  await loading;
+  assert.equal(old.store.getState().status, "closed");
+  assert.equal(current.store.getState().snapshot?.sessionId, second.hostSessionId);
+  assert.deepEqual(current.store.getState().snapshot?.rows.window, []);
+  current.release();
+  next.dispose();
+  transport.dispose();
+});
+
+test("external older-page cache stays bounded with >2000 committed rows", async () => {
+  const { service, history, transport } = harness([spec]);
+  const { SessionDataLayer } = await import("../src/v4/SessionDataLayer.js");
+  const events = history.get(spec.hostSessionId)!.events;
+  for (let i = 1; i <= 2200; i++) {
+    events.push({ ...turn(spec.hostSessionId, 2 * i - 1), turnId: `t${i}` });
+    events.push({
+      ...turn(spec.hostSessionId, 2 * i),
+      turnId: `t${i}`,
+      kind: "turn.finished",
+      outcome: "success",
+    });
+  }
+  service.snapshot = async () =>
+    projectHostConversation({ spec, runtimeEpoch: "epoch", events, windowSize: 2 });
+  service.rowsRange = async (_owner, request) => {
+    const result = projectHostConversation({
+      spec,
+      runtimeEpoch: "epoch",
+      events,
+      rowRange: { beforeRowId: request.beforeRowId, limit: request.limit },
+    });
+    return {
+      rows: result.rows.window,
+      atSeq: result.seq,
+      atRevision: result.revision,
+      atLogEpoch: result.logEpoch,
+      hasMore: true,
+    };
+  };
+  const layer = new SessionDataLayer({ transport, keepWarmMs: 0 });
+  const lease = layer.acquire(spec.hostSessionId);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  for (let i = 0; i < 11; i++) {
+    await lease.store.loadOlder(200);
+    assert.ok(lease.store.countProjectionRows() <= 2000);
+  }
+  assert.equal(lease.store.countProjectionRows(), 2000);
+  assert.equal(lease.store.getState().snapshot?.rows.window.at(-1)?.rowId, 2200);
+  lease.release();
+  layer.dispose();
   transport.dispose();
 });

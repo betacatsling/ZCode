@@ -266,7 +266,8 @@ export function projectHostConversation(input: {
         break;
     }
   }
-  const { inputTokens = 0, outputTokens = 0, cacheReadTokens = 0, cacheWriteTokens = 0 } = usage.totals();
+  const totals = usage.totals();
+  const { inputTokens = 0, outputTokens = 0, cacheReadTokens = 0, cacheWriteTokens = 0 } = totals;
   const lastError = errorCode ? { code: errorCode, message: "External harness error; inspect target-host diagnostics", recoverable: false, at: lastErrorAt, source: "runtime" as const } : null;
   const range = input.rowRange;
   const window = range
@@ -298,10 +299,11 @@ export function projectHostConversation(input: {
       thoughtLevels: [], followupMode: "queue", mode: "build",
     },
     modelTransition: null,
-    usage: { contextWindow: null, cumulative: { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens } },
+    usage: { contextWindow: null, cumulative: { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens },
+      measured: { inputTokens: totals.inputTokens !== undefined, outputTokens: totals.outputTokens !== undefined, cacheReadTokens: totals.cacheReadTokens !== undefined, cacheWriteTokens: totals.cacheWriteTokens !== undefined } },
     queue: { items: [], autoDrain: true }, pendingInteractions: [...interactions.values()], pendingCommands: [], backgroundWorks: [],
     subagents: { revision: childrenRevision, childSessionIds: [], running: [...children.values()].filter((row) => row.status === "running").map((row) => ({ childSessionId: row.childSessionId!, subagentType: row.subagentType, title: row.summaryText || row.subagentType, status: "running" as const, ...(row.parentToolCallId ? { toolCallId: row.parentToolCallId } : {}), startedAt: row.startedAt })), endedTotal: endedChildren },
     goal: null, plan, workspaceHookAdmission: null,
-    rows: { window, totalCount: rows.length, firstRowId: window[0]?.rowId ?? null },
+    rows: { window, totalCount: rows.length, firstRowId: rows[0]?.rowId ?? null },
   });
 }
