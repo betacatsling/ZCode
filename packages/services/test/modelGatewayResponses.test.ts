@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { ModelEvent } from "@zcode/contracts";
+import { modelRequestJsonSchema, type ModelEvent } from "@zcode/contracts";
+import { z } from "zod";
 import {
   decodeResponsesRequest,
   responsesProtocol,
@@ -83,6 +84,18 @@ test("Responses keeps pinned native developer instructions as developer, never s
     decoded.request.messages[1]?.content,
     pinned.input[0]?.content?.map((part) => part.text).join(""),
   );
+});
+
+test("pinned Codex cache affinity passes the independent strict Gateway ModelRequest schema", () => {
+  const pinned = codexFixture.cases.find((entry) => entry.name === "optional-tools-disabled")
+    ?.request.body;
+  assert.ok(pinned);
+  const request = decodeResponsesRequest(pinned, {}).request;
+  const schema = z.fromJSONSchema(modelRequestJsonSchema as Parameters<typeof z.fromJSONSchema>[0]);
+  assert.equal(schema.safeParse(request).success, true);
+  assert.equal(schema.safeParse({ ...request, promptCacheKey: "" }).success, false);
+  assert.equal(schema.safeParse({ ...request, promptCacheKey: "x".repeat(257) }).success, false);
+  assert.equal(schema.safeParse({ ...request, runtimeAuth: "untrusted" }).success, false);
 });
 
 test("Responses system-only instructions retain order without developer role promotion", () => {

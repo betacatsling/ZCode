@@ -64,12 +64,14 @@ test("real loopback Responses Gateway executes two fake Model calls with correla
 
     const pinned = codexFixture.cases.find((entry) => entry.name === "optional-tools-disabled")?.request.body;
     assert.ok(pinned);
-    const blockedToken = await gateway.issueToken({ targetId: "synthetic-target", hostSessionId: "synthetic-session", runtimeEpoch: "synthetic-epoch", turnId: "blocked",
+    const pinnedToken = await gateway.issueToken({ targetId: "synthetic-target", hostSessionId: "synthetic-session", runtimeEpoch: "synthetic-epoch", turnId: "pinned",
       protocol: "responses", requestedModelAlias: pinned.model, effectiveSelection: { providerId: "synthetic-provider", modelId: "synthetic-model", options: { reasoningLevel: "off" } },
       expiresAt: Date.now() + 30_000, maxRequests: 1, maxOutputBytes: 32 * 1024, maxGenerationTokens: 256, maxOutputTokensPerRequest: 256 });
-    const blocked = await fetch(`${url}/v1/responses`, { method: "POST", headers: { authorization: `Bearer ${blockedToken}`, "content-type": "application/json" }, body: JSON.stringify(pinned) });
-    assert.equal(blocked.status, 422);
-    assert.equal(seen.length, 2, "pinned Codex developer instructions must not reach Model by demotion/deletion");
-    gateway.revokeToken(blockedToken);
+    const pinnedResponse = await fetch(`${url}/v1/responses`, { method: "POST", headers: { authorization: `Bearer ${pinnedToken}`, "content-type": "application/json" }, body: JSON.stringify(pinned) });
+    assert.equal(pinnedResponse.status, 200);
+    await pinnedResponse.text();
+    assert.equal(seen.length, 3);
+    assert.equal(seen[2]?.[1]?.role, "developer", "pinned Codex instructions must retain their role");
+    gateway.revokeToken(pinnedToken);
   } finally { await gateway.close(); }
 });

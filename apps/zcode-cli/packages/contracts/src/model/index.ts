@@ -989,6 +989,8 @@ export const modelRequestJsonSchema = {
     messages: { type: "array", items: modelInputMessageJsonSchema },
     tools: { type: "array", items: modelGatewayToolJsonSchema },
     responseJsonSchema: { type: "object" },
+    // 修复原因：Responses 已校验并透传原生缓存亲和键，独立 Gateway Schema 也须接纳同一有界字段，否则真实 CLI 在调用模型前被误拒。
+    promptCacheKey: { type: "string", minLength: 1, maxLength: 256 },
     temperature: { type: "number", minimum: 0, maximum: 1 },
     anthropicMetadataUserId: { type: "string", minLength: 1, maxLength: 256 },
     anthropicEffort: { enum: ["low", "medium", "high", "xhigh", "max"] },

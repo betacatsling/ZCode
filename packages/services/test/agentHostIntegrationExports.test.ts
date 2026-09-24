@@ -1,10 +1,23 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { IAgentHostService, type IProjectCatalogService } from "@zcode/services";
+import {
+  IAgentHostService,
+  IProjectCatalogRpcService,
+  IProjectCatalogTargetRpcService,
+  type IProjectCatalogService,
+} from "@zcode/services";
 import {
   AgentHostTargetService,
   ProjectCatalog,
   TargetWorktreeService,
+  ProjectCatalogTargetBridge,
+  CatalogWorkspaceAdmission,
+  NativePersistentSessionIndex,
+  NativeSessionDirectory,
+  NativeSessionStoreMetadataReader,
+  createTrustedAcpFactory,
+  probeTrustedAcpProfile,
+  captureHostModel,
   createModelGateway,
   responsesProtocol,
   anthropicMessagesProtocol,
@@ -20,10 +33,20 @@ void (undefined as IProjectCatalogService | undefined);
 
 test("public assembly entrypoints retain host, catalog, gateway, asset and transport boundaries", async () => {
   assert.ok(IAgentHostService);
+  assert.ok(IProjectCatalogRpcService);
+  assert.ok(IProjectCatalogTargetRpcService);
   for (const value of [
     AgentHostTargetService,
     ProjectCatalog,
     TargetWorktreeService,
+    ProjectCatalogTargetBridge,
+    CatalogWorkspaceAdmission,
+    NativePersistentSessionIndex,
+    NativeSessionDirectory,
+    NativeSessionStoreMetadataReader,
+    createTrustedAcpFactory,
+    probeTrustedAcpProfile,
+    captureHostModel,
     createModelGateway,
     ClaudeCodeTransport,
     CodexTransport,

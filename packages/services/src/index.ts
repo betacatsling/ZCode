@@ -2,8 +2,13 @@
 export { type ServiceDescriptor, createServiceDescriptor } from "./descriptors.js";
 export { ServiceCollection } from "./collection.js";
 export { IAgentHostService } from "./agent-host/serviceContract.js";
+export {
+  IProjectCatalogRpcService,
+  IProjectCatalogTargetRpcService,
+} from "./project-workspaces/serviceContract.js";
 export type {
   IProjectCatalogService,
+  ProjectCatalogRpcService,
   ProjectCatalogTargetPort,
 } from "./project-workspaces/serviceContract.js";
 export {

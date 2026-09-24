@@ -90,7 +90,7 @@ export { HarnessRegistry } from "./agent-host/harnessRegistry.js";
 export type { HarnessAdapter } from "./agent-host/harnessRegistry.js";
 export { planModelBinding } from "./agent-host/modelBindingPlanner.js";
 export { createRegistryModelCatalog } from "./agent-host/registryCatalog.js";
-export { bindHostModel } from "./agent-host/modelBinding.js";
+export { bindHostModel, captureHostModel } from "./agent-host/modelBinding.js";
 export { PiHarnessAdapter } from "./agent-adapters/pi/piHarnessAdapter.js";
 export { projectHostConversation } from "./agent-ui-projection/projector.js";
 export { MockHarness } from "./agent-host/mockHarness.js";
@@ -102,6 +102,17 @@ export type { WorkspaceAdmissionPort } from "./agent-host/targetService.js";
 export { SessionRouter } from "./agent-host/sessionRouter.js";
 export { ProjectCatalog } from "./project-workspaces/projectCatalog.js";
 export { TargetWorktreeService } from "./project-workspaces/worktreeService.js";
+export {
+  ProjectCatalogTargetBridge,
+  CatalogWorkspaceAdmission,
+} from "./project-workspaces/targetBridge.js";
+export type { TrustedWorkspaceIdentity } from "./project-workspaces/targetBridge.js";
+export {
+  NativePersistentSessionIndex,
+  NativeSessionStoreMetadataReader,
+} from "./session/nativePersistentSessionIndex.js";
+export type { NativeSessionMetadataReader } from "./session/nativePersistentSessionIndex.js";
+export { NativeSessionDirectory } from "./session/nativeSessionDirectory.js";
 export { LegacyWorkspaceMigration } from "./project-workspaces/legacyWorkspaceMigration.js";
 export type {
   LegacyPersistentSessionIndexReader,
@@ -124,6 +135,9 @@ export { anthropicMessagesProtocol } from "./model-gateway/ingress/anthropicMess
 export { ClaudeCodeTransport } from "./agent-adapters/claude-code/claudeTransport.js";
 export { CodexTransport, createCodexTransport } from "./agent-adapters/codex/codexTransport.js";
 export { AcpTransport, createAcpTransport } from "./agent-adapters/acp/acpTransport.js";
+export { createTrustedAcpFactory } from "./agent-adapters/acp/acpFactory.js";
+export { probeTrustedAcpProfile } from "./agent-adapters/acp/acpProbe.js";
+export type { TrustedAcpProfile } from "./agent-adapters/acp/acpHarnessAdapter.js";
 export { createZCodeTaskServiceAdapter } from "./zcode-agent/zcodeTaskServiceAdapter.js";
 export { createZCodeSessionService } from "./zcode-session/zcodeSessionService.js";
 export {

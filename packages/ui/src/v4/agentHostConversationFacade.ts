@@ -4,6 +4,7 @@ import {
   type CommandQueryItem,
 } from "@zcode/shared/zcode-protocol-v4";
 import type { ConversationTransport } from "@/v4/transport.js";
+import type { IAgentHostService } from "@zcode/services";
 import {
   createAgentHostConversationTransport,
   type AgentHostConversationPort,
@@ -11,6 +12,10 @@ import {
   type AgentHostConversationTransport,
   type HostSessionOwner,
 } from "./agentHostConversationTransport.js";
+
+// 编译期保持真实 Host 服务与 facade 端口可直接赋值，禁止装配时靠断言掩盖方法缺口。
+const acceptHostPort = (host: IAgentHostService): AgentHostConversationPort => host;
+void acceptHostPort;
 
 export type ConversationOwner = "native" | "external";
 
