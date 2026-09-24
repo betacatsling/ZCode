@@ -124,6 +124,37 @@ test("request projection never bubbles a reminder across developer", () => {
   );
 });
 
+test("reminders on either side of multiple developers retain exact source ordering", () => {
+  const entries: RuntimeMessageEntry[] = [
+    { message: { role: "user", content: "before" } },
+    systemReminderAttachmentEntry("context_prefix", "before instruction"),
+    { message: { role: "developer", content: "instruction" } },
+    systemReminderAttachmentEntry("context_prefix", "after instruction"),
+    { message: { role: "assistant", content: "answer" } },
+    systemReminderAttachmentEntry("context_prefix", "before second"),
+    { message: { role: "developer", content: "second instruction" } },
+    systemReminderAttachmentEntry("context_prefix", "after second"),
+    { message: { role: "assistant", content: "second answer" } },
+  ];
+  for (const useMidConversationSystem of [false, true]) {
+    const messages = buildProviderRequestMessages({ entries, useMidConversationSystem }).messages;
+    assert.deepEqual(
+      messages.map((message) => message.role),
+      entries.map((entry) => ("message" in entry ? entry.message.role : "user")),
+    );
+    for (const [index, marker] of [
+      [1, "before instruction"],
+      [3, "after instruction"],
+      [5, "before second"],
+      [7, "after second"],
+    ] as const) {
+      assert.ok(JSON.stringify(messages[index]?.content).includes(marker));
+    }
+    assert.equal(messages[2]?.content, "instruction");
+    assert.equal(messages[6]?.content, "second instruction");
+  }
+});
+
 test("interleaved developer instructions fail closed before compaction or history mutation", () => {
   const entries: RuntimeMessageEntry[] = [
     { message: system },
