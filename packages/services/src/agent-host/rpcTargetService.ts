@@ -1,4 +1,5 @@
 import { Emitter } from "@zcode/rpc";
+import { writableSessionSpecV2Schema } from "@zcode/shared/agent-host";
 import type { IAgentHostService } from "./serviceContract.js";
 import { AgentHostTargetService, type TargetHostEvent } from "./targetService.js";
 
@@ -19,8 +20,12 @@ export function createRpcAgentHostService(target: AgentHostTargetService, admiss
     listWorkspaceSessions: (workspaceId) => target.listWorkspaceSessions(workspaceId),
     rowsRange: (spec, request) => target.rowsRange(spec, request),
     listSessions: (workspaceIdentity, worktreePath) => target.listSessions(workspaceIdentity, worktreePath),
-    create: (spec, commandId) => {
-      if (!admissionEnabled()) throw new Error("new external sessions disabled; existing history remains readable");
+    create: async (spec, commandId) => {
+      if (!admissionEnabled()) {
+        const prior = await target.queryCreationCommand(commandId);
+        if (prior && JSON.stringify(prior.spec) === JSON.stringify(writableSessionSpecV2Schema.parse(spec)) && prior.receipt.status === "completed") return target.snapshot(prior.spec);
+        throw new Error("new external sessions disabled; existing history remains readable");
+      }
       return target.create(spec, commandId);
     },
     queryCreationCommand: (commandId) => target.queryCreationCommand(commandId),
