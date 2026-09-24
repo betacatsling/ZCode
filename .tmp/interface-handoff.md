@@ -1,3 +1,5 @@
 # question-reservation public contract (early)
 
 No schema/API addition. Existing `SessionHost.dispatch(command: AgentCommand): Promise<AgentCommandReceipt>` and `SessionHost.queryCommand(commandId: string): AgentCommandReceipt | undefined` plus `SessionHost.queryCommandHistory(root, spec, commandId)` are the typed interfaces. A second `answerInteraction` commandId for the same runtime epoch + turnId + interactionId while first reservation is committed returns `{ commandId, status: "execution-unknown", reasonCode: "execution-unknown" }`, without calling the adapter; same commandId follows existing duplicate semantics. Source `question.answered` still controls pending projection. Source spec: `docs/agent-host/QUESTION-RESERVATION.md`.
+
+Early API/spec commit SHA: `70dc1631f32ce67f04214c0c41b26129bdbac92b`.
