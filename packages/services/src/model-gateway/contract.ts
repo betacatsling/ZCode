@@ -20,6 +20,7 @@ export interface GatewaySseFrame {
 export interface GatewayProtocolAdapter {
   id: GatewayProtocolId;
   paths: readonly string[];
+  allowedQueryParameters?: Readonly<Record<string, readonly string[]>>;
   decode(
     body: unknown,
     headers: Readonly<Record<string, string | undefined>>,
@@ -40,6 +41,8 @@ export interface GatewayTokenBinding {
   expiresAt: number;
   maxRequests: number;
   maxOutputBytes: number;
+  maxGenerationTokens: number;
+  maxOutputTokensPerRequest: number;
 }
 export interface GatewayLimits {
   maxBodyBytes: number;
@@ -54,7 +57,7 @@ export interface ModelGatewayOptions {
 }
 export interface ModelGateway {
   start(): Promise<{ url: string; port: number }>;
-  issueToken(binding: GatewayTokenBinding): string;
+  issueToken(binding: GatewayTokenBinding): Promise<string>;
   revokeToken(token: string): void;
   close(): Promise<void>;
 }
