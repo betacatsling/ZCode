@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, realpath, access } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, access, writeFile } from 'node:fs/promises';
+import { spawn, execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createFixture, runLoad, validateOptions, validateProductFacts, isolatedEnvironment } from './runner.mjs';
@@ -39,20 +40,21 @@ test('50 Git candidates are real disposable worktrees including main; no project
   for (const path of fixture.worktrees) assert.match(await readFile(join(path, 'tiny.txt'), 'utf8'), /tiny fixture/);
 });
 
-function driver({ bad = false, missing = false, backlog = 0, lingering = false, delivery = 'desktop-continuous', gateway = false } = {}) {
+function driver({ bad = false, missing = false, backlog = 0, lingering = false, delivery = 'desktop-continuous', gateway = false, productionCommit = 'test-only', latency = 5 } = {}) {
   let events = 0, detached = false, samples = 0, closed = false, reconnects = 0;
   return {
+    async dispose() { closed = true; },
     async open(input) {
       assert.match(input.isolation.home, /load-/);
       return {
-        metadata: { productionCommit: 'test-only', driverVersion: 'contract-stub', paths: input.isolation },
+        metadata: { productionCommit, driverVersion: 'contract-stub', paths: input.isolation },
         async discover({ candidates }) { return candidates.map((path, index) => ({ id: `candidate-${index}`, path })); },
         async mount({ sessions }) {
           assert.equal(new Set(sessions.map(s => s.id)).size, sessions.length);
           return { mountedSurfaces: bad ? ['Button'] : ['Shell', 'ProjectSidebar', 'SessionPane'], owner: 'durable-host', delivery };
         },
         async emit() { events++; },
-        async sample() { samples++; return { typedInputMs: 5, sessionSwitchMs: 7, focusStable: true, draftStable: true, selectedStable: true, worktreesStable: true }; },
+        async sample() { samples++; return { typedInputMs: latency, sessionSwitchMs: latency + 2, focusStable: true, draftStable: true, selectedStable: true, worktreesStable: true }; },
         async detach() { detached = true; },
         async reconnect() { assert.ok(detached); detached = false; reconnects++; return { replayedWithoutResend: true, caughtUp: true }; },
         async facts() { return { durableEvents: missing ? undefined : events, backlog, backlogHighWater: backlog, implicitCliStarts: 0, fullHistorySidebarReads: 0, worktreeMutations: 0, childProcesses: closed && !lingering ? 0 : 2, acceptedPrompts: 0, focusStable: true, draftStable: true, selectedStable: true, heapBytes: 1000 + samples, rssBytes: 5000 + samples }; },
@@ -120,4 +122,80 @@ test('baseline absent cannot produce a <=10% regression claim', async () => {
   const result = await runLoad({driver:driver(),mode:'smoke',artifactBase:await temp(),durationMs:3,eventCount:2,worktreeCount:2,sessionCount:2,expandedCount:1,reconnectEveryMs:1,sampleEveryMs:1,idleMs:0});
   assert.equal(result.comparison.status,'missing-baseline');
   assert.equal(result.comparison.typedInputRatio,undefined);
+});
+
+const short = { mode:'smoke',durationMs:10,eventCount:4,worktreeCount:2,sessionCount:2,expandedCount:1,sampleEveryMs:1,reconnectEveryMs:1,idleMs:0 };
+async function preservedSource() {
+  const {repo} = await createFixture(await temp(),1);
+  const commit = execFileSync('git',['rev-parse','HEAD'],{cwd:repo,encoding:'utf8'}).trim();
+  const buildArtifactPath = join(await temp(),'bundle.bin');
+  await writeFile(buildArtifactPath,'preserved build '+commit);
+  return {repo,commit,buildArtifactPath};
+}
+async function baselinePair({candidateLatency = 5, baselineMutate, candidateMutate} = {}) {
+  const baseline = await preservedSource();
+  const candidate = await preservedSource();
+  // Same fixture seed does not mean the candidate was built from baseline HEAD.
+  execFileSync('git',['-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','--allow-empty','-qm','candidate revision'],{cwd:candidate.repo});
+  candidate.commit = execFileSync('git',['rev-parse','HEAD'],{cwd:candidate.repo,encoding:'utf8'}).trim();
+  const baselineRun = await runLoad({...short, driver:driver({productionCommit:baseline.commit}),artifactBase:await temp(), sourceCheckout:baseline.repo, buildArtifactPath:baseline.buildArtifactPath});
+  assert.equal(baselineRun.status,'smoke-only');
+  const baselinePath = join(baselineRun.artifacts,'result.json');
+  if (baselineMutate) {
+    const edited = JSON.parse(await readFile(baselinePath,'utf8'));
+    await baselineMutate(edited, baseline);
+    await writeFile(baselinePath,JSON.stringify(edited));
+  }
+  if (candidateMutate) await candidateMutate(candidate);
+  const result = await runLoad({...short,driver:driver({productionCommit:candidate.commit,latency:candidateLatency}),artifactBase:await temp(),baselinePath,sourceCheckout:candidate.repo,buildArtifactPath:candidate.buildArtifactPath});
+  return {result,baseline,candidate};
+}
+
+test('partial open always disposes registered real child, including repeated disposal', async () => {
+  let child, disposals = 0, cleanups = 0;
+  const partial = {
+    async dispose() { disposals++; if (child && child.exitCode === null && child.signalCode === null) child.kill(); },
+    async open({registerCleanup,registerChild}) {
+      registerCleanup(async () => { cleanups++; if (child && child.exitCode === null && child.signalCode === null) child.kill(); });
+      child = spawn(process.execPath,['-e','setInterval(() => {}, 10000)'],{stdio:'ignore',env:{PATH:process.env.PATH}});
+      registerChild(child);
+      throw new Error('sensitive partial launch failure');
+    },
+  };
+  const result = await runLoad({...short,driver:partial,artifactBase:await temp()});
+  assert.equal(result.status,'failed');
+  assert.ok(result.failures.includes('gate-failed:driver-open'));
+  assert.equal(result.cleanup?.registeredChildrenExited,1);
+  assert.equal(child.exitCode !== null || child.signalCode !== null,true);
+  assert.equal(disposals,1); assert.equal(cleanups,1);
+  assert.ok(!JSON.stringify(result).includes('sensitive'));
+});
+
+test('wrong preserved Git HEAD cannot be adopted from baseline JSON', async () => {
+  const {result} = await baselinePair({baselineMutate:async (json) => { json.metadata.productionCommit = 'a'.repeat(40); }});
+  assert.equal(result.comparison.status,'incomparable-baseline');
+});
+
+test('missing build or idle provenance is incomparable', async () => {
+  for (const field of ['buildSha256','idleMs']) {
+    const {result} = await baselinePair({baselineMutate:async json => {
+      if (field === 'idleMs') delete json.config.idleMs;
+      else delete json.metadata.buildSha256;
+    }});
+    assert.equal(result.comparison.status,'incomparable-baseline');
+  }
+});
+
+test('controlled short latency window remains smoke, +10% budget enforced', async () => {
+  const {result} = await baselinePair({candidateLatency:6});
+  assert.equal(result.status,'smoke-only');
+  assert.equal(result.comparison.status,'over-budget');
+  assert.ok(result.failures.includes('gate-failed:latency-regression'));
+  assert.equal(result.comparison.typedInputRatio,1.2);
+});
+
+test('preserved baseline with matching short controlled window is comparable but not 8h', async () => {
+  const {result} = await baselinePair();
+  assert.equal(result.comparison.status,'within-budget');
+  assert.equal(result.status,'smoke-only');
 });
