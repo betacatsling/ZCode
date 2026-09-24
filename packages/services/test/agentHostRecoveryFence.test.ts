@@ -13,7 +13,7 @@ test("an uncertain send in the current owner also fences subsequent prompts", as
   const root = await mkdtemp(join(tmpdir(), "zcode-current-unknown-fence-"));
   const worktree = join(root, "worktree");
   await mkdir(worktree);
-  const spec = { schemaVersion: 1 as const, hostSessionId: "h", execution: { targetId: "t", workspaceIdentity: "w", worktreePath: worktree },
+  const spec = { schemaVersion: 2 as const, projectId: "project-a", workspaceId: "workspace-a", hostSessionId: "h", execution: { targetId: "t", workspaceIdentity: "w", worktreePath: worktree, worktreeGeneration: "generation-a", cwdRelativeToWorktree: "." },
     harness: { id: "mock", adapterVersion: "1.0.0" }, modelBinding: { kind: "host-managed" as const, selection: { providerId: "p", modelId: "m" } } };
   const target = { id: "t", kind: "local" as const, platform: process.platform as "darwin" | "linux", available: true };
   let calls = 0;
@@ -47,7 +47,7 @@ test("a prior uncertain send fences new prompts after host restart", async () =>
   const worktree = join(root, "worktree");
   await mkdir(worktree);
   const data = join(root, "data");
-  const spec = { schemaVersion: 1 as const, hostSessionId: "h", execution: { targetId: "t", workspaceIdentity: "w", worktreePath: worktree },
+  const spec = { schemaVersion: 2 as const, projectId: "project-a", workspaceId: "workspace-a", hostSessionId: "h", execution: { targetId: "t", workspaceIdentity: "w", worktreePath: worktree, worktreeGeneration: "generation-a", cwdRelativeToWorktree: "." },
     harness: { id: "mock", adapterVersion: "1.0.0" }, modelBinding: { kind: "host-managed" as const, selection: { providerId: "p", modelId: "m" } } };
   const target = { id: "t", kind: "local" as const, platform: process.platform as "darwin" | "linux", available: true };
   const registry = new HarnessRegistry();

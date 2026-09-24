@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { FileHandle } from "node:fs/promises";
 import { agentEventSchema, type AgentEvent } from "@zcode/shared/agent-host";
-import { closeJournal, durableAppend, journalPath, openJournal, type JournalIdentity } from "./journalStorage.js";
+import { closeJournal, durableAppend, journalPath, openJournal, readJournalLines, type JournalIdentity } from "./journalStorage.js";
 
 export class EventJournal {
   readonly #file: FileHandle;
@@ -22,18 +22,31 @@ export class EventJournal {
     this.#bySource = new Map(events.map((event) => [event.sourceEventId ?? event.eventId, event]));
   }
 
+  /** Sidecar replay never creates a journal or acquires its live owner's writer lock. */
+  static async readHistory(root: string, identity: JournalIdentity): Promise<readonly AgentEvent[]> {
+    return EventJournal.#parse(await readJournalLines(journalPath(root, identity, "events")), identity);
+  }
+
+  static async sinceHistory(root: string, identity: JournalIdentity, sequence: number): Promise<readonly AgentEvent[]> {
+    if (!Number.isSafeInteger(sequence) || sequence < 0) throw new Error("invalid journal cursor");
+    return (await EventJournal.readHistory(root, identity)).slice(sequence, sequence + 500);
+  }
+
+  static #parse(lines: readonly string[], identity: JournalIdentity): AgentEvent[] {
+    const events: AgentEvent[] = [];
+    for (const line of lines) {
+      const event = agentEventSchema.parse(JSON.parse(line));
+      if (event.hostSessionId !== identity.hostSessionId || event.runtimeEpoch !== identity.runtimeEpoch || event.sequence !== events.length + 1)
+        throw new Error("corrupt or foreign event journal");
+      events.push(event);
+    }
+    return events;
+  }
+
   static async open(root: string, identity: JournalIdentity): Promise<EventJournal> {
     const storage = await openJournal(root, journalPath(root, identity, "events"));
     try {
-      const events: AgentEvent[] = [];
-      for (const line of storage.lines) {
-        const event = agentEventSchema.parse(JSON.parse(line));
-        if (event.hostSessionId !== identity.hostSessionId || event.runtimeEpoch !== identity.runtimeEpoch || event.sequence !== events.length + 1) {
-          throw new Error("corrupt or foreign event journal");
-        }
-        events.push(event);
-      }
-      return new EventJournal(storage, identity, events);
+      return new EventJournal(storage, identity, EventJournal.#parse(storage.lines, identity));
     } catch (error) {
       await closeJournal(storage.file, storage.lock, storage.lockPath);
       throw error;

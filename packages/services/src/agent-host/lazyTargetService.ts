@@ -1,12 +1,14 @@
-import { isAbsolute, join } from "node:path";
+import { join } from "node:path";
 import { Emitter } from "@zcode/rpc";
 import type { ProviderRegistryService } from "@zcode/provider";
-import type { ExecutionTarget } from "@zcode/shared/agent-host";
+import type { ExecutionTarget, HarnessManifest } from "@zcode/shared/agent-host";
 import { HarnessRegistry } from "./harnessRegistry.js";
 import { createRegistryModelCatalog } from "./registryCatalog.js";
 import { createRpcAgentHostService } from "./rpcTargetService.js";
 import type { IAgentHostService } from "./serviceContract.js";
-import { AgentHostTargetService, type TargetHostEvent } from "./targetService.js";
+import { AgentHostTargetService, type TargetHostEvent, type WorkspaceAdmissionPort } from "./targetService.js";
+
+const piManifest: HarnessManifest = { schemaVersion: 1, id: "pi", name: "Pi", adapterVersion: "0.87.1" };
 
 /** Lazy registration avoids loading Pi/CLI model adapters during native-only startup. */
 export function createLazyTargetAgentHostService(input: {
@@ -14,18 +16,17 @@ export function createLazyTargetAgentHostService(input: {
   target: ExecutionTarget;
   registry: ProviderRegistryService;
   allowNewSessions: () => boolean;
+  admission: WorkspaceAdmissionPort;
 }): { service: IAgentHostService; dispose(): Promise<void> } {
   let target: AgentHostTargetService | undefined;
   let flight: Promise<AgentHostTargetService> | undefined;
   let targetDispose: (() => void) | undefined;
   let disposed = false;
   const events = new Emitter<TargetHostEvent>();
-  const authorizeWorktree = async (spec: { execution: { worktreePath: string } }, realPath: string) =>
-    isAbsolute(spec.execution.worktreePath) && isAbsolute(realPath);
   const historyOnly = new AgentHostTargetService({
     root: join(input.root, "sessions"), target: input.target,
     catalog: { fingerprint: "history-only", validateSelection: () => ({ ok: false as const, reason: "history-only" }) },
-    registry: new HarnessRegistry(), authorizeWorktree,
+    registry: new HarnessRegistry(), admission: input.admission,
   });
   const getTarget = async (): Promise<AgentHostTargetService> => {
     if (disposed) throw new Error("agent host service disposed");
@@ -34,12 +35,12 @@ export function createLazyTargetAgentHostService(input: {
       await input.registry.start();
       const { createRegistryPiHarness } = await import("../agent-adapters/pi/createPiHarness.js");
       const harnesses = new HarnessRegistry();
-      harnesses.register(createRegistryPiHarness({ root: join(input.root, "workers"), registry: input.registry }));
+      harnesses.registerTrusted(piManifest,
+        () => createRegistryPiHarness({ root: join(input.root, "workers"), registry: input.registry }));
       const instance = new AgentHostTargetService({
         root: join(input.root, "sessions"), target: input.target,
         catalog: createRegistryModelCatalog(input.registry), registry: harnesses,
-        // Trusted target channel only; reject symlink aliases in this environment.
-        authorizeWorktree,
+        admission: input.admission,
       });
       const rpc = createRpcAgentHostService(instance, input.allowNewSessions);
       const unsubscribe = rpc.service.onEvent((event) => events.fire(event));
@@ -53,9 +54,15 @@ export function createLazyTargetAgentHostService(input: {
     onEvent: events.event,
     getAvailability: async () => ({
       target: input.target,
-      harnesses: ["pi"],
+      harnesses: [piManifest.id],
       admissionEnabled: input.allowNewSessions() && input.target.available,
     }),
+    catalogForTarget: async (targetId) => (await getTarget()).catalogForTarget(targetId),
+    getSessionCapabilities: (spec) => (target ?? historyOnly).getSessionCapabilities(spec),
+    getRuntimeActivity: (workspaceId) => (target ?? historyOnly).getRuntimeActivity(workspaceId),
+    getSessionSpec: (scope) => (target ?? historyOnly).getSessionSpec(scope),
+    listWorkspaceSessions: (workspaceId) => (target ?? historyOnly).listWorkspaceSessions(workspaceId),
+    rowsRange: (spec, request) => (target ?? historyOnly).rowsRange(spec, request),
     async listSessions(workspaceIdentity, worktreePath) {
       return (target ?? historyOnly).listSessions(workspaceIdentity, worktreePath);
     },
