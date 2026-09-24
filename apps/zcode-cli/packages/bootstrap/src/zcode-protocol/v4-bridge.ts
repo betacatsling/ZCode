@@ -1152,6 +1152,10 @@ export function createConversationV4Gateway(
         // 极少数跨进程并发：handler 会清理新 record；持久 receipt 里的 ID 仍权威。
         throw new Error("guard.nativeCreateAlreadyCommittedElsewhere");
       }
+      // 中文：只在测试显式指定原命令时截断真实 CLI 的 COMMIT→complete 边界；
+      // 已持久化 pending 不能被 Core 的丢 ACK 恢复误判为 completed。
+      if (process.env.ZCODE_NATIVE_CREATE_POST_COMMIT_PENDING_TEST_ONLY === envelope.commandId)
+        throw new Error("native-create-post-commit-pending-test-only");
       return sessionId;
     },
     createSessionRecord: async ({

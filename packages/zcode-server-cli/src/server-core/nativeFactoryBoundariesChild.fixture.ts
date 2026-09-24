@@ -32,7 +32,64 @@ try {
     workspaceId: "workspace",
     sessionId: ids[0],
   });
-  if (process.env.CORE_NATIVE_VERIFY_INPUT === "1") {
+  if (process.env.CORE_NATIVE_RECOVER_BOUNDARY_TEST_ONLY) {
+    const kind = process.env.CORE_NATIVE_RECOVER_BOUNDARY_TEST_ONLY;
+    const commandId = `native-create-${kind}-boundary`;
+    const db = new DatabaseSync(process.env.ZCODE_SESSION_DB_PATH!, { readOnly: true });
+    const receipt = db
+      .prepare("select status, session_id as id from native_create_receipt where command_id = ?")
+      .get(commandId) as { status: string; id: string } | undefined;
+    db.close();
+    if (!receipt || receipt.status !== (kind === "pending" ? "pending" : "completed"))
+      throw new Error("CLI boundary receipt changed on restart");
+    const binding = {
+      kind: "host-managed" as const,
+      selection: {
+        providerId: "fixture",
+        modelId: "fixture-model",
+        options: { reasoningLevel: "off" },
+      },
+    };
+    let recovered: Awaited<ReturnType<typeof hierarchy.createAgent>> | undefined;
+    try {
+      recovered = await hierarchy.createAgent({
+        workspaceId: "workspace",
+        harnessId: "zcode",
+        commandId,
+        modelBinding: binding,
+      });
+    } catch (error) {
+      if (kind !== "pending" || !String(error).includes("native-create-receipt-uncertain"))
+        throw error;
+    }
+    if (
+      kind === "completed" &&
+      (recovered?.owner.kind !== "native" ||
+        recovered.owner.originalSessionId !== receipt.id ||
+        recovered.owner.historyOnly)
+    )
+      throw new Error("completed original ID not certified after cold Core+CLI restart");
+    if (kind === "pending" && recovered) throw new Error("pending receipt promoted to owner");
+    const again = await catalog.sidebarSnapshot();
+    const mapped = await hierarchy.resolveOwner({
+      targetId: "native-mount-fixture",
+      workspaceId: "workspace",
+      sessionId: receipt.id,
+    });
+    process.send?.({
+      type: "boundary-read",
+      status: receipt.status,
+      originalId: receipt.id,
+      owner: mapped?.kind === "native" && !mapped.historyOnly,
+      // Sidebar uses a scoped tree ID, not the original CLI ID; assert the new row itself.
+      listed: again.sessions.some(
+        (row) => !snapshot.sessions.some((prior) => prior.session.id === row.session.id),
+      ),
+      unrelated: healthy?.kind === "native" && !healthy.historyOnly,
+      before: snapshot.sessions.length,
+      after: again.sessions.length,
+    });
+  } else if (process.env.CORE_NATIVE_VERIFY_INPUT === "1") {
     // 中文：选项完整且 Registry 有效、但与原命令选择不同；不能把它当缺失 options 的弱冲突。
     await assert.rejects(
       hierarchy.createAgent({

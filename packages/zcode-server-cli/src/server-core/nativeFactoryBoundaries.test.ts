@@ -22,7 +22,14 @@ async function removeIsolatedProfile(root: string): Promise<void> {
 
 // The first process uses the existing public factory, real Git/Target/Catalog/CLI/SQLite.
 // Two independent restarts prove scoped degradation and per-original-ID execution separately.
-for (const variant of ["damaged", "per-id-model"] as const)
+for (const variant of [
+  "damaged",
+  "per-id-model",
+  "pending",
+  "completed",
+  "schema",
+  "source-db",
+] as const)
   test(`public native factory ${variant}`, async () => {
     const root = await mkdtemp(join(tmpdir(), "native-factory-boundaries-"));
     const calls: Array<{ model: string; body: string }> = [];
@@ -122,8 +129,8 @@ for (const variant of ["damaged", "per-id-model"] as const)
           "--stdio",
         ]),
       };
-      const boot = async (fixture: string, env: NodeJS.ProcessEnv) => {
-        const child = fork(fileURLToPath(new URL(fixture, import.meta.url)), [], {
+      const boot = async (fixture: string, env: NodeJS.ProcessEnv, args: string[] = []) => {
+        const child = fork(fileURLToPath(new URL(fixture, import.meta.url)), args, {
           cwd: root,
           execArgv: ["--import", import.meta.resolve("tsx")],
           env: { ...baseEnv, ...env },
@@ -174,11 +181,25 @@ for (const variant of ["damaged", "per-id-model"] as const)
         ZCODE_MULTI_HARNESS_ENABLED: "1",
         ZCODE_CORE_NATIVE_CREATE_TEST_ONLY: "1",
         CORE_NATIVE_BOOT_FENCE_TEST_ONLY: variant === "per-id-model" ? "1" : "0",
+        CORE_NATIVE_FAILURE_BOUNDARY_TEST_ONLY: ["pending", "completed", "schema"].includes(variant)
+          ? variant
+          : "",
+        ZCODE_NATIVE_CREATE_POST_COMMIT_PENDING_TEST_ONLY:
+          variant === "pending" ? "native-create-pending-boundary" : "",
+        ZCODE_CORE_NATIVE_BEFORE_MAPPING_FAULT_TEST_ONLY:
+          variant === "completed" ? "native-create-completed-boundary" : "",
         ZCODE_CORE_NATIVE_CATALOG_FAULT_TEST_ONLY: "native-create-catalog-fault",
         ZCODE_CORE_NATIVE_DROP_ACK_TEST_ONLY: "native-create-1",
         ZCODE_CORE_NATIVE_MAPPING_FSYNC_FAULT_TEST_ONLY: "native-create-fsync-fault",
       });
-      assert.equal(first.type, "native-created");
+      assert.equal(
+        first.type,
+        variant === "pending" || variant === "completed"
+          ? "boundary-staged"
+          : variant === "schema"
+            ? "boundary-schema"
+            : "native-created",
+      );
       assert.equal(first.ids.length, 2);
       assert.equal(first.worktreeCount, 1);
       const { DatabaseSync } = await import("node:sqlite");
@@ -200,8 +221,32 @@ for (const variant of ["damaged", "per-id-model"] as const)
         `${createHash("sha256").update("native-create-1").digest("hex")}.mapping.json`,
       );
       assert.ok((await readFile(mappingPath, "utf8")).includes(first.ids[0]));
-      if (variant === "damaged") await writeFile(mappingPath, "{damaged");
-      else {
+      let secondSource: string | undefined;
+      let recoveredIds = first.ids;
+      if (variant === "source-db") {
+        secondSource = join(root, "native-second.sqlite");
+        const next = await boot(
+          "./coreNativeMountChild.fixture.ts",
+          {
+            ZCODE_SESSION_DB_PATH: secondSource,
+            ZCODE_MULTI_HARNESS_ENABLED: "1",
+            ZCODE_CORE_NATIVE_CREATE_TEST_ONLY: "1",
+            CORE_NATIVE_FAILURE_BOUNDARY_TEST_ONLY: "",
+            ZCODE_CORE_NATIVE_CATALOG_FAULT_TEST_ONLY: "",
+            ZCODE_CORE_NATIVE_DROP_ACK_TEST_ONLY: "",
+            ZCODE_CORE_NATIVE_MAPPING_FSYNC_FAULT_TEST_ONLY: "",
+          },
+          ["source-next"],
+        );
+        assert.equal(next.type, "native-created");
+        assert.equal(next.ids.length, 1);
+        assert.notEqual(next.ids[0], first.ids[0]);
+        recoveredIds = [first.ids[0], next.ids[0]];
+        const db = new (await import("node:sqlite")).DatabaseSync(dbPath);
+        db.exec("pragma user_version = 1");
+        db.close();
+      } else if (variant === "damaged") await writeFile(mappingPath, "{damaged");
+      else if (variant === "per-id-model") {
         const personal = join(root, ".zcode", "v2", "provider_config.json");
         const settings = JSON.parse(await readFile(personal, "utf8"));
         settings.config.defaultModelSelection.modelId = "fixture-other";
@@ -210,14 +255,42 @@ for (const variant of ["damaged", "per-id-model"] as const)
       const result = await boot("./nativeFactoryBoundariesChild.fixture.ts", {
         ZCODE_MULTI_HARNESS_ENABLED: "0",
         ZCODE_CORE_NATIVE_CREATE_TEST_ONLY: "0",
-        CORE_NATIVE_IDS: JSON.stringify(first.ids),
+        ZCODE_SESSION_DB_PATH: secondSource ?? dbPath,
+        CORE_NATIVE_IDS: JSON.stringify(recoveredIds),
         CORE_NATIVE_VERIFY_INPUT: variant === "per-id-model" ? "1" : "0",
+        CORE_NATIVE_RECOVER_BOUNDARY_TEST_ONLY:
+          variant === "pending" || variant === "completed" ? variant : "",
       });
-      if (variant === "damaged") {
+      if (variant === "pending" || variant === "completed") {
+        assert.equal(result.type, "boundary-read");
+        assert.equal(result.status, variant);
+        assert.equal(result.originalId, first.originalId);
+        assert.equal(result.owner, variant === "completed");
+        assert.equal(result.listed, variant === "completed");
+        assert.equal(result.unrelated, true);
+        assert.equal(result.after - result.before, variant === "completed" ? 1 : 0);
+        assert.equal(calls.length, 0);
+        const catalog = JSON.parse(
+          await readFile(
+            join(root, ".zcode", "v2", "workspace-hierarchy", "profile", "catalog.json"),
+            "utf8",
+          ),
+        );
+        assert.equal(
+          catalog.nativeReferences.some(
+            (ref: { commandId: string }) => ref.commandId === first.commandId,
+          ),
+          variant === "completed",
+        );
+      } else if (variant === "damaged" || variant === "schema" || variant === "source-db") {
         assert.equal(result.type, "read");
         assert.equal(result.healthy, true);
-        assert.equal(result.damaged, true);
-        assert.equal(result.sessionIds.length, 1, "damaged owner is quarantined, not recreated");
+        assert.equal(result.damaged, variant === "damaged" || variant === "source-db");
+        assert.equal(
+          result.sessionIds.length,
+          variant === "damaged" || variant === "source-db" ? 1 : 2,
+          "only certified owners are listed",
+        );
         assert.equal(calls.length, 0, "read-only history must not submit an input");
       } else {
         assert.equal(result.type, "input");
@@ -237,16 +310,26 @@ for (const variant of ["damaged", "per-id-model"] as const)
       }
       assert.equal(count(), before);
     } finally {
-      await Promise.all(
+      const childResults = await Promise.allSettled(
         children.map(async (child) => {
           if (child.exitCode !== null || child.signalCode !== null) return;
-          const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
-          child.kill("SIGKILL");
-          await Promise.race([exited, new Promise<void>((resolve) => setTimeout(resolve, 5000))]);
+          await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(() => {
+              child.off("exit", onExit);
+              reject(new Error("owned factory child did not exit after bounded kill"));
+            }, 5000);
+            const onExit = () => {
+              clearTimeout(timer);
+              resolve();
+            };
+            child.once("exit", onExit);
+            child.kill("SIGKILL");
+          });
         }),
       );
       server.closeAllConnections();
       if (server.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
       await removeIsolatedProfile(root);
+      for (const result of childResults) if (result.status === "rejected") throw result.reason;
     }
   });

@@ -17,7 +17,7 @@ let authority: Awaited<ReturnType<typeof createCoreAuthority>> | undefined;
 try {
   const repo = join(root, "real-repo");
   await mkdir(repo, { recursive: true });
-  if (process.argv[2] !== "restart") {
+  if (process.argv[2] !== "restart" && process.argv[2] !== "source-next") {
     await git("git", ["init", "-q", repo]);
     await writeFile(join(repo, "README"), "isolated\n");
     await git("git", ["-C", repo, "add", "README"]);
@@ -35,7 +35,7 @@ try {
   }
   const settings = join(root, ".zcode", "v2");
   await mkdir(settings, { recursive: true });
-  if (process.argv[2] !== "restart")
+  if (process.argv[2] !== "restart" && process.argv[2] !== "source-next")
     await writeFile(
       join(settings, "provider_config.json"),
       JSON.stringify({
@@ -100,7 +100,7 @@ try {
         },
       }),
     );
-  if (process.argv[2] !== "restart") {
+  if (process.argv[2] !== "restart" && process.argv[2] !== "source-next") {
     const path = join(settings, "provider_config.json");
     const data = JSON.parse(await (await import("node:fs/promises")).readFile(path, "utf8"));
     data.config.modelConfigRules.providerModelRules.push({
@@ -136,7 +136,7 @@ try {
     await authority.bootAdmissionLease.release();
   }
   const hierarchy = authority.services.get(IWorkspaceHierarchyService);
-  if (process.argv[2] !== "restart") {
+  if (process.argv[2] !== "restart" && process.argv[2] !== "source-next") {
     await catalog.importProject({
       id: "project",
       name: "Test",
@@ -168,7 +168,11 @@ try {
   )
     throw new Error("real native model options unavailable");
   const ids: string[] = [];
-  for (const commandId of ["native-create-1", "native-create-2"]) {
+  const commands =
+    process.argv[2] === "source-next"
+      ? ["native-create-source-next"]
+      : ["native-create-1", "native-create-2"];
+  for (const commandId of commands) {
     const requested =
       commandId === "native-create-1"
         ? binding
@@ -209,7 +213,7 @@ try {
   ) as {
     nativeReferences?: Array<{ commandId: string; originalSessionId: string; workspaceId: string }>;
   };
-  for (const [index, commandId] of ["native-create-1", "native-create-2"].entries()) {
+  for (const [index, commandId] of commands.entries()) {
     if (
       !catalogState.nativeReferences?.some(
         (row) =>
@@ -220,7 +224,7 @@ try {
     )
       throw new Error(`missing durable Catalog reference: ${commandId}`);
   }
-  if (ids[0] === ids[1]) throw new Error("two commands allocated one session");
+  if (ids.length === 2 && ids[0] === ids[1]) throw new Error("two commands allocated one session");
   const nativeDb = process.env.ZCODE_SESSION_DB_PATH!.startsWith("/")
     ? process.env.ZCODE_SESSION_DB_PATH!
     : join(repo, process.env.ZCODE_SESSION_DB_PATH!);
@@ -233,9 +237,85 @@ try {
       db.close();
     }
   };
+  if (process.env.CORE_NATIVE_FAILURE_BOUNDARY_TEST_ONLY === "schema") {
+    const { DatabaseSync } = await import("node:sqlite");
+    const db = new DatabaseSync(process.env.ZCODE_SESSION_DB_PATH!);
+    db.exec("pragma user_version = 1");
+    try {
+      // 中文：在两个已认证原始 ID 后损坏实际 CLI 源库版本；公共工厂不得在效果前分配第三个。
+      try {
+        await hierarchy.createAgent({
+          workspaceId: "workspace",
+          harnessId: "zcode",
+          commandId: "native-create-schema-boundary",
+          modelBinding: binding,
+        });
+        throw new Error("unsupported actual source DB accepted by public factory");
+      } catch (error) {
+        if (!String(error).includes("unknown-native-session-schema")) throw error;
+      }
+      const receipt = db
+        .prepare("select session_id from native_create_receipt where command_id = ?")
+        .get("native-create-schema-boundary");
+      if (receipt) throw new Error("unsupported source allocated a native ID");
+    } finally {
+      db.exec("pragma user_version = 0");
+      db.close();
+    }
+    process.send?.({ type: "boundary-schema", ids, worktreeCount: 1 });
+  }
+  if (
+    process.env.CORE_NATIVE_FAILURE_BOUNDARY_TEST_ONLY &&
+    process.env.CORE_NATIVE_FAILURE_BOUNDARY_TEST_ONLY !== "schema"
+  ) {
+    const kind = process.env.CORE_NATIVE_FAILURE_BOUNDARY_TEST_ONLY;
+    const commandId = `native-create-${kind}-boundary`;
+    let failed = false;
+    try {
+      await hierarchy.createAgent({
+        workspaceId: "workspace",
+        harnessId: "zcode",
+        commandId,
+        modelBinding: binding,
+      });
+    } catch (error) {
+      // 中文：CLI 把内部 post-COMMIT 故障编码为 failed ACK；下方 SQLite pending 校验证明故障点。
+      if (
+        String(error).includes(
+          kind === "pending" ? "native-create-command-failed" : "before-core-mapping-test-only",
+        )
+      )
+        failed = true;
+      else throw error;
+    }
+    if (!failed) throw new Error(`actual public factory ${kind} boundary did not fail`);
+    const { DatabaseSync } = await import("node:sqlite");
+    const db = new DatabaseSync(process.env.ZCODE_SESSION_DB_PATH!, { readOnly: true });
+    const receipt = db
+      .prepare("select status, session_id as id from native_create_receipt where command_id = ?")
+      .get(commandId) as { status: string; id: string } | undefined;
+    db.close();
+    if (receipt?.status !== (kind === "pending" ? "pending" : "completed"))
+      throw new Error(`wrong durable CLI boundary status: ${receipt?.status}`);
+    const boundaryWorktrees = await git("git", ["-C", repo, "worktree", "list", "--porcelain"]);
+    process.send?.({
+      type: "boundary-staged",
+      kind,
+      commandId,
+      originalId: receipt.id,
+      ids,
+      worktreeCount: boundaryWorktrees.stdout
+        .split("\n")
+        .filter((line) => line.startsWith("worktree ")).length,
+    });
+  }
   let fsyncFailed = false;
   let catalogFailed = process.argv[2] === "restart";
-  if (process.argv[2] !== "restart") {
+  if (
+    process.argv[2] !== "restart" &&
+    process.argv[2] !== "source-next" &&
+    !process.env.CORE_NATIVE_FAILURE_BOUNDARY_TEST_ONLY
+  ) {
     try {
       await hierarchy.createAgent({
         workspaceId: "workspace",

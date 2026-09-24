@@ -235,6 +235,10 @@ export async function createCoreAuthority(
             throw error;
           }
         }
+        // 中文：仅测试显式指定命令可模拟 Core 在收到 CLI completed ACK 后、
+        // 但尚未同步本地映射/目录引用前退出；冷重启只能只读认证原始 ID。
+        if (process.env.ZCODE_CORE_NATIVE_BEFORE_MAPPING_FAULT_TEST_ONLY === input.commandId)
+          throw new Error("native-create-before-core-mapping-test-only");
         return { originalSessionId: (await journal.complete(input.commandId)).originalSessionId };
       },
       async capabilities(owner) {
