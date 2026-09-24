@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdir, open, readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import {
-  agentCommandSchema, backendBindingV2Schema, executionTargetSchema,
+  agentCommandReceiptSchema, agentCommandSchema, backendBindingV2Schema, executionTargetSchema,
   frozenTurnModelRouteSchema, readableSessionSpecSchema, writableSessionSpecV2Schema, type AgentCommand, type AgentCommandReceipt, type AgentEvent,
   type BackendBinding, type BackendBindingV2, type BindingPlan, type ExecutionTarget, type LegacySessionSpec, type SessionSpecV2,
   type StoredAgentSessionSummary,
@@ -14,7 +14,7 @@ import { EventJournal } from "./eventJournal.js";
 import { observeOutcome, publishActivitySummary, readActivitySummary, type ActivitySummary } from "./activityReadModel.js";
 import type { HostSessionReadModel } from "./serviceContract.js";
 import { HarnessRegistry, type HarnessAdapter } from "./harnessRegistry.js";
-import { journalCommittedBytes, journalPath, type JournalIdentity } from "./journalStorage.js";
+import { journalCommittedBytes, journalPath, readJournalLines, type JournalIdentity } from "./journalStorage.js";
 import { planModelBinding, type ModelCatalogPort } from "./modelBindingPlanner.js";
 import type { V4ConversationRowsRangeParams, V4ConversationRowsRangeResult } from "@zcode/shared/zcode-protocol-v4";
 import { v4ConversationRowsRangeParamsSchema, v4ConversationRowsRangeResultSchema } from "@zcode/shared/zcode-protocol-v4";
@@ -363,6 +363,25 @@ export class SessionHost {
           const capabilities = await this.#adapter.capabilities(this.#target);
           if (!("questions" in capabilities) || capabilities.questions?.support !== "supported" || !this.#adapter.answerInteraction)
             return this.#reject(command, "unsupported", "native question answering is not available");
+          // 修复源事件延迟时第二个 commandId 再次投递答案：首次 durable accept 即是预留，
+          // 必须先读提交游标内的命令记录；崩溃后未确认的预留也不能被当成安全重试。
+          if (await this.#questionAlreadyReserved(command)) {
+            const unknown: AgentCommandReceipt = { commandId: command.commandId, status: "execution-unknown", reasonCode: "execution-unknown" };
+            await this.#commands.finish(command.commandId, unknown);
+            await this.#publishSummary();
+            return unknown;
+          }
+          // 修复能力探测/日志读取期间源事件已解决问题仍投递旧答案：交付前再消费事件尾并校验。
+          await this.#eventTail;
+          if (this.#eventError) {
+            const unknown: AgentCommandReceipt = { commandId: command.commandId, status: "execution-unknown", reasonCode: "execution-unknown" };
+            await this.#commands.finish(command.commandId, unknown);
+            await this.#publishSummary();
+            return unknown;
+          }
+          if (!this.#isCurrentTurn(command) || this.#interactions.get(command.interactionId)?.kind !== "question" ||
+              this.#interactions.get(command.interactionId)?.turnId !== command.turnId)
+            return this.#reject(command, "stale-interaction", "question or epoch changed before delivery");
           await this.#adapter.answerInteraction(command);
           break;
         }
@@ -396,6 +415,35 @@ export class SessionHost {
       }
       return this.#reject(command, "backend-failure", error instanceof Error ? error.message : "backend failed");
     }
+  }
+
+  /** Committed answer admissions are the reservation; rejected pre-delivery commands release theirs. */
+  async #questionAlreadyReserved(command: Extract<AgentCommand, { type: "answerInteraction" }>): Promise<boolean> {
+    const lines = await readJournalLines(journalPath(this.#root, this.#identity, "commands"));
+    const earlier = new Map<string, AgentCommandReceipt>();
+    let reachedCurrent = false;
+    for (const line of lines) {
+      const raw: unknown = JSON.parse(line);
+      if (typeof raw !== "object" || raw === null) throw new Error("invalid question reservation record");
+      if (!("receipt" in raw)) {
+        // 修复损坏的已提交记录被误跳过而允许第二次投递；仅有效的 send 路由可跳过。
+        if (!("frozenRoute" in raw) || !("command" in raw) || typeof raw.command !== "string" ||
+            frozenTurnModelRouteSchema.safeParse(raw.frozenRoute).success === false)
+          throw new Error("invalid question reservation record");
+        continue;
+      }
+      const { command: recorded, receipt: result } = raw as { command: unknown; receipt: unknown };
+      const previous = agentCommandSchema.parse(recorded);
+      const receipt = agentCommandReceiptSchema.parse(result);
+      if (previous.hostSessionId !== this.spec.hostSessionId || receipt.commandId !== previous.commandId)
+        throw new Error("foreign question reservation record");
+      if (previous.commandId === command.commandId) { reachedCurrent = true; continue; }
+      if (previous.type === "answerInteraction" && previous.runtimeEpoch === command.runtimeEpoch &&
+          previous.turnId === command.turnId && previous.interactionId === command.interactionId)
+        earlier.set(previous.commandId, receipt);
+    }
+    if (!reachedCurrent) throw new Error("missing durable question admission");
+    return [...earlier.values()].some((receipt) => receipt.status !== "rejected");
   }
 
   getReadModel(): HostSessionReadModel {
