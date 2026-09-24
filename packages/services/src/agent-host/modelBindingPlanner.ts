@@ -9,7 +9,7 @@ export interface ModelCatalogPort {
 
 /** Pure admission decision except adapter capability probes; never substitutes a default model. */
 export async function planModelBinding(input: {
-  spec: SessionSpec;
+  spec: Pick<SessionSpec, "hostSessionId" | "execution" | "harness" | "modelBinding">;
   target: ExecutionTarget;
   harness: HarnessAdapter;
   catalog: ModelCatalogPort;
