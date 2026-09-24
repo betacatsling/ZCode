@@ -183,8 +183,16 @@ try {
     db.close();
     process.send?.({ type: "input", facts });
   } else {
+    const inspected = await hierarchy.inspectCreateCommand({
+      workspaceId: "workspace",
+      commandId: "native-create-1",
+    });
     process.send?.({
       type: "read",
+      inspected:
+        inspected.status === "unavailable"
+          ? { status: inspected.status, diagnostic: inspected.diagnostic }
+          : { status: inspected.status },
       sessionIds: snapshot.sessions.map((row) => row.session.id),
       healthy:
         healthy?.kind === "native" && healthy.originalSessionId === ids[1] && !healthy.historyOnly,

@@ -6,6 +6,7 @@ import {
 } from "@zcode/shared";
 /* oxlint-disable eslint(max-lines) -- ZCode Protocol transport、通知 wiring 和 app-facing session 方法必须共享同一个 client/emitter 上下文。 */
 import { randomUUID } from "node:crypto";
+import { ReadonlyNativeSessionMetadataView } from "@zcode/adapters/storage";
 import { ensureIndependentPlanSupport } from "./independentPlanSupport.js";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -1118,7 +1119,12 @@ export interface NativeCreationControlPort {
   }>;
   create(
     target: ZCodeAgentWorkspaceTarget,
-    expected: { runtimeIdentity: string; generation: number; databaseId: string },
+    expected: {
+      runtimeIdentity: string;
+      generation: number;
+      databaseId: string;
+      nativeDatabasePath: string;
+    },
     envelope: {
       commandId: string;
       payload: ReturnType<typeof commandPayloadSchemas.createSession.parse>;
@@ -6001,7 +6007,8 @@ export function createZCodeAgentService(
       if (
         current.runtimeIdentity !== expected.runtimeIdentity ||
         current.generation !== expected.generation ||
-        current.databaseId !== expected.databaseId
+        current.databaseId !== expected.databaseId ||
+        current.nativeDatabasePath !== expected.nativeDatabasePath
       )
         throw new NativeCreationOwnershipChangedError("before-effect");
       await getClient(target); // existing readiness owner validates real Registry before enabling a writable native command
@@ -6015,6 +6022,10 @@ export function createZCodeAgentService(
         client.storageStartup.snapshot?.phase !== "ready"
       )
         throw new NativeCreationOwnershipChangedError("before-effect");
+      // 中文：worker lease / 路径 hash 未变不等于真实 SQLite schema 未变；效果前复核该 CLI 报告的库。
+      // 只读查询不做迁移，也不向 Core 写入 CLI 业务表。
+      await new ReadonlyNativeSessionMetadataView(expected.nativeDatabasePath).read("");
+      assertCurrent(key, client);
       let ack: CommandAck;
       try {
         ack = await client.request(

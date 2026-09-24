@@ -30,6 +30,8 @@ for (const variant of [
   "schema",
   "source-db",
   "boot-held",
+  "worker-rotation",
+  "schema-between",
 ] as const)
   test(`public native factory ${variant}`, async () => {
     const root = await mkdtemp(join(tmpdir(), "native-factory-boundaries-"));
@@ -182,6 +184,8 @@ for (const variant of [
         ZCODE_MULTI_HARNESS_ENABLED: "1",
         ZCODE_CORE_NATIVE_CREATE_TEST_ONLY: "1",
         CORE_NATIVE_BOOT_FENCE_TEST_ONLY: variant === "per-id-model" ? "1" : "0",
+        CORE_INGRESS_ROTATE_WORKER_TEST_ONLY: variant === "worker-rotation" ? "1" : "0",
+        CORE_INGRESS_SCHEMA_BETWEEN_TEST_ONLY: variant === "schema-between" ? "1" : "0",
         CORE_NATIVE_FAILURE_BOUNDARY_TEST_ONLY: ["pending", "completed", "schema"].includes(variant)
           ? variant
           : "",
@@ -203,6 +207,16 @@ for (const variant of [
       );
       assert.equal(first.ids.length, 2);
       assert.equal(first.worktreeCount, 1);
+      if (variant === "worker-rotation" || variant === "schema-between") {
+        assert.equal(
+          first.workerRotation,
+          variant === "worker-rotation"
+            ? "native-create-owner-changed-before-effect"
+            : "unknown-native-session-schema",
+        );
+        assert.equal(first.raceAllocated, false);
+        assert.equal(calls.length, 0);
+      }
       const { DatabaseSync } = await import("node:sqlite");
       const count = () => {
         const db = new DatabaseSync(dbPath, { readOnly: true });
@@ -294,10 +308,24 @@ for (const variant of [
           ),
           variant === "completed",
         );
+      } else if (variant === "worker-rotation" || variant === "schema-between") {
+        assert.equal(result.type, "read");
+        assert.equal(result.healthy, true);
+        assert.equal(result.sessionIds.length, 2);
+        assert.equal(calls.length, 0);
       } else if (variant === "damaged" || variant === "schema" || variant === "source-db") {
         assert.equal(result.type, "read");
         assert.equal(result.healthy, true);
         assert.equal(result.damaged, variant === "damaged" || variant === "source-db");
+        if (variant === "damaged" || variant === "source-db") {
+          assert.deepEqual(result.inspected, {
+            status: "unavailable",
+            diagnostic: {
+              entryId: createHash("sha256").update("native-create-1").digest("hex"),
+              reason: "uncertified-mapping",
+            },
+          });
+        } else assert.deepEqual(result.inspected, { status: "completed" });
         assert.equal(
           result.sessionIds.length,
           variant === "damaged" || variant === "source-db" ? 1 : 2,

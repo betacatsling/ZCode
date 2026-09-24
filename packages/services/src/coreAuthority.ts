@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Core 的 profile/Target/CLI 三方启动与关闭需要由同一实例收口；只读认证已独立抽出。 */
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -23,6 +24,7 @@ import {
 } from "./zcode-agent/zcodeAgentService.js";
 import { readNativeCatalogReferences } from "./project-workspaces/projectCatalog.js";
 import { NativeCreateJournal } from "./workspace-hierarchy/nativeCreateJournal.js";
+import { createNativeCreateInspection } from "./workspace-hierarchy/nativeCreateInspection.js";
 import { nativeCreatePayloadFingerprint } from "@zcode/shared/zcode-protocol-v4/native-create-fingerprint-node";
 import { commandPayloadSchemas } from "@zcode/shared/zcode-protocol-v4";
 import { IZCodeAgentService } from "./zcode-agent/zcodeAgent.js";
@@ -44,6 +46,11 @@ export interface CoreAuthorityOptions {
   admissionFence?: "open" | "held";
   /** Node-only trusted harness factories; never a serialized renderer capability. */
   additionalTrustedHarnesses?: CompositionOptions["additionalTrustedHarnesses"];
+  /** Isolated test-only barrier after actual CLI DESCRIBE, before journal intent/CLI effect. */
+  testOnlyAfterNativeDescribe?: (
+    commandId: string,
+    target: { workspacePath: string; workspaceIdentity: string },
+  ) => Promise<void>;
 }
 export interface CoreAuthorityResult {
   services: ServiceCollection;
@@ -190,53 +197,7 @@ export async function createCoreAuthority(
     const runtime: NativeRuntimeFactsPort = {
       certifiedCreate: nativeEnabled,
       recover,
-      async inspect(commandId) {
-        const entryId = createHash("sha256").update(commandId).digest("hex");
-        let state: Awaited<ReturnType<typeof journal.read>>;
-        try {
-          state = await journal.read(commandId);
-        } catch {
-          // 中文：坏映射/源库不能升级成当前 owner；报告脱敏单项诊断，不修盘也不启动 CLI。
-          return { status: "unavailable", diagnostic: { entryId, reason: "uncertified-mapping" } };
-        }
-        if (!state) return { status: "unknown" };
-        if (!state.mapping) return { status: "pending" };
-        const { intent, mapping } = state;
-        const refs = await readNativeCatalogReferences(
-          join(configRoot, "workspace-hierarchy", "profile", "catalog.json"),
-        );
-        const referenced = refs.some(
-          (ref) =>
-            ref.commandId === intent.commandId &&
-            ref.originalSessionId === mapping.originalSessionId &&
-            ref.targetId === intent.targetId &&
-            ref.projectId === intent.projectId &&
-            ref.workspaceId === intent.workspaceId &&
-            ref.repositoryBindingId === intent.repositoryBindingId &&
-            ref.worktreeGeneration === intent.worktreeGeneration &&
-            ref.workspaceIdentity === intent.workspaceIdentity &&
-            ref.workspacePath === intent.workspacePath &&
-            ref.remoteSessionId === intent.remoteSessionId,
-        );
-        if (!referenced)
-          return {
-            status: "unavailable",
-            diagnostic: { entryId, reason: "unreferenced-completion" },
-          };
-        return {
-          status: "completed",
-          originalSessionId: mapping.originalSessionId,
-          intent: {
-            targetId: intent.targetId,
-            projectId: intent.projectId,
-            workspaceId: intent.workspaceId,
-            repositoryBindingId: intent.repositoryBindingId,
-            worktreeGeneration: intent.worktreeGeneration,
-            workspaceIdentity: intent.workspaceIdentity,
-            workspacePath: intent.workspacePath,
-          },
-        };
-      },
+      inspect: createNativeCreateInspection(journal, configRoot),
       async create(input) {
         if (!nativeEnabled || !creation)
           throw new Error("Native durable creation receipt unavailable");
@@ -250,6 +211,7 @@ export async function createCoreAuthority(
           workspaceIdentity: input.scope.workspaceIdentity,
         };
         const description = await creation.describe(target);
+        if (nativeEnabled) await options.testOnlyAfterNativeDescribe?.(input.commandId, target);
         const payload = commandPayloadSchemas.createSession.parse({
           workspaceId: input.scope.workspaceIdentity,
           config: { modelSelection: input.modelBinding.selection, mode: "build" },

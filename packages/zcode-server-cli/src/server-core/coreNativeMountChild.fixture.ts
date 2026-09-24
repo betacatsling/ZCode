@@ -114,6 +114,24 @@ try {
     profileRoot: root,
     zcodeBuiltinProviderConfigFilePath: process.env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE!,
     admissionFence: process.env.CORE_NATIVE_BOOT_FENCE_TEST_ONLY === "1" ? "held" : "open",
+    testOnlyAfterNativeDescribe:
+      process.env.CORE_INGRESS_ROTATE_WORKER_TEST_ONLY === "1" ||
+      process.env.CORE_INGRESS_SCHEMA_BETWEEN_TEST_ONLY === "1"
+        ? async (commandId, target) => {
+            if (commandId === "native-create-worker-rotation")
+              await authority!.services.get(IZCodeAgentService).disposeWorkspace(target);
+            if (commandId === "native-create-schema-between") {
+              // 中文：仅 fixture 修改真实独立 SQLite；Core 生产代码不能写 CLI 业务数据库。
+              const { DatabaseSync } = await import("node:sqlite");
+              const db = new DatabaseSync(process.env.ZCODE_SESSION_DB_PATH!);
+              try {
+                db.exec("pragma user_version = 1");
+              } finally {
+                db.close();
+              }
+            }
+          }
+        : undefined,
   });
   await authority.reconcileBeforeAdmission();
   const catalog = authority.services.get(IProjectCatalogRpcService);
@@ -200,6 +218,71 @@ try {
       resolved.originalSessionId !== created.owner.originalSessionId
     )
       throw new Error("new mapping not joined as writable original owner");
+  }
+  let workerRotation: string | undefined;
+  let raceAllocated: boolean | undefined;
+  if (
+    process.env.CORE_INGRESS_ROTATE_WORKER_TEST_ONLY === "1" ||
+    process.env.CORE_INGRESS_SCHEMA_BETWEEN_TEST_ONLY === "1"
+  ) {
+    const before = await (async () => {
+      const { DatabaseSync } = await import("node:sqlite");
+      const db = new DatabaseSync(process.env.ZCODE_SESSION_DB_PATH!, { readOnly: true });
+      try {
+        return (db.prepare("select count(*) as total from session").get() as { total: number })
+          .total;
+      } finally {
+        db.close();
+      }
+    })();
+    const schemaBetween = process.env.CORE_INGRESS_SCHEMA_BETWEEN_TEST_ONLY === "1";
+    const raceCommand = schemaBetween
+      ? "native-create-schema-between"
+      : "native-create-worker-rotation";
+    try {
+      await hierarchy.createAgent({
+        workspaceId: "workspace",
+        harnessId: "zcode",
+        commandId: raceCommand,
+        modelBinding: {
+          kind: "host-managed",
+          selection: {
+            providerId: "fixture",
+            modelId: "fixture-model",
+            options: { reasoningLevel: "off" },
+          },
+        },
+      });
+      throw new Error("rotated real CLI worker accepted stale create");
+    } catch (error) {
+      workerRotation = String(error).includes("native-create-owner-changed-before-effect")
+        ? "native-create-owner-changed-before-effect"
+        : String(error).includes("unknown-native-session-schema")
+          ? "unknown-native-session-schema"
+          : String(error);
+    } finally {
+      if (schemaBetween) {
+        const { DatabaseSync } = await import("node:sqlite");
+        const db = new DatabaseSync(process.env.ZCODE_SESSION_DB_PATH!);
+        try {
+          db.exec("pragma user_version = 0");
+        } finally {
+          db.close();
+        }
+      }
+    }
+    const { DatabaseSync } = await import("node:sqlite");
+    const db = new DatabaseSync(process.env.ZCODE_SESSION_DB_PATH!, { readOnly: true });
+    try {
+      raceAllocated =
+        (db.prepare("select count(*) as total from session").get() as { total: number }).total !==
+          before ||
+        db
+          .prepare("select command_id from native_create_receipt where command_id = ?")
+          .get(raceCommand) !== undefined;
+    } finally {
+      db.close();
+    }
   }
   // Real public factory must durably reference each certified original ID in the Catalog,
   // not merely expose the standalone native-create mapping.
@@ -499,6 +582,8 @@ try {
     ids,
     fsyncFailed,
     catalogFailed,
+    workerRotation,
+    raceAllocated,
     worktreeCount: worktrees.stdout.split("\n").filter((line) => line.startsWith("worktree "))
       .length,
   });
