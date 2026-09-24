@@ -6,12 +6,14 @@ import test from "node:test";
 import type { ProjectCatalogTargetPort } from "../src/project-workspaces/serviceContract.js";
 import { ProjectCatalog } from "../src/project-workspaces/projectCatalog.js";
 import { LegacyWorkspaceMigration } from "../src/project-workspaces/legacyWorkspaceMigration.js";
+import { ProfileFileOwner } from "../src/project-workspaces/profilePersistence.js";
 import { hierarchyFixture } from "./fixtures/hierarchy.js";
 
 const original = hierarchyFixture.workspaces[0]!;
 function port(): ProjectCatalogTargetPort & { calls: string[] } {
   const calls: string[] = [];
   const adopted = new Map<string, typeof original>();
+  const registered = new Map<string, (typeof hierarchyFixture.bindings)[number]>();
   return {
     calls,
     async inspectRepository({ targetId }) {
@@ -21,10 +23,18 @@ function port(): ProjectCatalogTargetPort & { calls: string[] } {
     async sameRepository() {
       return false;
     },
-    async registerBinding() {},
+    async registerBinding(binding) {
+      registered.set(binding.id, binding);
+    },
+    async lookupBinding(id) {
+      return registered.get(id);
+    },
+    async lookupWorkspace(id) {
+      return adopted.get(id);
+    },
     async setArchivePolicy() {},
     async previewRemoval(workspaceId, generation) {
-      return { workspaceId, generation, git: null, activity: null, unknown: true, safe: false };
+      return { workspaceId, generation, git: null, activity: null, unknown: false, safe: true };
     },
     async discover(binding) {
       calls.push("discover");
@@ -57,11 +67,15 @@ function port(): ProjectCatalogTargetPort & { calls: string[] } {
     },
     async create(input) {
       calls.push("create");
-      return { ...(await this.adopt(input)), origin: "created" };
+      const created = { ...(await this.adopt(input)), origin: "created" as const };
+      adopted.set(input.workspaceId, created);
+      return created;
     },
     async remove(input) {
       calls.push("remove");
-      return { ...adopted.get(input.workspaceId)!, lifecycle: "removed" as const };
+      const removed = { ...adopted.get(input.workspaceId)!, lifecycle: "removed" as const };
+      adopted.set(input.workspaceId, removed);
+      return removed;
     },
   };
 }
@@ -293,9 +307,11 @@ test("migration full persistent export dry-run, backup, retry, rollback and futu
       {
         id: "s1",
         nativeSessionId: "native-1",
+        workspaceKey: "local-main",
         targetId: "local",
         workspaceIdentity: "local-main",
         workspacePath: "/repo/src",
+        nativeCwd: "/repo/src",
         cwdRelativeToWorktree: "src",
         harnessId: "zcode",
         modelBinding,
@@ -303,14 +319,22 @@ test("migration full persistent export dry-run, backup, retry, rollback and futu
       {
         id: "s2",
         nativeSessionId: "native-2",
+        workspaceKey: "remote:offline",
         targetId: "ssh",
         workspaceIdentity: "remote:offline",
         workspacePath: "/repo",
+        nativeCwd: "/repo",
         cwdRelativeToWorktree: ".",
         harnessId: "unknown",
         modelBinding,
       },
-      { id: "s3", nativeSessionId: "native-3", workspacePath: "/unknown", modelBinding },
+      {
+        id: "s3",
+        nativeSessionId: "native-3",
+        workspaceKey: "/unknown",
+        workspacePath: "/unknown",
+        modelBinding,
+      },
     ],
   };
   const backup = {
@@ -344,7 +368,11 @@ test("migration full persistent export dry-run, backup, retry, rollback and futu
           failures++;
           throw new Error("offline");
         }
-        return { binding: hierarchyFixture.bindings[0]!, workspace: original };
+        return {
+          binding: hierarchyFixture.bindings[0]!,
+          workspace: original,
+          cwdRelativeToWorktree: "src",
+        };
       },
     });
     const preview = await migration.dryRun();
@@ -386,6 +414,208 @@ test("migration full persistent export dry-run, backup, retry, rollback and futu
       }),
     );
   } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("profile write fails after target creation: restart queries result by ID and never repeats Git", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "catalog-receipt-"));
+  const path = join(dir, "catalog.json");
+  const target = port();
+  const originalWrite = ProfileFileOwner.prototype.write;
+  let catalog: ProjectCatalog | undefined;
+  try {
+    catalog = await ProjectCatalog.open(path, target, index);
+    await catalog.importProject({
+      id: "p",
+      bindingId: "b",
+      name: "P",
+      targetId: "local",
+      repositoryPath: "/same",
+    });
+    ProfileFileOwner.prototype.write = async function (value) {
+      const record = value as { pending?: unknown; workspaces?: unknown[] };
+      if (!record.pending && record.workspaces?.length === 1)
+        throw new Error("injected-profile-write-failure");
+      return originalWrite.call(this, value);
+    };
+    await assert.rejects(
+      () =>
+        catalog!.create({
+          bindingId: "b",
+          workspaceId: "w",
+          title: "Feature",
+          worktreePath: "/feature",
+          baseRef: "main",
+          branch: "feature",
+        }),
+      /injected-profile-write-failure/,
+    );
+    ProfileFileOwner.prototype.write = originalWrite;
+    assert.equal(target.calls.filter((call) => call === "create").length, 1);
+    assert.equal(
+      (JSON.parse(await readFile(path, "utf8")) as { pending: { kind: string } }).pending.kind,
+      "create",
+    );
+    await catalog.close();
+    catalog = await ProjectCatalog.open(path, target, index);
+    await assert.rejects(
+      () => catalog!.updateProject("p", { name: "unsafe" }),
+      /catalog-pending-target-operation/,
+    );
+    await catalog.reconcilePending();
+    assert.equal((await catalog.workspace("w"))?.origin, "created");
+    assert.equal(target.calls.filter((call) => call === "create").length, 1);
+    await catalog.reconcilePending();
+    await catalog.close();
+    catalog = undefined;
+  } finally {
+    ProfileFileOwner.prototype.write = originalWrite;
+    await catalog?.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("unknown target result and replaced owner lock fail closed; explicit dead-owner recovery", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "catalog-lock-"));
+  const path = join(dir, "catalog.json");
+  const target = port();
+  const originalWrite = ProfileFileOwner.prototype.write;
+  let catalog: ProjectCatalog | undefined;
+  try {
+    catalog = await ProjectCatalog.open(path, target, index);
+    ProfileFileOwner.prototype.write = async function (value) {
+      const record = value as { pending?: unknown; projects?: unknown[] };
+      if (!record.pending && record.projects?.length)
+        throw new Error("injected-profile-write-failure");
+      return originalWrite.call(this, value);
+    };
+    await assert.rejects(
+      () =>
+        catalog!.importProject({
+          id: "p",
+          bindingId: "b",
+          name: "P",
+          targetId: "local",
+          repositoryPath: "/same",
+        }),
+      /injected-profile-write-failure/,
+    );
+    ProfileFileOwner.prototype.write = originalWrite;
+    await catalog.close();
+    catalog = await ProjectCatalog.open(path, target, index);
+    const unavailable = target.lookupBinding;
+    target.lookupBinding = async () => {
+      throw new Error("target-offline");
+    };
+    await assert.rejects(() => catalog!.reconcilePending(), /target-offline/);
+    target.lookupBinding = unavailable;
+    await catalog.reconcilePending();
+    assert.equal((await catalog.project("p"))?.name, "P");
+    await catalog.close();
+    catalog = undefined;
+    await writeFile(`${path}.lock`, JSON.stringify({ token: "stale", pid: 2147483647 }));
+    await assert.rejects(() => ProjectCatalog.open(path, target, index), /EEXIST/);
+    const recovered = await ProjectCatalog.open(path, target, index, { recoverStaleOwner: true });
+    await assert.rejects(
+      () => ProjectCatalog.open(path, target, index, { recoverStaleOwner: true }),
+      /profile-owner-still-running/,
+    );
+    await recovered.close();
+  } finally {
+    ProfileFileOwner.prototype.write = originalWrite;
+    await catalog?.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("partial archive denial stays fenced across restart until explicit reconciliation", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "catalog-archive-recover-"));
+  const path = join(dir, "catalog.json");
+  const target = port();
+  const policies: boolean[] = [];
+  let failSecondDeny = true;
+  target.setArchivePolicy = async (_kind, _id, archived) => {
+    policies.push(archived);
+    if (archived && failSecondDeny && policies.filter(Boolean).length === 2)
+      throw new Error("target-offline");
+  };
+  let catalog = await ProjectCatalog.open(path, target, index);
+  try {
+    for (const id of ["p", "q"])
+      await catalog.importProject({
+        id,
+        bindingId: `b${id}`,
+        name: id,
+        targetId: "local",
+        repositoryPath: "/same",
+      });
+    await catalog.adopt({ bindingId: "bp", workspaceId: "w", title: "W", worktreePath: "/same" });
+    // First denial succeeds, second request fails before publishing its metadata.
+    await catalog.updateProject("p", { archived: true });
+    await assert.rejects(() => catalog.updateWorkspace("w", { archived: true }), /target-offline/);
+    assert.equal((await catalog.workspace("w"))?.archived, undefined);
+    await catalog.close();
+    catalog = await ProjectCatalog.open(path, target, index);
+    await assert.rejects(
+      () => catalog.updateWorkspace("w", { hidden: true }),
+      /catalog-pending-target-operation/,
+    );
+    failSecondDeny = false;
+    await catalog.reconcilePending();
+    assert.equal((await catalog.workspace("w"))?.archived, true);
+    await catalog.reconcileArchivePolicies();
+    assert.deepEqual(policies.slice(0, 3), [true, true, true]);
+  } finally {
+    await catalog.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("failed profile write after target removal resolves removed generation without second remove", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "catalog-remove-recover-"));
+  const path = join(dir, "catalog.json");
+  const target = port();
+  const originalWrite = ProfileFileOwner.prototype.write;
+  let catalog = await ProjectCatalog.open(path, target, index);
+  try {
+    await catalog.importProject({
+      id: "p",
+      bindingId: "b",
+      name: "P",
+      targetId: "local",
+      repositoryPath: "/same",
+    });
+    const workspace = await catalog.adopt({
+      bindingId: "b",
+      workspaceId: "w",
+      title: "W",
+      worktreePath: "/same",
+    });
+    ProfileFileOwner.prototype.write = async function (value) {
+      const record = value as { pending?: unknown; workspaces?: { lifecycle: string }[] };
+      if (!record.pending && record.workspaces?.[0]?.lifecycle === "removed")
+        throw new Error("failed-profile-commit");
+      return originalWrite.call(this, value);
+    };
+    await assert.rejects(
+      () =>
+        catalog.remove({
+          workspaceId: "w",
+          expectedGeneration: workspace.worktreeGeneration,
+          confirmation: true,
+        }),
+      /failed-profile-commit/,
+    );
+    ProfileFileOwner.prototype.write = originalWrite;
+    await catalog.close();
+    catalog = await ProjectCatalog.open(path, target, index);
+    await catalog.reconcilePending();
+    assert.equal((await catalog.workspace("w"))?.lifecycle, "removed");
+    assert.equal(target.calls.filter((name) => name === "remove").length, 1);
+  } finally {
+    ProfileFileOwner.prototype.write = originalWrite;
+    await catalog.close();
     await rm(dir, { recursive: true, force: true });
   }
 });

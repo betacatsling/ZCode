@@ -10,12 +10,52 @@ export class ProfileFileOwner {
     private readonly token: string,
   ) {}
 
-  static async open(path: string): Promise<ProfileFileOwner> {
+  static async open(path: string, recoverStaleOwner = false): Promise<ProfileFileOwner> {
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+    if (recoverStaleOwner) {
+      // 中文：恢复标记序列化重启者；旧 PID 必须已退出，未知格式一律拒绝。
+      const recovery = await open(`${path}.recovery`, "wx", 0o600);
+      try {
+        const previous = await readFile(`${path}.lock`, "utf8").catch(
+          (error: NodeJS.ErrnoException) => {
+            if (error.code === "ENOENT") return undefined;
+            throw error;
+          },
+        );
+        if (previous !== undefined) {
+          const parsed: unknown = JSON.parse(previous);
+          if (
+            !parsed ||
+            typeof parsed !== "object" ||
+            typeof (parsed as { token?: unknown }).token !== "string" ||
+            !Number.isSafeInteger((parsed as { pid?: unknown }).pid) ||
+            (parsed as { pid: number }).pid <= 0
+          )
+            throw new Error("unknown-profile-owner");
+          try {
+            process.kill((parsed as { pid: number }).pid, 0);
+            throw new Error("profile-owner-still-running");
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+          }
+          if ((await readFile(`${path}.lock`, "utf8")) !== previous)
+            throw new Error("profile-owner-fence-lost");
+          await unlink(`${path}.lock`);
+        }
+        return await this.create(path);
+      } finally {
+        await recovery.close();
+        await unlink(`${path}.recovery`);
+      }
+    }
+    return this.create(path);
+  }
+
+  private static async create(path: string): Promise<ProfileFileOwner> {
     const lock = await open(`${path}.lock`, "wx", 0o600);
     const token = randomUUID();
     try {
-      await lock.writeFile(token, "utf8");
+      await lock.writeFile(JSON.stringify({ token, pid: process.pid }), "utf8");
       await lock.sync();
       return new ProfileFileOwner(path, lock, token);
     } catch (error) {
@@ -23,6 +63,16 @@ export class ProfileFileOwner {
       await unlink(`${path}.lock`);
       throw error;
     }
+  }
+
+  private async assertLease(): Promise<void> {
+    const parsed: unknown = JSON.parse(await readFile(`${this.path}.lock`, "utf8"));
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      (parsed as { token?: unknown }).token !== this.token
+    )
+      throw new Error("profile-owner-fence-lost");
   }
 
   async read(): Promise<unknown | undefined> {
@@ -35,20 +85,17 @@ export class ProfileFileOwner {
   }
 
   async write(value: unknown): Promise<void> {
-    if ((await readFile(`${this.path}.lock`, "utf8")) !== this.token)
-      throw new Error("profile-owner-fence-lost");
+    await this.assertLease();
     await atomicJsonWrite(this.path, value);
   }
 
   async remove(): Promise<void> {
-    if ((await readFile(`${this.path}.lock`, "utf8")) !== this.token)
-      throw new Error("profile-owner-fence-lost");
+    await this.assertLease();
     await unlink(this.path);
   }
 
   async close(): Promise<void> {
-    if ((await readFile(`${this.path}.lock`, "utf8")) !== this.token)
-      throw new Error("profile-owner-fence-lost");
+    await this.assertLease();
     await this.lock.close();
     await unlink(`${this.path}.lock`);
   }
