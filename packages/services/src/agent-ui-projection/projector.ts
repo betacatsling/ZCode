@@ -10,6 +10,7 @@ import {
   type PlanState,
 } from "@zcode/shared/zcode-protocol-v4";
 import type { AgentEvent, LegacySessionSpec, SessionSpecV2 } from "@zcode/shared/agent-host";
+import { UsageAccounting } from "./usageAccounting.js";
 
 const unavailable = { allowed: false as const, reasonCode: "externalHarnessUnsupported" };
 
@@ -31,18 +32,14 @@ export function projectHostConversation(input: {
   const interactions = new Map<string, PendingInteraction>();
   const reasoning = new Map<string, ReasoningRow>();
   const children = new Map<string, SubagentRow>();
-  const accounted = new Map<string, { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; reasoning?: number; mode: "delta" | "absolute" }>();
+  const usage = new UsageAccounting();
   let plan: PlanState | null = null;
   let childrenRevision = 0;
   let endedChildren = 0;
-  let cacheReadTokens = 0;
-  let cacheWriteTokens = 0;
   let activeTurn: string | undefined;
   let phase: ConversationSnapshot["control"]["phase"] = "draft";
   let errorCode: string | undefined;
   let lastErrorAt = 0;
-  let inputTokens = 0;
-  let outputTokens = 0;
   let revision = 0;
   let seq = 0;
   let startedAt = 0;
@@ -192,26 +189,10 @@ export function projectHostConversation(input: {
         }
         break;
       }
-      case "usage.accounted": {
-        if (event.turnId !== activeTurn) throw new Error("usage outside active turn");
-        const key = `${event.turnId}:${event.sourceId}`;
-        const previous = accounted.get(key);
-        if (previous?.mode !== undefined && previous.mode !== event.accounting) throw new Error("usage accounting mode changed");
-        if (previous && event.accounting === "delta") throw new Error("duplicate usage delta source");
-        const metrics = { input: event.inputTokens, output: event.outputTokens, cacheRead: event.cacheReadTokens, cacheWrite: event.cacheWriteTokens, reasoning: event.reasoningTokens };
-        for (const metric of ["input", "output", "cacheRead", "cacheWrite", "reasoning"] as const) {
-          if (event.accounting === "absolute" && previous?.[metric] !== undefined && metrics[metric] === undefined) throw new Error("usage snapshot omitted prior metric");
-        }
-        inputTokens += (metrics.input ?? 0) - (previous?.input ?? 0);
-        outputTokens += (metrics.output ?? 0) - (previous?.output ?? 0);
-        cacheReadTokens += (metrics.cacheRead ?? 0) - (previous?.cacheRead ?? 0);
-        cacheWriteTokens += (metrics.cacheWrite ?? 0) - (previous?.cacheWrite ?? 0);
-        accounted.set(key, { ...metrics, mode: event.accounting });
-        break;
-      }
+      case "usage.accounted":
       case "usage.reported":
-        inputTokens += event.inputTokens;
-        outputTokens += event.outputTokens;
+        if (event.turnId !== activeTurn) throw new Error("usage outside active turn");
+        usage.record(event);
         break;
       case "turn.finished": {
         if (activeTurn !== event.turnId) throw new Error("turn completed out of order");
@@ -241,8 +222,11 @@ export function projectHostConversation(input: {
         plan = { items: event.items, updatedAt: event.at };
         break;
       case "subagent.updated": {
-        if (event.turnId !== activeTurn) throw new Error("child outside active turn");
         const existing = children.get(event.childSessionId);
+        const terminal = event.status !== "started";
+        const historicalTerminal = terminal && headers.has(event.turnId) && event.turnId !== activeTurn;
+        if (event.turnId !== activeTurn && !historicalTerminal) throw new Error("child outside active turn");
+        if (existing && existing.turnId !== event.turnId) throw new Error("child reused across turns");
         if (event.status === "started") {
           if (existing) throw new Error("duplicate child start");
           const row: SubagentRow = { ...base(event), kind: "subagent", childSessionId: event.childSessionId,
@@ -251,12 +235,27 @@ export function projectHostConversation(input: {
             ...(event.parentToolCallId ? { parentToolCallId: event.parentToolCallId } : {}), startedAt: event.at };
           rows.push(row);
           children.set(event.childSessionId, row);
-        } else {
-          if (!existing || existing.status !== "running") throw new Error("child completion without start");
-          existing.status = event.status === "finished" ? "success" : "failed";
-          existing.endedAt = event.at;
-          if (event.summary !== undefined) existing.summaryText = event.summary;
+        } else if (!existing) {
+          // 修复旧日志仅有 terminal 子任务事实时历史投影崩溃：仅显示已观测结果，不伪造启动时间或执行。
+          const row: SubagentRow = { ...base(event), kind: "subagent", childSessionId: event.childSessionId,
+            subagentType: event.subagentType ?? event.childHarnessId ?? "unknown", status: event.status === "finished" ? "success" : "failed",
+            summaryText: event.summary ?? "", endedAt: event.at,
+            ...(event.parentToolCallId ? { parentToolCallId: event.parentToolCallId } : {}) };
+          rows.push(row);
+          children.set(event.childSessionId, row);
           endedChildren++;
+        } else {
+          const status = event.status === "finished" ? "success" : "failed";
+          if (existing.status === "running") {
+            if (historicalTerminal) throw new Error("running child completed outside active turn");
+            existing.status = status;
+            existing.endedAt = event.at;
+            endedChildren++;
+          } else if (existing.status !== status) throw new Error("conflicting child completion");
+          if (event.summary !== undefined) existing.summaryText = event.summary;
+          if (event.parentToolCallId && existing.parentToolCallId && event.parentToolCallId !== existing.parentToolCallId) throw new Error("conflicting child parent");
+          if (event.parentToolCallId) existing.parentToolCallId = event.parentToolCallId;
+          if (event.subagentType || event.childHarnessId) existing.subagentType = event.subagentType ?? event.childHarnessId!;
         }
         childrenRevision++;
         break;
@@ -267,6 +266,7 @@ export function projectHostConversation(input: {
         break;
     }
   }
+  const { inputTokens = 0, outputTokens = 0, cacheReadTokens = 0, cacheWriteTokens = 0 } = usage.totals();
   const lastError = errorCode ? { code: errorCode, message: "External harness error; inspect target-host diagnostics", recoverable: false, at: lastErrorAt, source: "runtime" as const } : null;
   const range = input.rowRange;
   const window = range
