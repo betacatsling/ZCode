@@ -1,0 +1,25 @@
+# Actual Electron Shell → Core mount acceptance
+
+## Behavior and boundary
+
+A disposable Electron window uses the **production** main Core endpoint resolver, utility Host, preload MessagePort and renderer service connection. An isolated default Core owns Target/Catalog, workspace identity, AgentHost/session journal and Pi worker. The Shell may select a real existing Git workspace, create a Pi session using real hierarchy/Host commands, submit typed input and display its matching final response and measured Model usage. Native creation stays disabled. No renderer business-service object literals, generic unauthenticated Core WebSocket privileges or second Host/Core are allowed.
+
+```text
+Git receipt → Core Target/Catalog → Core Host create/admit → Pi SDK worker → local HTTP Model
+                                  │       └─ journal/snapshot (only authority)
+                       one-use ticketed RPC → window utility Host → MessagePort → preload
+                                                                             → renderer Shell view
+view detach/reload ──> reattach original Host/session (never resubmit command)
+desktop-continuous: live port; phone web-remote-replayable: authorized attachment + replay/gap repair
+```
+
+Core owns persisted workspace/session/journal and command admission; main owns window and process lifecycle, window Host owns attachment routing, renderer only draft/cursor/pending overlay. Identity is `workspaceIdentity?.trim() || workspacePath`; filesystem cwd always workspacePath. Reject stale target/generation/lease and duplicate submission at authoritative command boundary, not by hiding a renderer callback. Detach must not terminate owner. Mobile viewport emulation alone cannot certify phone transport. The phone attachment must be paired and authorized, scoped to original Host, revocable, with distinct replayable delivery.
+
+## Test scenarios (staged)
+
+1. **First RED:** one hidden owned Electron window, disposable HOME/XDG/userData before production imports, one actual default Core process and real utility Host, production preload and renderer connection. Assert the UI's create/input/final/usage against Host snapshot and local fake HTTP Model request/usage receipts. The test fails if the real mount/creation is missing; a controlled services fixture is not acceptable. Close/reap all children and verify no unauthorized network/telemetry. Commit the first passing vertical slice before expanding.
+2. Two distinct Pi Host IDs with the *same* existing worktree, identity and generation. Switching/splitting/focus doesn't spawn/stop their owners or invoke native conversation operations from the external pane; legitimate CLI bootstrap is not counted as pane traffic.
+3. Block local Model stream at producer, detach only the renderer, prove Host journal advances and owner remains; reload/reattach same ID and recover final content/usage without replaying typed input. Test desktop-continuous independently from authorized phone web-remote-replayable.
+4. Seed actual Host journal via documented test-only producer with >100k canonical events; mounted Shell pages repeatedly across >2000 rows to earliest and back to latest under live append and a genuine older-row mutation revision. View is bounded, ranges contiguous, loaded/not-loaded and zero/absent usage stay truthful. Synthetic 100k is not measured 8h load.
+
+No packaged binary, Supervisor, SSH, paid provider, Native, live production or multi-hour certification follows from this fixture.
