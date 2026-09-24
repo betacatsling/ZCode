@@ -136,30 +136,19 @@ export function decodeResponsesRequest(
       keys(item, ["type", "id", "encrypted_content", "summary", "status"], field);
       if (item.status !== undefined && item.status !== "completed")
         fail("unsupported_reasoning", field);
-      const id = string(item.id, `${field}.id`);
+      string(item.id, `${field}.id`);
       if (typeof item.encrypted_content !== "string" || !item.encrypted_content)
         fail("unsupported_reasoning", `${field}.encrypted_content`);
-      const encrypted = item.encrypted_content;
       if (!Array.isArray(item.summary)) fail("unsupported_reasoning", `${field}.summary`);
-      const summary = item.summary
-        .map((raw: unknown, partIndex: number) => {
-          const part = record(raw, `${field}.summary[${partIndex}]`);
-          keys(part, ["type", "text"], `${field}.summary[${partIndex}]`);
-          if (part.type !== "summary_text" || typeof part.text !== "string")
-            fail("unsupported_reasoning", `${field}.summary[${partIndex}]`);
-          return part.text;
-        })
-        .join("");
-      messages.push({
-        role: "assistant",
-        content: [
-          {
-            type: "reasoning",
-            text: summary,
-            providerOptions: { openai: { itemId: id, reasoningEncryptedContent: encrypted } },
-          },
-        ],
-      });
+      for (const [partIndex, raw] of item.summary.entries()) {
+        const part = record(raw, `${field}.summary[${partIndex}]`);
+        keys(part, ["type", "text"], `${field}.summary[${partIndex}]`);
+        if (part.type !== "summary_text" || typeof part.text !== "string")
+          fail("unsupported_reasoning", `${field}.summary[${partIndex}]`);
+      }
+      // 修复原因：仅凭加密 item 无法证明当前 Model 仍是原始 provider route；
+      // 跨路由或序列化投影可能静默丢掉私有状态，必须在调用 Model 前明确拒绝。
+      fail("unsupported_reasoning_replay", field);
     } else if (item.type === "function_call") {
       keys(item, ["type", "id", "call_id", "name", "arguments", "status"], field);
       if (item.status !== undefined && item.status !== "completed")

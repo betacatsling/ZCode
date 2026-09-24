@@ -75,3 +75,128 @@ test("real loopback Responses Gateway executes two fake Model calls with correla
     gateway.revokeToken(pinnedToken);
   } finally { await gateway.close(); }
 });
+
+test("Responses private state from a first streamed item rejects on replay before Model, even across routes", async () => {
+  const calls: string[] = [];
+  const seen: ModelInputMessage[][] = [];
+  const makeModel = (providerId: string): Model =>
+    ({
+      providerId,
+      modelId: "synthetic-model",
+      options: { reasoningLevel: "off" },
+      async *streamText(request: {
+        messages: ModelInputMessage[];
+      }): AsyncIterable<ModelStreamEvent> {
+        calls.push(providerId);
+        seen.push(request.messages);
+        yield {
+          type: "reasoning_start",
+          id: "reasoning",
+          providerMetadata: {
+            openai: {
+              itemId: "original-item",
+              reasoningEncryptedContent: "opaque-private-fixture",
+            },
+          },
+        };
+        yield { type: "reasoning_delta", id: "reasoning", text: "summary" };
+        yield { type: "reasoning_end", id: "reasoning" };
+        yield { type: "finish", finishReason: "stop", usage: { inputTokens: 4, outputTokens: 3 } };
+      },
+    }) as Model;
+  const gateway = createModelGateway({
+    protocols: [responsesProtocol],
+    resolveModel: (binding) => makeModel(binding.effectiveSelection.providerId),
+    limits: { maxBodyBytes: 64 * 1024, maxConcurrentRequests: 1 },
+  });
+  const { url } = await gateway.start();
+  const send = async (providerId: string, input: unknown[]) => {
+    const token = await gateway.issueToken({
+      targetId: "target",
+      hostSessionId: "session",
+      runtimeEpoch: "epoch",
+      turnId: `turn-${providerId}-${calls.length}`,
+      protocol: "responses",
+      requestedModelAlias: "alias",
+      effectiveSelection: {
+        providerId,
+        modelId: "synthetic-model",
+        options: { reasoningLevel: "off" },
+      },
+      expiresAt: Date.now() + 30_000,
+      maxRequests: 1,
+      maxOutputBytes: 32 * 1024,
+      maxGenerationTokens: 256,
+      maxOutputTokensPerRequest: 256,
+    });
+    try {
+      const response = await fetch(`${url}/v1/responses`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "alias",
+          stream: true,
+          reasoning: { effort: "none" },
+          include: ["reasoning.encrypted_content"],
+          prompt_cache_key: "cache-stays-independent",
+          input,
+        }),
+      });
+      return { status: response.status, body: await response.text() };
+    } finally {
+      gateway.revokeToken(token);
+    }
+  };
+  try {
+    const first = await send("original-route", [
+      { role: "developer", content: "remain developer" },
+      { role: "user", content: "prompt" },
+    ]);
+    assert.equal(first.status, 200);
+    assert.deepEqual(seen[0], [
+      { role: "developer", content: "remain developer" },
+      { role: "user", content: "prompt" },
+    ]);
+    const item = events(first.body).find((event) => event.type === "response.output_item.done")
+      ?.item as Record<string, unknown>;
+    assert.deepEqual(item, {
+      id: "original-item",
+      type: "reasoning",
+      status: "completed",
+      encrypted_content: "opaque-private-fixture",
+      summary: [{ type: "summary_text", text: "summary" }],
+    });
+    for (const route of ["original-route", "changed-route"]) {
+      const second = await send(route, [
+        item,
+        { role: "developer", content: "remain developer" },
+        { role: "user", content: "continue" },
+      ]);
+      assert.equal(second.status, 422);
+      assert.deepEqual(JSON.parse(second.body), {
+        error: { code: "unsupported_reasoning_replay" },
+      });
+    }
+    assert.deepEqual(calls, ["original-route"], "no second Model call, regardless of bound route");
+    const malformed = await send("original-route", [
+      { ...item, encrypted_content: 42 },
+      { role: "user", content: "continue" },
+    ]);
+    assert.equal(malformed.status, 422);
+    assert.deepEqual(JSON.parse(malformed.body), { error: { code: "unsupported_reasoning" } });
+    assert.deepEqual(calls, ["original-route"]);
+    // A rejected history does not disable ordinary developer/cache requests for this profile.
+    const clean = await send("original-route", [
+      { role: "developer", content: "remain developer" },
+      { role: "user", content: "next ordinary prompt" },
+    ]);
+    assert.equal(clean.status, 200);
+    assert.equal(events(clean.body).at(-1)?.type, "response.completed");
+    assert.deepEqual(seen[1], [
+      { role: "developer", content: "remain developer" },
+      { role: "user", content: "next ordinary prompt" },
+    ]);
+  } finally {
+    await gateway.close();
+  }
+});
