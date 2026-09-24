@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 import {
@@ -9,6 +12,7 @@ import {
 import type { AcpProcess } from "../src/agent-adapters/acp/acpTransport.js";
 import { createTrustedAcpFactory } from "../src/agent-adapters/acp/acpFactory.js";
 import { HarnessRegistry, type HarnessAdapter } from "../src/agent-host/harnessRegistry.js";
+import { SessionHost } from "../src/agent-host/sessionHost.js";
 import type { AgentEvent, BindingPlan, SessionSpecV2 } from "@zcode/shared/agent-host";
 
 const target = {
@@ -269,6 +273,143 @@ test("two manifest-only profiles, independent sessions, pre-tool denial and stal
   assert.equal(bb.backendSessionId, "native-two");
   await beta.shutdown();
 });
+test("unknown native stop persists uncertain Host receipt and blocks next admission", async () => {
+  const root = await mkdtemp(join(tmpdir(), "acp-unknown-host-"));
+  const f = fake(true);
+  const registry = new HarnessRegistry();
+  const p = profile("acp-alpha", [f]);
+  registry.registerTrusted(
+    { schemaVersion: 1, id: p.id, name: p.id, adapterVersion: p.version },
+    createTrustedAcpFactory(
+      { schemaVersion: 1, id: p.id, name: p.id, adapterVersion: p.version },
+      p,
+    ),
+  );
+  const s = spec("unknown-host");
+  let host: SessionHost | undefined;
+  try {
+    const creating = SessionHost.create({
+      root,
+      spec: s,
+      target,
+      registry,
+      catalog: { fingerprint: "fixture", validateSelection: () => ({ ok: true }) },
+    });
+    for (let i = 0; !f.frames.some((frame) => frame.method === "initialize") && i < 100; i++)
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    await f.answer("initialize", { protocolVersion: 1, agentCapabilities: { loadSession: true } });
+    await f.answer("session/new", { sessionId: "native-unknown" });
+    host = await creating;
+    assert.equal(
+      (
+        await host.dispatch({
+          type: "send",
+          commandId: "first",
+          hostSessionId: s.hostSessionId,
+          turnId: "t1",
+          text: "work",
+        })
+      ).status,
+      "accepted",
+    );
+    await f.answer("session/prompt", { stopReason: "future_value" });
+    await host.whenIdleAllowingGap();
+    assert.equal(host.queryCommand("first")?.status, "execution-unknown");
+    assert.equal(host.getActivity(), "uncertain");
+    assert.equal(
+      (
+        await host.dispatch({
+          type: "send",
+          commandId: "second",
+          hostSessionId: s.hostSessionId,
+          turnId: "t2",
+          text: "no",
+        })
+      ).status,
+      "rejected",
+    );
+    assert.equal(f.frames.filter((frame) => frame.method === "session/prompt").length, 1);
+    assert.equal(
+      (await SessionHost.queryCommandHistory(root, s, "first"))?.status,
+      "execution-unknown",
+    );
+  } finally {
+    if (host) {
+      await registry.require(p.id).shutdown?.();
+      await host.close();
+    }
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("cancel followed by native error never completes as cancelled or admits another turn", async () => {
+  const f = fake(true);
+  const adapter = new AcpHarnessAdapter(profile("acp-alpha", [f]));
+  const s = spec("cancel-error");
+  const binding = await start(adapter, f, s);
+  const events: AgentEvent[] = [];
+  adapter.subscribe(s.hostSessionId, (event) => events.push(event));
+  const command = {
+    type: "send" as const,
+    hostSessionId: s.hostSessionId,
+    commandId: "first",
+    turnId: "t1",
+    text: "work",
+  };
+  const sending = adapter.send(command);
+  await adapter.cancelTurn({
+    type: "cancelTurn",
+    hostSessionId: s.hostSessionId,
+    commandId: "cancel",
+    turnId: "t1",
+    runtimeEpoch: binding.runtimeEpoch,
+  });
+  const prompt = f.frames.find((frame) => frame.method === "session/prompt");
+  assert.ok(prompt);
+  f.receive({ id: prompt.id, error: { code: -32000, message: "still running" } });
+  await assert.rejects(sending, /outcome unknown/);
+  assert.equal(
+    events.some((e) => e.kind === "turn.finished" && e.outcome === "cancelled"),
+    false,
+  );
+  await assert.rejects(
+    adapter.send({ ...command, commandId: "second", turnId: "t2" }),
+    /busy or execution unknown/,
+  );
+  assert.equal(f.frames.filter((frame) => frame.method === "session/prompt").length, 1);
+  await adapter.shutdown();
+});
+
+test("unknown native stop fences adapter without a success event or second prompt", async () => {
+  const f = fake(true);
+  const adapter = new AcpHarnessAdapter(profile("acp-alpha", [f]));
+  const s = spec("uncertain");
+  await start(adapter, f, s);
+  const events: AgentEvent[] = [];
+  adapter.subscribe(s.hostSessionId, (event) => events.push(event));
+  const command = {
+    type: "send" as const,
+    hostSessionId: s.hostSessionId,
+    commandId: "first",
+    turnId: "t1",
+    text: "work",
+  };
+  const sending = adapter.send(command);
+  await f.answer("session/prompt", { stopReason: "future_value" });
+  await assert.rejects(sending, /outcome unknown/);
+  assert.equal(
+    events.some((e) => e.kind === "turn.finished"),
+    false,
+  );
+  assert.ok(events.some((e) => e.kind === "session.status" && e.state === "execution-unknown"));
+  await assert.rejects(
+    adapter.send({ ...command, commandId: "second", turnId: "t2" }),
+    /busy or execution unknown/,
+  );
+  assert.equal(f.frames.filter((frame) => frame.method === "session/prompt").length, 1);
+  await adapter.shutdown();
+});
+
 function objectResult(frame: Record<string, unknown>) {
   return "result" in frame;
 }

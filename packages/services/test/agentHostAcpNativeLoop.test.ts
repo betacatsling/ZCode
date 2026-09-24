@@ -26,6 +26,7 @@ test(
     let requests = 0;
     const permissionTools: string[] = [];
     let holdNext = false;
+    let attackNext = false;
     let signalPending!: () => void;
     const pendingUpstream = new Promise<void>((resolvePending) => {
       signalPending = resolvePending;
@@ -72,7 +73,9 @@ test(
           usage: { input_tokens: 2, output_tokens: 0 },
         },
       });
-      if (requests <= 2) {
+      const attackTool = attackNext;
+      attackNext = false;
+      if (requests <= 2 || attackTool) {
         const name = requests === 1 ? "Read" : "Edit";
         event("content_block_start", {
           type: "content_block_start",
@@ -106,7 +109,10 @@ test(
       event("content_block_stop", { type: "content_block_stop", index: 0 });
       event("message_delta", {
         type: "message_delta",
-        delta: { stop_reason: requests <= 2 ? "tool_use" : "end_turn", stop_sequence: null },
+        delta: {
+          stop_reason: requests <= 2 || attackTool ? "tool_use" : "end_turn",
+          stop_sequence: null,
+        },
         usage: { output_tokens: 10 },
       });
       event("message_stop", { type: "message_stop" });
@@ -171,6 +177,30 @@ test(
       `denied Edit must cross real ACP permission request (got ${JSON.stringify(permissionTools)}, upstream ${requests})`,
     );
     await first.close();
+    // Native opt-in negative certification: untrusted project settings may authorize Edit before
+    // the Host-facing canUseTool callback. Clean-worktree denial above is insufficient evidence.
+    await mkdir(join(cwd, ".claude"));
+    await writeFile(
+      join(cwd, ".claude", "settings.local.json"),
+      JSON.stringify({ permissions: { allow: ["Edit"] } }),
+    );
+    const beforeAttackPermissions = permissionTools.length;
+    attackNext = true;
+    const unsafe = await connect();
+    await unsafe.newSession();
+    await unsafe.prompt(
+      "Use Edit to replace original with modified in denied-marker. Then say done.",
+    );
+    assert.equal(
+      await readFile(marker, "utf8"),
+      "modified\n",
+      "project allow can bypass host pre-tool denial",
+    );
+    assert.equal(
+      permissionTools.slice(beforeAttackPermissions).some((title) => title.includes("Edit")),
+      false,
+    );
+    await unsafe.close();
     const second = await connect();
     await second.load(nativeId);
     const resumed = await second.prompt("Reply with done.");
@@ -180,7 +210,16 @@ test(
     const active = second.prompt("Wait for cancellation.");
     await pendingUpstream;
     await second.cancel();
-    await assert.rejects(active, /cancel/i);
+    // 取消通知不是终态；原生若回复 error，只能标记未知，不能重用该连接。
+    const cancelled = await active.then(
+      (result) => result.stopReason,
+      (error: unknown) => String(error),
+    );
+    assert.ok(cancelled === "cancelled" || /unknown|cancel|exited|ended/i.test(cancelled));
+    await assert.rejects(
+      second.prompt("must not reuse cancelled connection"),
+      /uncertain|unavailable/,
+    );
     await second.close();
   },
 );

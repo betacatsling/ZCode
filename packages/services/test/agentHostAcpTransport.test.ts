@@ -152,23 +152,24 @@ test("permission remains pending until selected option; cancellation invalidates
   assert.deepEqual(f.writes.find((w) => w.id === 71 && "result" in w)?.result, {
     outcome: { outcome: "cancelled" },
   });
-  await assert.rejects(prompt, /cancelled/);
+  let settled = false;
+  void prompt.finally(() => {
+    settled = true;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false, "cancel notification is not prompt completion");
   await assert.rejects(client.prompt("too soon"), /cancelling/);
   const oldPrompt = f.writes.find((w) => w.method === "session/prompt");
   assert.ok(oldPrompt);
   f.send({ jsonrpc: "2.0", id: oldPrompt.id, result: { stopReason: "cancelled" } });
-  const next = client.prompt("next turn");
-  await f.respond("session/prompt", { stopReason: "end_turn" });
-  assert.deepEqual(await next, { stopReason: "end_turn" });
+  assert.deepEqual(await prompt, { stopReason: "cancelled" });
+  await assert.rejects(client.prompt("next turn"), /cancelling\/uncertain/);
   await client.close();
 });
 
-test("default-deny client requests and injected authorized filesystem handler", async () => {
+test("default-deny all client filesystem and terminal requests", async () => {
   const f = fixture(false);
-  const opening = f.connect({
-    clientRequests: { "fs/read_text_file": async () => ({ content: "authorized" }) },
-    clientCapabilities: { fs: { readTextFile: true } },
-  });
+  const opening = f.connect();
   const client = await f.initialize(opening);
   f.send({
     jsonrpc: "2.0",
@@ -178,7 +179,7 @@ test("default-deny client requests and injected authorized filesystem handler", 
   });
   f.send({ jsonrpc: "2.0", id: 81, method: "terminal/create", params: { command: "danger" } });
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(f.writes.find((w) => w.id === 80)?.result, { content: "authorized" });
+  assert.equal((f.writes.find((w) => w.id === 80)?.error as { code: number }).code, -32601);
   const denied = f.writes.find((w) => w.id === 81);
   assert.ok(denied?.error);
   assert.equal((denied.error as { code: number }).code, -32601);
@@ -189,13 +190,99 @@ test("capabilities cannot advertise filesystem or terminal execution without inj
   const f = fixture(false);
   await assert.rejects(
     f.connect({ clientCapabilities: { fs: { writeTextFile: true } } }),
-    /advertised without authorized callback/,
+    /lack a cancellable prompt fence/,
   );
   assert.equal(f.child.killed, false);
   await assert.rejects(
     f.connect({ clientCapabilities: { terminal: true } }),
-    /terminal advertised/,
+    /lack a cancellable prompt fence/,
   );
+});
+
+test("unexpected native stop poisons raw transport independently of Host", async () => {
+  const f = fixture(false);
+  const opening = f.connect();
+  const client = await f.initialize(opening);
+  const creating = client.newSession();
+  await f.respond("session/new", { sessionId: "s" });
+  await creating;
+  const prompt = client.prompt("work");
+  await f.respond("session/prompt", { stopReason: "future_value" });
+  await assert.rejects(prompt, /outcome unknown/);
+  await assert.rejects(client.prompt("next"), /uncertain/);
+  assert.equal(f.writes.filter((w) => w.method === "session/prompt").length, 1);
+  await client.close();
+});
+
+test("client callbacks cannot execute after cancel or on mismatched native session", async () => {
+  const f = fixture(false);
+  let effects = 0;
+  await assert.rejects(
+    f.connect({
+      clientRequests: {
+        "fs/write_text_file": async () => {
+          effects++;
+        },
+      },
+    }),
+    /prompt fence/,
+  );
+  const opening = f.connect();
+  const client = await f.initialize(opening);
+  const creating = client.newSession();
+  await f.respond("session/new", { sessionId: "s" });
+  await creating;
+  const prompt = client.prompt("go");
+  await client.cancel();
+  f.send({
+    jsonrpc: "2.0",
+    id: 90,
+    method: "fs/write_text_file",
+    params: { sessionId: "wrong", path: "/tmp/marker" },
+  });
+  assert.equal(effects, 0);
+  assert.ok(f.writes.find((w) => w.id === 90)?.error);
+  const old = f.writes.find((w) => w.method === "session/prompt");
+  assert.ok(old);
+  f.send({ jsonrpc: "2.0", id: old.id, error: { code: -32000, message: "busy" } });
+  await assert.rejects(prompt, /outcome unknown/);
+  await assert.rejects(client.prompt("new"), /cancelling\/uncertain|unavailable/);
+  await client.close();
+});
+
+test("rejected asynchronous permission callback defaults to one denial", async () => {
+  const f = fixture(false);
+  const opening = f.connect({
+    onPermission: async () => {
+      throw new Error("authorization unavailable");
+    },
+  });
+  const client = await f.initialize(opening);
+  const creating = client.newSession();
+  await f.respond("session/new", { sessionId: "s" });
+  await creating;
+  const prompt = client.prompt("go");
+  f.send({
+    jsonrpc: "2.0",
+    id: 91,
+    method: "session/request_permission",
+    params: {
+      sessionId: "s",
+      toolCall: { toolCallId: "x" },
+      options: [{ optionId: "yes" }],
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(
+    f.writes.filter((w) => w.id === 91 && "result" in w).map((w) => w.result),
+    [{ outcome: { outcome: "cancelled" } }],
+  );
+  await client.cancel();
+  const old = f.writes.find((w) => w.method === "session/prompt");
+  assert.ok(old);
+  f.send({ jsonrpc: "2.0", id: old.id, result: { stopReason: "cancelled" } });
+  await prompt;
+  await client.close();
 });
 
 test("unknown version, malformed/duplicate frames and child exit fail closed", async () => {
