@@ -132,6 +132,59 @@ test("removed/rebuilt scope permits only exact mounted cancellation, not new sen
   await cold.close();
 }));
 
+test("dispose during deferred registry startup cannot create Host or leave a writer lease", async () =>
+  fixture(async (root, _path) => {
+    let releaseStart!: () => void;
+    let starting!: () => void;
+    const began = new Promise<void>((resolve) => {
+      starting = resolve;
+    });
+    const registry = {
+      start: () => {
+        starting();
+        return new Promise<void>((resolve) => {
+          releaseStart = resolve;
+        });
+      },
+    } as unknown as ProviderRegistryService;
+    const lazy = createLazyTargetAgentHostService({
+      root,
+      target,
+      registry,
+      allowNewSessions: () => true,
+      admission: {
+        verify: async () => {
+          throw new Error("not reached");
+        },
+        withAdmission: async () => {
+          throw new Error("not reached");
+        },
+      },
+    });
+    const lookup = lazy.service.catalogForTarget(target.id);
+    await began;
+    const closing = lazy.dispose();
+    releaseStart();
+    await closing;
+    await assert.rejects(lookup, /disposed during registry startup/);
+    await assert.rejects(lazy.service.catalogForTarget(target.id), /disposed/);
+    const next = createLazyTargetAgentHostService({
+      root,
+      target,
+      registry: { start: async () => {} } as ProviderRegistryService,
+      allowNewSessions: () => false,
+      admission: {
+        verify: async () => {
+          throw new Error("disabled");
+        },
+        withAdmission: async () => {
+          throw new Error("disabled");
+        },
+      },
+    });
+    await next.dispose();
+  }));
+
 test("feature-off lazy wrapper reads durable history and completed create retry without Pi startup", async () => fixture(async (root, path, host) => {
   const session = spec(path);
   const created = await host.create(session, "create");

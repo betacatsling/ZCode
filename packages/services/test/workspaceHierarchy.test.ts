@@ -112,6 +112,13 @@ test("real Git/catalog/target/Host: server derives identity and deduplicates cre
       host: rpc.service,
       newAdmissionsEnabled: () => true,
     });
+    // 中文：没有 Target Registry 的受控组合不得猜 UI 模型选项或回退到固定列表。
+    assert.deepEqual(await hierarchy.listCreateOptions("w"), {
+      workspaceId: "w",
+      worktreeGeneration: workspace.worktreeGeneration,
+      options: [],
+    });
+    await assert.rejects(hierarchy.listCreateOptions("missing"), /Unknown/);
     const initialPreview = await hierarchy.previewRemoval({
       workspaceId: "w",
       expectedGeneration: workspace.worktreeGeneration,
@@ -289,6 +296,16 @@ test("real Git/catalog/target/Host: server derives identity and deduplicates cre
       },
       resolveRemoteSession: async () => "attached-remote-session",
     });
+    assert.equal((await mapped.listHarnesses("w"))[0]?.availability, "unknown");
+    await assert.rejects(
+      mapped.createAgent({
+        workspaceId: "w",
+        harnessId: "zcode",
+        modelBinding: { kind: "harness-managed" },
+        commandId: "uncertified-native",
+      }),
+      /creation receipt unavailable/,
+    );
     const native = await mapped.resolveOwner({
       targetId: "local",
       workspaceId: "w",
