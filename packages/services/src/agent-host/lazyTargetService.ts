@@ -78,7 +78,16 @@ export function createLazyTargetAgentHostService(input: {
     },
     queryCreationCommand: (commandId) => (target ?? historyOnly).queryCreationCommand(commandId),
     async attach(spec) { return (await getTarget()).attach(spec); },
-    async dispatch(spec, command) { return (await getTarget()).dispatch(spec, command); },
+    async dispatch(spec, command) {
+      // 控制已接受的轮次不应仅因调用而懒启动 Pi；冷 Host 不持有 epoch，必须显式 attach。
+      if (command.type === "cancelTurn" || command.type === "detach" || command.type === "viewHistory" ||
+          command.type === "terminateSession" || (command.type === "resolveInteraction" && command.decision === "deny"))
+        return (target ?? historyOnly).dispatch(spec, command);
+      // 已挂载 Host 的已接受 ID 可在关停新 admission 后取得重复回执；不为冷历史启动 worker。
+      if (target && await target.queryCommand(spec, command.commandId)) return target.dispatch(spec, command);
+      if (!input.allowNewSessions()) throw new Error("new external execution disabled; existing history remains readable");
+      return (await getTarget()).dispatch(spec, command);
+    },
     async snapshot(spec) { return (target ?? historyOnly).snapshot(spec); },
     async eventsSince(spec, sequence) { return (target ?? historyOnly).eventsSince(spec, sequence); },
     async queryCommand(spec, commandId) { return (target ?? historyOnly).queryCommand(spec, commandId); },
