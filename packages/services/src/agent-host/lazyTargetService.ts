@@ -3,6 +3,7 @@ import { Emitter } from "@zcode/rpc";
 import type { ProviderRegistryService } from "@zcode/provider";
 import {
   writableSessionSpecV2Schema,
+  harnessManifestSchema,
   type ExecutionTarget,
   type HarnessManifest,
 } from "@zcode/shared/agent-host";
@@ -35,6 +36,14 @@ export function createLazyTargetAgentHostService(input: {
     factory: () => HarnessAdapter;
   }[];
 }): { service: IAgentHostService; dispose(): Promise<void> } {
+  // 中文：若后列 manifest 重复/非法，不能先运行前列 factory（可能已占有进程或端口）。
+  // Node-only 构造阶段预检全表；真正注册时 HarnessRegistry 仍校验 adapter 与 manifest 一致。
+  const seen = new Set([piManifest.id]);
+  for (const trusted of input.additionalTrustedHarnesses ?? []) {
+    const manifest = harnessManifestSchema.parse(trusted.manifest);
+    if (seen.has(manifest.id)) throw new Error(`duplicate-id: ${manifest.id}`);
+    seen.add(manifest.id);
+  }
   let target: AgentHostTargetService | undefined;
   let flight: Promise<AgentHostTargetService> | undefined;
   let targetDispose: (() => void) | undefined;
