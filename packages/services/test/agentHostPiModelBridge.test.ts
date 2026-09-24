@@ -199,6 +199,64 @@ test("Pi Anthropic signature survives native-style history and returns to the sa
   );
 });
 
+test("Pi redacted Anthropic reasoning restores as opaque data without a forged text block", async () => {
+  const requests: Array<Parameters<Model["streamText"]>[0]> = [];
+  const provider = createPiHostProvider(
+    {
+      ...model((request) => requests.push(request)),
+      async *streamText(request) {
+        requests.push(request);
+        yield { type: "start" } as const;
+        yield {
+          type: "reasoning_start",
+          id: "r",
+          providerMetadata: {
+            anthropic: { redactedData: "opaque-redacted-fixture" },
+          },
+        } as const;
+        yield { type: "reasoning_end", id: "r" } as const;
+        yield { type: "finish", finishReason: "stop", usage: {} } as const;
+      },
+    } as Model,
+    route,
+  );
+  const selected = (await provider.getModels())[0]!;
+  const initial = [];
+  for await (const event of provider.streamSimple!(
+    selected,
+    normalizeContext({ messages: [{ role: "user", content: "start", timestamp: Date.now() }] }),
+  ))
+    initial.push(event);
+  const done = initial.at(-1);
+  assert.equal(done?.type, "done");
+  if (done?.type !== "done") return;
+  assert.equal(
+    done.message.content[0]?.type === "thinking" && done.message.content[0].redacted,
+    true,
+  );
+  const followup = [];
+  for await (const event of provider.streamSimple!(
+    selected,
+    normalizeContext({
+      messages: [
+        { role: "user", content: "start", timestamp: Date.now() },
+        done.message,
+        { role: "user", content: "again", timestamp: Date.now() },
+      ],
+    }),
+  ))
+    followup.push(event);
+  assert.equal(followup.at(-1)?.type, "done");
+  const assistant = requests[1]?.messages.find((message) => message.role === "assistant");
+  assert.deepEqual(typeof assistant?.content === "string" ? undefined : assistant?.content[0], {
+    type: "reasoning",
+    text: "",
+    providerOptions: {
+      anthropic: { redactedData: "opaque-redacted-fixture" },
+    },
+  });
+});
+
 test("Pi signature rejects cross-route replay and unknown metadata without leaking values", async () => {
   let calls = 0;
   const provider = createPiHostProvider(
@@ -329,6 +387,10 @@ test("Pi signature rejects cross-route replay and unknown metadata without leaki
   ))
     failures.push(event);
   assert.equal(failures.at(-1)?.type, "error");
+  assert.match(
+    failures.at(-1)?.type === "error" ? (failures.at(-1)!.error.errorMessage ?? "") : "",
+    /anthropic\.alien \(type string\)/,
+  );
   assert.equal(JSON.stringify(failures).includes("SECRET"), false);
 });
 
