@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-import { mkdir, open, readFile, unlink, type FileHandle } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, open, readFile, rename, unlink, type FileHandle } from "node:fs/promises";
 import { join } from "node:path";
 
 export interface JournalIdentity {
@@ -26,15 +26,41 @@ async function tryTakeLock(path: string): Promise<FileHandle> {
   return lock;
 }
 
-export async function readJournalLines(path: string): Promise<string[]> {
-  let raw: string;
-  try { raw = await readFile(path, "utf8"); }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+async function committedBytes(path: string): Promise<number | undefined> {
+  try {
+    const value = JSON.parse(await readFile(`${path}.cursor`, "utf8")) as { version?: number; bytes?: number };
+    if (value.version !== 1 || !Number.isSafeInteger(value.bytes) || value.bytes! < 0) throw new Error("invalid journal commit cursor");
+    return value.bytes;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
   }
-  if (raw && !raw.endsWith("\n")) throw new Error("truncated journal tail; inspect before reading history");
-  return raw ? raw.trimEnd().split("\n") : [];
+}
+
+export async function journalCommittedBytes(path: string): Promise<number | undefined> {
+  return committedBytes(path);
+}
+
+async function publishCursor(path: string, bytes: number): Promise<void> {
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  const file = await open(temporary, "wx", 0o600);
+  try { await file.writeFile(JSON.stringify({ version: 1, bytes })); await file.sync(); }
+  finally { await file.close(); }
+  await rename(temporary, `${path}.cursor`);
+}
+
+export async function readJournalLines(path: string): Promise<string[]> {
+  const bytes = await committedBytes(path);
+  let raw: Buffer;
+  try { raw = await readFile(path); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT" && bytes === undefined) return [];
+    throw error;
+  }
+  if (bytes !== undefined && bytes > raw.length) throw new Error("journal shorter than committed cursor");
+  const prefix = (bytes === undefined ? raw : raw.subarray(0, bytes)).toString("utf8");
+  if (prefix && !prefix.endsWith("\n")) throw new Error("truncated journal tail; inspect before reading history");
+  return prefix ? prefix.slice(0, -1).split("\n") : [];
 }
 
 export async function openJournal(root: string, path: string): Promise<{ file: FileHandle; lock: FileHandle; lockPath: string; lines: string[] }> {
@@ -56,16 +82,19 @@ export async function openJournal(root: string, path: string): Promise<{ file: F
     await unlink(lockPath);
     lock = await tryTakeLock(lockPath);
   }
+  let file: FileHandle | undefined;
   try {
-    const file = await open(path, "a+", 0o600);
-    const raw = await file.readFile("utf8");
-    const lines = raw ? raw.trimEnd().split("\n") : [];
-    if (raw && !raw.endsWith("\n")) {
-      await file.close();
-      throw new Error("truncated journal tail; inspect before admitting commands");
-    }
-    return { file, lock, lockPath, lines };
+    file = await open(path, "a+", 0o600);
+    const raw = await file.readFile();
+    const committed = await committedBytes(path);
+    // 修复崩溃后未提交的尾部被再次追加：必须人工确认，不能自动截断或重放。
+    if (committed !== undefined && committed !== raw.length) throw new Error("uncommitted journal tail; inspect before admitting commands");
+    const text = raw.toString("utf8");
+    if (text && !text.endsWith("\n")) throw new Error("truncated journal tail; inspect before admitting commands");
+    if (committed === undefined) await publishCursor(path, raw.length);
+    return { file, lock, lockPath, lines: text ? text.slice(0, -1).split("\n") : [] };
   } catch (error) {
+    await file?.close();
     await lock.close();
     await unlink(lockPath);
     throw error;
@@ -78,7 +107,9 @@ export async function closeJournal(file: FileHandle, lock: FileHandle, lockPath:
   await unlink(lockPath);
 }
 
-export async function durableAppend(file: FileHandle, row: unknown): Promise<void> {
+export async function durableAppend(file: FileHandle, path: string, row: unknown): Promise<void> {
   await file.appendFile(`${JSON.stringify(row)}\n`, "utf8");
   await file.sync();
+  // 修复只读并发读到 fsync 前半行：提交游标始终最后发布。
+  await publishCursor(path, (await file.stat()).size);
 }

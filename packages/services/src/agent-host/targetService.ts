@@ -5,6 +5,7 @@ import { HarnessRegistry } from "./harnessRegistry.js";
 import { CreationJournal, type CreationCommand } from "./creationJournal.js";
 import { SessionHost } from "./sessionHost.js";
 import type { ModelCatalogPort } from "./modelBindingPlanner.js";
+import type { HostSessionReadModel } from "./serviceContract.js";
 
 export interface TargetHostEvent { spec: SessionSpecV2; event: AgentEvent }
 
@@ -87,6 +88,13 @@ export class AgentHostTargetService {
       hostManagedModel, fork: notImplemented, subagents: notImplemented,
     });
   }
+  async getSessionReadModel(raw: SessionSpecV2 | LegacySessionSpec): Promise<HostSessionReadModel> {
+    const spec = this.#readScope(raw);
+    const host = spec.schemaVersion === 2 ? this.#hosts.get(this.#key(spec)) : undefined;
+    if (host) { await host.whenEventsRecorded(); return host.getReadModel(); }
+    try { return await SessionHost.readModelHistory(this.#root, spec); }
+    catch { return { runtimeEpoch: null, seq: 0, activity: "uncertain" }; } // 损坏记录只可呈现未知，不能暗示空闲。
+  }
   async getRuntimeActivity(workspaceId?: string): Promise<{ running: number; waiting: number; uncertain: number }> {
     const records = await SessionHost.listStoredSessions(this.#root, { targetId: this.#target.id, ...(workspaceId === undefined ? {} : { workspaceId }) });
     const counts = { running: 0, waiting: 0, uncertain: 0 };
@@ -97,7 +105,9 @@ export class AgentHostTargetService {
       if (record.state === "terminated") continue;
       const host = this.#hosts.get(this.#key(record.spec));
       // 修复离线历史被一律视为未知：只有未确认创建、未完成命令或未解决的工具门禁才阻止维护。
-      const activity = pendingCreates.has(record.spec.hostSessionId) ? "uncertain" : host?.getActivity() ?? await SessionHost.historyActivity(this.#root, record.spec);
+      let activity: "running" | "waiting" | "uncertain" | "idle";
+      try { activity = pendingCreates.has(record.spec.hostSessionId) ? "uncertain" : host?.getActivity() ?? await SessionHost.historyActivity(this.#root, record.spec); }
+      catch { activity = "uncertain"; } // 损坏或不完整的只读日志不能被当作空闲以放行维护。
       if (activity !== "idle") counts[activity]++;
     }
     return counts;

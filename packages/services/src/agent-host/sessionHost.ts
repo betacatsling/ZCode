@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- 单一 Host owner 集中保持 durable admission、事件与摘要写入的顺序。 */
 import { createHash } from "node:crypto";
 import { mkdir, open, readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
@@ -10,8 +11,10 @@ import {
 import { CommandJournal } from "./commandJournal.js";
 import { assertBinding, manifestPath, manifestSchema, matchesScope, readableManifestSchema, saveManifest } from "./sessionManifest.js";
 import { EventJournal } from "./eventJournal.js";
+import { observeOutcome, publishActivitySummary, readActivitySummary, type ActivitySummary } from "./activityReadModel.js";
+import type { HostSessionReadModel } from "./serviceContract.js";
 import { HarnessRegistry, type HarnessAdapter } from "./harnessRegistry.js";
-import type { JournalIdentity } from "./journalStorage.js";
+import { journalCommittedBytes, journalPath, type JournalIdentity } from "./journalStorage.js";
 import { planModelBinding, type ModelCatalogPort } from "./modelBindingPlanner.js";
 import type { V4ConversationRowsRangeParams, V4ConversationRowsRangeResult } from "@zcode/shared/zcode-protocol-v4";
 import { v4ConversationRowsRangeParamsSchema, v4ConversationRowsRangeResultSchema } from "@zcode/shared/zcode-protocol-v4";
@@ -27,10 +30,15 @@ export interface SessionHostOptions {
 
 /** One target-local owner. Renderer disconnect must NOT call close() on this service. */
 export class SessionHost {
+  static readonly #coldActivityCache = new Map<string, { signature: string; activity: "uncertain" | "waiting" | "idle" }>();
   readonly spec: SessionSpecV2;
   readonly binding: BackendBindingV2;
   readonly plan: BindingPlan;
   readonly #manifestPath: string;
+  readonly #root: string;
+  readonly #identity: JournalIdentity;
+  #lastOutcome?: ActivitySummary["lastOutcome"];
+  #summaryTail: Promise<void> = Promise.resolve();
   readonly #adapter: HarnessAdapter;
   readonly #target: ExecutionTarget;
   readonly #catalog: ModelCatalogPort;
@@ -39,6 +47,8 @@ export class SessionHost {
   readonly #listeners = new Set<(event: AgentEvent) => void>();
   readonly #active = new Set<Promise<void>>();
   readonly #interactions = new Map<string, string>();
+  readonly #pendingTools = new Set<string>();
+  #backendUnknown = false;
   #activeTurn?: string;
   #eventTail: Promise<void> = Promise.resolve();
   #dispatchTail: Promise<void> = Promise.resolve();
@@ -47,10 +57,12 @@ export class SessionHost {
   #closed = false;
 
   private constructor(options: {
-    manifestPath: string; spec: SessionSpecV2; plan: BindingPlan; binding: BackendBindingV2;
+    root: string; identity: JournalIdentity; manifestPath: string; spec: SessionSpecV2; plan: BindingPlan; binding: BackendBindingV2;
     adapter: HarnessAdapter; commands: CommandJournal; events: EventJournal; target: ExecutionTarget; catalog: ModelCatalogPort;
   }) {
     this.#manifestPath = options.manifestPath;
+    this.#root = options.root;
+    this.#identity = options.identity;
     this.spec = options.spec;
     this.plan = options.plan;
     this.binding = options.binding;
@@ -71,9 +83,11 @@ export class SessionHost {
         const { event, appended } = await this.#events.appendWithStatus(source);
         if (!appended) return;
         this.#applyEventState(event);
+        await this.#publishSummary();
         for (const listener of this.#listeners) listener(event);
-      }).catch((error: unknown) => {
+      }).catch(async (error: unknown) => {
         this.#eventError = error instanceof Error ? error : new Error(String(error));
+        await this.#publishSummary();
       });
     });
   }
@@ -165,6 +179,21 @@ export class SessionHost {
     return summaries.sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
+  static async readModelHistory(root: string, spec: LegacySessionSpec | SessionSpecV2): Promise<HostSessionReadModel> {
+    let stored;
+    try { stored = await SessionHost.#storedHistory(root, spec); }
+    catch (error) {
+      if (error instanceof Error && error.message.includes("backend create was not confirmed"))
+        return { runtimeEpoch: null, seq: 0, activity: "uncertain" };
+      throw error;
+    }
+    const summary = await readActivitySummary(root, stored.identity);
+    if (!summary) return { runtimeEpoch: stored.binding.runtimeEpoch, seq: 0, activity: "uncertain" };
+    return { runtimeEpoch: summary.runtimeEpoch, seq: summary.seq,
+      activity: summary.pendingSend || summary.activity === "running" ? "uncertain" : summary.activity,
+      ...(summary.lastOutcome ? { lastOutcome: summary.lastOutcome } : {}) };
+  }
+
   static async historyActivity(root: string, spec: LegacySessionSpec | SessionSpecV2): Promise<"uncertain" | "waiting" | "idle"> {
     let stored;
     try { stored = await SessionHost.#storedHistory(root, spec); }
@@ -173,7 +202,22 @@ export class SessionHost {
       throw error;
     }
     const { identity } = stored;
-    if (await CommandJournal.hasUnresolvedHistory(root, identity)) return "uncertain";
+    const summary = await readActivitySummary(root, identity);
+    if (summary) return summary.pendingSend || summary.activity === "running" ? "uncertain" : summary.activity;
+    const paths = [journalPath(root, identity, "events"), journalPath(root, identity, "commands")];
+    const readSignature = async () => JSON.stringify(await Promise.all(paths.map(async (path) => {
+      try { const metadata = await stat(path); return [metadata.size, metadata.mtimeMs, metadata.ctimeMs, await journalCommittedBytes(path)]; }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
+    })));
+    const signature = await readSignature();
+    const cacheKey = JSON.stringify([root, identity]);
+    const cached = SessionHost.#coldActivityCache.get(cacheKey);
+    if (cached?.signature === signature) return cached.activity;
+    if (await CommandJournal.hasUnresolvedHistory(root, identity)) {
+      if (await readSignature() !== signature) return "uncertain";
+      SessionHost.#coldActivityCache.set(cacheKey, { signature, activity: "uncertain" });
+      return "uncertain";
+    }
     const events = await EventJournal.readHistory(root, identity);
     const activeTurns = new Set<string>();
     const pendingInteractions = new Map<string, string>();
@@ -194,21 +238,20 @@ export class SessionHost {
       if (event.kind === "session.status" && (event.state === "execution-unknown" || event.state === "interrupted")) backendUnknown = true;
       if (event.kind === "session.status" && event.state === "idle") backendUnknown = false;
     }
-    if (backendUnknown || activeTurns.size || pendingTools.size) return "uncertain";
-    return pendingInteractions.size ? "waiting" : "idle";
+    const activity = backendUnknown || activeTurns.size || pendingTools.size ? "uncertain" : pendingInteractions.size ? "waiting" : "idle";
+    if (await readSignature() !== signature) return "uncertain"; // 修复回放期间追加事件时缓存旧空闲于新水位。
+    SessionHost.#coldActivityCache.set(cacheKey, { signature, activity });
+    return activity;
   }
 
   static async rowsRangeHistory(root: string, spec: LegacySessionSpec | SessionSpecV2, request: V4ConversationRowsRangeParams): Promise<V4ConversationRowsRangeResult> {
     const params = v4ConversationRowsRangeParamsSchema.parse(request);
     if (params.sessionId !== spec.hostSessionId) throw new Error("foreign rows session");
-    const snapshot = await SessionHost.snapshotHistory(root, spec);
     const { binding, identity } = await SessionHost.#storedHistory(root, spec);
+    // 修复两次读取事件日志之间追加事件导致水位与返回行不一致：只投影同一提交视图。
     const events = await EventJournal.readHistory(root, identity);
-    const all = projectHostConversation({ spec, runtimeEpoch: binding.runtimeEpoch, events, windowSize: 100_000 }).rows.window;
-    const eligible = all.filter((row) => params.beforeRowId === undefined || row.rowId < params.beforeRowId);
-    const rows = eligible.slice(-params.limit);
-    return v4ConversationRowsRangeResultSchema.parse({ rows, atSeq: snapshot.seq, atRevision: snapshot.revision,
-      atLogEpoch: snapshot.logEpoch, hasMore: eligible.length > rows.length });
+    const snapshot = projectHostConversation({ spec, runtimeEpoch: binding.runtimeEpoch, events, rowRange: params });
+    return SessionHost.#rangeResult(snapshot, params);
   }
 
   static async #storedHistory(root: string, raw: LegacySessionSpec | SessionSpecV2): Promise<{ binding: BackendBinding; identity: JournalIdentity }> {
@@ -237,7 +280,9 @@ export class SessionHost {
     const events = await EventJournal.open(root, identity);
     try {
       const commands = await CommandJournal.open(root, identity);
-      return new SessionHost({ manifestPath: path, spec, plan, binding, adapter, commands, events, target, catalog });
+      const host = new SessionHost({ root, identity, manifestPath: path, spec, plan, binding, adapter, commands, events, target, catalog });
+      await host.#publishSummary();
+      return host;
     } catch (error) { await events.close(); throw error; }
   }
 
@@ -254,6 +299,7 @@ export class SessionHost {
     if (command.hostSessionId !== this.spec.hostSessionId) throw new Error("foreign session command");
     const receipt = await this.#commands.accept(command);
     if (receipt.status === "duplicate") return receipt;
+    await this.#publishSummary();
     await this.#eventTail;
     if (this.#closed) return this.#reject(command, "backend-failure", "session host is closing");
     if (this.#eventError && !["viewHistory", "detach", "terminateSession"].includes(command.type))
@@ -282,6 +328,7 @@ export class SessionHost {
           requested: plan.requested, effective: plan.effective, route: plan.route, credentialRef: plan.credentialRef,
         });
         await this.#commands.freezeTurn(command.commandId, route);
+        await this.#publishSummary();
         await this.#adapter.prepareTurn?.(this.spec, { turnId: command.turnId, runtimeEpoch: this.binding.runtimeEpoch, plan });
         const run = this.#adapter.send(command);
         this.#track(command.commandId, command.turnId, run);
@@ -290,6 +337,7 @@ export class SessionHost {
         this.#activeTurn = undefined;
         // 准备阶段可能已分配后端资源；不可在未知副作用后将同一命令重发。
         await this.#commands.finish(command.commandId, { commandId: command.commandId, status: "execution-unknown", reasonCode: "execution-unknown" });
+        await this.#publishSummary();
         return { commandId: command.commandId, status: "execution-unknown", reasonCode: "execution-unknown", message: error instanceof Error ? error.message : "backend failed" };
       }
     }
@@ -327,26 +375,28 @@ export class SessionHost {
       }
       const done: AgentCommandReceipt = { commandId: command.commandId, status: "completed" };
       await this.#commands.finish(command.commandId, done);
+      await this.#publishSummary();
       return done;
     } catch (error) {
       return this.#reject(command, "backend-failure", error instanceof Error ? error.message : "backend failed");
     }
   }
 
+  getReadModel(): HostSessionReadModel {
+    return { runtimeEpoch: this.binding.runtimeEpoch, seq: this.#events.length, activity: this.getActivity(),
+      ...(this.#lastOutcome ? { lastOutcome: this.#lastOutcome } : {}) };
+  }
   getActivity(): "running" | "waiting" | "uncertain" | "idle" {
-    if (this.#eventError || this.#commands.hasUncertainSend()) return "uncertain";
+    if (this.#eventError || this.#backendUnknown || this.#commands.hasUncertainSend()) return "uncertain";
     if (this.#interactions.size) return "waiting";
-    return this.#activeTurn || this.#commands.hasPendingSend() ? "running" : "idle";
+    return this.#activeTurn || this.#pendingTools.size || this.#commands.hasPendingSend() ? "running" : "idle";
   }
   rowsRange(request: V4ConversationRowsRangeParams): V4ConversationRowsRangeResult {
     const params = v4ConversationRowsRangeParamsSchema.parse(request);
     if (params.sessionId !== this.spec.hostSessionId) throw new Error("foreign rows session");
-    const snapshot = this.snapshot();
-    const all = this.#projectAllRows();
-    const eligible = all.filter((row) => params.beforeRowId === undefined || row.rowId < params.beforeRowId);
-    const rows = eligible.slice(-params.limit);
-    return v4ConversationRowsRangeResultSchema.parse({ rows, atSeq: snapshot.seq, atRevision: snapshot.revision,
-      atLogEpoch: snapshot.logEpoch, hasMore: eligible.length > rows.length });
+    const snapshot = projectHostConversation({ spec: this.spec, runtimeEpoch: this.binding.runtimeEpoch,
+      events: this.#allEvents(), rowRange: params });
+    return SessionHost.#rangeResult(snapshot, params);
   }
   eventsSince(sequence: number): readonly AgentEvent[] { return this.#events.since(sequence); }
   snapshot() {
@@ -357,9 +407,10 @@ export class SessionHost {
     while (true) { const batch = this.#events.since(events.length); events.push(...batch); if (batch.length < 500) break; }
     return events;
   }
-  #projectAllRows() {
-    // Pagination must project the full journal, not just a tail snapshot.
-    return projectHostConversation({ spec: this.spec, runtimeEpoch: this.binding.runtimeEpoch, events: this.#allEvents(), windowSize: 100_000 }).rows.window;
+  static #rangeResult(snapshot: ReturnType<typeof projectHostConversation>, params: V4ConversationRowsRangeParams): V4ConversationRowsRangeResult {
+    const eligible = Math.min(snapshot.rows.totalCount, Math.max(0, Math.ceil(params.beforeRowId ?? Infinity) - 1));
+    return v4ConversationRowsRangeResultSchema.parse({ rows: snapshot.rows.window, atSeq: snapshot.seq,
+      atRevision: snapshot.revision, atLogEpoch: snapshot.logEpoch, hasMore: eligible > snapshot.rows.window.length });
   }
   queryCommand(commandId: string): AgentCommandReceipt | undefined { return this.#commands.query(commandId); }
   subscribe(listener: (event: AgentEvent) => void): () => void {
@@ -397,9 +448,11 @@ export class SessionHost {
       } else {
         await this.#commands.finish(commandId, { commandId, status: "completed" });
       }
+      await this.#publishSummary();
     }, async () => {
       await this.#eventTail;
       await this.#commands.finish(commandId, { commandId, status: "execution-unknown", reasonCode: "execution-unknown" });
+      await this.#publishSummary();
     });
     this.#active.add(tracked);
     void tracked.then(() => this.#active.delete(tracked), () => this.#active.delete(tracked));
@@ -408,18 +461,34 @@ export class SessionHost {
     return command.runtimeEpoch === this.binding.runtimeEpoch && command.turnId === this.#activeTurn;
   }
   #applyEventState(event: AgentEvent): void {
+    this.#lastOutcome = observeOutcome(this.#lastOutcome, event);
     if (event.kind === "turn.started") this.#activeTurn = event.turnId;
+    if (event.kind === "tool.started") this.#pendingTools.add(event.toolCallId);
+    if (event.kind === "tool.finished") this.#pendingTools.delete(event.toolCallId);
+    if (event.kind === "session.status" && (event.state === "execution-unknown" || event.state === "interrupted")) this.#backendUnknown = true;
+    if (event.kind === "session.status" && event.state === "idle") this.#backendUnknown = false;
     if (event.kind === "interaction.requested") this.#interactions.set(event.interactionId, event.turnId);
     if (event.kind === "interaction.resolved") this.#interactions.delete(event.interactionId);
     if (event.kind === "turn.finished") {
       if (this.#activeTurn && event.turnId !== this.#activeTurn) throw new Error("out-of-order turn completion");
       this.#activeTurn = undefined;
       this.#interactions.clear();
+      this.#pendingTools.clear();
+      if (event.outcome === "unknown") this.#backendUnknown = true;
     }
+  }
+  #publishSummary(): Promise<void> {
+    const write = this.#summaryTail.then(() => publishActivitySummary(this.#root, this.#identity, {
+      seq: this.#events.length, activity: this.getActivity(), pendingSend: this.#commands.hasPendingSend(),
+      ...(this.#lastOutcome ? { lastOutcome: this.#lastOutcome } : {}),
+    }));
+    this.#summaryTail = write.then(() => undefined, () => undefined);
+    return write;
   }
   async #reject(command: AgentCommand, reasonCode: NonNullable<AgentCommandReceipt["reasonCode"]>, message: string): Promise<AgentCommandReceipt> {
     const receipt: AgentCommandReceipt = { commandId: command.commandId, status: "rejected", reasonCode, message };
     await this.#commands.finish(command.commandId, receipt);
+    await this.#publishSummary();
     return receipt;
   }
 }
