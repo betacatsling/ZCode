@@ -132,21 +132,30 @@ const snapshot: SidebarSnapshot = {
     },
   ],
 };
-const historyRows = [1, 2, 3, 4].map((rowId) => ({
-  kind: "assistantText" as const,
-  rowId,
-  turnId: `turn-${rowId}`,
-  createdAt: rowId,
-  createdAtSeq: rowId,
-  assistantResponseId: `msg-${rowId}`,
-  state: "complete" as const,
-  text: `History row ${rowId}`,
-}));
+// Controlled renderer fixture only; never substitute this array for production Core/Host proof.
+const longHistory = new URLSearchParams(location.search).get("history") === "long";
+const historyRows = Array.from({ length: longHistory ? 2201 : 4 }, (_, index) => index + 1).map(
+  (rowId) => ({
+    kind: "assistantText" as const,
+    rowId,
+    turnId: `turn-${rowId}`,
+    createdAt: rowId,
+    createdAtSeq: rowId,
+    assistantResponseId: `msg-${rowId}`,
+    state: "complete" as const,
+    text: `History row ${rowId}`,
+  }),
+);
 const paneRows = (spec: SessionSpecV2) =>
   spec.hostSessionId === "pi-one"
-    ? { window: historyRows.slice(-2), totalCount: historyRows.length, firstRowId: 1 }
+    ? {
+        window: historyRows.slice(longHistory ? -2000 : -2),
+        totalCount: historyRows.length,
+        firstRowId: 1,
+      }
     : initialSnapshot.rows;
 let releaseOlder: (() => void) | undefined;
+let holdLongInitialPage = longHistory;
 const events: string[] = [];
 let changed = () => {};
 let nativeCalls = 0;
@@ -335,9 +344,12 @@ const services = {
       }),
     eventsSince: async () => [],
     rowsRange: async (_spec: SessionSpecV2, request: { beforeRowId?: number; limit: number }) => {
-      await new Promise<void>((resolve) => {
-        releaseOlder = resolve;
-      });
+      if (!longHistory || holdLongInitialPage) {
+        holdLongInitialPage = false;
+        await new Promise<void>((resolve) => {
+          releaseOlder = resolve;
+        });
+      }
       return {
         rows: historyRows
           .filter((row) => row.rowId < (request.beforeRowId ?? Infinity))

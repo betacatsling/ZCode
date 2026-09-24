@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("real shell routes two Pi sessions from Catalog without creating or native navigation", async ({
+test("controlled shell routes two Pi sessions without creating or native navigation", async ({
   page,
 }) => {
   await page.goto("/shell-pane.html");
@@ -39,7 +39,7 @@ test("restored unproven pane cannot subscribe native even when focused", async (
   await expect(page.getByTestId("create-calls")).toHaveText("0");
 });
 
-test("real shell uses original native ID rather than Catalog alias", async ({ page }) => {
+test("controlled shell uses original native ID rather than Catalog alias", async ({ page }) => {
   await page.goto("/shell-pane.html");
   await page.getByRole("button", { name: /Native session/ }).click();
   await expect(page.getByTestId("shell-events")).toContainText("native-navigation:original-native");
@@ -140,7 +140,24 @@ test("full shell renders explicit external zero separately from unreported usage
   await expect(page.getByTestId("native-subscriptions")).toHaveText("0");
 });
 
-test("full Shell external pane loads a real Host older page without native fallback", async ({
+test("controlled full Shell at cache cap still browses older and back to latest", async ({
+  page,
+}) => {
+  await page.goto("/shell-pane.html?history=long");
+  await page.getByRole("button", { name: /Pi one/ }).click();
+  // Auto-prefetch can already have an older read in flight. At the 2000-row cap the
+  // earlier control must still exist; release that pending read through the fixture.
+  await expect(page.getByTestId("external-history-range")).toContainText("Rows 202–2201 of 2201");
+  await expect(page.getByRole("button", { name: "Load earlier messages" })).toBeVisible();
+  await page.getByRole("button", { name: "Release older page" }).click();
+  await expect(page.getByRole("button", { name: "Load newer messages" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Latest messages" })).toBeVisible();
+  await page.getByRole("button", { name: "Latest messages" }).click();
+  await expect(page.locator('[data-session-id="pi-one"]')).toBeVisible();
+  await expect(page.getByTestId("native-subscriptions")).toHaveText("0");
+});
+
+test("controlled full Shell external pane loads an older page without native fallback", async ({
   page,
 }) => {
   await page.goto("/shell-pane.html");

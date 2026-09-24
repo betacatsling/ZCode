@@ -1,5 +1,7 @@
 import { runServerCore } from "./core.js";
 import { createCoreAuthority } from "@zcode/services/node";
+import { ensureServerInstallOwnership } from "../runtime/installationOwnership.js";
+import { resolveServerLayout } from "../runtime/paths.js";
 import {
   IAgentHostService,
   IProjectCatalogRpcService,
@@ -107,8 +109,15 @@ if (process.argv[2] === "direct") {
     process.exit(1);
   });
 } else {
-  // Default production Core, no override.
-  void runServerCore(1).catch((error: unknown) => {
+  // Test-only real installer setup; never synthesize an ownership marker or authority.
+  void (async () => {
+    if (process.env.ZCODE_FIXTURE_INSTALL_ROOT) {
+      await ensureServerInstallOwnership(
+        resolveServerLayout(process.env.ZCODE_FIXTURE_INSTALL_ROOT),
+      );
+    }
+    await runServerCore(1);
+  })().catch((error: unknown) => {
     process.stderr.write(String(error));
     process.exit(1);
   });

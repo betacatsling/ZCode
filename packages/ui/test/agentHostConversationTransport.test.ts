@@ -686,8 +686,8 @@ test("owner lease switch closes an in-flight external page rather than adding st
   transport.dispose();
 });
 
-test("external older-page cache stays bounded with >2000 committed rows", async () => {
-  const { service, history, transport } = harness([spec]);
+test("external older-page view slides past multiple cache budgets and returns to live tail", async () => {
+  const { service, history, transport, publish } = harness([spec]);
   const { SessionDataLayer } = await import("../src/v4/SessionDataLayer.js");
   const events = history.get(spec.hostSessionId)!.events;
   for (let i = 1; i <= 2200; i++) {
@@ -724,13 +724,117 @@ test("external older-page cache stays bounded with >2000 committed rows", async 
     assert.ok(lease.store.countProjectionRows() <= 2000);
   }
   assert.equal(lease.store.countProjectionRows(), 2000);
-  const cappedFirst = lease.store.getState().snapshot?.rows.window[0]?.rowId;
-  await lease.store.loadOlder(200);
-  assert.equal(lease.store.getState().snapshot?.rows.window[0]?.rowId, cappedFirst);
+  // A full cache is not a history terminus. Multiple shifts must reach the journal's first row.
+  for (let i = 0; i < 15 && lease.store.getState().snapshot?.rows.window[0]?.rowId !== 1; i++) {
+    await lease.store.loadOlder(200);
+    assert.ok(lease.store.countProjectionRows() <= 2000);
+  }
+  assert.equal(lease.store.getState().snapshot?.rows.window[0]?.rowId, 1);
+  assert.equal(lease.store.getState().snapshot?.rows.firstRowId, 1);
+  assert.equal(lease.store.getState().snapshot?.rows.window.at(-1)?.rowId, 2000);
+  // Live authoritative stream continues while the held view stays contiguous and bounded.
+  publish(spec, { ...turn(spec.hostSessionId, 4401), turnId: "live" });
+  // A real subscription notification causes the transport to read the new canonical Host snapshot.
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(lease.store.getState().snapshot?.seq, 4401);
+  assert.equal(lease.store.getState().snapshot?.rows.window.at(-1)?.rowId, 2000);
+  await lease.store.loadNewer(200);
+  assert.equal(lease.store.getState().snapshot?.rows.window[0]?.rowId, 201);
   assert.equal(lease.store.getState().snapshot?.rows.window.at(-1)?.rowId, 2200);
+  await lease.store.jumpToLatest();
+  assert.equal(lease.store.getState().snapshot?.rows.window.at(-1)?.rowId, 2201);
   lease.release();
   layer.dispose();
   transport.dispose();
+});
+
+test("a real late old-child rewrite refreshes the held page through Host transport, not an immutable prefix", async () => {
+  const { service, history, transport, publish } = harness([spec]);
+  const { SessionDataLayer } = await import("../src/v4/SessionDataLayer.js");
+  const events = history.get(spec.hostSessionId)!.events;
+  events.push(turn(spec.hostSessionId, 1));
+  events.push({
+    ...turn(spec.hostSessionId, 2),
+    turnId: "turn-1",
+    kind: "subagent.updated",
+    childSessionId: "late-child",
+    status: "finished",
+    summary: "old",
+  });
+  events.push({
+    ...turn(spec.hostSessionId, 3),
+    turnId: "turn-1",
+    kind: "turn.finished",
+    outcome: "success",
+  });
+  for (let i = 2; i <= 110; i++) {
+    const seq = events.length + 1;
+    events.push({ ...turn(spec.hostSessionId, seq), turnId: `turn-${i}` });
+    events.push({
+      ...turn(spec.hostSessionId, seq + 1),
+      turnId: `turn-${i}`,
+      kind: "turn.finished",
+      outcome: "success",
+    });
+  }
+  service.snapshot = async () =>
+    projectHostConversation({ spec, runtimeEpoch: "epoch", events, windowSize: 2 });
+  let held: (() => void) | undefined;
+  let started: (() => void) | undefined;
+  const pending = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  service.rowsRange = async (_owner, request) => {
+    const page = projectHostConversation({
+      spec,
+      runtimeEpoch: "epoch",
+      events,
+      windowSize: 2,
+      rowRange: { beforeRowId: request.beforeRowId, limit: request.limit },
+    });
+    if (!held)
+      await new Promise<void>((resolve) => {
+        held = resolve;
+        started?.();
+      });
+    return {
+      rows: page.rows.window,
+      atSeq: page.seq,
+      atRevision: page.revision,
+      atLogEpoch: page.logEpoch,
+      hasMore: true,
+    };
+  };
+  const layer = new SessionDataLayer({ transport, keepWarmMs: 0 });
+  const lease = layer.acquire(spec.hostSessionId);
+  try {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const loading = lease.store.loadOlder(200);
+    await pending;
+    publish(spec, {
+      ...turn(spec.hostSessionId, events.length + 1),
+      turnId: "turn-1",
+      kind: "subagent.updated",
+      childSessionId: "late-child",
+      status: "finished",
+      summary: "new",
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    held?.();
+    await loading;
+    // Refresh + retry are read-only asynchronous work, not prompt replay.
+    for (let i = 0; i < 10 && lease.store.getState().snapshot?.rows.window[0]?.rowId !== 1; i++)
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    const snapshot = lease.store.getState().snapshot;
+    assert.equal(snapshot?.rows.window[0]?.rowId, 1);
+    const child = snapshot?.rows.window.find((row) => row.kind === "subagent");
+    assert.equal(child?.kind === "subagent" ? child.summaryText : null, "new");
+    assert.ok(lease.store.countProjectionRows() <= 2000);
+  } finally {
+    lease.release();
+    layer.dispose();
+    transport.dispose();
+  }
 });
 
 test("new subscription generation discards an older-page response from its predecessor", async () => {

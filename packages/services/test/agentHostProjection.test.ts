@@ -71,8 +71,9 @@ test("legacy terminal-only, repeated and late child facts remain readable withou
     event(5, "subagent.updated", { turnId: "t1", childSessionId: "old", status: "finished", summary: "updated" }),
     event(6, "turn.finished", { turnId: "t2", outcome: "success" }),
   ];
-  const snapshot = projectHostConversation({ spec, runtimeEpoch: epoch, events: facts, rowRange: { beforeRowId: 2, limit: 1 } });
+  const snapshot = projectHostConversation({ spec, runtimeEpoch: epoch, events: facts, windowSize: 1, rowRange: { beforeRowId: 2, limit: 1 } });
   assert.equal(snapshot.rows.totalCount, 3);
+  assert.equal(snapshot.rows.historicalRevision, 5); // late old-child rewrite is outside canonical live tail
   const page = projectHostConversation({ spec, runtimeEpoch: epoch, events: facts, rowRange: { beforeRowId: 3, limit: 1 } });
   const child = page.rows.window[0];
   assert.equal(child?.kind, "subagent");
