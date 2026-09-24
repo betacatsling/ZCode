@@ -15,7 +15,14 @@ class QuestionHarness extends MockHarness {
   #id = "";
   #turn = "";
   #settle?: () => void;
+  delayAnswerEvent = false;
   answers: string[] = [];
+  settleSendWithoutSourceResolution() { this.#settle?.(); }
+  confirmAnswer() {
+    this.#emit("question.answered", { interactionId: "question-1" });
+    this.#emit("turn.finished", { outcome: "success" });
+    this.#settle?.();
+  }
   override subscribe(_id: string, listener: (event: AgentEvent) => void) {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
@@ -37,9 +44,7 @@ class QuestionHarness extends MockHarness {
   }
   async answerInteraction(command: Extract<AgentCommand, { type: "answerInteraction" }>) {
     this.answers.push(command.answer);
-    this.#emit("question.answered", { interactionId: command.interactionId });
-    this.#emit("turn.finished", { outcome: "success" });
-    this.#settle?.();
+    if (!this.delayAnswerEvent) this.confirmAnswer();
   }
   setEpoch(epoch: string) { this.#epoch = epoch; }
 }
@@ -72,6 +77,56 @@ test("Host journals a question before answering, rejects permission masquerade/s
     await host.whenIdle();
     assert.deepEqual(adapter.answers, ["a"]);
     assert.equal(host.snapshot().pendingInteractions.length, 0);
+  } finally {
+    await host?.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("two command IDs cannot answer one unresolved question; restart keeps reservation and receipts", async () => {
+  const root = await mkdtemp(join(tmpdir(), "zcode-question-reservation-"));
+  const worktree = join(root, "tree");
+  await mkdir(worktree);
+  const adapter = new QuestionHarness();
+  adapter.delayAnswerEvent = true;
+  const registry = new HarnessRegistry();
+  registry.register(adapter);
+  const spec = { schemaVersion: 2 as const, hostSessionId: "q", projectId: "p", workspaceId: "w", execution: {
+    targetId: "local", workspaceIdentity: "w", worktreePath: worktree, worktreeGeneration: "g", cwdRelativeToWorktree: ".",
+  }, harness: { id: "mock", adapterVersion: "1.0.0" }, modelBinding: { kind: "host-managed" as const, selection: { providerId: "p", modelId: "m" } } };
+  const options = { root: join(root, "journals"), spec, target: { id: "local", kind: "local" as const, platform: "darwin" as const, available: true }, registry,
+    catalog: { fingerprint: "f", validateSelection: () => ({ ok: true as const }) } };
+  let host: SessionHost | undefined;
+  try {
+    host = await SessionHost.create(options);
+    adapter.setEpoch(host.binding.runtimeEpoch);
+    assert.equal((await host.dispatch({ type: "send", hostSessionId: "q", turnId: "t", commandId: "send", text: "ask" })).status, "accepted");
+    await host.whenEventsRecorded();
+    const answer = { type: "answerInteraction" as const, commandId: "first", hostSessionId: "q", runtimeEpoch: host.binding.runtimeEpoch,
+      turnId: "t", interactionId: "question-1", answer: "a" };
+    const alternate = { ...answer, commandId: "second", answer: "b" };
+    const [first, second] = await Promise.all([host.dispatch(answer), host.dispatch(alternate)]);
+    assert.equal(first.status, "completed");
+    assert.deepEqual(second, { commandId: "second", status: "execution-unknown", reasonCode: "execution-unknown" });
+    assert.equal((await host.dispatch(answer)).status, "duplicate");
+    assert.deepEqual(adapter.answers, ["a"]);
+    assert.equal(host.snapshot().pendingInteractions[0]?.kind, "userInput");
+    adapter.settleSendWithoutSourceResolution();
+    await host.whenIdle();
+    await host.close();
+    host = undefined;
+
+    assert.equal((await SessionHost.queryCommandHistory(options.root, spec, "first"))?.status, "completed");
+    assert.equal((await SessionHost.queryCommandHistory(options.root, spec, "second"))?.status, "execution-unknown");
+    host = await SessionHost.open(options);
+    assert.equal(host.snapshot().pendingInteractions[0]?.kind, "userInput");
+    assert.equal(host.queryCommand("first")?.status, "completed");
+    assert.equal((await host.dispatch({ ...answer, commandId: "after-restart", answer: "c" })).status, "execution-unknown");
+    assert.deepEqual(adapter.answers, ["a"]);
+    adapter.confirmAnswer();
+    await host.whenEventsRecorded();
+    assert.equal(host.snapshot().pendingInteractions.length, 0);
+    assert.equal((await host.dispatch({ ...answer, commandId: "stale-after-source" })).reasonCode, "stale-interaction");
   } finally {
     await host?.close();
     await rm(root, { recursive: true, force: true });
