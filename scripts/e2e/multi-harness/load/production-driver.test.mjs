@@ -60,7 +60,7 @@ for(const delivery of ['desktop-continuous','web-remote-replayable']) test(`real
       assert.equal((await owner.ownerRows('synthetic-0',1)).length,1);
       const raw=await readFile(join(input.root,'load-catalog.json'),'utf8');
       assert.match(raw,/load-workspace-0/);
-    } finally {await owner.close();}
+    } finally {await owner.close(); assert.deepEqual(JSON.parse(await readFile(join(input.root,'driver-cleanup.json'),'utf8')),{hostClosed:true,catalogClosed:true,targetClosed:true,ownedChildProcesses:0,ownerLocks:0});}
   });
 });
 
@@ -92,6 +92,6 @@ test('50 discovered real Git worktrees and 10 durable Host sessions across five 
       for(const session of sessions) assert.equal((await owner.ownerRows(session.id)).length,3);
       await owner.detach();
       assert.deepEqual(await owner.reconnect(),{replayedWithoutResend:true,caughtUp:true});
-    } finally {await owner.close();}
+    } finally {await owner.close(); assert.deepEqual(JSON.parse(await readFile(join(input.root,'driver-cleanup.json'),'utf8')),{hostClosed:true,catalogClosed:true,targetClosed:true,ownedChildProcesses:0,ownerLocks:0});}
   });
 });

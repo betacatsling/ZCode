@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { realpath } from 'node:fs/promises';
+import { realpath, readdir, writeFile } from 'node:fs/promises';
 import { relative, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -172,7 +172,14 @@ export async function createProductionBackend(input) {
         return {replayedWithoutResend:true,caughtUp:true};
       },
       get observed() {return {ownerEvents,liveCursor:new Map(liveCursor)};},
-      async close() {unsubscribe?.(); try {await host?.close();} finally {try {await catalog?.close();} finally {await target?.close(); unregister();}}},
+      async close() {
+        unsubscribe?.();
+        try {await host?.close();} finally {try {await catalog?.close();} finally {await target?.close(); unregister();}}
+        const files=[...(await readdir(join(runRoot,'host-journal'))),...(await readdir(join(runRoot,'target-owner'))),...(await readdir(runRoot)).filter(name=>name==='load-catalog.json.lock')];
+        if (files.some(name=>name.endsWith('.lock') || name.endsWith('.owner'))) throw new Error('owned Host/Catalog/Target lease remains after close');
+        // No driver-owned process is spawned. Git fixture children belong to runner and have exited before open.
+        await writeFile(join(runRoot,'driver-cleanup.json'),JSON.stringify({hostClosed:true,catalogClosed:true,targetClosed:true,ownedChildProcesses:0,ownerLocks:0})+'\n');
+      },
     };
     return source;
   } catch (error) {
