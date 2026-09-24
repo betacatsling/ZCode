@@ -29,7 +29,7 @@ function safeGatewayUrl(raw: string): string {
   return url.toString().replace(/\/$/, "");
 }
 
-async function probeVersion(
+export async function probeCodexVersion(
   command: string,
   start: typeof spawn,
   cwd: string,
@@ -78,7 +78,8 @@ export async function launchCodex(
   if (!options.gatewayToken) throw new Error("Codex Gateway token is required");
   const url = safeGatewayUrl(options.gatewayUrl);
   await mkdir(options.sessionHome, { recursive: true, mode: 0o700 });
-  await mkdir(join(options.sessionHome, "codex-home"), { mode: 0o700 });
+  // 修复原因：每个 turn 重启 app-server 必须复用同一私有 CODEX_HOME 才能恢复原生 thread。
+  await mkdir(join(options.sessionHome, "codex-home"), { recursive: true, mode: 0o700 });
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH ?? "/usr/bin:/bin",
     LANG: "C.UTF-8",
@@ -88,7 +89,7 @@ export async function launchCodex(
   };
   const start = options.spawnProcess ?? spawn;
   const executable = options.executable ?? "codex";
-  await probeVersion(executable, start, options.cwd, env);
+  await probeCodexVersion(executable, start, options.cwd, env);
   const args = [
     "app-server",
     "--stdio",
