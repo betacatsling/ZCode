@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { CompactTrigger, createSessionId, type ModelInputMessage } from "@zcode/contracts";
 import { selectCompactEntries } from "../runtime/helpers/compact-selection.js";
+import {
+  assertCompactDeveloperPrefix,
+  buildPostCompactRuntimeEntries,
+} from "../runtime/helpers/compact.js";
 import { buildProviderRequestMessages } from "../runtime/helpers/provider-request-messages.js";
 import { buildContextHistoryEntries } from "../runtime/methods/context-history-entries.js";
 import {
@@ -117,6 +121,42 @@ test("request projection never bubbles a reminder across developer", () => {
   assert.deepEqual(
     midSystem.messages.find((message) => message.role === "developer")?.content,
     developer.content,
+  );
+});
+
+test("interleaved developer instructions fail closed before compaction or history mutation", () => {
+  const entries: RuntimeMessageEntry[] = [
+    { message: system },
+    { message: user },
+    { message: { role: "assistant", content: "First reply" } },
+    { message: developer },
+    { message: { role: "user", content: "Next question" } },
+    { message: { role: "assistant", content: "Second reply" } },
+    { message: { role: "developer", content: "Second ordered instruction" } },
+    { message: { role: "user", content: "Third question" } },
+    { message: { role: "assistant", content: "Third reply" } },
+  ];
+  const projected = buildProviderRequestMessages({ entries, applyCacheControl: false });
+  assert.deepEqual(
+    projected.messages.map((message) => message.role),
+    entries.map((entry) => entry.message.role),
+  );
+  assert.equal(projected.messages[6]?.content, "Second ordered instruction");
+  const original = wire(entries.map((entry) => entry.message));
+  assert.throws(() => assertCompactDeveloperPrefix(entries), /interleaved developer/);
+  assert.throws(
+    () =>
+      buildPostCompactRuntimeEntries(entries, { message: { role: "user", content: "Summary" } }),
+    /interleaved developer/,
+  );
+  assert.equal(wire(entries.map((entry) => entry.message)), original);
+  const plain = entries.filter((entry) => entry.message.role !== "developer");
+  assert.doesNotThrow(() => assertCompactDeveloperPrefix(plain));
+  assert.deepEqual(
+    buildPostCompactRuntimeEntries(plain, { message: { role: "user", content: "Summary" } }).map(
+      (entry) => entry.message.role,
+    ),
+    ["system", "user"],
   );
 });
 
