@@ -70,6 +70,8 @@ export class Supervisor {
     | undefined;
   private activeRelease: ReleaseManifest | null = null;
   private fallbackMaintenance: { release(): Promise<void> } | undefined;
+  private maintenanceInFlight = false;
+  private maintenanceHeld = false;
 
   public constructor(private readonly options: SupervisorOptions) {
     this.layout = options.layout ?? resolveServerLayout();
@@ -481,6 +483,7 @@ export class Supervisor {
 
   private clearCoreScopedStatus(): void {
     this.fallbackMaintenance = undefined;
+    this.maintenanceHeld = false;
     this.host = null;
     this.port = null;
     this.startedAt = null;
@@ -491,6 +494,27 @@ export class Supervisor {
 
   /** Freeze admissions before reading fresh native + external activity; a snapshot alone races new commands. */
   private async beginMaintenance(): Promise<{ unsafeCount: number; release(): Promise<void> }> {
+    // 中文：两条控制连接可同时进入 begin；直到 IPC 回应前都必须预留单个冻结请求。
+    // fallback 持有期间 update/uninstall 也不能共用或偷释放它的 lease。
+    if (this.maintenanceInFlight || this.maintenanceHeld)
+      throw new Error("Core maintenance operation already in progress");
+    this.maintenanceInFlight = true;
+    try {
+      const lease = await this.requestMaintenance();
+      this.maintenanceHeld = true;
+      return {
+        unsafeCount: lease.unsafeCount,
+        release: async () => {
+          await lease.release();
+          this.maintenanceHeld = false;
+        },
+      };
+    } finally {
+      this.maintenanceInFlight = false;
+    }
+  }
+
+  private async requestMaintenance(): Promise<{ unsafeCount: number; release(): Promise<void> }> {
     const core = this.core;
     if (!core || this.state !== "ready") throw new Error("Core unavailable for maintenance");
     const requestId = randomUUID();
@@ -698,9 +722,15 @@ export class Supervisor {
         }
         log.info("uninstall confirmed, stopping server");
         try {
-          this.startAcknowledgedLifecycleOperation("uninstall", () =>
-            this.stopInternal("uninstall"),
-          );
+          this.startAcknowledgedLifecycleOperation("uninstall", async () => {
+            try {
+              await this.stopInternal("uninstall");
+            } finally {
+              // 中文：停止失败且 Core 仍存活时释放原 lease，避免冻结永久遗留；
+              // Core 已终止则旧代际 lease 不可触及下一代。
+              await maintenance.release();
+            }
+          });
         } catch (error) {
           await maintenance.release();
           throw error;

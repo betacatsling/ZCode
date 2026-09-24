@@ -36,6 +36,34 @@ test("maintenance freezes before fresh activity and releases only matching lease
   assert.deepEqual(order, ["freeze", "read", "release"]);
 });
 
+test("shutdown during asynchronous freeze releases the acquired fence without leaking a lease", async () => {
+  let finishFreeze!: () => void;
+  const frozen = new Promise<void>((resolve) => {
+    finishFreeze = resolve;
+  });
+  let released = 0;
+  const gate = new CoreMaintenanceAdmission({
+    async freezeAdmissions() {
+      await frozen;
+      return {
+        async release() {
+          released++;
+        },
+      };
+    },
+    async readActivity() {
+      throw new Error("activity must not be read after shutdown");
+    },
+  });
+  const begin = gate.begin();
+  const closing = gate.releaseHeld();
+  finishFreeze();
+  await assert.rejects(begin, /Core closed/);
+  await closing;
+  assert.equal(released, 1);
+  await assert.rejects(gate.begin(), /Core closing/);
+});
+
 test("missing source blocks; failed activity read returns uncertain while retaining lease", async () => {
   await assert.rejects(new CoreMaintenanceAdmission(undefined).begin(), /unavailable/);
   let released = false;
