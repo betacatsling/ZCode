@@ -30,6 +30,8 @@ export interface ModelOptions {
 
 export interface ModelRequest {
   messages: ModelInputMessage[];
+  /** Per-request OpenAI Responses cache affinity; unsupported API routes reject before dispatch. */
+  promptCacheKey?: string;
   tools?: ModelToolContract[];
   responseJsonSchema?: JsonSchema;
   options?: ModelOptions;

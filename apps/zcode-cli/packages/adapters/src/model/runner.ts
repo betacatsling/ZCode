@@ -190,6 +190,7 @@ export class AiSdkModelAdapter {
           : undefined;
       return {
         messages: request.messages,
+        promptCacheKey: request.promptCacheKey,
         tools: request.tools,
         responseJsonSchema: request.responseJsonSchema,
         abortSignal: request.abortSignal,
