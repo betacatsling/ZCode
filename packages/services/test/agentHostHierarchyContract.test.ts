@@ -157,6 +157,24 @@ test("hidden workspace still contributes stable project attention and offline fr
       }),
     /invalid-summary-identity/,
   );
+  for (const key of ["workspaceSummaries", "projectSummaries"] as const)
+    assert.throws(
+      () =>
+        parseSidebarSnapshot({
+          ...hierarchyFixture,
+          [key]: [...hierarchyFixture[key], hierarchyFixture[key][0]],
+        }),
+      /invalid-summary-identity/,
+    );
+  assert.equal(
+    parseSidebarSnapshot({
+      ...hierarchyFixture,
+      workspaces: hierarchyFixture.workspaces.map((w, index) =>
+        index === 0 ? { ...w, workspaceIdentity: "remote:" + "a".repeat(300) } : w,
+      ),
+    }).workspaces[0]?.workspaceIdentity.length,
+    307,
+  );
 });
 
 test("per-turn binding retains selected route and rejects silent native fallback", () => {

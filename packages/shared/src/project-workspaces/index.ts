@@ -8,6 +8,9 @@ export const projectSchema = z.strictObject({
   id,
   name: z.string().trim().min(1),
   sortOrder: z.number().int().nonnegative(),
+  pinned: z.boolean().optional(),
+  hidden: z.boolean().optional(),
+  archived: z.boolean().optional(),
   iconAssetId: iconAssetIdSchema.optional(),
   defaultWorkspaceId: id.optional(),
 });
@@ -28,7 +31,8 @@ export const worktreeWorkspaceSchema = z.strictObject({
   title: z.string().trim().min(1),
   sortOrder: z.number().int().nonnegative(),
   hidden: z.boolean(),
-  workspaceIdentity: id,
+  archived: z.boolean().optional(),
+  workspaceIdentity: z.string().trim().min(1).max(2048),
   worktreePath: path,
   worktreeGeneration: id,
   isMainWorktree: z.boolean(),
@@ -40,6 +44,16 @@ export const worktreeWorkspaceSchema = z.strictObject({
   lifecycle: z.enum(["active", "archived", "missing", "removed", "needsVerification"]),
 });
 export type WorktreeWorkspace = z.infer<typeof worktreeWorkspaceSchema>;
+/** A target-verified discovery result is not yet a catalog workspace or permanent identity. */
+export const unadoptedWorktreeCandidateSchema = worktreeWorkspaceSchema
+  .pick({
+    worktreePath: true,
+    worktreeGeneration: true,
+    isMainWorktree: true,
+    head: true,
+  })
+  .extend({ repositoryBindingId: id, workspaceIdentity: z.string().trim().min(1).max(2048) });
+export type UnadoptedWorktreeCandidate = z.infer<typeof unadoptedWorktreeCandidateSchema>;
 export const agentSessionSchema = z.strictObject({
   schemaVersion: z.literal(1),
   id,
@@ -83,6 +97,8 @@ export const projectSummarySchema = z.strictObject({
 export type ProjectSummary = z.infer<typeof projectSummarySchema>;
 export const sidebarSnapshotSchema = z.strictObject({
   schemaVersion: z.literal(1),
+  /** Monotonic within one catalog owner epoch; clients refresh after reconnect. */
+  revision: z.number().int().nonnegative().optional(),
   projects: z.array(projectSchema),
   bindings: z.array(repositoryBindingSchema),
   workspaces: z.array(worktreeWorkspaceSchema),
@@ -125,8 +141,10 @@ export function parseSidebarSnapshot(value: unknown): SidebarSnapshot {
     if (workspaces.get(session.workspaceId)?.projectId !== session.projectId)
       throw new Error("invalid-ownership");
   if (
+    snapshot.workspaceSummaries.length !== snapshot.workspaces.length ||
     new Set(snapshot.workspaceSummaries.map(({ workspaceId }) => workspaceId)).size !==
       snapshot.workspaces.length ||
+    snapshot.projectSummaries.length !== snapshot.projects.length ||
     new Set(snapshot.projectSummaries.map(({ projectId }) => projectId)).size !==
       snapshot.projects.length
   )
@@ -172,14 +190,27 @@ export function parseSidebarSnapshot(value: unknown): SidebarSnapshot {
 
 export const worktreeOperationSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("discover"), repositoryBindingId: id }),
-  z.strictObject({ kind: z.literal("adopt"), repositoryBindingId: id, worktreePath: path }),
+  z.strictObject({
+    kind: z.literal("adopt"),
+    repositoryBindingId: id,
+    workspaceId: id,
+    title: z.string().trim().min(1),
+    worktreePath: path,
+  }),
   z.strictObject({
     kind: z.literal("create"),
     repositoryBindingId: id,
+    workspaceId: id,
+    title: z.string().trim().min(1),
     baseRef: id,
     branch: id,
     worktreePath: path,
   }),
-  z.strictObject({ kind: z.literal("remove"), workspaceId: id, expectedGeneration: id }),
+  z.strictObject({
+    kind: z.literal("remove"),
+    workspaceId: id,
+    expectedGeneration: id,
+    confirmation: z.literal(true),
+  }),
 ]);
 export type WorktreeOperation = z.infer<typeof worktreeOperationSchema>;
