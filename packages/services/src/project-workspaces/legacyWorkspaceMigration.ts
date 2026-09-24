@@ -1,86 +1,33 @@
 import { z } from "zod";
-import { cwdRelativeToWorktreeSchema, modelBindingRequestSchema } from "@zcode/shared/agent-host";
-import {
-  repositoryBindingSchema,
-  worktreeWorkspaceSchema,
-  type RepositoryBinding,
-  type WorktreeWorkspace,
-} from "@zcode/shared/project-workspaces";
+import { cwdRelativeToWorktreeSchema } from "@zcode/shared/agent-host";
+import { repositoryBindingSchema, worktreeWorkspaceSchema } from "@zcode/shared/project-workspaces";
 import { ProfileFileOwner } from "./profilePersistence.js";
-
-/** Adapter exports ALL persistent task-index rows, not current tabs or paginated sidebar queries.
- * Required native fields: workspace_key (identity isolation), workspace_path, task_id,
- * meta_json/model selection and exact native cwd (or explicit unknown). Adapter derives a
- * stable execution target from trusted storage; missing remote target/model/cwd stays pending.
- * SQLite backup must use its own consistency mechanism (not copying a live WAL main file).
- */
-export const legacyRecordSchema = z.strictObject({
-  id: z.string().min(1),
-  nativeSessionId: z.string().min(1),
-  targetId: z.string().min(1).optional(),
-  workspaceIdentity: z.string().min(1).optional(),
-  workspacePath: z.string().min(1),
-  cwdRelativeToWorktree: cwdRelativeToWorktreeSchema.optional(),
-  harnessId: z.string().min(1).optional(),
-  modelBinding: modelBindingRequestSchema.optional(),
-});
-export type LegacyRecord = z.infer<typeof legacyRecordSchema>;
-export const legacyExportSchema = z.strictObject({
-  sourceSchemaVersion: z.number().int().positive(),
-  profileId: z.string().min(1),
-  revision: z.string().min(1),
-  checksum: z.string().min(1),
-  records: z.array(legacyRecordSchema),
-});
-export type LegacyExport = z.infer<typeof legacyExportSchema>;
-export const legacyBackupSchema = legacyExportSchema
-  .pick({
-    sourceSchemaVersion: true,
-    profileId: true,
-    revision: true,
-    checksum: true,
-  })
-  .extend({ backupId: z.string().min(1) });
-export type LegacyBackup = z.infer<typeof legacyBackupSchema>;
-export interface LegacyPersistentSessionIndexReader {
-  /** Consistent native-owner export of complete persisted index, including closed tabs. */
-  exportAll(): Promise<LegacyExport>;
-  /** Durable verified backup of the SAME consistent export before publishing any mapping. */
-  backup(exported: LegacyExport): Promise<LegacyBackup>;
-  /** Check recoverability before rollback. Does not edit native sessions. */
-  verifyBackup(backup: LegacyBackup): Promise<boolean>;
-}
-const mappingSchema = z.strictObject({
-  legacyId: z.string().min(1),
-  nativeSessionId: z.string().min(1),
-  projectId: z.string().min(1),
-  workspaceId: z.string().min(1),
-  targetId: z.string().min(1),
-  worktreeGeneration: z.string().min(1),
-  cwdRelativeToWorktree: cwdRelativeToWorktreeSchema,
-  modelBinding: modelBindingRequestSchema,
-});
+import {
+  legacyExportSchema,
+  legacyBackupSchema,
+  mappingSchema,
+  type LegacyMapping,
+  type LegacyBackup,
+  type LegacyExport,
+  type LegacyPersistentSessionIndexReader,
+  type LegacyTargetResolver,
+  type MigrationPreview,
+} from "./migrationContract.js";
+export { legacyRecordSchema, legacyExportSchema, legacyBackupSchema } from "./migrationContract.js";
+export type {
+  LegacyRecord,
+  LegacyExport,
+  LegacyBackup,
+  LegacyMapping,
+  LegacyPersistentSessionIndexReader,
+  LegacyTargetResolver,
+  MigrationPreview,
+} from "./migrationContract.js";
 const migrationSchema = z.strictObject({
   schemaVersion: z.literal(1),
   source: legacyBackupSchema,
   mappings: z.array(mappingSchema),
 });
-export type LegacyMapping = z.infer<typeof mappingSchema>;
-export interface LegacyTargetResolver {
-  /** No local filesystem fallback; failure becomes a pending record. */
-  resolve(record: LegacyRecord): Promise<
-    | {
-        binding: RepositoryBinding;
-        workspace: WorktreeWorkspace;
-      }
-    | undefined
-  >;
-}
-export interface MigrationPreview {
-  mapped: LegacyMapping[];
-  pending: { legacyId: string; reason: string }[];
-  source: LegacyExport;
-}
 function sameSource(a: LegacyBackup, b: LegacyExport): boolean {
   return (
     a.sourceSchemaVersion === b.sourceSchemaVersion &&
@@ -115,19 +62,29 @@ export class LegacyWorkspaceMigration {
   async close() {
     await this.owner.close();
   }
+  /** Public read-only references; the native owner remains the authority for every live fact. */
+  async listMappings(): Promise<readonly LegacyMapping[]> {
+    const raw = await this.owner.read();
+    if (raw === undefined) return [];
+    const persisted = migrationSchema.parse(raw);
+    if (!(await this.reader.verifyBackup(persisted.source)))
+      throw new Error("unverified-native-backup");
+    return persisted.mappings;
+  }
   async dryRun(): Promise<MigrationPreview> {
     const source = legacyExportSchema.parse(await this.reader.exportAll());
-    const ids = source.records.map(({ id }) => id);
-    if (new Set(ids).size !== ids.length) throw new Error("duplicate-legacy-id");
+    const ids = source.records.map(({ workspaceKey, nativeSessionId }) =>
+      JSON.stringify([workspaceKey, nativeSessionId]),
+    );
+    if (
+      new Set(ids).size !== ids.length ||
+      new Set(source.records.map(({ id }) => id)).size !== source.records.length
+    )
+      throw new Error("duplicate-legacy-id");
     const mapped: LegacyMapping[] = [];
     const pending: MigrationPreview["pending"] = [];
     for (const record of source.records) {
-      if (
-        !record.targetId ||
-        !record.cwdRelativeToWorktree ||
-        !record.harnessId ||
-        !record.modelBinding
-      ) {
+      if (!record.targetId || !record.nativeCwd || !record.harnessId || !record.modelBinding) {
         pending.push({ legacyId: record.id, reason: "missing-native-metadata" });
         continue;
       }
@@ -138,13 +95,14 @@ export class LegacyWorkspaceMigration {
           continue;
         }
         const binding = repositoryBindingSchema.parse(verified.binding);
+        const cwdRelativeToWorktree = cwdRelativeToWorktreeSchema.parse(
+          verified.cwdRelativeToWorktree,
+        );
         const workspace = worktreeWorkspaceSchema.parse(verified.workspace);
         if (
           binding.executionTargetId !== record.targetId ||
           workspace.repositoryBindingId !== binding.id ||
           workspace.projectId !== binding.projectId ||
-          workspace.workspaceIdentity !==
-            (record.workspaceIdentity?.trim() || record.workspacePath) ||
           workspace.lifecycle !== "active"
         )
           throw new Error("target-mismatch");
@@ -152,11 +110,13 @@ export class LegacyWorkspaceMigration {
           mappingSchema.parse({
             legacyId: record.id,
             nativeSessionId: record.nativeSessionId,
+            sourceWorkspaceKey: record.workspaceKey,
+            sourceWorkspacePath: record.workspacePath,
             projectId: binding.projectId,
             workspaceId: workspace.id,
             targetId: record.targetId,
             worktreeGeneration: workspace.worktreeGeneration,
-            cwdRelativeToWorktree: record.cwdRelativeToWorktree,
+            cwdRelativeToWorktree,
             modelBinding: record.modelBinding,
           }),
         );
@@ -175,12 +135,18 @@ export class LegacyWorkspaceMigration {
     const existing = raw === undefined ? undefined : migrationSchema.parse(raw);
     if (existing && !sameSource(existing.source, preview.source))
       throw new Error("legacy-index-changed");
-    const byId = new Map(existing?.mappings.map((row) => [row.legacyId, row]));
+    const byId = new Map(
+      existing?.mappings.map((row) => [
+        JSON.stringify([row.sourceWorkspaceKey, row.nativeSessionId]),
+        row,
+      ]),
+    );
     for (const row of preview.mapped) {
-      const previous = byId.get(row.legacyId);
+      const key = JSON.stringify([row.sourceWorkspaceKey, row.nativeSessionId]);
+      const previous = byId.get(key);
       if (previous && JSON.stringify(previous) !== JSON.stringify(row))
         throw new Error("migration-mapping-conflict");
-      byId.set(row.legacyId, row);
+      byId.set(key, row);
     }
     // 中文：备份必须由原生持久化 owner 验证，不能直接复制正在写入的 SQLite/WAL 主文件。
     const backup =
@@ -188,7 +154,11 @@ export class LegacyWorkspaceMigration {
     if (!sameSource(backup, preview.source) || !(await this.reader.verifyBackup(backup)))
       throw new Error("unverified-native-backup");
     const current = legacyExportSchema.parse(await this.reader.exportAll());
-    if (!sameSource(backup, current)) throw new Error("legacy-index-changed");
+    if (
+      !sameSource(backup, current) ||
+      JSON.stringify(preview.source.records) !== JSON.stringify(current.records)
+    )
+      throw new Error("legacy-index-changed");
     await this.owner.write(
       migrationSchema.parse({ schemaVersion: 1, source: backup, mappings: [...byId.values()] }),
     );
