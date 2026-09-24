@@ -46,7 +46,7 @@ export class SessionHost {
   readonly #events: EventJournal;
   readonly #listeners = new Set<(event: AgentEvent) => void>();
   readonly #active = new Set<Promise<void>>();
-  readonly #interactions = new Map<string, string>();
+  readonly #interactions = new Map<string, { turnId: string; kind: "permission" | "question" }>();
   readonly #pendingTools = new Set<string>();
   #backendUnknown = false;
   #activeTurn?: string;
@@ -233,8 +233,8 @@ export class SessionHost {
         for (const [id, turnId] of pendingTools) if (turnId === event.turnId) pendingTools.delete(id);
         if (event.outcome === "unknown") backendUnknown = true;
       }
-      if (event.kind === "interaction.requested") pendingInteractions.set(event.interactionId, event.turnId);
-      if (event.kind === "interaction.resolved") pendingInteractions.delete(event.interactionId);
+      if (event.kind === "interaction.requested" || event.kind === "question.requested") pendingInteractions.set(event.interactionId, event.turnId);
+      if (event.kind === "interaction.resolved" || event.kind === "question.answered") pendingInteractions.delete(event.interactionId);
       if (event.kind === "tool.started") pendingTools.set(event.toolCallId, event.turnId);
       if (event.kind === "tool.finished") pendingTools.delete(event.toolCallId);
       if (event.kind === "session.status" && (event.state === "execution-unknown" || event.state === "interrupted")) backendUnknown = true;
@@ -353,13 +353,22 @@ export class SessionHost {
           await this.#adapter.cancelTurn(command);
           break;
         case "resolveInteraction":
-          if (!this.#isCurrentTurn(command) || this.#interactions.get(command.interactionId) !== command.turnId) {
+          if (!this.#isCurrentTurn(command) || this.#interactions.get(command.interactionId)?.turnId !== command.turnId || this.#interactions.get(command.interactionId)?.kind !== "permission") {
             return this.#reject(command, "stale-interaction", "interaction or epoch changed");
           }
           if ((await this.#adapter.capabilities(this.#target)).approvals.support !== "supported")
             return this.#reject(command, "unsupported", "approvals unavailable");
           await this.#adapter.resolveInteraction(command);
           break;
+        case "answerInteraction": {
+          if (!this.#isCurrentTurn(command) || this.#interactions.get(command.interactionId)?.turnId !== command.turnId || this.#interactions.get(command.interactionId)?.kind !== "question")
+            return this.#reject(command, "stale-interaction", "question or epoch changed");
+          const capabilities = await this.#adapter.capabilities(this.#target);
+          if (!("questions" in capabilities) || capabilities.questions?.support !== "supported" || !this.#adapter.answerInteraction)
+            return this.#reject(command, "unsupported", "native question answering is not available");
+          await this.#adapter.answerInteraction(command);
+          break;
+        }
         case "detach": // Closing a UI subscription never touches the target worker.
         case "viewHistory":
           break;
@@ -381,6 +390,13 @@ export class SessionHost {
       await this.#publishSummary();
       return done;
     } catch (error) {
+      if (command.type === "answerInteraction") {
+        // 修复后端已接收答案但宿主未确认的窗口：不能声称安全拒绝、更不能自动重试。
+        const unknown: AgentCommandReceipt = { commandId: command.commandId, status: "execution-unknown", reasonCode: "execution-unknown" };
+        await this.#commands.finish(command.commandId, unknown);
+        await this.#publishSummary();
+        return unknown;
+      }
       return this.#reject(command, "backend-failure", error instanceof Error ? error.message : "backend failed");
     }
   }
@@ -471,8 +487,17 @@ export class SessionHost {
     if (event.kind === "tool.finished") this.#pendingTools.delete(event.toolCallId);
     if (event.kind === "session.status" && (event.state === "execution-unknown" || event.state === "interrupted")) this.#backendUnknown = true;
     if (event.kind === "session.status" && event.state === "idle") this.#backendUnknown = false;
-    if (event.kind === "interaction.requested") this.#interactions.set(event.interactionId, event.turnId);
-    if (event.kind === "interaction.resolved") this.#interactions.delete(event.interactionId);
+    if (event.kind === "interaction.requested" || event.kind === "question.requested") {
+      if (!this.#activeTurn || this.#activeTurn !== event.turnId || this.#interactions.has(event.interactionId))
+        throw new Error("stale or duplicate interaction source event");
+      this.#interactions.set(event.interactionId, { turnId: event.turnId, kind: event.kind === "interaction.requested" ? "permission" : "question" });
+    }
+    if (event.kind === "interaction.resolved" || event.kind === "question.answered") {
+      const pending = this.#interactions.get(event.interactionId);
+      if (pending?.turnId !== event.turnId || pending.kind !== (event.kind === "interaction.resolved" ? "permission" : "question"))
+        throw new Error("stale or mismatched interaction source resolution");
+      this.#interactions.delete(event.interactionId);
+    }
     if (event.kind === "turn.finished") {
       if (this.#activeTurn && event.turnId !== this.#activeTurn) throw new Error("out-of-order turn completion");
       this.#activeTurn = undefined;

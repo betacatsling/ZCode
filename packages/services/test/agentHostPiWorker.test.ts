@@ -19,6 +19,9 @@ const fakeModel = {
     const hasToolResult = request.messages.some((item) => item.role === "tool");
     yield { type: "start", modelId: "model-a" };
     if (!hasToolResult) {
+      yield { type: "reasoning_start", id: "visible-thinking" };
+      yield { type: "reasoning_delta", id: "visible-thinking", text: "Visible analysis" };
+      yield { type: "reasoning_end", id: "visible-thinking" };
       yield { type: "tool_input_start", id: "write-1", toolName: "write" };
       yield {
         type: "tool_input_delta",
@@ -37,7 +40,7 @@ const fakeModel = {
       yield {
         type: "finish",
         finishReason: "tool-calls",
-        usage: { inputTokens: 10, outputTokens: 5 },
+        usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 7, cacheWriteTokens: 2, reasoningTokens: 3 },
       };
     } else {
       yield { type: "text_start", id: "text-2" };
@@ -142,6 +145,12 @@ test(
         "completed",
       );
       await host.whenIdle();
+      const recorded = host.eventsSince(0);
+      assert.deepEqual(recorded.filter((row) => row.kind.startsWith("reasoning.")).map((row) => row.kind), ["reasoning.started", "reasoning.delta", "reasoning.finished"]);
+      assert.equal(host.snapshot().rows.window.find((row) => row.kind === "reasoning")?.text, "Visible analysis");
+      assert.deepEqual(host.snapshot().usage.cumulative, { inputTokens: 25, outputTokens: 8, cacheReadTokens: 7, cacheWriteTokens: 2 });
+      assert.equal(JSON.stringify(recorded).includes("thinkingSignature"), false);
+
       assert.equal(host.queryCommand("send-1")?.status, "completed");
       await assert.rejects(readFile(join(worktree, "denied.txt")), { code: "ENOENT" });
       assert.equal(

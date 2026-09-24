@@ -5,6 +5,9 @@ import {
   type PendingInteraction,
   type ToolCallRow,
   type TurnHeaderRow,
+  type ReasoningRow,
+  type SubagentRow,
+  type PlanState,
 } from "@zcode/shared/zcode-protocol-v4";
 import type { AgentEvent, LegacySessionSpec, SessionSpecV2 } from "@zcode/shared/agent-host";
 
@@ -26,6 +29,14 @@ export function projectHostConversation(input: {
   const messages = new Map<string, ConversationRow>();
   const tools = new Map<string, ToolCallRow>();
   const interactions = new Map<string, PendingInteraction>();
+  const reasoning = new Map<string, ReasoningRow>();
+  const children = new Map<string, SubagentRow>();
+  const accounted = new Map<string, { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; reasoning?: number; mode: "delta" | "absolute" }>();
+  let plan: PlanState | null = null;
+  let childrenRevision = 0;
+  let endedChildren = 0;
+  let cacheReadTokens = 0;
+  let cacheWriteTokens = 0;
   let activeTurn: string | undefined;
   let phase: ConversationSnapshot["control"]["phase"] = "draft";
   let errorCode: string | undefined;
@@ -91,6 +102,27 @@ export function projectHostConversation(input: {
         }
         break;
       }
+      case "reasoning.started": {
+        if (event.turnId !== activeTurn || reasoning.has(event.messageId)) throw new Error("duplicate or stale reasoning start");
+        const row: ReasoningRow = { ...base(event), kind: "reasoning", text: "", state: "streaming", assistantResponseId: event.messageId };
+        rows.push(row);
+        reasoning.set(event.messageId, row);
+        break;
+      }
+      case "reasoning.delta": {
+        const row = reasoning.get(event.messageId);
+        if (event.turnId !== activeTurn || !row || row.state !== "streaming") throw new Error("reasoning delta without active item");
+        row.text += event.text;
+        break;
+      }
+      case "reasoning.finished": {
+        const row = reasoning.get(event.messageId);
+        if (event.turnId !== activeTurn || !row || row.state !== "streaming") throw new Error("reasoning final without active item");
+        // 修复增量之后终帧重复追加：可见终稿替换增量，私有签名从未进入此投影。
+        row.text = event.text;
+        row.state = "complete";
+        break;
+      }
       case "tool.started": {
         if (event.turnId !== activeTurn || tools.has(event.toolCallId)) throw new Error("duplicate tool or wrong turn");
         const row: ToolCallRow = {
@@ -115,9 +147,24 @@ export function projectHostConversation(input: {
         });
         break;
       }
+      case "question.requested": {
+        if (event.turnId !== activeTurn || interactions.has(event.interactionId)) throw new Error("stale or duplicate question");
+        const anchor = event.toolCallId ? tools.get(event.toolCallId) : headers.get(event.turnId);
+        if (!anchor || anchor.turnId !== event.turnId) throw new Error("unmatched question anchor");
+        interactions.set(event.interactionId, { interactionId: event.interactionId, kind: "userInput", anchorRowId: anchor.rowId, createdAt: event.at,
+          payload: { kind: "userInput", prompt: event.prompt, freeText: event.freeText,
+            ...(event.options ? { options: event.options } : {}), ...(event.toolCallId ? { toolCallId: event.toolCallId } : {}) } });
+        break;
+      }
+      case "question.answered": {
+        const pending = interactions.get(event.interactionId);
+        if (event.turnId !== activeTurn || pending?.kind !== "userInput") throw new Error("stale question answer");
+        interactions.delete(event.interactionId);
+        break;
+      }
       case "interaction.resolved": {
         const pending = interactions.get(event.interactionId);
-        if (event.turnId !== activeTurn || !pending) throw new Error("stale approval resolution");
+        if (event.turnId !== activeTurn || pending?.kind !== "permission") throw new Error("stale approval resolution");
         const row = tools.get(pending.payload.kind === "permission" ? pending.payload.toolCallId : "");
         if (row) {
           row.approvalInteractionId = undefined;
@@ -145,6 +192,23 @@ export function projectHostConversation(input: {
         }
         break;
       }
+      case "usage.accounted": {
+        if (event.turnId !== activeTurn) throw new Error("usage outside active turn");
+        const key = `${event.turnId}:${event.sourceId}`;
+        const previous = accounted.get(key);
+        if (previous?.mode !== undefined && previous.mode !== event.accounting) throw new Error("usage accounting mode changed");
+        if (previous && event.accounting === "delta") throw new Error("duplicate usage delta source");
+        const metrics = { input: event.inputTokens, output: event.outputTokens, cacheRead: event.cacheReadTokens, cacheWrite: event.cacheWriteTokens, reasoning: event.reasoningTokens };
+        for (const metric of ["input", "output", "cacheRead", "cacheWrite", "reasoning"] as const) {
+          if (event.accounting === "absolute" && previous?.[metric] !== undefined && metrics[metric] === undefined) throw new Error("usage snapshot omitted prior metric");
+        }
+        inputTokens += (metrics.input ?? 0) - (previous?.input ?? 0);
+        outputTokens += (metrics.output ?? 0) - (previous?.output ?? 0);
+        cacheReadTokens += (metrics.cacheRead ?? 0) - (previous?.cacheRead ?? 0);
+        cacheWriteTokens += (metrics.cacheWrite ?? 0) - (previous?.cacheWrite ?? 0);
+        accounted.set(key, { ...metrics, mode: event.accounting });
+        break;
+      }
       case "usage.reported":
         inputTokens += event.inputTokens;
         outputTokens += event.outputTokens;
@@ -156,6 +220,7 @@ export function projectHostConversation(input: {
         header.endedAt = event.at;
         header.activeMs = Math.max(0, event.at - startedAt);
         for (const pending of interactions.keys()) interactions.delete(pending);
+        for (const row of reasoning.values()) if (row.turnId === event.turnId && row.state === "streaming") row.state = "interrupted";
         for (const row of tools.values()) {
           if (row.turnId === event.turnId && (row.status === "running" || row.status === "pendingApproval")) row.status = "cancelled";
         }
@@ -171,8 +236,32 @@ export function projectHostConversation(input: {
         lastErrorAt = event.at;
         phase = "error";
         break;
+      case "plan.itemsUpdated":
+        if (event.turnId !== activeTurn) throw new Error("plan outside active turn");
+        plan = { items: event.items, updatedAt: event.at };
+        break;
+      case "subagent.updated": {
+        if (event.turnId !== activeTurn) throw new Error("child outside active turn");
+        const existing = children.get(event.childSessionId);
+        if (event.status === "started") {
+          if (existing) throw new Error("duplicate child start");
+          const row: SubagentRow = { ...base(event), kind: "subagent", childSessionId: event.childSessionId,
+            // Source child ID is preserved; navigation still requires a trusted Host owner lookup.
+            subagentType: event.subagentType ?? event.childHarnessId ?? "unknown", status: "running", summaryText: event.summary ?? "",
+            ...(event.parentToolCallId ? { parentToolCallId: event.parentToolCallId } : {}), startedAt: event.at };
+          rows.push(row);
+          children.set(event.childSessionId, row);
+        } else {
+          if (!existing || existing.status !== "running") throw new Error("child completion without start");
+          existing.status = event.status === "finished" ? "success" : "failed";
+          existing.endedAt = event.at;
+          if (event.summary !== undefined) existing.summaryText = event.summary;
+          endedChildren++;
+        }
+        childrenRevision++;
+        break;
+      }
       case "plan.updated":
-      case "subagent.updated":
       case "extension.event":
         // Retained in the canonical journal. Uncertified rich UI is not fabricated here.
         break;
@@ -209,10 +298,10 @@ export function projectHostConversation(input: {
       thoughtLevels: [], followupMode: "queue", mode: "build",
     },
     modelTransition: null,
-    usage: { contextWindow: null, cumulative: { inputTokens, outputTokens, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+    usage: { contextWindow: null, cumulative: { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens } },
     queue: { items: [], autoDrain: true }, pendingInteractions: [...interactions.values()], pendingCommands: [], backgroundWorks: [],
-    subagents: { revision: 0, childSessionIds: [], running: [], endedTotal: 0 },
-    goal: null, plan: null, workspaceHookAdmission: null,
+    subagents: { revision: childrenRevision, childSessionIds: [], running: [...children.values()].filter((row) => row.status === "running").map((row) => ({ childSessionId: row.childSessionId!, subagentType: row.subagentType, title: row.summaryText || row.subagentType, status: "running" as const, ...(row.parentToolCallId ? { toolCallId: row.parentToolCallId } : {}), startedAt: row.startedAt })), endedTotal: endedChildren },
+    goal: null, plan, workspaceHookAdmission: null,
     rows: { window, totalCount: rows.length, firstRowId: window[0]?.rowId ?? null },
   });
 }

@@ -35,6 +35,6 @@ export const agentEventSchema = z.discriminatedUnion("kind", [
   z.strictObject({ ...turnEvent, kind: z.literal("turn.finished"), outcome: z.enum(["success", "cancelled", "failed", "unknown"]) }),
   z.strictObject({ ...eventBase, kind: z.literal("session.status"), state: z.enum(["idle", "running", "interrupted", "error", "execution-unknown"]) }),
   z.strictObject({ ...eventBase, kind: z.literal("session.error"), code: z.string().min(1), message: z.string().max(1024) }),
-  z.strictObject({ ...eventBase, kind: z.literal("extension.event"), namespace: z.string().regex(/^[a-z][a-z0-9.-]+$/), version: z.number().int().positive(), payload: z.string().max(4096) }),
+  z.strictObject({ ...eventBase, kind: z.literal("extension.event"), namespace: z.string().regex(/^[a-z][a-z0-9.-]+$/), version: z.number().int().positive(), payload: z.unknown() }),
 ]);
 export type AgentEvent = z.infer<typeof agentEventSchema>;

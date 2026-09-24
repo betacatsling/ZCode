@@ -75,6 +75,10 @@ export class EventJournal {
       if (source.hostSessionId !== this.#identity.hostSessionId || source.runtimeEpoch !== this.#identity.runtimeEpoch) throw new Error("foreign event identity");
       if (source.sequence !== this.#events.length + 1) throw new Error("source event sequence gap or stale event");
       const event = agentEventSchema.parse({ ...source, sourceEventId: sourceId, eventId: randomUUID() });
+      if (event.kind === "extension.event") {
+        // 修复旧 journal 任意 JSON 扩展必须可读；新写入禁止携带未审查的嵌套数据、凭据或私有签名。
+        if (event.payload !== "unsupported") throw new Error("unsafe extension event payload");
+      }
       try { await durableAppend(this.#file, journalPath(this.#root, this.#identity, "events"), event); }
       catch (error) { this.#writeError = error; throw error; }
       this.#events.push(event);
