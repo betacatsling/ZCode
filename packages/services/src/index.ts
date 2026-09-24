@@ -13,8 +13,6 @@ export type {
   ProjectCatalogRpcService,
   ProjectCatalogTargetPort,
 } from "./project-workspaces/serviceContract.js";
-  ProjectCatalogTargetPort,
-} from "./project-workspaces/serviceContract.js";
 export {
   IModelSelectionService,
   IProviderSettingsService,

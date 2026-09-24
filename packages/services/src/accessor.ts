@@ -11,7 +11,7 @@ import type { IBroadcastService } from "./broadcast/broadcast.js";
 import type { IZCodeTaskService } from "./session/zcodeTaskService.js";
 import type { IZCodeAgentService } from "./zcode-agent/zcodeAgent.js";
 import type { IAgentHostService } from "./agent-host/serviceContract.js";
-import type { IProjectCatalogService } from "./project-workspaces/serviceContract.js";
+import type { ProjectCatalogRpcService } from "./project-workspaces/serviceContract.js";
 import type { IWorkspaceHierarchyService } from "./workspace-hierarchy/serviceContract.js";
 import type { IZCodeSessionService } from "./zcode-session/zcodeSession.js";
 import type { ICuaPermissionService } from "./cua-permission-broker/cuaPermissionService.js";
@@ -63,7 +63,7 @@ export interface IServiceAccessor {
   /** Opt-in external harness owner; missing on older or disabled hosts. */
   readonly agentHostService?: IAgentHostService;
   /** Host-owned profile catalog, absent on legacy/unmounted transports. */
-  readonly projectCatalogService?: IProjectCatalogService;
+  readonly projectCatalogService?: ProjectCatalogRpcService;
   /** Target-scoped navigation and server-derived creation; never infer native from absence. */
   readonly workspaceHierarchyService?: IWorkspaceHierarchyService;
   readonly zcodeSessionService: IZCodeSessionService;
