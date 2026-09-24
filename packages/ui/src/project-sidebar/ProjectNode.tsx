@@ -134,7 +134,10 @@ export function ProjectNode({
                 size="sm"
                 variant="outline"
                 aria-label={`${props.locale === "zh" ? "待处理" : "Attention"}: ${session?.session.title ?? id}`}
-                onClick={() => props.actions.onOpenAttention(id)}
+                onClick={() => {
+                  if (session) props.actions.onOpenAttention(session);
+                }}
+                disabled={!session}
               >
                 {l.waiting}: {session?.session.title ?? id}
               </Button>
