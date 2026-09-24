@@ -33,6 +33,7 @@ const result = { type: "result", subtype: "success", is_error: false, session_id
 test("Claude SDK uses documented explicit no-thinking control without removing tool hook", async () => {
   const transport = new ClaudeCodeTransport({ ...base, ...fakeSdk([init, result], 0, async (options) => {
     assert.deepEqual(options?.thinking, { type: "disabled" });
+    assert.equal(options?.env?.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS, "1");
     assert.equal(options?.hooks?.PreToolUse?.[0]?.hooks.length, 1);
   }) });
   await transport.run("synthetic", () => {});
@@ -101,8 +102,13 @@ test("fixed bundled Claude 2.1.263 synthetic endpoint enforces real Edit gate an
     const { stdout } = await execFileAsync(process.execPath, ["packages/services/test/fixtures/probeClaudeSdk.mjs"], {
       env: { ...process.env, ZCODE_CLAUDE_PROBE: "1", ZCODE_CLAUDE_PROBE_CANCEL: cancel ? "1" : "0", ZCODE_CLAUDE_PROBE_ALLOW: mode === "allow" ? "1" : "0" }, timeout: 25000,
     });
-    const probe = JSON.parse(stdout) as { requests: number; events: Array<{ type: string; unchangedBeforeDenial?: boolean; accepted?: boolean }>; marker: string; error?: string };
+    const probe = JSON.parse(stdout) as { requests: number; observations: Array<{ beta: string[]; toolsShape: Array<{ keys: string[] }> }>; events: Array<{ type: string; unchangedBeforeDenial?: boolean; accepted?: boolean }>; marker: string; error?: string };
     assert.equal(probe.requests >= 1, true);
+    for (const observation of probe.observations) {
+      // Pinned 2.1.263 retains three headers even under the official switch; Gateway must still reject them.
+      assert.deepEqual(observation.beta, ["claude-code-20250219", "effort-2025-11-24", "interleaved-thinking-2025-05-14"]);
+      assert.equal(observation.toolsShape.every((tool) => !tool.keys.includes("defer_loading") && !tool.keys.includes("eager_input_streaming")), true);
+    }
     assert.equal(probe.marker, mode === "allow" ? "modified\n" : "original\n");
     assert.equal(probe.events.some((event) => event.type === "preExecutionCheck" && event.unchangedBeforeDenial), true);
     assert.equal(probe.events.some((event) => event.type === (cancel ? "lateReply" : "reply") && event.accepted === !cancel), true);

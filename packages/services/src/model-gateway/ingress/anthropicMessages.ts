@@ -99,7 +99,12 @@ export function decodeAnthropicMessagesRequest(
   )
     unsupported("unsupported_header");
   const input = object(body);
-  fields(input, ["model", "max_tokens", "stream", "system", "messages", "tools", "temperature", "metadata", "output_config"]);
+  fields(input, ["model", "max_tokens", "stream", "system", "messages", "tools", "temperature", "metadata", "output_config", "thinking"]);
+  if (input.thinking !== undefined) {
+    const thinking = object(input.thinking);
+    fields(thinking, ["type"]);
+    if (thinking.type !== "disabled") unsupported("unsupported_thinking");
+  }
   if (input.temperature !== undefined && (typeof input.temperature !== "number" || !Number.isFinite(input.temperature) || input.temperature < 0 || input.temperature > 1))
     invalid("invalid_temperature");
   let userId: string | undefined;
@@ -226,7 +231,7 @@ export function decodeAnthropicMessagesRequest(
     request: {
       messages,
       ...(tools === undefined ? {} : { tools }),
-      options: { maxOutputTokens: input.max_tokens as number },
+      options: { maxOutputTokens: input.max_tokens as number, ...(input.thinking === undefined ? {} : { reasoningLevel: "off" }) },
       ...(input.temperature === undefined ? {} : { temperature: input.temperature as number }),
       ...(userId === undefined ? {} : { anthropicMetadataUserId: userId }),
       ...(effort === undefined ? {} : { anthropicEffort: effort }),

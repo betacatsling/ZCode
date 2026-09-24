@@ -96,7 +96,8 @@ export class ClaudeCodeTransport {
         tools: ["Read", "Edit", "Write", "Bash"], permissionMode: "default", permissionPrompts: "host", includePartialMessages: true,
         env: { PATH: process.env.PATH ?? "", HOME: this.options.profileDir, CLAUDE_CONFIG_DIR: this.options.profileDir,
           ANTHROPIC_BASE_URL: this.options.gatewayUrl, ANTHROPIC_API_KEY: this.options.gatewayToken,
-          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", ENABLE_CLAUDEAI_MCP_SERVERS: "false", LANG: "C.UTF-8" },
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1",
+          ENABLE_CLAUDEAI_MCP_SERVERS: "false", LANG: "C.UTF-8" },
         spawnClaudeCodeProcess: spawnProcess,
         canUseTool: async () => ({ behavior: "deny", message: "Tool approval requires PreToolUse gate" }),
         hooks: { PreToolUse: [{ hooks: [async (input, _id, { signal }) => {
