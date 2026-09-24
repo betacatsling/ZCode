@@ -1,5 +1,6 @@
 import type { HarnessCatalogEntry, HarnessCapabilitiesV2, ModelBindingRequest, SessionSpecV2 } from "@zcode/shared/agent-host";
 import type { ConversationSnapshot } from "@zcode/shared/zcode-protocol-v4";
+import type { RemovalPreview } from "../project-workspaces/worktreeService.js";
 import type { TrustedPngDescriptor } from "../harness-assets/index.js";
 import { createServiceDescriptor } from "../descriptors.js";
 
@@ -12,7 +13,7 @@ export interface WorkspaceNavigationScope {
   remoteSessionId?: string;
 }
 export type SessionOwner =
-  | { kind: "native"; scope: WorkspaceNavigationScope; originalSessionId: string }
+  | { kind: "native"; scope: WorkspaceNavigationScope; originalSessionId: string; historyOnly: boolean }
   | { kind: "external"; scope: WorkspaceNavigationScope; spec: SessionSpecV2; historyOnly: boolean };
 
 export interface IWorkspaceHierarchyService {
@@ -23,6 +24,15 @@ export interface IWorkspaceHierarchyService {
     targetId: string;
   }): Promise<WorkspaceNavigationScope | undefined>;
   resolveOwner(input: { targetId: string; workspaceId: string; sessionId: string }): Promise<SessionOwner | undefined>;
+  /** Target-verified live facts; no client-provided execution or Git fields. */
+  previewRemoval(input: { workspaceId: string; expectedGeneration: string }): Promise<RemovalPreview>;
+  /** Explicit, read-only operator inspection; missing receipts remain unresolved. */
+  pendingRecovery(input: { workspaceId: string }): Promise<{
+    workspaceId: string;
+    status: "unresolved";
+    reason: "target-receipts-unavailable";
+    actions: readonly ["inspect"];
+  }>;
   listHarnesses(workspaceId: string): Promise<readonly HarnessCatalogEntry[]>;
   createAgent(input: {
     workspaceId: string;
