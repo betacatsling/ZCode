@@ -24,8 +24,12 @@ export async function collectBareModuleSpecifiers(
   // esbuild 只在内存解析入口，把 npm 包标成 external；metafile.outputs.imports
   // 才包含语法引用（bundle:false 的 inputs.imports 始终为空），不写入/改写发行产物。
   const sourcefile = commonJsBundle ? "agent.cjs" : "server-core.js";
+  // 中文：server-core 的 esbuild 内联旧 CJS 会生成 require2("node-pty/lib/utils")；
+  // metafile 不认识别名。只改内存中的解析副本（字符串/注释由解析器自行忽略），
+  // 不能把该原生依赖从闭包里漏掉，实际发行 bytes 始终不改写。
+  const analysisSource = source.replace(/\brequire\d+(?=\s*\()/gu, "require");
   const result = await build({
-    stdin: { contents: source, sourcefile, resolveDir: process.cwd() },
+    stdin: { contents: analysisSource, sourcefile, resolveDir: process.cwd() },
     bundle: true,
     packages: "external",
     write: false,

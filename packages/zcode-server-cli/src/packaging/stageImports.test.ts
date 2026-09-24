@@ -19,11 +19,12 @@ test("stager recognizes actual CJS require and literal dynamic import without sc
     `
     const real = require("real-cjs");
     const dynamic = import("dynamic-cjs");
+    const native = require2("node-pty/lib/utils");
     const docs = "require('fake-doc')";
     const codeExample = "import('fake-example')";
     const data = import("data:text/javascript,export%20default%201");
   `,
     true,
   );
-  assert.deepEqual([...imports].sort(), ["dynamic-cjs", "real-cjs"]);
+  assert.deepEqual([...imports].sort(), ["dynamic-cjs", "node-pty", "real-cjs"]);
 });

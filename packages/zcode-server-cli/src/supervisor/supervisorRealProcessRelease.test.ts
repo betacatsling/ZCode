@@ -93,6 +93,13 @@ test(
         manifest.components?.some((component) => component.id === "server-runtime"),
         true,
       );
+      // Actual generated server-core.js has require2("node-pty/lib/utils"); alias must not be omitted.
+      assert.equal(
+        (
+          await stat(join(manifest.releaseDir, "runtime/node_modules/node-pty/package.json"))
+        ).isFile(),
+        true,
+      );
       const consumed = [
         "runtime/server-cli.js",
         "runtime/server-core.js",
