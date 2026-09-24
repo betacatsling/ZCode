@@ -7,6 +7,7 @@ import { performance } from 'node:perf_hooks';
 import { pathToFileURL } from 'node:url';
 
 const HOUR8 = 8 * 60 * 60 * 1000;
+const LATENCY_BUDGET = 1.10;
 const defaults = { delivery: 'desktop-continuous', mode: 'acceptance', durationMs: HOUR8, eventCount: 100_000, worktreeCount: 50, sessionCount: 10, expandedCount: 5, sampleEveryMs: 60_000, reconnectEveryMs: 300_000, idleMs: 60_000, maxBacklog: 10_000, maxOwnedChildren: 32 };
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const inside = (root, child) => { const r = relative(root, child); return r === '' || (r !== '..' && !r.startsWith('../') && !isAbsolute(r)); };
@@ -95,13 +96,93 @@ function metadataCheck(meta, paths, mode) {
   if (!meta || typeof meta.productionCommit !== 'string' || !/^[a-f0-9]{40}$/.test(meta.productionCommit) && !(mode === 'smoke' && meta.productionCommit === 'test-only') || !/^[a-zA-Z0-9._-]{1,64}$/.test(meta.driverVersion ?? '') || !meta.paths) throw new Error('missing driver provenance/isolation attestation');
   for (const [key, value] of Object.entries(paths)) if (meta.paths[key] !== value) throw new Error(`unverified effective ${key}`);
 }
-function configOf(o) { return { delivery:o.delivery,durationMs:o.durationMs,eventCount:o.eventCount,worktreeCount:o.worktreeCount,sessionCount:o.sessionCount,expandedCount:o.expandedCount,sampleEveryMs:o.sampleEveryMs,reconnectEveryMs:o.reconnectEveryMs,maxBacklog:o.maxBacklog,maxOwnedChildren:o.maxOwnedChildren }; }
+function configOf(o) { return { delivery:o.delivery,durationMs:o.durationMs,eventCount:o.eventCount,worktreeCount:o.worktreeCount,sessionCount:o.sessionCount,expandedCount:o.expandedCount,sampleEveryMs:o.sampleEveryMs,reconnectEveryMs:o.reconnectEveryMs,maxBacklog:o.maxBacklog,maxOwnedChildren:o.maxOwnedChildren,idleMs:o.idleMs }; }
+async function preservedSource(checkout, expectedCommit) {
+  if (typeof checkout !== 'string' || !isAbsolute(checkout) || !/^[a-f0-9]{40}$/.test(expectedCommit ?? '')) throw new Error('missing preserved source');
+  const root = await realpath(checkout);
+  const top = (await git(root, 'rev-parse', '--show-toplevel')).trim();
+  const head = (await git(root, 'rev-parse', 'HEAD')).trim();
+  // 中文：不能仅信任 result.json 自报的 commit，必须核验保留的 Git checkout。
+  if (top !== root || head !== expectedCommit || (await git(root, 'status', '--porcelain', '--untracked-files=no')).trim()) throw new Error('source identity changed');
+  return root;
+}
+async function buildHash(path) {
+  if (typeof path !== 'string' || !isAbsolute(path)) throw new Error('missing preserved build artifact');
+  return createHash('sha256').update(await readFile(await realpath(path))).digest('hex');
+}
+async function verifiedProvenance(checkout, buildArtifactPath, commit, artifactRoot) {
+  const sourceCheckout = await preservedSource(checkout,commit);
+  const build = await realpath(buildArtifactPath);
+  if (inside(artifactRoot,sourceCheckout) || inside(artifactRoot,build)) throw new Error('provenance cannot be disposable fixture');
+  return {sourceCheckout,buildArtifactPath:build,buildSha256:await buildHash(build)};
+}
 async function comparison(path, result) {
-  if (!path) return { status: 'missing-baseline' };
-  const base = JSON.parse(await readFile(path, 'utf8'));
-  if (!['load-measured-baseline-pending','load-measured'].includes(base.status) || base.machine !== result.machine || JSON.stringify(base.config) !== JSON.stringify(result.config) || base.metadata?.driverVersion !== result.metadata?.driverVersion || base.metadata?.productionCommit === result.metadata?.productionCommit) return { status: 'incomparable-baseline' };
-  if (!base.p95?.typedInputMs || !base.p95?.sessionSwitchMs) return { status: 'incomparable-baseline' };
-  return { status: 'comparable', baselineCommit: base.metadata.productionCommit, typedInputRatio: result.p95.typedInputMs / base.p95.typedInputMs, sessionSwitchRatio: result.p95.sessionSwitchMs / base.p95.sessionSwitchMs };
+  if (!path) return {status:'missing-baseline'};
+  const base = JSON.parse(await readFile(path,'utf8'));
+  const a = base.metadata, b = result.metadata;
+  if (!a || !b || !['smoke-only','load-measured-baseline-pending','load-measured'].includes(base.status) ||
+    base.mode !== result.mode || base.machine !== result.machine || JSON.stringify(base.config) !== JSON.stringify(result.config) ||
+    a.driverVersion !== b.driverVersion || a.delivery !== b.delivery || a.productionCommit === b.productionCommit ||
+    !Number.isFinite(base.elapsedMs) || base.elapsedMs < base.config.durationMs ||
+    !Number.isFinite(result.elapsedMs) || result.elapsedMs < result.config.durationMs ||
+    !Array.isArray(base.samples?.typedInputMs) || !Array.isArray(base.samples?.sessionSwitchMs) ||
+    !base.samples.typedInputMs.length || base.samples.typedInputMs.length !== base.samples.sessionSwitchMs.length ||
+    !result.samples.typedInputMs.length || !base.p95?.typedInputMs || !base.p95?.sessionSwitchMs ||
+    base.p95.typedInputMs !== p95(base.samples.typedInputMs) || base.p95.sessionSwitchMs !== p95(base.samples.sessionSwitchMs) ||
+    !base.samples.typedInputMs.every(x => Number.isFinite(x) && x >= 0) ||
+    !base.samples.sessionSwitchMs.every(x => Number.isFinite(x) && x >= 0) ||
+    !Number.isFinite(result.p95.typedInputMs) || !Number.isFinite(result.p95.sessionSwitchMs)) return {status:'incomparable-baseline'};
+  try {
+    if (inside(resolve(base.artifacts),a.sourceCheckout) || inside(resolve(base.artifacts),a.buildArtifactPath) || inside(result.artifacts,b.sourceCheckout) || inside(result.artifacts,b.buildArtifactPath) ||
+      await preservedSource(a.sourceCheckout,a.productionCommit) !== a.sourceCheckout ||
+      await buildHash(a.buildArtifactPath) !== a.buildSha256 ||
+      await preservedSource(b.sourceCheckout,b.productionCommit) !== b.sourceCheckout ||
+      await buildHash(b.buildArtifactPath) !== b.buildSha256) return {status:'incomparable-baseline'};
+  } catch { return {status:'incomparable-baseline'}; }
+  const typedInputRatio = result.p95.typedInputMs / base.p95.typedInputMs;
+  const sessionSwitchRatio = result.p95.sessionSwitchMs / base.p95.sessionSwitchMs;
+  if (!Number.isFinite(typedInputRatio) || !Number.isFinite(sessionSwitchRatio)) return {status:'incomparable-baseline'};
+  return {status: typedInputRatio > LATENCY_BUDGET || sessionSwitchRatio > LATENCY_BUDGET ? 'over-budget' : 'within-budget',baselineCommit:a.productionCommit,budget:LATENCY_BUDGET,typedInputRatio,sessionSwitchRatio};
+}
+
+// Ownership exists before open; disposer must also handle a launch before child registration.
+function cleanupRegistry(driver) {
+  const callbacks = [], children = [];
+  let disposed = false;
+  return {
+    registerCleanup(fn) {
+      if (disposed || typeof fn !== 'function') throw new Error('invalid cleanup registration');
+      callbacks.push(fn);
+    },
+    registerChild(child) {
+      if (disposed || !child || typeof child.kill !== 'function' || typeof child.once !== 'function' || !Number.isSafeInteger(child.pid) || child.pid <= 0) throw new Error('invalid owned child');
+      const closed = new Promise(resolve => child.once('close', resolve));
+      children.push({child,closed});
+    },
+    async dispose() {
+      if (disposed) return {registeredChildrenExited:children.length};
+      disposed = true;
+      let failed = false;
+      for (const fn of callbacks.reverse()) try { await fn(); } catch { failed = true; }
+      try { await driver.dispose(); } catch { failed = true; }
+      for (const {child,closed} of children) {
+        if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
+        // Cleanup escalation is not used as a runtime synchronization success signal.
+        let timer;
+        let exited = await Promise.race([closed.then(() => true),new Promise(resolve => { timer = setTimeout(() => resolve(false),5000); })]);
+        clearTimeout(timer);
+        if (!exited) {
+          failed = true;
+          child.kill('SIGKILL');
+          exited = await Promise.race([closed.then(() => true),new Promise(resolve => { timer = setTimeout(() => resolve(false),5000); })]);
+          clearTimeout(timer);
+        }
+        if (!exited || (child.exitCode === null && child.signalCode === null)) failed = true;
+      }
+      if (failed) throw new Error('owned resource cleanup unproven');
+      return {registeredChildrenExited:children.length};
+    },
+  };
 }
 
 async function existingAncestor(path) {
@@ -145,7 +226,7 @@ function applyIsolation(paths) {
 
 export async function runLoad(input = {}) {
   const o = validateOptions(input);
-  if (!input.driver || typeof input.driver.open !== 'function') throw new Error('production driver required; no mounted driver is bundled');
+  if (!input.driver || typeof input.driver.open !== 'function' || typeof input.driver.dispose !== 'function') throw new Error('production driver with top-level disposer required');
   if (o.mode === 'acceptance' && input.isolateProcessEnv !== true) throw new Error('acceptance requires isolated launch environment');
   const base = resolve(input.artifactBase ?? tmpdir());
   const baseReal = await prepareArtifactBase(base);
@@ -154,6 +235,7 @@ export async function runLoad(input = {}) {
   if (input.isolateProcessEnv) applyIsolation(paths);
   const result = { mode:o.mode, status:'failed', artifacts:root, machine, config:configOf(o), metadata:null, discovered:0, expanded:0, sessions:0, committedEvents:0, reconnects:0, elapsedMs:0, samples:{typedInputMs:[],sessionSwitchMs:[],sessionIds:[]}, p95:{typedInputMs:null,sessionSwitchMs:null}, backlog:[], backlogSummary:null, memory:[], cleanup:null, comparison:{status:'missing-baseline'}, gateway:{status:'unsupported'}, unsupported:['live-provider-latency-not-measured','paid-provider-not-used','ssh-not-used','desktop-and-web-require-separate-runs'], failures:[] };
   let mount, start, startingEvents = 0, phase = 'fixture';
+  const cleanup = cleanupRegistry(input.driver);
   const takeFacts = async phase => {
     const facts = validateProductFacts(await mount.facts(), {mode:o.mode,phase});
     if (facts.backlogHighWater > o.maxBacklog || facts.childProcesses > o.maxOwnedChildren) throw new Error('owner backlog/process bound exceeded');
@@ -164,10 +246,15 @@ export async function runLoad(input = {}) {
   try {
     const fixture = await createFixture(root, o.worktreeCount);
     phase = 'driver-open';
-    mount = await input.driver.open({root,repo:fixture.repo,worktrees:fixture.worktrees,artifacts:root,isolation:paths,mode:o.mode});
+    mount = await input.driver.open({root,repo:fixture.repo,worktrees:fixture.worktrees,artifacts:root,isolation:paths,mode:o.mode,registerCleanup:cleanup.registerCleanup,registerChild:cleanup.registerChild});
     for (const name of ['discover','mount','emit','sample','detach','reconnect','facts','close']) if (typeof mount?.[name] !== 'function') throw new Error(`missing production hook ${name}`);
     metadataCheck(mount.metadata, paths, o.mode);
     result.metadata = {productionCommit:mount.metadata.productionCommit,driverVersion:mount.metadata.driverVersion};
+    // Smoke stubs remain incomparable unless both independently verified sources are provided.
+    if (input.sourceCheckout || input.buildArtifactPath || o.mode === 'acceptance') {
+      phase = 'source-provenance';
+      Object.assign(result.metadata,await verifiedProvenance(input.sourceCheckout,input.buildArtifactPath,mount.metadata.productionCommit,root));
+    }
     phase = 'discovery';
     const discovered = await mount.discover({repo:fixture.repo,candidates:fixture.worktrees});
     if (!Array.isArray(discovered) || discovered.length !== o.worktreeCount || new Set(discovered.map(c=>c.id)).size !== discovered.length || fixture.worktrees.some(w=>!discovered.some(c=>c.path===w))) throw new Error('production discovery did not return real candidates');
@@ -226,21 +313,24 @@ export async function runLoad(input = {}) {
   } catch { result.failures.push(`gate-failed:${phase}`); }
   finally {
     if (start && !result.elapsedMs) result.elapsedMs = performance.now()-start;
-    if (mount) {
-      try {
-        await mount.close();
+    if (mount) try { await mount.close(); } catch { result.failures.push('gate-failed:cleanup-or-idle'); }
+    try {
+      const exits = await cleanup.dispose();
+      result.cleanup = {...exits};
+      if (mount) {
         const after = await takeFacts('post-cleanup');
         if (after.childProcesses !== 0) throw new Error('owned child processes remained after cleanup');
         if (o.idleMs) await sleep(o.idleMs);
         const idle = await takeFacts('post-idle');
         if (idle.childProcesses !== 0) throw new Error('owned child processes remained at idle');
-        result.cleanup = {childProcesses:idle.childProcesses,idleHeapBytes:idle.heapBytes,idleRssBytes:idle.rssBytes};
-      } catch { result.failures.push('gate-failed:cleanup-or-idle'); }
-    }
+        Object.assign(result.cleanup,{childProcesses:idle.childProcesses,idleHeapBytes:idle.heapBytes,idleRssBytes:idle.rssBytes});
+      }
+    } catch { result.failures.push('gate-failed:cleanup-or-idle'); }
     result.p95 = {typedInputMs:p95(result.samples.typedInputMs),sessionSwitchMs:p95(result.samples.sessionSwitchMs)};
     if (result.backlog.length) result.backlogSummary = {max:Math.max(...result.backlog.map(b=>b.highWater)),final:result.backlog.findLast(b=>b.phase==='end')?.count ?? null};
     try { result.comparison = await comparison(input.baselinePath,result); } catch { result.failures.push('gate-failed:baseline-unreadable'); }
-    if (!result.failures.length) result.status = o.mode === 'smoke' ? 'smoke-only' : result.comparison.status === 'comparable' ? 'load-measured' : 'load-measured-baseline-pending';
+    if (result.comparison.status === 'over-budget') result.failures.push('gate-failed:latency-regression');
+    if (!result.failures.length) result.status = o.mode === 'smoke' ? 'smoke-only' : result.comparison.status === 'within-budget' ? 'load-measured' : 'load-measured-baseline-pending';
     const file = join(root,'result.json'); await writeFile(file+'.partial',JSON.stringify(result,null,2)+'\n'); await rename(file+'.partial',file);
   }
   return result;
@@ -264,7 +354,7 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(new URL(import.meta.
   const launchPaths = await isolation(launch);
   applyIsolation(launchPaths);
   const driver = (await import(pathToFileURL(driverPath).href)).default;
-  const result = await runLoad({driver,...options,artifactBase:base,baselinePath:val('--baseline'),isolateProcessEnv:true});
+  const result = await runLoad({driver,...options,artifactBase:base,baselinePath:val('--baseline'),sourceCheckout:val('--source-checkout'),buildArtifactPath:val('--build-artifact'),isolateProcessEnv:true});
   console.log(JSON.stringify({status:result.status,artifacts:result.artifacts,elapsedMs:Math.round(result.elapsedMs),failures:result.failures}));
   if (result.status === 'failed') process.exitCode = 1;
 }
