@@ -14,14 +14,18 @@ test("mounted hierarchy queries authoritative owner and keeps stale catalog on d
   await expect(page.getByTestId("mounted-events")).toContainText(
     "open:original-native-id:target:active",
   );
-  await page.getByRole("button", { name: "Toggle offline" }).click();
-  await expect(page.getByRole("alert")).toContainText("offline");
-  await expect(page.getByTestId("workspace-ws-active")).toBeVisible();
   await page.getByRole("button", { name: /Remove Workspace active/ }).click();
   await expect(page.getByRole("dialog")).toContainText("External process may change the worktree");
   await page.getByRole("button", { name: "Confirm remove" }).click();
   await expect(page.getByRole("dialog")).toContainText("Target removal rejected: dirty worktree");
   await expect(page.getByTestId("mounted-events")).toContainText("remove:ws-active:gen-active");
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await page.getByRole("button", { name: "Toggle offline" }).click();
+  await expect(page.getByRole("alert")).toContainText("offline");
+  await expect(page.getByTestId("workspace-ws-active")).toBeVisible();
+  await page.getByRole("button", { name: /Remove Workspace active/ }).click();
+  await expect(page.getByRole("dialog")).toContainText("Target removal preview unavailable");
+  await expect(page.getByRole("button", { name: "Confirm remove" })).toBeDisabled();
 });
 
 test("import failure keeps form open and valid target adds a zero-session project", async ({
@@ -46,18 +50,55 @@ test("mounted hierarchy creates an agent without creating a worktree", async ({ 
   await page.goto("/mounted-hierarchy.html");
   await page.getByRole("button", { name: /New agent in Workspace active/ }).click();
   await expect(page.getByRole("dialog")).toContainText("share the same files");
-  await expect(page.getByRole("combobox", { name: "Model" })).toContainText("Provider A / Model B / high");
+  await expect(page.getByRole("combobox", { name: "Model" })).toContainText(
+    "Provider A / Model B / high",
+  );
+  await expect(page.getByRole("combobox", { name: "Model" })).not.toContainText(
+    "Other target only",
+  );
+  await expect(page.getByRole("radio", { name: /Codex/ })).toBeDisabled();
   await page.getByRole("button", { name: "Create agent" }).click();
   await expect(page.getByRole("dialog")).toContainText("Host rejected creation");
-  await expect(page.getByTestId("mounted-events")).toContainText('"providerId":"provider-a","modelId":"model-b","options":{"reasoningLevel":"high"}');
+  await expect(page.getByTestId("mounted-events")).toContainText(
+    '"providerId":"provider-a","modelId":"model-b","options":{"reasoningLevel":"high"}',
+  );
   await page.getByRole("button", { name: "Create agent" }).click();
   const commands = await page.getByTestId("mounted-events").textContent();
-  const ids = [...(commands ?? "").matchAll(/create:ws-active:([a-f0-9-]+):/g)].map((match) => match[1]);
+  const ids = [...(commands ?? "").matchAll(/create:ws-active:([a-f0-9-]+):/g)].map(
+    (match) => match[1],
+  );
   expect(ids).toHaveLength(2);
   expect(ids[0]).toBe(ids[1]);
+  await page.getByRole("button", { name: "Cancel" }).click();
   await page.getByRole("button", { name: "Allow create" }).click();
+  await page.getByRole("button", { name: /New agent in Workspace active/ }).click();
   await page.getByRole("button", { name: "Create agent" }).click();
   await expect(page.getByTestId("mounted-events")).toContainText("create:ws-active:");
   await expect(page.getByTestId("mounted-events")).toContainText("open:new-external:target:active");
   await expect(page.getByTestId("mounted-events")).not.toContainText("workspace:ws-active");
+});
+
+test("model outage disables only that workspace; no fabricated fallback", async ({ page }) => {
+  await page.goto("/mounted-hierarchy.html");
+  await expect(page.getByTestId("project-active")).toBeVisible();
+  await page.getByRole("button", { name: "Disable active options" }).click();
+  await page.getByRole("button", { name: /New agent in Workspace active/ }).click();
+  await expect(page.getByRole("button", { name: "Create agent" })).toBeDisabled();
+  await expect(page.getByRole("combobox", { name: "Model" })).not.toContainText("Harness-managed");
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await page.getByRole("button", { name: /New agent in Workspace empty/ }).click();
+  await expect(page.getByRole("combobox", { name: "Model" })).toContainText("Other target only");
+});
+
+test("model choices are scoped to the selected workspace, not the target intersection", async ({
+  page,
+}) => {
+  await page.goto("/mounted-hierarchy.html");
+  await page.getByRole("button", { name: /New agent in Workspace empty/ }).click();
+  await expect(page.getByRole("radio", { name: /Codex/ })).toBeEnabled();
+  await page.getByRole("radio", { name: /Codex/ }).check();
+  await expect(page.getByRole("combobox", { name: "Model" })).toContainText("Codex target choice");
+  await expect(page.getByRole("combobox", { name: "Model" })).not.toContainText(
+    "Provider A / Model B / high",
+  );
 });
