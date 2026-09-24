@@ -29,6 +29,15 @@ async function frames(events: ModelEvent[], signal?: AbortSignal) {
   return out;
 }
 
+test("Messages explicit disabled thinking constrains frozen reasoning to off; adaptive remains unsupported", () => {
+  const decoded = decodeAnthropicMessagesRequest({ ...base, thinking: { type: "disabled" } }, headers);
+  assert.deepEqual(decoded.request.options, { maxOutputTokens: 128, reasoningLevel: "off" });
+  assert.throws(
+    () => decodeAnthropicMessagesRequest({ ...base, thinking: { type: "adaptive" } }, headers),
+    /unsupported_thinking/,
+  );
+});
+
 test("Messages decoder retains per-block system marker and sole tool-result marker", () => {
   const decoded = decodeAnthropicMessagesRequest({ ...base,
     system: [{ type: "text", text: "base" }, { type: "text", text: "cached", cache_control: { type: "ephemeral" } }],

@@ -235,6 +235,8 @@ test("Messages Gateway -> existing Anthropic Model -> fake upstream retains per-
     assert.equal(upstreamBodies.length, 2);
     for (const body of upstreamBodies) {
       assert.equal(body.temperature, 1);
+      // @ai-sdk/anthropic omits thinking when neither enabled nor adaptive is selected.
+      assert.equal(body.thinking, undefined);
       assert.deepEqual(body.output_config, { effort: "high" });
       assert.deepEqual(body.metadata, { user_id: "opaque-fixture-id" });
       const userContent = (
@@ -473,6 +475,55 @@ test("Anthropic cache marker validation refuses conflicting, excess and unsuppor
       ),
     /requires Anthropic/,
   );
+});
+
+test("Gateway rejects disabled-thinking request against captured high binding before Model IO", async () => {
+  let calls = 0;
+  const model = {
+    providerId: "fixture-anthropic", modelId: alias, options: { reasoningLevel: "high" },
+    async *streamText() { calls++; yield { type: "start" }; },
+  } as unknown as ReturnType<AiSdkModelAdapter["createModel"]>;
+  const gateway = createModelGateway({ protocols: [anthropicMessagesProtocol], resolveModel: () => model,
+    limits: { maxBodyBytes: 2048, maxConcurrentRequests: 1 } });
+  const { url } = await gateway.start();
+  try {
+    const token = await gateway.issueToken({ targetId: "target", hostSessionId: "session", runtimeEpoch: "epoch", turnId: "turn",
+      protocol: "anthropic-messages", requestedModelAlias: alias,
+      effectiveSelection: { providerId: model.providerId, modelId: model.modelId, options: { reasoningLevel: "high" } },
+      expiresAt: Date.now() + 30_000, maxRequests: 1, maxOutputBytes: 1024,
+      maxGenerationTokens: 128, maxOutputTokensPerRequest: 128 });
+    const response = await fetch(`${url}/v1/messages`, { method: "POST", headers: {
+      "x-api-key": token, "anthropic-version": "2023-06-01", "content-type": "application/json",
+    }, body: JSON.stringify({ model: alias, max_tokens: 128, stream: true,
+      messages: [{ role: "user", content: "fixture" }], thinking: { type: "disabled" } }) });
+    assert.equal(response.status, 422);
+    assert.deepEqual(await response.json(), { error: { code: "model_options_mismatch" } });
+    assert.equal(calls, 0);
+  } finally { await gateway.close(); }
+});
+
+test("Anthropic frozen off rejects option map injecting enabled thinking before upstream IO", async () => {
+  const root = await mkdtemp(join(tmpdir(), "zcode-claude-thinking-"));
+  let calls = 0;
+  const upstream = createServer((_req, res) => { calls++; res.writeHead(500).end(); });
+  upstream.listen(0, "127.0.0.1");
+  await once(upstream, "listening");
+  try {
+    for (const map of ['{"thinking":{"type":"enabled","budget_tokens":1024}}',
+      '{"thinking":{"type":"disabled","budget_tokens":1024}}']) {
+      const model = fixtureModel(`http://127.0.0.1:${(upstream.address() as { port: number }).port}`,
+        root, map);
+      await assert.rejects(async () => {
+        for await (const _event of model.streamText({ messages: [{ role: "user", content: "fixture" }],
+          options: { reasoningLevel: "off" } })) { /* reject before stream */ }
+      });
+    }
+    assert.equal(calls, 0);
+  } finally {
+    upstream.closeAllConnections();
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("Anthropic native effort conflicting with frozen reasoning map fails before upstream request", async () => {

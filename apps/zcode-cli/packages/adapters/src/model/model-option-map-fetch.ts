@@ -15,12 +15,18 @@ export function createModelOptionMapFetch(input: {
   readonly fetch: ProviderFetch;
   readonly maps: CompiledModelOptionMaps;
   readonly values: ModelOptionValues;
+  readonly anthropicNoThinkingWhenOff?: boolean;
 }): ProviderFetch {
   return async (request, init) => {
     const bodyText = await readRequestBody(request, init);
     if (bodyText === undefined) return input.fetch(request, init);
     const body = parseJsonObject(bodyText);
     const patched = input.maps.apply(body, input.values);
+    // 修复原因：Messages disabled-thinking 只可映射冻结的 off；option map 若在 SDK 序列化后注入启用 thinking，必须在网络 IO 前拒绝。
+    if (input.anthropicNoThinkingWhenOff && input.values.reasoningLevel === "off" &&
+      (patched.thinking !== undefined && (typeof patched.thinking !== "object" || patched.thinking === null || Array.isArray(patched.thinking) ||
+        Object.keys(patched.thinking).length !== 1 || (patched.thinking as JsonObject).type !== "disabled")))
+      throw new Error("anthropic_disabled_thinking_conflict");
     // 修复原因：冻结的 reasoning map 如改写原生 effort，不能静默覆盖已接纳的请求选择。
     const requestedEffort = nestedEffort(body);
     const mappedEffort = nestedEffort(patched);
