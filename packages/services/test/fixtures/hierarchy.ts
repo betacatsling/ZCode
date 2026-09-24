@@ -3,8 +3,8 @@ import { parseSidebarSnapshot } from "@zcode/shared/project-workspaces";
 export const hierarchyFixture = parseSidebarSnapshot({
   schemaVersion: 1,
   projects: [
-    { schemaVersion: 1, id: "p1", name: "Project One", defaultWorkspaceId: "w1" },
-    { schemaVersion: 1, id: "p2", name: "Project Two", defaultWorkspaceId: "w3" },
+    { schemaVersion: 1, id: "p1", name: "Project One", sortOrder: 0, defaultWorkspaceId: "w1" },
+    { schemaVersion: 1, id: "p2", name: "Project Two", sortOrder: 1, defaultWorkspaceId: "w3" },
   ],
   bindings: [
     {
@@ -65,6 +65,8 @@ export const hierarchyFixture = parseSidebarSnapshot({
     head: { kind: "branch", ref: "main", oid: null },
     origin: "adopted",
     lifecycle: "active",
+    sortOrder: Number(workspace.id.slice(1)) - 1,
+    hidden: workspace.id === "w1",
     ...workspace,
   })),
   sessions: [
@@ -72,10 +74,68 @@ export const hierarchyFixture = parseSidebarSnapshot({
     { id: "s2", projectId: "p1", workspaceId: "w1", harnessId: "pi", title: "Implementation" },
     { id: "s3", projectId: "p1", workspaceId: "w1", harnessId: "zcode", title: "Review" },
   ].map((session, index) => ({
-    session: { schemaVersion: 1, archived: false, ...session },
+    session: { schemaVersion: 1, sortOrder: index, archived: false, ...session },
     updatedAt: index + 1,
-    activity: "idle",
+    activity: index === 0 ? "waiting" : "idle",
     freshness: "live",
     unread: false,
   })),
+  workspaceSummaries: [
+    {
+      workspaceId: "w1",
+      freshness: "live",
+      totalAgents: 3,
+      waiting: 1,
+      running: 0,
+      errors: 0,
+      unreadCompleted: 0,
+    },
+    {
+      workspaceId: "w2",
+      freshness: "live",
+      totalAgents: 0,
+      waiting: 0,
+      running: 0,
+      errors: 0,
+      unreadCompleted: 0,
+    },
+    {
+      workspaceId: "w3",
+      freshness: "offline",
+      totalAgents: 0,
+      waiting: 0,
+      running: 0,
+      errors: 0,
+      unreadCompleted: 0,
+    },
+    {
+      workspaceId: "w4",
+      freshness: "offline",
+      totalAgents: 0,
+      waiting: 0,
+      running: 0,
+      errors: 0,
+      unreadCompleted: 0,
+    },
+  ],
+  projectSummaries: [
+    {
+      projectId: "p1",
+      totalAgents: 3,
+      waiting: 1,
+      running: 0,
+      errors: 0,
+      unreadCompleted: 0,
+      attentionSessionIds: ["s1"],
+    },
+    {
+      projectId: "p2",
+      totalAgents: 0,
+      waiting: 0,
+      running: 0,
+      errors: 0,
+      unreadCompleted: 0,
+      attentionSessionIds: [],
+    },
+  ],
 });
