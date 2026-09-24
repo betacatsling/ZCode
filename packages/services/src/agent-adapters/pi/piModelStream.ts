@@ -6,16 +6,18 @@ import {
   type Model as PiModel,
   type SimpleStreamOptions,
   type TranscriptContext,
-  type Usage,
   type Provider,
 } from "@earendil-works/pi-ai";
 import type { Model as ZCodeModel, ModelInputMessage, ModelStreamEvent } from "@zcode/contracts";
+import type { ReasoningMetadata } from "./piReasoningSignature.js";
 
-const HOST_PROVIDER_ID = "zcode-host";
-const HOST_API = "zcode-model-executor";
-const EMPTY_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+// Pi's source worker loads .ts directly; the packaged worker loads compiled .js.
+const sourceMode = import.meta.url.endsWith(".ts");
+const { EMPTY_COST, toUsage } = await import(sourceMode ? "./piModelUsage.ts" : "./piModelUsage.js");
+const { HOST_API, HOST_PROVIDER_ID, SIGNATURE_KIND, metadataFailure, readSignature, reasoningMetadata } =
+  await import(sourceMode ? "./piReasoningSignature.ts" : "./piReasoningSignature.js");
 
-function toMessages(context: TranscriptContext): ModelInputMessage[] {
+function toMessages(context: TranscriptContext, model: ZCodeModel): ModelInputMessage[] {
   const systems = context.messages.filter((message) => message.role === "system");
   if (systems.length > 1)
     throw new Error("mid-conversation system updates are not certified for this Pi bridge");
@@ -41,23 +43,30 @@ function toMessages(context: TranscriptContext): ModelInputMessage[] {
       if (
         message.content.some(
           (part) =>
-            (part.type === "thinking" && (part.thinkingSignature || part.redacted)) ||
+            (part.type === "thinking" && part.redacted && !part.thinkingSignature) ||
             (part.type === "text" && part.textSignature) ||
             (part.type === "toolCall" && (part.thoughtSignature || part.namespace)),
         )
       ) {
         throw new Error(
-          "opaque provider signature or tool namespace cannot be migrated across model routes",
+          "unsupported provider signature or tool namespace in Pi history",
         );
       }
       messages.push({
         role: "assistant",
+        providerId: model.providerId,
+        modelId: model.modelId,
         content: message.content
           .filter((part) => part.type !== "toolCall")
           .map((part) =>
             part.type === "text"
               ? { type: "text" as const, text: part.text }
-              : { type: "reasoning" as const, text: part.thinking },
+              : { type: "reasoning" as const,
+                  text: part.redacted ? "" : part.thinking,
+                  ...(part.thinkingSignature ? {
+                    providerOptions: readSignature(part.thinkingSignature, message, model),
+                  } : {}),
+                },
           ),
         toolCalls: message.content
           .filter((part) => part.type === "toolCall")
@@ -82,29 +91,6 @@ function toMessages(context: TranscriptContext): ModelInputMessage[] {
     }
   }
   return messages;
-}
-
-function toUsage(usage: {
-  inputTokens?: number;
-  outputTokens?: number;
-  totalTokens?: number;
-  cacheReadTokens?: number;
-  cacheWriteTokens?: number;
-  reasoningTokens?: number;
-}): Usage {
-  const input = usage.inputTokens ?? 0;
-  const output = usage.outputTokens ?? 0;
-  const cacheRead = usage.cacheReadTokens ?? 0;
-  const cacheWrite = usage.cacheWriteTokens ?? 0;
-  return {
-    input,
-    output,
-    cacheRead,
-    cacheWrite,
-    reasoning: usage.reasoningTokens,
-    totalTokens: usage.totalTokens ?? input + output,
-    cost: { ...EMPTY_COST },
-  };
 }
 
 export function createPiHostProvider(model: ZCodeModel): Provider {
@@ -145,11 +131,28 @@ export function createPiHostProvider(model: ZCodeModel): Provider {
       const toolIndexes = new Map<string, number>();
       const toolInputs = new Map<string, string>();
       const reasoningIndexes = new Map<string, number>();
+      const reasoningSignatures = new Map<number, ReasoningMetadata>();
+      function applyReasoningMetadata(index: number, value?: Record<string, unknown>): void {
+        if (!value) return;
+        const incoming = reasoningMetadata(value);
+        if (!incoming) return;
+        const previous = reasoningSignatures.get(index)?.anthropic;
+        const next = incoming.anthropic;
+        if (!Object.keys(next).length) return;
+        if (previous && ("redactedData" in previous || "redactedData" in next ||
+            ("signature" in previous && !("signature" in next))))
+          metadataFailure("anthropic.signatureSequence", next);
+        reasoningSignatures.set(index, { anthropic: {
+          ...(previous?.signature !== undefined ? { signature: previous.signature } : {}),
+          ...(next.signature !== undefined ? { signature: (previous?.signature ?? "") + next.signature } : {}),
+          ...(next.redactedData !== undefined ? { redactedData: next.redactedData } : {}),
+        } });
+      }
       try {
         if (_selected.id !== modelId) throw new Error("Pi requested a different model route");
         if (options?.toolChoice && options.toolChoice !== "auto")
           throw new Error("non-auto tool choice is not supported by the ZCode model executor");
-        const messages = toMessages(context);
+        const messages = toMessages(context, model);
         failureStage = "prepare-tools";
         const tools = getCurrentTools(context.messages).map((tool) => ({
           name: tool.name,
@@ -184,9 +187,13 @@ export function createPiHostProvider(model: ZCodeModel): Provider {
           if (finished) break;
         }
         if (!finished) throw new Error("ZCode model stream ended without a finish event");
-      } catch {
+      } catch (error) {
         response.stopReason = options?.signal?.aborted ? "aborted" : "error";
-        response.errorMessage = `ZCode model bridge failed at ${failureStage}; inspect target-host diagnostics`;
+        response.errorMessage = error instanceof Error &&
+          (error.message.startsWith("unsupported reasoning metadata field ") ||
+           error.message === "reasoning signature route mismatch")
+          ? error.message
+          : `ZCode model bridge failed at ${failureStage}; inspect target-host diagnostics`;
         stream.push({ type: "error", reason: response.stopReason, error: response });
       }
       function convertEvent(event: ModelStreamEvent): void {
@@ -296,9 +303,12 @@ export function createPiHostProvider(model: ZCodeModel): Provider {
           }
           case "reasoning_start": {
             // 修复：实际 Provider 即使请求 off 仍会发送普通 reasoning；Pi 与现有 Model 契约都能表达文本，不能在首个工具前误报失败。
-            if (event.providerMetadata && Object.keys(event.providerMetadata).length)
-              throw new Error("opaque reasoning metadata cannot be represented");
             const index = response.content.push({ type: "thinking", thinking: "" }) - 1;
+            applyReasoningMetadata(index, event.providerMetadata);
+            if (reasoningSignatures.get(index)?.anthropic.redactedData !== undefined) {
+              const part = response.content[index];
+              if (part?.type === "thinking") part.redacted = true;
+            }
             reasoningIndexes.set(event.id, index);
             stream.push({ type: "thinking_start", contentIndex: index, partial: response });
             break;
@@ -311,10 +321,11 @@ export function createPiHostProvider(model: ZCodeModel): Provider {
             if (
               index === undefined ||
               !part ||
-              part.type !== "thinking" ||
-              (event.providerMetadata && Object.keys(event.providerMetadata).length)
+              part.type !== "thinking"
             )
               throw new Error("unrepresentable reasoning delta");
+            applyReasoningMetadata(index, event.providerMetadata);
+            if (part.redacted && event.text) metadataFailure("anthropic.redactedData.text", event.text);
             part.thinking += event.text;
             stream.push({
               type: "thinking_delta",
@@ -330,10 +341,18 @@ export function createPiHostProvider(model: ZCodeModel): Provider {
             if (
               index === undefined ||
               !part ||
-              part.type !== "thinking" ||
-              (event.providerMetadata && Object.keys(event.providerMetadata).length)
+              part.type !== "thinking"
             )
               throw new Error("unrepresentable reasoning end");
+            applyReasoningMetadata(index, event.providerMetadata);
+            const metadata = reasoningSignatures.get(index);
+            if (metadata) {
+              // 修复：SDK 的 signature_delta 是空文本增量；必须留在原生 thinkingSignature，
+              // 才能在工具执行后原样带回同一路由的 Model providerOptions。
+              part.thinkingSignature = JSON.stringify({ v: 1, kind: SIGNATURE_KIND,
+                providerId: model.providerId, modelId: model.modelId, providerMetadata: metadata });
+              part.redacted = metadata.anthropic.redactedData !== undefined;
+            }
             stream.push({
               type: "thinking_end",
               contentIndex: index,

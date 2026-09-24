@@ -103,6 +103,85 @@ test("Pi bridge accepts committed tool input after non-JSON partial delta and re
   assert.equal(requests.length, 1);
 });
 
+test("Pi Anthropic signature survives native-style history and returns to the same Model route", async () => {
+  const requests: Array<Parameters<Model["streamText"]>[0]> = [];
+  const provider = createPiHostProvider({
+    ...model((request) => requests.push(request)),
+    async *streamText(request) {
+      requests.push(request);
+      yield { type: "start" } as const;
+      yield { type: "reasoning_start", id: "r" } as const;
+      yield { type: "reasoning_delta", id: "r", text: "thought" } as const;
+      yield {
+        type: "reasoning_delta", id: "r", text: "", providerMetadata: { anthropic: { signature: "opaque-fixture" } },
+      } as const;
+      yield { type: "reasoning_end", id: "r" } as const;
+      yield { type: "tool_input_start", id: "read-1", toolName: "read" } as const;
+      yield { type: "tool_input_delta", id: "read-1", delta: '{"path":"input.txt"}' } as const;
+      yield { type: "tool_input_end", id: "read-1" } as const;
+      yield { type: "tool_call", toolCall: { id: "read-1", name: "read", input: { path: "input.txt" } } } as const;
+      yield { type: "finish", finishReason: "tool-calls", usage: { inputTokens: 2, outputTokens: 3 } } as const;
+    },
+  } as Model);
+  const selected = (await provider.getModels())[0]!;
+  const events = [];
+  for await (const event of provider.streamSimple!(selected, normalizeContext({
+    messages: [{ role: "user", content: "read", timestamp: Date.now() }],
+  }))) events.push(event);
+  const done = events.at(-1);
+  assert.equal(done?.type, "done");
+  if (done?.type !== "done") return;
+  const reasoning = done.message.content[0];
+  assert.equal(reasoning?.type, "thinking");
+  if (reasoning?.type !== "thinking") return;
+  assert.ok(reasoning.thinkingSignature);
+  assert.equal(reasoning.thinkingSignature.includes("opaque-fixture"), true);
+  const followup = [];
+  for await (const event of provider.streamSimple!(selected, normalizeContext({ messages: [
+    { role: "user", content: "read", timestamp: Date.now() },
+    done.message,
+    { role: "toolResult", toolCallId: "read-1", toolName: "read", content: [{ type: "text", text: "ok" }], isError: false, timestamp: Date.now() },
+    { role: "user", content: "follow up", timestamp: Date.now() },
+  ] }))) followup.push(event);
+  assert.equal(followup.at(-1)?.type, "done");
+  assert.deepEqual(requests[1]?.messages.find((m) => m.role === "assistant"), {
+    role: "assistant", providerId: "provider-a", modelId: "model-a",
+    content: [{ type: "reasoning", text: "thought", providerOptions: { anthropic: { signature: "opaque-fixture" } } }],
+    toolCalls: [{ id: "read-1", name: "read", input: { path: "input.txt" } }],
+  });
+});
+
+test("Pi signature rejects cross-route replay and unknown metadata without leaking values", async () => {
+  let calls = 0;
+  const provider = createPiHostProvider(model(() => calls++));
+  const selected = (await provider.getModels())[0]!;
+  const signed = { role: "assistant" as const, api: "zcode-model-executor" as const,
+    provider: "zcode-host", model: "provider-a/model-a", timestamp: Date.now(),
+    stopReason: "stop" as const, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0,
+      totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    content: [{ type: "thinking" as const, thinking: "safe", thinkingSignature: JSON.stringify({
+      v: 1, kind: "zcode-reasoning", providerId: "other-provider", modelId: "model-a",
+      providerMetadata: { anthropic: { signature: "DO-NOT-LOG" } },
+    }) }],
+  };
+  const rejected = [];
+  for await (const event of provider.streamSimple!(selected, normalizeContext({ messages: [
+    { role: "user", content: "start", timestamp: Date.now() }, signed,
+  ] }))) rejected.push(event);
+  assert.equal(rejected.at(-1)?.type, "error");
+  assert.equal(calls, 0);
+  const unknown = createPiHostProvider({ ...model(() => calls++), async *streamText() {
+    yield { type: "reasoning_start", id: "r" } as const;
+    yield { type: "reasoning_delta", id: "r", text: "", providerMetadata: { anthropic: { alien: "SECRET" } } } as const;
+  } } as Model);
+  const failures = [];
+  for await (const event of unknown.streamSimple!((await unknown.getModels())[0]!, normalizeContext({ messages: [
+    { role: "user", content: "go", timestamp: Date.now() },
+  ] }))) failures.push(event);
+  assert.equal(failures.at(-1)?.type, "error");
+  assert.equal(JSON.stringify(failures).includes("SECRET"), false);
+});
+
 test("Pi bridge fails closed on unsupported image rather than silently dropping it", async () => {
   let calls = 0;
   const provider = createPiHostProvider(model(() => calls++));
