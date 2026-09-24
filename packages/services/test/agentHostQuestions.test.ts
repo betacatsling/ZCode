@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import type { AgentCommand, AgentEvent } from "@zcode/shared/agent-host";
+import { CommandJournal } from "../src/agent-host/commandJournal.js";
 import { HarnessRegistry } from "../src/agent-host/harnessRegistry.js";
 import { MockHarness } from "../src/agent-host/mockHarness.js";
 import { SessionHost } from "../src/agent-host/sessionHost.js";
@@ -16,6 +17,7 @@ class QuestionHarness extends MockHarness {
   #turn = "";
   #settle?: () => void;
   delayAnswerEvent = false;
+  questionsSupported = true;
   answers: string[] = [];
   settleSendWithoutSourceResolution() { this.#settle?.(); }
   confirmAnswer() {
@@ -28,7 +30,7 @@ class QuestionHarness extends MockHarness {
     return () => this.#listeners.delete(listener);
   }
   override async capabilities(target: Parameters<MockHarness["capabilities"]>[0]) {
-    return { ...await super.capabilities(target), questions: { support: "supported" as const } };
+    return { ...await super.capabilities(target), questions: { support: this.questionsSupported ? "supported" as const : "unsupported" as const } };
   }
   #emit(kind: AgentEvent["kind"], fields: Record<string, unknown>) {
     const event = { hostSessionId: this.#id, runtimeEpoch: this.#epoch, sequence: ++this.#seq,
@@ -71,6 +73,9 @@ test("Host journals a question before answering, rejects permission masquerade/s
     assert.equal((await host.dispatch(stale)).reasonCode, "stale-interaction");
     assert.equal((await host.dispatch({ type: "resolveInteraction", commandId: "wrong-kind", hostSessionId: "q", runtimeEpoch: host.binding.runtimeEpoch, turnId: "t", interactionId: "question-1", decision: "allow" })).reasonCode, "stale-interaction");
     const answer = { ...stale, commandId: "answer", runtimeEpoch: host.binding.runtimeEpoch };
+    adapter.questionsSupported = false;
+    assert.equal((await host.dispatch({ ...answer, commandId: "unsupported" })).reasonCode, "unsupported");
+    adapter.questionsSupported = true;
     assert.equal((await host.dispatch(answer)).status, "completed");
     assert.equal((await host.dispatch(answer)).status, "duplicate");
     assert.equal((await host.dispatch({ ...answer, commandId: "late" })).reasonCode, "stale-interaction");
@@ -128,6 +133,61 @@ test("two command IDs cannot answer one unresolved question; restart keeps reser
     assert.equal(host.snapshot().pendingInteractions.length, 0);
     assert.equal((await host.dispatch({ ...answer, commandId: "stale-after-source" })).reasonCode, "stale-interaction");
   } finally {
+    if (host?.snapshot().pendingInteractions.length) {
+      adapter.confirmAnswer();
+      await host.whenEventsRecorded();
+    }
+    adapter.settleSendWithoutSourceResolution();
+    await host?.whenIdleAllowingGap();
+    await host?.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("crash after durable question admission but before delivery never replays an alternative ID", async () => {
+  const root = await mkdtemp(join(tmpdir(), "zcode-question-crash-"));
+  const worktree = join(root, "tree");
+  await mkdir(worktree);
+  const adapter = new QuestionHarness();
+  const registry = new HarnessRegistry();
+  registry.register(adapter);
+  const spec = { schemaVersion: 2 as const, hostSessionId: "q", projectId: "p", workspaceId: "w", execution: {
+    targetId: "local", workspaceIdentity: "w", worktreePath: worktree, worktreeGeneration: "g", cwdRelativeToWorktree: ".",
+  }, harness: { id: "mock", adapterVersion: "1.0.0" }, modelBinding: { kind: "host-managed" as const, selection: { providerId: "p", modelId: "m" } } };
+  const options = { root: join(root, "journals"), spec, target: { id: "local", kind: "local" as const, platform: "darwin" as const, available: true }, registry,
+    catalog: { fingerprint: "f", validateSelection: () => ({ ok: true as const }) } };
+  let host: SessionHost | undefined;
+  try {
+    host = await SessionHost.create(options);
+    adapter.setEpoch(host.binding.runtimeEpoch);
+    assert.equal((await host.dispatch({ type: "send", hostSessionId: "q", turnId: "t", commandId: "send", text: "ask" })).status, "accepted");
+    await host.whenEventsRecorded();
+    adapter.settleSendWithoutSourceResolution();
+    await host.whenIdle();
+    const epoch = host.binding.runtimeEpoch;
+    await host.close();
+    host = undefined;
+
+    // Simulate a process dying immediately after the durable admission append, before answerInteraction.
+    const identity = { targetId: "local", workspaceIdentity: "w", harnessId: "mock", hostSessionId: "q", runtimeEpoch: epoch };
+    const journal = await CommandJournal.open(options.root, identity);
+    const admitted = { type: "answerInteraction" as const, commandId: "unconfirmed", hostSessionId: "q", runtimeEpoch: epoch,
+      turnId: "t", interactionId: "question-1", answer: "a" };
+    try { assert.equal((await journal.accept(admitted)).status, "accepted"); }
+    finally { await journal.close(); }
+    assert.equal((await SessionHost.queryCommandHistory(options.root, spec, admitted.commandId))?.status, "execution-unknown");
+    host = await SessionHost.open(options);
+    assert.equal(host.snapshot().pendingInteractions[0]?.kind, "userInput");
+    assert.equal(host.queryCommand(admitted.commandId)?.status, "execution-unknown");
+    assert.equal((await host.dispatch({ ...admitted, commandId: "replacement", answer: "b" })).status, "execution-unknown");
+    assert.equal((await SessionHost.queryCommandHistory(options.root, spec, "replacement"))?.status, "execution-unknown");
+    assert.deepEqual(adapter.answers, []);
+  } finally {
+    if (host?.snapshot().pendingInteractions.length) {
+      adapter.confirmAnswer();
+      await host.whenEventsRecorded();
+    }
+    await host?.whenIdleAllowingGap();
     await host?.close();
     await rm(root, { recursive: true, force: true });
   }
