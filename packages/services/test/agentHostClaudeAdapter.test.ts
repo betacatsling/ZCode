@@ -11,6 +11,7 @@ import {
   claudeCodeManifest,
 } from "../src/agent-adapters/claude-code/index.js";
 import { ClaudeCodeTransport } from "../src/agent-adapters/claude-code/claudeTransport.js";
+import { claudeDir } from "../src/agent-adapters/claude-code/claudeSessionScope.js";
 import type { TrustedClaudeProfile } from "../src/agent-adapters/claude-code/contract.js";
 import type { SessionSpecV2, BindingPlan, AgentEvent } from "@zcode/shared/agent-host";
 import type { Query, SDKMessage, SpawnedProcess } from "@anthropic-ai/claude-agent-sdk";
@@ -366,6 +367,282 @@ test("Claude binding cannot silently reattach uncommitted native state or change
     );
     await adapter.shutdown?.();
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// Only the fixture overrides certification; the production Claude manifest remains blocked by beta ingress.
+test("Claude terminal text and prompt survive SessionHost snapshot and read-only replay", async () => {
+  const root = await mkdtemp(join(tmpdir(), "claude-host-projection-"));
+  const profileRoot = join(root, "native");
+  const { ClaudeHarnessAdapter } =
+    await import("../src/agent-adapters/claude-code/claudeHarnessAdapter.js");
+  const { HarnessRegistry } = await import("../src/agent-host/harnessRegistry.js");
+  const { SessionHost } = await import("../src/agent-host/sessionHost.js");
+  const profile: TrustedClaudeProfile = {
+    root: profileRoot,
+    verifyCwd: async () => "/tmp/fixture",
+    nativeModel: () => "claude-sonnet-4-6",
+    gateway: {
+      url: "http://127.0.0.1:42123",
+      issueToken: async () => "token",
+      revokeToken: () => {},
+    },
+    transportFactory: (options) =>
+      ({
+        run: async (_prompt: string, emit: (event: { type: "text"; text: string }) => void) => {
+          emit({ type: "text", text: "chunk" });
+          emit({ type: "text", text: " answer" });
+          return { nativeSessionId: options.sessionId! };
+        },
+        cancel: () => {},
+        reply: () => false,
+      }) as unknown as ClaudeCodeTransport,
+  };
+  class CertifiedFixture extends ClaudeHarnessAdapter {
+    override async probe() {
+      return { support: "supported" as const };
+    }
+    override async hostManagedSupport() {
+      return { support: "supported" as const };
+    }
+    override async capabilities(target: Parameters<ClaudeHarnessAdapter["capabilities"]>[0]) {
+      const caps = await super.capabilities(target);
+      return { ...caps, text: { support: "supported" as const } };
+    }
+  }
+  const s = spec("history"),
+    registry = new HarnessRegistry(),
+    adapter = new CertifiedFixture(profile);
+  registry.register(adapter);
+  const options = {
+    root: join(root, "host"),
+    spec: s,
+    target: {
+      id: "t",
+      kind: "local" as const,
+      platform: process.platform as "darwin",
+      available: true,
+    },
+    catalog: { fingerprint: "fixture", validateSelection: () => ({ ok: true as const }) },
+    registry,
+  };
+  try {
+    const host = await SessionHost.create(options);
+    assert.equal(
+      (
+        await host.dispatch({
+          type: "send",
+          hostSessionId: s.hostSessionId,
+          commandId: "cmd",
+          turnId: "turn",
+          text: "prompt text",
+        })
+      ).status,
+      "accepted",
+    );
+    await host.whenIdle();
+    assert.equal(host.queryCommand("cmd")?.status, "completed");
+    const rows = host.snapshot().rows.window;
+    assert.deepEqual(
+      rows.filter((row) => row.kind === "userInput").map((row) => row.text),
+      ["prompt text"],
+    );
+    assert.deepEqual(
+      rows.filter((row) => row.kind === "assistantText").map((row) => [row.text, row.state]),
+      [["chunk answer", "complete"]],
+    );
+    assert.equal(host.snapshot().control.phase, "completedSuccess");
+    await host.close();
+    const replay = await SessionHost.snapshotHistory(options.root, s);
+    assert.deepEqual(replay.rows.window, rows);
+  } finally {
+    await adapter.shutdown();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("shutdown while durable intent write is pending fences spawn, revokes token and reports unknown", async () => {
+  const root = await mkdtemp(join(tmpdir(), "claude-inflight-race-"));
+  const { writeFile, readFile } = await import("node:fs/promises");
+  let entered!: () => void, release!: () => void;
+  const writing = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let spawned = 0;
+  const revoked: string[] = [];
+  const profile: TrustedClaudeProfile = {
+    root,
+    verifyCwd: async () => "/tmp/fixture",
+    nativeModel: () => "claude-sonnet-4-6",
+    gateway: {
+      url: "http://127.0.0.1:42123",
+      issueToken: async () => "leased",
+      revokeToken: (token) => {
+        revoked.push(token);
+      },
+    },
+    writeInflight: async (path, contents) => {
+      entered();
+      await gate;
+      await writeFile(path, contents, { flag: "wx", mode: 0o600 });
+    },
+    transportFactory: () => {
+      spawned++;
+      throw new Error("must never spawn");
+    },
+  };
+  const s = spec("race"),
+    p = plan("race"),
+    adapter = createClaudeHarness(profile),
+    events: AgentEvent[] = [];
+  try {
+    const binding = await adapter.create(s, p);
+    adapter.subscribe(s.hostSessionId, (event) => events.push(event));
+    await adapter.prepareTurn(s, { turnId: "turn", runtimeEpoch: binding.runtimeEpoch, plan: p });
+    const send = adapter.send({
+      type: "send",
+      hostSessionId: s.hostSessionId,
+      commandId: "cmd",
+      turnId: "turn",
+      text: "prompt",
+    });
+    await writing;
+    const shutdown = adapter.shutdown();
+    assert.deepEqual(revoked, ["leased"]);
+    assert.equal(spawned, 0);
+    release();
+    await assert.rejects(send, /ownership|shutdown/);
+    await shutdown;
+    assert.equal(spawned, 0);
+    assert.deepEqual(
+      events.filter((event) => event.kind === "turn.finished").map((event) => event.outcome),
+      ["unknown"],
+    );
+    assert.equal(
+      events.some((event) => event.kind === "message.finished" && event.role === "assistant"),
+      false,
+    );
+    assert.equal(
+      JSON.parse(await readFile(join(claudeDir(root, s), "inflight.json"), "utf8")).turnId,
+      "turn",
+    );
+    await assert.rejects(
+      createClaudeHarness(profile).attach(s, binding, events.length, p),
+      /uncommitted/,
+    );
+  } finally {
+    release();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Host receipt is execution-unknown when shutdown races Claude inflight persistence", async () => {
+  const { writeFile } = await import("node:fs/promises");
+  const { ClaudeHarnessAdapter } =
+    await import("../src/agent-adapters/claude-code/claudeHarnessAdapter.js");
+  const { HarnessRegistry } = await import("../src/agent-host/harnessRegistry.js");
+  const { SessionHost } = await import("../src/agent-host/sessionHost.js");
+  const root = await mkdtemp(join(tmpdir(), "claude-host-race-"));
+  let entered!: () => void, release!: () => void;
+  const writing = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let spawned = 0;
+  const revoked: string[] = [];
+  const profile: TrustedClaudeProfile = {
+    root: join(root, "native"),
+    verifyCwd: async () => "/tmp/fixture",
+    nativeModel: () => "claude-sonnet-4-6",
+    gateway: {
+      url: "http://127.0.0.1:42123",
+      issueToken: async () => "host-token",
+      revokeToken: (token) => {
+        revoked.push(token);
+      },
+    },
+    writeInflight: async (path, contents) => {
+      entered();
+      await gate;
+      await writeFile(path, contents, { flag: "wx", mode: 0o600 });
+    },
+    transportFactory: () => {
+      spawned++;
+      throw new Error("post-shutdown spawn");
+    },
+  };
+  class CertifiedFixture extends ClaudeHarnessAdapter {
+    override async probe() {
+      return { support: "supported" as const };
+    }
+    override async hostManagedSupport() {
+      return { support: "supported" as const };
+    }
+    override async capabilities(target: Parameters<ClaudeHarnessAdapter["capabilities"]>[0]) {
+      return { ...(await super.capabilities(target)), text: { support: "supported" as const } };
+    }
+  }
+  const adapter = new CertifiedFixture(profile),
+    registry = new HarnessRegistry(),
+    s = spec("host-race");
+  registry.register(adapter);
+  const options = {
+    root: join(root, "host"),
+    spec: s,
+    registry,
+    target: {
+      id: "t",
+      kind: "local" as const,
+      platform: process.platform as "darwin",
+      available: true,
+    },
+    catalog: { fingerprint: "fixture", validateSelection: () => ({ ok: true as const }) },
+  };
+  try {
+    const host = await SessionHost.create(options);
+    assert.equal(
+      (
+        await host.dispatch({
+          type: "send",
+          hostSessionId: s.hostSessionId,
+          commandId: "race-cmd",
+          turnId: "race-turn",
+          text: "prompt",
+        })
+      ).status,
+      "accepted",
+    );
+    await writing;
+    const shutdown = adapter.shutdown();
+    release();
+    await shutdown;
+    await host.whenIdle();
+    assert.deepEqual(revoked, ["host-token"]);
+    assert.equal(spawned, 0);
+    assert.equal(host.queryCommand("race-cmd")?.status, "execution-unknown");
+    assert.deepEqual(
+      host
+        .eventsSince(0)
+        .filter((event) => event.kind === "turn.finished")
+        .map((event) => event.outcome),
+      ["unknown"],
+    );
+    assert.equal(host.snapshot().control.phase, "error");
+    await host.close();
+    assert.equal(
+      (await SessionHost.queryCommandHistory(options.root, s, "race-cmd"))?.status,
+      "execution-unknown",
+    );
+    assert.equal((await SessionHost.snapshotHistory(options.root, s)).control.phase, "error");
+  } finally {
+    release();
+    await adapter.shutdown();
     await rm(root, { recursive: true, force: true });
   }
 });

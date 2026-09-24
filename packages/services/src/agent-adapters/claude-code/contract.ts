@@ -16,6 +16,8 @@ export interface TrustedClaudeProfile {
   /** Maps frozen effective selection to a real native CLI backend model identifier; never use a token as a model ID. */
   nativeModel(spec: SessionSpecV2, plan: BindingPlan): string;
   gateway: ClaudeGatewayLease;
+  /** Tests only: deterministic barrier for the exclusive durable inflight write. Production uses writeFile(wx). */
+  writeInflight?: (path: string, contents: string) => Promise<void>;
   /** Tests only: the actual transport remains ClaudeCodeTransport. */
   transportFactory?: (
     options: ClaudeTransportOptions,
