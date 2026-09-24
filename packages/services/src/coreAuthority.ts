@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
@@ -5,6 +6,7 @@ import { getAppConfigDir, getTasksIndexDatabasePath } from "./paths.js";
 import { ProfileFileOwner } from "./project-workspaces/profilePersistence.js";
 import { legacyBackupSchema, mappingSchema } from "./project-workspaces/migrationContract.js";
 import { NativePersistentSessionIndex } from "./session/nativePersistentSessionIndex.js";
+import { prepareTasksIndexStorage } from "./session/tasksDatabase/startup.js";
 import { NativeSqliteMetadataReader } from "./session/nativeSessionMetadata.js";
 import { ReadonlyNativeSessionMetadataView } from "@zcode/adapters/storage";
 import { resolveNativeSessionDbPath } from "@zcode/adapters/config";
@@ -59,6 +61,9 @@ export async function createCoreAuthority(
     // 中文：与 CLI 共享配置解释器；读取目录不能启动 CLI 或偷偷迁移不存在的 SQLite。
     const nativeDb = resolveNativeSessionDbPath({ cwd: process.cwd(), env: process.env });
     const taskDb = getTasksIndexDatabasePath();
+    // 中文：旧工厂把首次 sidebar 的缺库误当只读故障；在 Core 持有 profile writer
+    // 的启动写阶段运行同一 tasks migration owner，读路径本身绝不迁移。
+    await prepareTasksIndexStorage(taskDb, () => {});
     const backups = join(configRoot, "native-migration", "backups");
     const metadata = new NativeSqliteMetadataReader(
       new ReadonlyNativeSessionMetadataView(nativeDb),
@@ -128,7 +133,19 @@ export async function createCoreAuthority(
       workspaceCompositionRoot: join(configRoot, "workspace-hierarchy"),
       workspaceComposition: bridge,
     });
-    live = getNativeProcessControlPort(services.get(IZCodeAgentService));
+    const nativeService = services.get(IZCodeAgentService);
+    live = getNativeProcessControlPort(nativeService);
+    // 中文：session DB 只能由真实 CLI storage-startup 创建。显式在启动时使用
+    // 配置解析所用 cwd 的 worker；不能让 sidebar 查询暗中启动迁移或制造空库。
+    await nativeService.prepareStorage({ workspacePath: process.cwd() });
+    const storage = await nativeService.getStorageStartupState({ workspacePath: process.cwd() });
+    // 中文：不带 storage-startup 控制帧的旧/自定义 CLI 会让 prepareStorage 立即
+    // 返回；只有同一个配置路径的真实 CLI 完成写端迁移后，Core 才能发布只读目录。
+    if (
+      storage?.state?.phase !== "ready" ||
+      storage.state.databaseId !== createHash("sha256").update(nativeDb).digest("hex")
+    )
+      throw new Error("Core native CLI storage owner unavailable or path changed");
     const collection = services;
     const coordinator = getWorkspaceMaintenanceCoordination(collection);
     if (!coordinator) throw new Error("Core maintenance coordinator missing");
