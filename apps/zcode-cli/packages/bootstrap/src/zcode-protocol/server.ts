@@ -213,6 +213,7 @@ export class ZCodeProtocolAgentServer {
   private nativeActivity(): NativeMaintenanceActivity {
     const v4 = this.requireV4Gateway().getNativeActivity();
     let active = v4.active, tools = v4.tools;
+    const approvals = v4.approvals + this.context.v4Interactions.pendingCount;
     let unknown = v4.unknown;
     for (const record of this.context.sessions.values()) {
       if (record.activeAbortController || record.residencyFinalizationCount) active++;
@@ -220,7 +221,9 @@ export class ZCodeProtocolAgentServer {
       if (!this.context.v4Gateway?.hasNativeSnapshot(record.app.sessionId)) unknown = true;
     }
     return { ...v4, frozen: this.nativeLease !== null,
-      active, tools, pending: v4.pending + this.legacyMutationInFlight, unknown };
+      active, tools, approvals,
+      pending: v4.pending + this.legacyMutationInFlight + this.workspaceGenerateTextControllers.size + this.pendingClientRequests.size,
+      unknown };
   }
 
   readonly browserControlPort: BrowserControlPort;
@@ -462,6 +465,9 @@ export class ZCodeProtocolAgentServer {
       zcodeProtocolMethods.sessionCreate, zcodeProtocolMethods.sessionResume,
       zcodeProtocolMethods.sessionSend, zcodeProtocolMethods.sessionFork,
       zcodeProtocolMethods.sessionCompact, zcodeProtocolMethods.sessionGoal,
+      zcodeProtocolMethods.sessionClose, zcodeProtocolMethods.sessionSetModel,
+      zcodeProtocolMethods.sessionSetThoughtLevel, zcodeProtocolMethods.sessionSetMode,
+      zcodeProtocolMethods.workspaceGenerateText,
     ].includes(request.method as typeof zcodeProtocolMethods.sessionCreate);
     if (legacyMutation) this.legacyMutationInFlight++;
     try {

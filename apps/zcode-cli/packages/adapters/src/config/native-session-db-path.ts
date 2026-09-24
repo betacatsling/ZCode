@@ -10,8 +10,10 @@ export function resolveConfiguredSessionDbPath(config: ConfigResult, cwd?: strin
 }
 
 /** Pure path lookup (reads config only); never opens or migrates a session database. */
-export function resolveNativeSessionDbPath(options: ConfigFactoryOptions & { cwd: string }): string {
+export function resolveNativeSessionDbPath(
+  options: Pick<ConfigFactoryOptions, 'env' | 'userConfigPath' | 'skipUserConfig'> & { cwd: string },
+): string {
   const { cwd, ...configOptions } = options;
   // Match protocol bootstrap: config is loaded without project discovery; cwd only anchors relative DB paths.
-  return resolveConfiguredSessionDbPath(createConfig(configOptions), cwd);
+  return resolveConfiguredSessionDbPath(createConfig({ ...configOptions, suppressDiagnostics: true }), cwd);
 }

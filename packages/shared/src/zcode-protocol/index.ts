@@ -3561,18 +3561,29 @@ export const zcodeOffPeakListResultSchema = z
 export type ZCodeOffPeakListProtocolResult = z.infer<typeof zcodeOffPeakListResultSchema>;
 
 /** Trusted Node stdio control plane; deliberately not a renderer service RPC. */
-export const nativeMaintenanceLeaseSchema = z.object({ epoch: z.string().uuid(), leaseId: z.string().uuid() }).strict();
+export const nativeMaintenanceLeaseSchema = z
+  .object({ epoch: z.string().uuid(), leaseId: z.string().uuid() })
+  .strict();
 export type NativeMaintenanceLease = z.infer<typeof nativeMaintenanceLeaseSchema>;
-export const nativeMaintenanceActivitySchema = z.object({
-  epoch: z.string().uuid(), frozen: z.boolean(), active: z.number().int().nonnegative(),
-  accepted: z.number().int().nonnegative(), pending: z.number().int().nonnegative(),
-  tools: z.number().int().nonnegative(), approvals: z.number().int().nonnegative(),
-  unknown: z.boolean(),
-}).strict();
+export const nativeMaintenanceActivitySchema = z
+  .object({
+    epoch: z.string().uuid(),
+    frozen: z.boolean(),
+    active: z.number().int().nonnegative(),
+    accepted: z.number().int().nonnegative(),
+    pending: z.number().int().nonnegative(),
+    tools: z.number().int().nonnegative(),
+    approvals: z.number().int().nonnegative(),
+    unknown: z.boolean(),
+  })
+  .strict();
 export type NativeMaintenanceActivity = z.infer<typeof nativeMaintenanceActivitySchema>;
-export const nativeMaintenanceFreezeResultSchema = z.object({
-  lease: nativeMaintenanceLeaseSchema, activity: nativeMaintenanceActivitySchema,
-}).strict();
+export const nativeMaintenanceFreezeResultSchema = z
+  .object({
+    lease: nativeMaintenanceLeaseSchema,
+    activity: nativeMaintenanceActivitySchema,
+  })
+  .strict();
 export type NativeMaintenanceFreezeResult = z.infer<typeof nativeMaintenanceFreezeResultSchema>;
 export const nativeMaintenanceReleaseResultSchema = z.object({ released: z.boolean() }).strict();
 

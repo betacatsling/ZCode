@@ -29,8 +29,10 @@ import {
   ZCODE_MODEL_REASONING_SEPARATOR,
   isRemoteWorkspaceIdentity,
   ZCODE_PROTOCOL_NAME,
-  nativeMaintenanceLeaseSchema, nativeMaintenanceActivitySchema,
-  nativeMaintenanceFreezeResultSchema, nativeMaintenanceReleaseResultSchema,
+  nativeMaintenanceLeaseSchema,
+  nativeMaintenanceActivitySchema,
+  nativeMaintenanceFreezeResultSchema,
+  nativeMaintenanceReleaseResultSchema,
   ZCODE_PROTOCOL_VERSION,
   zcodeMcpListResultSchema,
   zcodePermissionRequestParamsSchema,
@@ -1058,12 +1060,22 @@ function resolveOffPeakToolSelection(
 }
 /** Node-local only: not registered as an RPC service or exposed to renderer. */
 export interface NativeMaintenanceControlPort {
-  freeze(target: ZCodeAgentWorkspaceTarget): Promise<import("@zcode/shared").NativeMaintenanceFreezeResult>;
-  getActivity(target: ZCodeAgentWorkspaceTarget, lease: import("@zcode/shared").NativeMaintenanceLease): Promise<import("@zcode/shared").NativeMaintenanceActivity>;
-  release(target: ZCodeAgentWorkspaceTarget, lease: import("@zcode/shared").NativeMaintenanceLease): Promise<boolean>;
+  freeze(
+    target: ZCodeAgentWorkspaceTarget,
+  ): Promise<import("@zcode/shared").NativeMaintenanceFreezeResult>;
+  getActivity(
+    target: ZCodeAgentWorkspaceTarget,
+    lease: import("@zcode/shared").NativeMaintenanceLease,
+  ): Promise<import("@zcode/shared").NativeMaintenanceActivity>;
+  release(
+    target: ZCodeAgentWorkspaceTarget,
+    lease: import("@zcode/shared").NativeMaintenanceLease,
+  ): Promise<boolean>;
 }
 const nativeMaintenancePorts = new WeakMap<IZCodeAgentService, NativeMaintenanceControlPort>();
-export function getNativeMaintenanceControlPort(service: IZCodeAgentService): NativeMaintenanceControlPort {
+export function getNativeMaintenanceControlPort(
+  service: IZCodeAgentService,
+): NativeMaintenanceControlPort {
   const port = nativeMaintenancePorts.get(service);
   if (!port) throw new Error("native maintenance control unavailable for this service");
   return port;
@@ -5693,7 +5705,9 @@ export function createZCodeAgentService(
     async freeze(target) {
       const { key, client } = await currentClient(target);
       const result = await client.request(
-        zcodeProtocolMethods.nativeMaintenanceFreeze, {}, nativeMaintenanceFreezeResultSchema,
+        zcodeProtocolMethods.nativeMaintenanceFreeze,
+        {},
+        nativeMaintenanceFreezeResultSchema,
       );
       assertCurrent(key, client);
       return result;
@@ -5701,8 +5715,10 @@ export function createZCodeAgentService(
     async getActivity(target, lease) {
       const { key, client } = await currentClient(target);
       const result = await client.request(
-        zcodeProtocolMethods.nativeMaintenanceGetActivity, nativeMaintenanceLeaseSchema.parse(lease),
-        nativeMaintenanceActivitySchema, { lifecycle: "observation" },
+        zcodeProtocolMethods.nativeMaintenanceGetActivity,
+        nativeMaintenanceLeaseSchema.parse(lease),
+        nativeMaintenanceActivitySchema,
+        { lifecycle: "observation" },
       );
       assertCurrent(key, client);
       if (result.epoch !== lease.epoch || !result.frozen)
@@ -5712,7 +5728,8 @@ export function createZCodeAgentService(
     async release(target, lease) {
       const { key, client } = await currentClient(target);
       const result = await client.request(
-        zcodeProtocolMethods.nativeMaintenanceRelease, nativeMaintenanceLeaseSchema.parse(lease),
+        zcodeProtocolMethods.nativeMaintenanceRelease,
+        nativeMaintenanceLeaseSchema.parse(lease),
         nativeMaintenanceReleaseResultSchema,
       );
       assertCurrent(key, client);
