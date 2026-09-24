@@ -26,7 +26,7 @@ Catalog selection → hierarchy.resolveOwner(target, workspace, alias) → shell
 Desktop continuous / mobile replayable → same Host journal; shell only selects view
 ```
 
-When a prior workbench binding has no current proof (e.g. renderer restart), it is never classified as native merely from its ID or path. The UI must obtain a fresh hierarchy resolution before restoring execution. Only renderer-local navigation proofs are cached while mounted; the Catalog and Host remain authoritative. Acceptance: native plus two Pi siblings in a workspace, late owner resolution, focus/draft persistence, desktop/mobile rendering, unknown no native RPC, and reopen without create.
+When a prior workbench binding has no current proof (e.g. renderer restart), it is never classified as native merely from its ID or path. The UI must obtain a fresh hierarchy resolution before restoring execution. Only renderer-local navigation proofs are cached while mounted; the Catalog and Host remain authoritative. Focus/split of an unproven binding must not call native navigation; focus of a proven external binding selects that owner's Host view and never sends its ID to native. A shell-selected external binding must be the active workbench binding (including split placement), not a stale native activeTaskId. A late response for a different attachment cannot displace the current selection. Acceptance: native plus two Pi siblings in a workspace, late owner resolution, focus/draft persistence, desktop/mobile rendering, unknown no native RPC, and reopen without create.
 
 ## Current integration gates
 

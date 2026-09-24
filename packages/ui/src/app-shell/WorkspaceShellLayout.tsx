@@ -51,6 +51,7 @@ import { WorkspaceHeader } from "@/WorkspaceHeader.js";
 import { WorkspaceSidebar, type SidebarFileTreeOpenRequest } from "@/WorkspaceSidebar.js";
 import { MountedProjectSidebar } from "@/project-sidebar/MountedProjectSidebar.js";
 import { hasMountedHierarchy } from "@/hooks/useMountedProjectSidebar.js";
+import { matchesMountedSessionOwner, type MountedSessionOwner } from "@/v4/mountedSessionOwner.js";
 import { AnimatedSidePanePanel } from "@/app-shell/AnimatedSidePanePanel.js";
 import {
   findScreenshotSurfaceTabForRender,
@@ -362,6 +363,21 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
   );
   const [isSidebarFileTreeOpen, setIsSidebarFileTreeOpen] = useState(false);
   const workspaceKey = workspaceIdentity?.trim() || workspaceAbsPath;
+  const mountedHierarchyEnabled = hasMountedHierarchy(baseServices);
+  // Only proofs returned by resolveOwner enter this renderer-local view selection; Host/Catalog own facts.
+  const [mountedOwners, setMountedOwners] = useState<readonly MountedSessionOwner[]>([]);
+  const [selectedMountedOwner, setSelectedMountedOwner] = useState<MountedSessionOwner | null>(
+    null,
+  );
+  const selectedExternalId =
+    selectedMountedOwner?.kind === "external" &&
+    matchesMountedSessionOwner(selectedMountedOwner, selectedMountedOwner.spec.hostSessionId, {
+      workspacePath: workspaceAbsPath,
+      workspaceIdentity,
+      remoteSessionId: workspaceRemoteSessionId,
+    })
+      ? selectedMountedOwner.spec.hostSessionId
+      : null;
   const screenshotSurfaceRequest = useBrowserScreenshotSurfaceRequest(sidePaneState?.tabs ?? []);
   const screenshotSurfaceTab = screenshotSurfaceRequest
     ? findScreenshotSurfaceTabForRender(sidePaneState?.tabs ?? [], screenshotSurfaceRequest)
@@ -839,20 +855,25 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
     },
     [onCreateTask, showChatMainView, workspaceReadOnlyReason],
   );
-  const shellWorkbenchBinding = useMemo<WorkbenchSessionBinding | null>(
-    () =>
-      activeTaskId
-        ? {
-            workspaceScope: {
-              workspacePath: workspaceAbsPath,
-              ...(workspaceIdentity?.trim() ? { workspaceIdentity } : {}),
-              ...(workspaceRemoteSessionId ? { remoteSessionId: workspaceRemoteSessionId } : {}),
-            },
-            sessionId: activeTaskId,
-          }
-        : null,
-    [activeTaskId, workspaceAbsPath, workspaceIdentity, workspaceRemoteSessionId],
-  );
+  const shellWorkbenchBinding = useMemo<WorkbenchSessionBinding | null>(() => {
+    const selectedId = selectedExternalId ?? activeTaskId;
+    return selectedId
+      ? {
+          workspaceScope: {
+            workspacePath: workspaceAbsPath,
+            ...(workspaceIdentity?.trim() ? { workspaceIdentity } : {}),
+            ...(workspaceRemoteSessionId ? { remoteSessionId: workspaceRemoteSessionId } : {}),
+          },
+          sessionId: selectedId,
+        }
+      : null;
+  }, [
+    activeTaskId,
+    selectedExternalId,
+    workspaceAbsPath,
+    workspaceIdentity,
+    workspaceRemoteSessionId,
+  ]);
   const handleCreateAutomationInChat = useCallback(
     (prompt: string, targetWorkspace?: { workspacePath: string; workspaceIdentity?: string }) => {
       // 带 target 时跳过活动 workspace 只读检查，交由 handleCreateTaskInChat / root 动作在
@@ -876,6 +897,7 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
       expectedUnreadAt?: number,
     ) => {
       {
+        setSelectedMountedOwner(null);
         const workspaceResult = ensureTaskNavigationWorkspace({
           workspacePath: targetWorkspacePath,
           workspaceIdentity: targetWorkspaceIdentity,
@@ -1045,6 +1067,64 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
       workspaceTabs,
     ],
   );
+  const handleNavigateMountedOwner = useCallback(
+    (owner: MountedSessionOwner) => {
+      const sessionId =
+        owner.kind === "external" ? owner.spec.hostSessionId : owner.originalSessionId;
+      // Bug 原因：Catalog workspace 是目标事实，不能以 workspacePath 补开 tab 或让
+      // Host ID 进入 handleSelectTask 的 native task 状态。仅当前真实 attachment 可选中。
+      if (
+        !matchesMountedSessionOwner(owner, sessionId, {
+          workspacePath: workspaceAbsPath,
+          workspaceIdentity,
+          remoteSessionId: workspaceRemoteSessionId,
+        })
+      ) {
+        toast(locale === "zh-CN" ? "目标工作区尚未连接" : "Target workspace is not attached");
+        return;
+      }
+      setMountedOwners((previous) => [
+        ...previous.filter(
+          (entry) =>
+            !(
+              entry.scope.targetId === owner.scope.targetId &&
+              entry.scope.workspaceId === owner.scope.workspaceId &&
+              (entry.kind === "external" ? entry.spec.hostSessionId : entry.originalSessionId) ===
+                sessionId
+            ),
+        ),
+        owner,
+      ]);
+      setSelectedMountedOwner(owner);
+      showChatMainView();
+      if (owner.kind === "native") {
+        handleSelectTaskInChat(
+          owner.scope.workspacePath,
+          owner.originalSessionId,
+          owner.scope.workspaceIdentity,
+          owner.scope.remoteSessionId,
+        );
+        setSelectedMountedOwner(owner);
+      } else {
+        selectWorkbenchSession(shellWorkbenchBinding, {
+          workspacePath: owner.scope.workspacePath,
+          workspaceIdentity: owner.scope.workspaceIdentity,
+          ...(owner.scope.remoteSessionId ? { remoteSessionId: owner.scope.remoteSessionId } : {}),
+          sessionId,
+        });
+      }
+    },
+    [
+      handleSelectTaskInChat,
+      locale,
+      shellWorkbenchBinding,
+      showChatMainView,
+      workspaceAbsPath,
+      workspaceIdentity,
+      workspaceRemoteSessionId,
+    ],
+  );
+
   const handlePaneActiveSessionChange = useCallback(
     (
       scope: {
@@ -1054,6 +1134,25 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
       },
       sessionId: string,
     ) => {
+      if (mountedHierarchyEnabled) {
+        const owner = mountedOwners.find((entry) =>
+          matchesMountedSessionOwner(entry, sessionId, scope),
+        );
+        // Bug 原因：恢复的无证明 binding 不能经 focus/split 回写 native；Host ID 同理。
+        if (!owner) return;
+        if (owner.kind === "external") {
+          setSelectedMountedOwner(owner);
+          return;
+        }
+        handleSelectTaskInChat(
+          owner.scope.workspacePath,
+          owner.originalSessionId,
+          owner.scope.workspaceIdentity,
+          owner.scope.remoteSessionId,
+        );
+        setSelectedMountedOwner(owner);
+        return;
+      }
       handleSelectTaskInChat(
         scope.workspacePath,
         sessionId,
@@ -1061,30 +1160,55 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
         scope.remoteSessionId,
       );
     },
-    [handleSelectTaskInChat],
+    [handleSelectTaskInChat, mountedHierarchyEnabled, mountedOwners],
   );
 
   const canOpenSessionInSplitPane = useCallback(
     (target: V4SplitPaneSessionTarget) => {
-      return canPlaceWorkbenchSessionInSplit(shellWorkbenchBinding, target, {
-        mode: "context-menu",
-        side: "right",
-      });
+      return (
+        (!mountedHierarchyEnabled ||
+          mountedOwners.some((owner) =>
+            matchesMountedSessionOwner(owner, target.sessionId, target),
+          )) &&
+        canPlaceWorkbenchSessionInSplit(shellWorkbenchBinding, target, {
+          mode: "context-menu",
+          side: "right",
+        })
+      );
     },
-    [shellWorkbenchBinding],
+    [mountedHierarchyEnabled, mountedOwners, shellWorkbenchBinding],
   );
   const handleOpenSessionInSplitPane = useCallback(
     (target: V4SplitPaneSessionTarget) => {
+      const owner = mountedHierarchyEnabled
+        ? mountedOwners.find((entry) => matchesMountedSessionOwner(entry, target.sessionId, target))
+        : undefined;
+      // Bug 原因：split context menu 可绕过普通 sidebar owner 验证并将 Host ID 发往 native。
+      if (mountedHierarchyEnabled && !owner) return;
       showChatMainView();
       const shouldSelectTarget = placeWorkbenchSessionInSplit(shellWorkbenchBinding, target, {
         mode: "context-menu",
         side: "right",
       });
       if (shouldSelectTarget) {
-        handleSelectTask(target.workspacePath, target.sessionId, target.workspaceIdentity);
+        if (owner?.kind === "external") setSelectedMountedOwner(owner);
+        else if (owner?.kind === "native") {
+          handleSelectTask(
+            owner.scope.workspacePath,
+            owner.originalSessionId,
+            owner.scope.workspaceIdentity,
+          );
+          setSelectedMountedOwner(owner);
+        } else handleSelectTask(target.workspacePath, target.sessionId, target.workspaceIdentity);
       }
     },
-    [handleSelectTask, shellWorkbenchBinding, showChatMainView],
+    [
+      handleSelectTask,
+      mountedHierarchyEnabled,
+      mountedOwners,
+      shellWorkbenchBinding,
+      showChatMainView,
+    ],
   );
   const handleStartDraftInWorkspaceInChat = useCallback(
     (
@@ -1560,30 +1684,12 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
               >
                 <WorkflowRunOpenProvider onOpenRun={handleOpenSidebarWorkflowRun}>
                   <div className="flex h-full min-h-0 flex-col">
-                    {hasMountedHierarchy(baseServices) ? (
+                    {mountedHierarchyEnabled ? (
                       <div className="max-h-[50%] min-h-0 shrink-0 overflow-auto">
                         <MountedProjectSidebar
                           services={baseServices}
                           locale={locale === "zh-CN" ? "zh" : "en"}
-                          onNavigate={(owner) => {
-                            // 修复目录别名误作为原生运行时 ID：只能使用解析所得原始 ID 和目标 scope。
-                            if (owner.kind === "external") {
-                              // 修复 Host ID 误流入原生 task 数据面的风险：SessionPane 的 owner prop 尚未
-                              // 由 split-pane 宿主接线，不能把外部会话伪装为原生 task 导航。
-                              toast(
-                                locale === "zh-CN"
-                                  ? "外部会话视图尚未接入分屏"
-                                  : "External session pane is not connected yet",
-                              );
-                              return;
-                            }
-                            handleSelectTaskInChat(
-                              owner.scope.workspacePath,
-                              owner.originalSessionId,
-                              owner.scope.workspaceIdentity,
-                              owner.scope.remoteSessionId,
-                            );
-                          }}
+                          onNavigate={handleNavigateMountedOwner}
                         />
                       </div>
                     ) : null}
@@ -1872,13 +1978,15 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
                                   桌面主区升级为分屏宿主（Layout/Focus 两层）；primary pane
                                   绑定语义与 testid 契约（paneId=workspace-main）不变。 */}
                             <V4WorkspaceChatArea
+                              mountedSessionRouting={mountedHierarchyEnabled ? "scoped" : "native"}
+                              mountedOwners={mountedHierarchyEnabled ? mountedOwners : []}
                               readOnly={Boolean(workspaceReadOnlyReason)}
                               foregroundEnabled={isWorkspaceVisible}
                               workspacePath={workspaceAbsPath}
                               workspaceIdentity={workspaceIdentity}
                               isDesktop={isDesktop === true}
                               remoteSessionId={workspaceRemoteSessionId}
-                              sessionId={activeTaskId}
+                              sessionId={selectedExternalId ?? activeTaskId}
                               activeSelectionSideChatSessionId={activeSelectionSideChatSessionId}
                               provider={activeTaskProvider ?? undefined}
                               onSessionCreated={handleV4SessionCreated}
