@@ -17,5 +17,7 @@ export interface TrustedClaudeProfile {
   nativeModel(spec: SessionSpecV2, plan: BindingPlan): string;
   gateway: ClaudeGatewayLease;
   /** Tests only: the actual transport remains ClaudeCodeTransport. */
-  transportFactory?: (options: ClaudeTransportOptions) => import("./claudeTransport.js").ClaudeCodeTransport;
+  transportFactory?: (
+    options: ClaudeTransportOptions,
+  ) => import("./claudeTransport.js").ClaudeCodeTransport;
 }
