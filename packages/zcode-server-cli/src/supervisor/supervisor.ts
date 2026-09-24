@@ -30,7 +30,11 @@ import { unsafeActivityCount } from "./activityGuard.js";
 const log = createServiceLogger("server-supervisor");
 
 interface CoreLauncher {
-  launch(generation: number, release?: ReleaseManifest | null): ChildProcess;
+  launch(
+    generation: number,
+    release: ReleaseManifest | null,
+    bootMode: "open" | "held",
+  ): ChildProcess;
 }
 
 interface SupervisorOptions {
@@ -49,12 +53,23 @@ interface SupervisorOptions {
 
 type LifecycleOperationKind = "stop" | "restart" | "update" | "uninstall";
 
+interface MaintenanceLease {
+  token: object;
+  unsafeCount: number;
+  core: ChildProcess;
+  generation: number;
+  release(): Promise<void>;
+}
+
 export class Supervisor {
   private readonly layout: ServerLayout;
   private readonly lock: DataRootLock;
   private readonly crashBudget: CrashBudget;
   private readonly releaseManager: ReleaseManager;
   private core: ChildProcess | undefined;
+  private bootFence: { core: ChildProcess; generation: number; leaseId: string } | undefined;
+  private bootMode: "open" | "held" = "open";
+  private deferredRestartGeneration: number | undefined;
   private control: Awaited<ReturnType<typeof createControlServer>> | undefined;
   private state: LifecycleState = "stopped";
   private generation = 0;
@@ -69,9 +84,9 @@ export class Supervisor {
     | { kind: LifecycleOperationKind; promise: Promise<unknown> }
     | undefined;
   private activeRelease: ReleaseManifest | null = null;
-  private fallbackMaintenance: { release(): Promise<void> } | undefined;
-  private maintenanceInFlight = false;
-  private maintenanceHeld = false;
+  private fallbackMaintenance: MaintenanceLease | undefined;
+  private maintenanceInFlight: object | undefined;
+  private maintenanceHeld: object | undefined;
 
   public constructor(private readonly options: SupervisorOptions) {
     this.layout = options.layout ?? resolveServerLayout();
@@ -279,14 +294,22 @@ export class Supervisor {
       throw new Error("Active or uncertain tasks require --force for update");
     }
     try {
-      return await this.applyUpdateWithLease(pending, force);
+      return await this.applyUpdateWithLease(pending, force, maintenance);
     } finally {
       await maintenance.release();
     }
   }
 
-  private async applyUpdateWithLease(pending: ReleaseManifest, force: boolean): Promise<unknown> {
+  private async applyUpdateWithLease(
+    pending: ReleaseManifest,
+    force: boolean,
+    maintenance: MaintenanceLease,
+  ): Promise<unknown> {
     const previous = await this.releaseManager.readCurrent();
+    let committed = false;
+    // 中文：读指针是异步 IO，期间旧 Core 可能退出并被 crash timer 替换；
+    // 原代际冻结不能授权停止新 Core，即使 --force 也必须重新验证身份。
+    this.assertMaintenanceOwner(maintenance);
     log.info("applying pending release", { version: pending.version, force });
     await this.stopCore("update");
     this.state = "updating";
@@ -295,12 +318,28 @@ export class Supervisor {
       await this.releaseManager.applyPendingWithTransaction(previous);
       this.activeRelease = pending;
       this.state = "starting";
-      this.launchCore();
-      await waitForUpdateReady(() => this.state, this.options.coreReadyTimeoutMs ?? 15_000);
+      this.launchCore("held");
+      await waitForUpdateReady(
+        () => (this.bootFence ? "ready" : this.state),
+        this.options.coreReadyTimeoutMs ?? 15_000,
+      );
+      const candidate = this.requireBootFence();
       await this.releaseManager.completeUpdate();
+      committed = true;
+      // 中文：commit 本身是异步 IO；只有同一代际还活着才可释放它的启动冻结。
+      this.assertBootFence(candidate);
+      await this.releaseBootFence(candidate);
       log.info("release applied", { version: pending.version });
       return { applied: true, version: pending.version };
     } catch (error) {
+      if (committed) {
+        // 中文：commit 后 release 回执丢失时，候选 Core 可能已开放并接收新请求；
+        // 再回滚会无凭据地中断它。保留 current、锁和诊断，显式人工恢复。
+        this.state = "stop-failed";
+        this.lastExitReason = `committed update admission uncertain: ${updateErrorMessage(error)}`;
+        await this.persistStatusSnapshot();
+        throw error;
+      }
       this.enterUpdateRollback();
       // 更新后的 Core 未 ready 时必须先停止仍存活的子进程，再恢复 current 指针。
       // 否则 timeout 路径会覆盖 this.core 引用后遗留新 Core，与回滚后的旧 Core 并存。
@@ -330,9 +369,13 @@ export class Supervisor {
       this.state = "stopped";
       if (previous) {
         this.state = "starting";
-        this.launchCore();
+        this.launchCore("held");
         try {
-          await waitForUpdateReady(() => this.state, this.options.coreReadyTimeoutMs ?? 15_000);
+          await waitForUpdateReady(
+            () => (this.bootFence ? "ready" : this.state),
+            this.options.coreReadyTimeoutMs ?? 15_000,
+          );
+          await this.releaseBootFence(this.requireBootFence());
         } catch (rollbackError) {
           log.error("previous release rollback failed", rollbackError);
           // 旧 release ready 超时只改状态会让仍存活的 Core、PID 和 lock 与 stopped 脱节；复用 stopCore 等待 exit/close，失败则保持 stop-failed。
@@ -364,11 +407,12 @@ export class Supervisor {
     };
   }
 
-  private launchCore(): void {
+  private launchCore(bootMode: "open" | "held" = "open"): void {
     const generation = ++this.generation;
-    const child = this.options.launcher.launch(generation, this.activeRelease);
+    const child = this.options.launcher.launch(generation, this.activeRelease, bootMode);
     this.core = child;
     this.clearCoreScopedStatus();
+    this.bootMode = bootMode;
     log.info("launching server core", { generation, pid: child.pid });
     child.on("message", (raw: unknown) => this.handleCoreMessage(child, generation, raw));
     let terminalObserved = false;
@@ -405,7 +449,11 @@ export class Supervisor {
       });
       void this.persistStatusSnapshot();
       setTimeout(() => {
-        if (this.state !== "crashed") return;
+        if (this.state !== "crashed" || this.generation !== generation || this.core) return;
+        if (this.lifecycleOperation) {
+          this.deferredRestartGeneration = generation;
+          return;
+        }
         this.state = "starting";
         this.launchCore();
       }, decision.delayMs).unref();
@@ -444,7 +492,16 @@ export class Supervisor {
       // ready 只对当前 starting 的 Core 有效；stopping/stopped/stop-failed 阶段的迟到消息
       // 不能复活已经收口或进入不确定终态的 Supervisor。
       if (message.generation !== expectedGeneration || this.state !== "starting") return;
-      this.state = "ready";
+      if (this.bootMode === "held") {
+        if (!message.bootLeaseId || this.bootFence) return;
+        this.bootFence = {
+          core: child,
+          generation: expectedGeneration,
+          leaseId: message.bootLeaseId,
+        };
+      } else {
+        this.state = "ready";
+      }
       this.host = message.host;
       this.port = message.port;
       this.generation = message.generation;
@@ -482,8 +539,12 @@ export class Supervisor {
   }
 
   private clearCoreScopedStatus(): void {
+    this.bootFence = undefined;
+    this.bootMode = "open";
+    this.deferredRestartGeneration = undefined;
     this.fallbackMaintenance = undefined;
-    this.maintenanceHeld = false;
+    this.maintenanceHeld = undefined;
+    this.maintenanceInFlight = undefined;
     this.host = null;
     this.port = null;
     this.startedAt = null;
@@ -493,29 +554,80 @@ export class Supervisor {
   }
 
   /** Freeze admissions before reading fresh native + external activity; a snapshot alone races new commands. */
-  private async beginMaintenance(): Promise<{ unsafeCount: number; release(): Promise<void> }> {
-    // 中文：两条控制连接可同时进入 begin；直到 IPC 回应前都必须预留单个冻结请求。
-    // fallback 持有期间 update/uninstall 也不能共用或偷释放它的 lease。
-    if (this.maintenanceInFlight || this.maintenanceHeld)
-      throw new Error("Core maintenance operation already in progress");
-    this.maintenanceInFlight = true;
-    try {
-      const lease = await this.requestMaintenance();
-      this.maintenanceHeld = true;
-      return {
-        unsafeCount: lease.unsafeCount,
-        release: async () => {
-          await lease.release();
-          this.maintenanceHeld = false;
-        },
-      };
-    } finally {
-      this.maintenanceInFlight = false;
+  private requireBootFence(): { core: ChildProcess; generation: number; leaseId: string } {
+    const fence = this.bootFence;
+    if (!fence) throw new Error("Core boot generation lease missing; candidate remains unsafe");
+    this.assertBootFence(fence);
+    return fence;
+  }
+
+  private assertBootFence(fence: {
+    core: ChildProcess;
+    generation: number;
+    leaseId: string;
+  }): void {
+    if (
+      this.core !== fence.core ||
+      this.generation !== fence.generation ||
+      this.state !== "starting"
+    )
+      throw new Error("Core boot generation changed during update; candidate unsafe");
+  }
+
+  private async releaseBootFence(fence: {
+    core: ChildProcess;
+    generation: number;
+    leaseId: string;
+  }): Promise<void> {
+    this.assertBootFence(fence);
+    await this.releaseCoreLease(fence.core, fence.generation, fence.leaseId);
+    this.assertBootFence(fence);
+    if (this.bootFence === fence) {
+      this.bootFence = undefined;
+      this.state = "ready";
     }
   }
 
-  private async requestMaintenance(): Promise<{ unsafeCount: number; release(): Promise<void> }> {
+  private assertMaintenanceOwner(lease: MaintenanceLease): void {
+    if (
+      this.core !== lease.core ||
+      this.generation !== lease.generation ||
+      this.maintenanceHeld !== lease.token
+    )
+      throw new Error("Core generation changed since maintenance lease; operation unsafe");
+  }
+
+  private async beginMaintenance(): Promise<MaintenanceLease> {
+    // 中文：冻结请求与 lease 的状态都必须以 token 比较；旧请求的 finally/迟到 release
+    // 不能覆盖新代际的预留或已持有租约。
+    if (this.maintenanceInFlight || this.maintenanceHeld)
+      throw new Error("Core maintenance operation already in progress");
+    const token = {};
+    this.maintenanceInFlight = token;
+    try {
+      const lease = await this.requestMaintenance();
+      if (this.maintenanceInFlight !== token)
+        throw new Error("Core generation changed during maintenance acquire");
+      this.maintenanceHeld = token;
+      let released = false;
+      return {
+        ...lease,
+        token,
+        release: async () => {
+          if (released) return;
+          await lease.release();
+          released = true;
+          if (this.maintenanceHeld === token) this.maintenanceHeld = undefined;
+        },
+      };
+    } finally {
+      if (this.maintenanceInFlight === token) this.maintenanceInFlight = undefined;
+    }
+  }
+
+  private async requestMaintenance(): Promise<Omit<MaintenanceLease, "token">> {
     const core = this.core;
+    const generation = this.generation;
     if (!core || this.state !== "ready") throw new Error("Core unavailable for maintenance");
     const requestId = randomUUID();
     const reply = await new Promise<
@@ -560,54 +672,69 @@ export class Supervisor {
       !reply.nativeActivity ||
       !reply.externalActivity ||
       this.core !== core ||
+      this.generation !== generation ||
       this.state !== "ready"
     ) {
       throw new Error("Cannot confirm maintenance admission fence; Core remains unsafe");
     }
     const leaseId = reply.leaseId;
     return {
+      core,
+      generation,
       unsafeCount:
         unsafeActivityCount(0, reply.nativeActivity) +
         unsafeActivityCount(0, reply.externalActivity),
       release: async () => {
-        if (this.core !== core) return; // old Core exited; its fence cannot affect the next generation.
-        const releaseRequestId = randomUUID();
-        const acknowledged = await new Promise<boolean>((resolve) => {
-          const finish = (ok: boolean): void => {
-            clearTimeout(timer);
-            core.off("message", onMessage);
-            core.off("exit", onExit);
-            core.off("close", onExit);
-            resolve(ok);
-          };
-          const onExit = (): void => finish(false);
-          const onMessage = (raw: unknown): void => {
-            const parsed = coreMessageSchema.safeParse(raw);
-            if (
-              parsed.success &&
-              parsed.data.type === "maintenance" &&
-              parsed.data.requestId === releaseRequestId
-            )
-              finish(parsed.data.leaseId === leaseId);
-          };
-          const timer = setTimeout(() => finish(false), 2_000);
-          core.on("message", onMessage);
-          core.once("exit", onExit);
-          core.once("close", onExit);
-          try {
-            core.send(
-              { command: "maintenance-release", requestId: releaseRequestId, leaseId },
-              (error) => {
-                if (error) finish(false);
-              },
-            );
-          } catch {
-            finish(false);
-          }
-        });
-        if (!acknowledged) throw new Error("Cannot verify maintenance admission release");
+        if (this.core !== core || this.generation !== generation) return; // 旧租约不可触及新代际。
+        await this.releaseCoreLease(core, generation, leaseId);
       },
     };
+  }
+
+  private async releaseCoreLease(
+    core: ChildProcess,
+    generation: number,
+    leaseId: string,
+  ): Promise<void> {
+    const releaseRequestId = randomUUID();
+    const acknowledged = await new Promise<boolean>((resolve) => {
+      let settled = false;
+      const finish = (ok: boolean): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        core.off("message", onMessage);
+        core.off("exit", onExit);
+        core.off("close", onExit);
+        resolve(ok);
+      };
+      const onExit = (): void => finish(false);
+      const onMessage = (raw: unknown): void => {
+        const parsed = coreMessageSchema.safeParse(raw);
+        if (
+          parsed.success &&
+          parsed.data.type === "maintenance" &&
+          parsed.data.requestId === releaseRequestId
+        )
+          finish(parsed.data.leaseId === leaseId);
+      };
+      const timer = setTimeout(() => finish(false), 2_000);
+      core.on("message", onMessage);
+      core.once("exit", onExit);
+      core.once("close", onExit);
+      try {
+        core.send(
+          { command: "maintenance-release", requestId: releaseRequestId, leaseId },
+          (error) => {
+            if (error) finish(false);
+          },
+        );
+      } catch {
+        finish(false);
+      }
+    });
+    if (!acknowledged || this.core !== core || this.generation !== generation)
+      throw new Error("Cannot verify maintenance admission release for Core generation");
   }
 
   /** Fresh Core roundtrip closes the heartbeat-to-update race after a command was admitted. */
@@ -696,6 +823,7 @@ export class Supervisor {
             "Cannot migrate fallback server while tasks are active, waiting or uncertain",
           );
         }
+        this.assertMaintenanceOwner(lease);
         this.fallbackMaintenance = lease;
         return { ready: true };
       }
@@ -720,10 +848,12 @@ export class Supervisor {
             "Cannot uninstall while tasks are active, waiting or uncertain; stop the server first",
           );
         }
+        this.assertMaintenanceOwner(maintenance);
         log.info("uninstall confirmed, stopping server");
         try {
           this.startAcknowledgedLifecycleOperation("uninstall", async () => {
             try {
+              this.assertMaintenanceOwner(maintenance);
               await this.stopInternal("uninstall");
             } finally {
               // 中文：停止失败且 Core 仍存活时释放原 lease，避免冻结永久遗留；
@@ -751,14 +881,26 @@ export class Supervisor {
     const promise = Promise.resolve().then(operation);
     this.lifecycleOperation = { kind, promise };
     void promise.then(
-      () => {
-        if (this.lifecycleOperation?.promise === promise) this.lifecycleOperation = undefined;
-      },
-      () => {
-        if (this.lifecycleOperation?.promise === promise) this.lifecycleOperation = undefined;
-      },
+      () => this.finishLifecycleOperation(promise),
+      () => this.finishLifecycleOperation(promise),
     );
     return promise;
+  }
+
+  private finishLifecycleOperation(promise: Promise<unknown>): void {
+    if (this.lifecycleOperation?.promise !== promise) return;
+    this.lifecycleOperation = undefined;
+    // 中文：更新租约未决时 Core 崩溃不能自动换代；待旧操作彻底结算后，
+    // 才能使用已经确认终态的 crash budget 恢复。旧定时器不能复活新 owner。
+    if (
+      this.state === "crashed" &&
+      !this.core &&
+      this.deferredRestartGeneration === this.generation
+    ) {
+      this.state = "starting";
+      this.launchCore();
+      void this.persistStatusSnapshot();
+    }
   }
 
   private startAcknowledgedLifecycleOperation(

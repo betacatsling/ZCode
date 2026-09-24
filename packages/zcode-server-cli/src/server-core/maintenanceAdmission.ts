@@ -17,6 +17,15 @@ export class CoreMaintenanceAdmission {
 
   constructor(private readonly port: CoreMaintenanceAdmissionPort | undefined) {}
 
+  /** Adopt only the factory's pre-initialization boot hold; never acquire a second fence. */
+  adoptBootLease(lease: { release(): Promise<void> }): string {
+    if (this.pending || this.lease || this.closed)
+      throw new Error("Core admission lease already held or closing");
+    const id = randomUUID();
+    this.lease = { id, release: lease.release };
+    return id;
+  }
+
   /** Missing wiring or read errors are unsafe; never substitute an idle snapshot. */
   async begin(): Promise<{ leaseId: string; native: RuntimeActivity; external: RuntimeActivity }> {
     if (!this.port) throw new Error("Runtime maintenance admission coordinator unavailable");

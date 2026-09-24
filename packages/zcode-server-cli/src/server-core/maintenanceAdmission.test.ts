@@ -86,3 +86,26 @@ test("missing source blocks; failed activity read returns uncertain while retain
   await gate.release(result.leaseId);
   assert.equal(released, true);
 });
+
+test("factory boot hold is adopted once and released only by its token", async () => {
+  let releases = 0;
+  const admission = new CoreMaintenanceAdmission({
+    async freezeAdmissions() {
+      throw new Error("boot must not acquire a second lease");
+    },
+    async readActivity() {
+      throw new Error("boot cannot require an idle census");
+    },
+  });
+  const id = admission.adoptBootLease({
+    async release() {
+      releases++;
+    },
+  });
+  await assert.rejects(admission.begin(), /already held/);
+  await assert.rejects(admission.release("00000000-0000-4000-8000-000000000000"), /mismatch/);
+  assert.equal(releases, 0);
+  await admission.release(id);
+  assert.equal(releases, 1);
+  await assert.rejects(admission.release(id), /mismatch/);
+});

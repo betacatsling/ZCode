@@ -23,6 +23,7 @@ declare const __ZCODE_BUILTIN_PROVIDER_CONFIG_JSON__: string | undefined;
 export async function runServerCore(
   generation: number,
   createAuthority: CoreAuthorityFactory = createProductionCoreAuthority,
+  bootHeld = false,
 ): Promise<void> {
   let shutdown: ((reason: string) => Promise<void>) | undefined;
   let parentDisconnected = false;
@@ -52,6 +53,7 @@ export async function runServerCore(
     installationId: serverId,
     profileRoot: resolveServerLayout(process.env.ZCODE_SERVER_ROOT).serverRoot,
     zcodeBuiltinProviderConfigFilePath,
+    admissionFence: bootHeld ? "held" : "open",
   });
   if (
     !authority.services ||
@@ -64,15 +66,28 @@ export async function runServerCore(
     throw new Error("Persistent Core authority is missing required lifecycle or maintenance ports");
   }
   const services = authority.services;
-  // 中文：服务装配负责保持新 admission 关闭，只有确认 Target 收据与归档策略后才打开。
-  // 失败只影响新 admission；已接纳控制、历史及恢复诊断仍可由同一 Core 提供。
+  const maintenance = new CoreMaintenanceAdmission(authority.maintenance);
+  let bootLeaseId: string | undefined;
+  // 中文：候选 Core 的原生/Host 写入必须在 factory 构造期间已关闭；
+  // IPC 在这里仅收养工厂原始租约，不能再次 freeze（会死锁，也无法弥补构造期空窗）。
   try {
+    if (bootHeld) {
+      if (!authority.bootAdmissionLease)
+        throw new Error("Core authority did not establish pre-initialization boot admission hold");
+      bootLeaseId = maintenance.adoptBootLease(authority.bootAdmissionLease);
+    }
+    // 失败只影响普通启动的新 admission；事务候选必须拒绝提交，否则恢复后可能接收写入。
     await authority.reconcileBeforeAdmission();
   } catch (error) {
+    if (bootHeld) {
+      disposeParentDisconnectHandler();
+      await maintenance.releaseHeld().catch(() => undefined);
+      await authority.dispose();
+      throw error;
+    }
     log.warn("Core authority reconciliation incomplete; new admission remains closed", error);
   }
   const taskActivityTracker = createTaskActivityTracker(services.getOptional(IZCodeAgentService));
-  const maintenance = new CoreMaintenanceAdmission(authority.maintenance);
   // V2 Host 由集成层挂载；旧 Host 若无法报告外部活动必须视为不确定，不能假定空闲。
   const host = services.getOptional(IAgentHostService) as
     | (IAgentHostService & { getRuntimeActivity?: () => Promise<RuntimeActivity> })
@@ -85,6 +100,7 @@ export async function runServerCore(
     // 中文：装配成功但 HTTP 绑定失败时不能留存单例 Catalog/Host 写入者。
     taskActivityTracker.dispose();
     disposeParentDisconnectHandler();
+    await maintenance.releaseHeld().catch(() => undefined);
     await authority
       .dispose()
       .catch((disposeError: unknown) =>
@@ -111,6 +127,7 @@ export async function runServerCore(
     port: http.port,
     version: ZCODE_VERSION,
     generation,
+    ...(bootLeaseId ? { bootLeaseId } : {}),
   });
   let shutdownStarted = false;
   let lastRunningTaskCount = taskActivityTracker.readRunningTaskCount();

@@ -257,7 +257,7 @@ async function runServe(
   const supervisor = new Supervisor({
     layout,
     launcher: {
-      launch: (generation, release) => {
+      launch: (generation, release, bootMode) => {
         const runtimeRoot = release?.releaseDir ? join(release.releaseDir, "runtime") : null;
         const corePath = runtimeRoot
           ? join(runtimeRoot, "server-core.js")
@@ -273,7 +273,7 @@ async function runServe(
         const releaseWiring = runtimeRoot
           ? createReleaseAgentWiring(runtimeRoot, runtimeNode, inheritedEnv)
           : runtimeOptions.bundledAgentWiring;
-        return fork(corePath, [String(generation)], {
+        return fork(corePath, [String(generation), bootMode], {
           execPath: runtimeNode,
           env: {
             ...inheritedEnv,

@@ -138,6 +138,7 @@ export const coreMessageSchema = z.discriminatedUnion("type", [
     port: z.number().int().positive(),
     version: z.string().min(1),
     generation: z.number().int().nonnegative(),
+    bootLeaseId: z.string().uuid().optional(),
   }),
   z.object({
     type: z.literal("heartbeat"),

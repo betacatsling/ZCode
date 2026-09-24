@@ -6,6 +6,8 @@ import type { CoreMaintenanceAdmissionPort } from "./maintenanceAdmission.js";
 export interface CoreAuthority {
   services: ServiceCollection;
   maintenance: CoreMaintenanceAdmissionPort;
+  /** Factory-owned admission barrier installed before business-capable initialization. */
+  bootAdmissionLease?: { release(): Promise<void> };
   reconcileBeforeAdmission(): Promise<void>;
   /** Close the profile/Target writer AND collection resources exactly once. */
   dispose(): Promise<void>;
@@ -15,6 +17,7 @@ export interface CoreAuthorityOptions {
   installationId: string;
   profileRoot: string;
   zcodeBuiltinProviderConfigFilePath: string;
+  admissionFence?: "open" | "held";
 }
 
 /** Public Node composition port. Missing export must fail boot BEFORE Core advertises ready. */
