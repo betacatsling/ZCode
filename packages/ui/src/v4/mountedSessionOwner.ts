@@ -1,22 +1,9 @@
-import type { HarnessCapabilitiesV2, SessionSpecV2 } from "@zcode/shared/agent-host";
+import { writableSessionSpecV2Schema, type HarnessCapabilitiesV2 } from "@zcode/shared/agent-host";
+import type { SessionOwner, WorkspaceNavigationScope } from "@zcode/services";
 
-/** Navigation proof issued by the authoritative target-scoped hierarchy, not inferred from a path. */
-export interface MountedSessionScope {
-  readonly targetId: string;
-  readonly workspaceId: string;
-  readonly workspaceIdentity: string;
-  readonly workspacePath: string;
-  readonly remoteSessionId?: string;
-}
-
-export type MountedSessionOwner =
-  | { readonly kind: "native"; readonly scope: MountedSessionScope; readonly originalSessionId: string }
-  | {
-      readonly kind: "external";
-      readonly scope: MountedSessionScope;
-      readonly spec: SessionSpecV2;
-      readonly historyOnly: boolean;
-    };
+/** The single authority is the public hierarchy service, not a renderer-side copy. */
+export type MountedSessionScope = WorkspaceNavigationScope;
+export type MountedSessionOwner = SessionOwner;
 
 /** Optional capabilities are authoritative Host facts; the UI never infers them from method presence. */
 export interface MountedExternalSession {
@@ -25,6 +12,25 @@ export interface MountedExternalSession {
 }
 
 /** Scope validation is required before any native/Host subscription or command. */
+export function sameMountedExternalOwner(
+  a: Extract<MountedSessionOwner, { kind: "external" }>,
+  b: Extract<MountedSessionOwner, { kind: "external" }>,
+): boolean {
+  const aSpec = writableSessionSpecV2Schema.safeParse(a.spec);
+  const bSpec = writableSessionSpecV2Schema.safeParse(b.spec);
+  return (
+    aSpec.success &&
+    bSpec.success &&
+    a.historyOnly === b.historyOnly &&
+    a.scope.targetId === b.scope.targetId &&
+    a.scope.workspaceId === b.scope.workspaceId &&
+    a.scope.workspaceIdentity === b.scope.workspaceIdentity &&
+    a.scope.workspacePath === b.scope.workspacePath &&
+    (a.scope.remoteSessionId ?? null) === (b.scope.remoteSessionId ?? null) &&
+    JSON.stringify(aSpec.data) === JSON.stringify(bSpec.data)
+  );
+}
+
 export function matchesMountedSessionOwner(
   owner: MountedSessionOwner,
   sessionId: string,
@@ -35,7 +41,8 @@ export function matchesMountedSessionOwner(
     owner.scope.workspaceIdentity !== key ||
     owner.scope.workspacePath !== scope.workspacePath ||
     (owner.scope.remoteSessionId ?? null) !== (scope.remoteSessionId ?? null)
-  ) return false;
+  )
+    return false;
   if (owner.kind === "native") return owner.originalSessionId === sessionId;
   return (
     owner.spec.hostSessionId === sessionId &&
