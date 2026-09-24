@@ -18,6 +18,7 @@ import type { NativeRuntimeFactsPort } from "./workspace-hierarchy/nativeProduct
 import { getNativeProcessControlPort } from "./zcode-agent/zcodeAgentService.js";
 import { IZCodeAgentService } from "./zcode-agent/zcodeAgent.js";
 import type { ServiceCollection } from "./collection.js";
+import type { CompositionOptions } from "./workspace-hierarchy/lazyComposition.js";
 import {
   createLocalServices,
   disposeServiceResourcesAndWait,
@@ -30,6 +31,8 @@ export interface CoreAuthorityOptions {
   /** Installation/runtime layout, not the writable profile root. */
   profileRoot: string;
   zcodeBuiltinProviderConfigFilePath: string;
+  /** Node-only trusted harness factories; never a serialized renderer capability. */
+  additionalTrustedHarnesses?: CompositionOptions["additionalTrustedHarnesses"];
 }
 export interface CoreAuthorityResult {
   services: ServiceCollection;
@@ -132,6 +135,7 @@ export async function createCoreAuthority(
       agentHostTargetId: options.installationId,
       workspaceCompositionRoot: join(configRoot, "workspace-hierarchy"),
       workspaceComposition: bridge,
+      additionalTrustedHarnesses: options.additionalTrustedHarnesses,
     });
     const nativeService = services.get(IZCodeAgentService);
     live = getNativeProcessControlPort(nativeService);

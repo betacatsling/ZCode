@@ -1414,6 +1414,8 @@ export function createLocalServices(options: {
   agentHostTargetId?: string;
   /** Core supplies an isolated, persistent profile root; windows never open this writer. */
   workspaceCompositionRoot?: string;
+  /** Node-only trusted harness factories; never serialized across RPC. */
+  additionalTrustedHarnesses?: CompositionOptions["additionalTrustedHarnesses"];
   /** Core's authenticated target; OS platform is not proof that a target is remote. */
   workspaceCompositionTarget?: CompositionOptions["target"];
   /** Required live native bridge, including the configured-path complete index and real CLI fence. */
@@ -2757,6 +2759,7 @@ export function createLocalServices(options: {
       native: composition.native,
       nativeActivity: composition.nativeActivity,
       nativeAdmissionFence: composition.nativeAdmissionFence,
+      additionalTrustedHarnesses: options.additionalTrustedHarnesses,
       resolveRemoteSession: composition.resolveRemoteSession,
       reconcileBoot: async (catalog) => {
         await catalog.reconcilePending();

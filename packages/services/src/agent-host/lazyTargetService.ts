@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { Emitter } from "@zcode/rpc";
 import type { ProviderRegistryService } from "@zcode/provider";
 import { writableSessionSpecV2Schema, type ExecutionTarget, type HarnessManifest } from "@zcode/shared/agent-host";
-import { HarnessRegistry } from "./harnessRegistry.js";
+import { HarnessRegistry, type HarnessAdapter } from "./harnessRegistry.js";
 import { createRegistryModelCatalog } from "./registryCatalog.js";
 import { createRpcAgentHostService } from "./rpcTargetService.js";
 import type { IAgentHostService } from "./serviceContract.js";
@@ -17,6 +17,7 @@ export function createLazyTargetAgentHostService(input: {
   registry: ProviderRegistryService;
   allowNewSessions: () => boolean;
   admission: WorkspaceAdmissionPort;
+  additionalTrustedHarnesses?: readonly { manifest: HarnessManifest; factory: () => HarnessAdapter }[];
 }): { service: IAgentHostService; dispose(): Promise<void> } {
   let target: AgentHostTargetService | undefined;
   let flight: Promise<AgentHostTargetService> | undefined;
@@ -39,6 +40,9 @@ export function createLazyTargetAgentHostService(input: {
       const harnesses = new HarnessRegistry();
       harnesses.registerTrusted(piManifest,
         () => createRegistryPiHarness({ root: join(input.root, "workers"), registry: input.registry }));
+      // 中文：仅受信 Node 工厂能注入；登记时严格验证 manifest/重复 ID，不执行仓库元数据。
+      for (const trusted of input.additionalTrustedHarnesses ?? [])
+        harnesses.registerTrusted(trusted.manifest, trusted.factory);
       // 中文：异步 import/Registry 可能晚于 close；关停后不得产生新的 Host 或写入者。
       if (disposed) throw new Error("agent host service disposed during adapter startup");
       const instance = new AgentHostTargetService({
