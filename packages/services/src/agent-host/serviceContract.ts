@@ -6,6 +6,7 @@ import type {
   AgentEvent,
   ExecutionTarget,
   HarnessCatalogEntry,
+  HarnessCapabilitiesV2,
   LegacySessionSpec,
   SessionSpecV2,
   StoredAgentSessionSummary,
@@ -17,6 +18,7 @@ import { createServiceDescriptor } from "../descriptors.js";
 export interface IAgentHostService {
   readonly onEvent: Event<{ spec: SessionSpecV2; event: AgentEvent }>; 
   catalogForTarget(targetId: string): Promise<readonly HarnessCatalogEntry[]>;
+  getSessionCapabilities(spec: SessionSpecV2 | LegacySessionSpec): Promise<HarnessCapabilitiesV2>;
   getRuntimeActivity(workspaceId: string): Promise<{ running: number; waiting: number; uncertain: number }>;
   getSessionSpec(scope: { targetId: string; workspaceId: string; hostSessionId: string }): Promise<SessionSpecV2 | undefined>;
   listWorkspaceSessions(workspaceId: string): Promise<StoredAgentSessionSummary[]>;

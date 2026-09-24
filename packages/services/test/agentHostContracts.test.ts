@@ -61,7 +61,8 @@ test("mock emits text/tool/approval and faults without pretending a denied tool 
   const mock = new MockHarness();
   const events: unknown[] = [];
   const unsubscribe = mock.subscribe("host-1", (event) => events.push(event));
-  await mock.create(spec);
+  await mock.create({ ...spec, schemaVersion: 2, projectId: "project-1", workspaceId: "workspace-1",
+    execution: { ...spec.execution, worktreeGeneration: "generation-1", cwdRelativeToWorktree: "." } });
   const execution = mock.send({ type: "send", commandId: "send-1", hostSessionId: "host-1", turnId: "turn-1", text: "edit file" });
   await mock.waitForInteraction("host-1");
   assert.equal(events.some((event) => (event as { kind: string }).kind === "interaction.requested"), true);

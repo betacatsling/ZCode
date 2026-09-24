@@ -26,6 +26,17 @@ async function tryTakeLock(path: string): Promise<FileHandle> {
   return lock;
 }
 
+export async function readJournalLines(path: string): Promise<string[]> {
+  let raw: string;
+  try { raw = await readFile(path, "utf8"); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+  if (raw && !raw.endsWith("\n")) throw new Error("truncated journal tail; inspect before reading history");
+  return raw ? raw.trimEnd().split("\n") : [];
+}
+
 export async function openJournal(root: string, path: string): Promise<{ file: FileHandle; lock: FileHandle; lockPath: string; lines: string[] }> {
   await mkdir(root, { recursive: true, mode: 0o700 });
   const lockPath = `${path}.lock`;

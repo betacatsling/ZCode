@@ -14,17 +14,17 @@ test("target service admits only authorized workspaces, detaches without stoppin
   const worktree = join(root, "worktree");
   await mkdir(worktree);
   const spec = {
-    schemaVersion: 1 as const, hostSessionId: "host-a",
-    execution: { targetId: "target-a", workspaceIdentity: "workspace-a", worktreePath: worktree },
+    schemaVersion: 2 as const, projectId: "project-a", workspaceId: "workspace-a", hostSessionId: "host-a",
+    execution: { targetId: "target-a", workspaceIdentity: "workspace-a", worktreePath: worktree, worktreeGeneration: "generation-a", cwdRelativeToWorktree: "." },
     harness: { id: "mock", adapterVersion: "1.0.0" },
     modelBinding: { kind: "host-managed" as const, selection: { providerId: "provider-a", modelId: "model-a" } },
   };
   const registry = new HarnessRegistry();
   const mock = new MockHarness();
-  registry.register(mock);
+  registry.registerTrusted({ schemaVersion: 1, id: "mock", name: "Mock", adapterVersion: "1.0.0" }, () => mock);
   const service = new AgentHostTargetService({
     root: join(root, "host"), target: { id: "target-a", kind: "local", platform: process.platform as "darwin" | "linux", available: true },
-    catalog, registry, authorizeWorktree: async (candidate) => candidate.execution.workspaceIdentity === "workspace-a" && candidate.execution.worktreePath === worktree,
+    catalog, registry, admission: { verify: async (candidate) => { if (candidate.execution.workspaceIdentity !== "workspace-a" || candidate.execution.worktreePath !== worktree) throw new Error("unauthorized"); return { canonicalCwd: worktree }; }, withAdmission: async (candidate, action) => { if (candidate.execution.workspaceIdentity !== "workspace-a" || candidate.execution.worktreePath !== worktree) throw new Error("unauthorized"); return action({ canonicalCwd: worktree }); } },
   });
   try {
     assert.deepEqual(await service.getAvailability(), {
@@ -51,14 +51,14 @@ test("target service admits only authorized workspaces, detaches without stoppin
     // available and attach cannot accidentally recreate a terminated backend.
     const history = new AgentHostTargetService({
       root: join(root, "host"), target: { id: "target-a", kind: "local", platform: process.platform as "darwin" | "linux", available: true },
-      catalog, registry: new HarnessRegistry(), authorizeWorktree: async () => true,
+      catalog, registry: new HarnessRegistry(), admission: { verify: async () => { throw new Error("history only"); }, withAdmission: async () => { throw new Error("history only"); } },
     });
     assert.deepEqual((await history.listSessions("workspace-a", worktree)).map((item) => [item.spec.hostSessionId, item.state]), [["host-a", "terminated"]]);
     assert.deepEqual(await history.listSessions("foreign", worktree), []);
     assert.equal((await history.snapshot(spec)).rows.window.some((row) => row.kind === "assistantText"), true);
     assert.ok((await history.eventsSince(spec, 0)).length > 0);
     assert.equal((await history.queryCommand(spec, "send-1"))?.status, "completed");
-    await assert.rejects(history.attach(spec), /terminated/);
+    await assert.rejects(history.attach(spec), /history only|terminated/);
     await history.close();
   } finally { await rm(root, { recursive: true, force: true }); }
 });

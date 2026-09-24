@@ -8,8 +8,8 @@ import { MockHarness } from "../src/agent-host/mockHarness.js";
 import { SessionHost } from "../src/agent-host/sessionHost.js";
 
 const spec = {
-  schemaVersion: 1 as const, hostSessionId: "host-a",
-  execution: { targetId: "local-a", workspaceIdentity: "workspace-a", worktreePath: "/tmp/fixture" },
+  schemaVersion: 2 as const, projectId: "project-a", workspaceId: "workspace-a", hostSessionId: "host-a",
+  execution: { targetId: "local-a", workspaceIdentity: "workspace-a", worktreePath: "/tmp/fixture", worktreeGeneration: "generation-a", cwdRelativeToWorktree: "." },
   harness: { id: "mock", adapterVersion: "1.0.0" },
   modelBinding: { kind: "host-managed" as const, selection: { providerId: "provider-a", modelId: "model-a" } },
 };
