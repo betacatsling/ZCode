@@ -20,3 +20,5 @@ export const codexTrustedManifest = {
   name: "Codex",
   adapterVersion: "0.156.1",
 } as const;
+
+/** V2 create/attach are the only writable Codex session contract; legacy V1 is Host history-only. */
