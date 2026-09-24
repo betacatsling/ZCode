@@ -12,6 +12,7 @@ import { AiSdkModelAdapter, type CreateAiSdkModelOptions } from "./runner.js";
 import {
   createOpenAiDeveloperRoleFetch,
   createOpenAiInstructionPlan,
+  withOpenAiPromptCacheKey,
 } from "./openai-developer-role.js";
 
 const modelOptions = (baseUrl: string, type = "openai-responses"): CreateAiSdkModelOptions => ({
@@ -124,6 +125,10 @@ test("OpenAI Responses adapter preserves concurrent opposite role plans, auth, o
       assert.equal(body.model, "synthetic-model");
       assert.equal(body.max_output_tokens, 100);
       assert.equal(body.instructions, undefined);
+      assert.equal(
+        body.prompt_cache_key,
+        rolesInWire(body).includes("developer") ? "synthetic-cache-key" : undefined,
+      );
       return { status: 200, body: successResponse() };
     },
     async (baseUrl, captured) => {
@@ -136,9 +141,24 @@ test("OpenAI Responses adapter preserves concurrent opposite role plans, auth, o
         messages("system"),
       ];
       const results = await Promise.all(
-        plans.map((plan) => model.generateText({ messages: plan })),
+        plans.map((plan) =>
+          model.generateText({
+            messages: plan,
+            ...(plan.some((item) => item.role === "developer")
+              ? { promptCacheKey: "synthetic-cache-key" }
+              : {}),
+          }),
+        ),
       );
       assert.equal(results.length, 3);
+      assert.deepEqual(
+        results.map((result) => result.usage.inputTokens),
+        [6, 6, 6],
+      );
+      assert.deepEqual(
+        results.map((result) => result.usage.outputTokens),
+        [2, 2, 2],
+      );
       assert.deepEqual(
         captured.map(rolesInWire).sort(),
         [["system", "developer"], ["developer", "system"], ["system"]].sort(),
@@ -192,9 +212,34 @@ test("unsupported provider and aborted request never send a request", async () =
       await assert.rejects(
         model.generateText({ messages: messages("developer"), abortSignal: abort.signal }),
       );
+      for (const type of ["anthropic-messages", "openai-chat-completions"]) {
+        const unsupported = new AiSdkModelAdapter({ retry: { maxAttempts: 1 } }).createModel(
+          modelOptions(baseUrl, type),
+        );
+        await assert.rejects(
+          unsupported.generateText({
+            messages: [{ role: "user", content: "synthetic" }],
+            promptCacheKey: "synthetic-cache-key",
+          }),
+          /Prompt cache key requires/,
+        );
+      }
       assert.equal(captured.length, 0);
     },
   );
+});
+
+test("typed prompt cache key refuses conflicts and malformed values", () => {
+  assert.throws(
+    () =>
+      withOpenAiPromptCacheKey(
+        { openai: { promptCacheKey: "other" } },
+        "synthetic-cache-key",
+        "openai",
+      ),
+    /conflicts/,
+  );
+  assert.throws(() => withOpenAiPromptCacheKey(undefined, "", "openai"), /non-empty/);
 });
 
 test("SDK instruction body tampering, extra instruction, and missing instruction fail before fetch", async () => {

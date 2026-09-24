@@ -83,6 +83,7 @@ class ExecutableModel implements Model {
     const requestOptions = request.options ?? {};
     return {
       messages: request.messages,
+      promptCacheKey: request.promptCacheKey,
       tools: request.tools,
       responseJsonSchema: request.responseJsonSchema,
       abortSignal: request.abortSignal,
