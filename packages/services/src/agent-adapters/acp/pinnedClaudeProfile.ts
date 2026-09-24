@@ -23,7 +23,8 @@ export async function probePinnedClaudeAcp(descriptor: AcpDescriptor): Promise<s
     !entry ||
     !isAbsolute(entry) ||
     basename(entry) !== "index.js"
-  ) throw new Error("ACP pinned package descriptor mismatch");
+  )
+    throw new Error("ACP pinned package descriptor mismatch");
   const root = resolve(dirname(entry), "..");
   const dist = join(root, "dist");
   const [actualEntry, actualDist, manifest, filenames] = await Promise.all([
@@ -40,7 +41,8 @@ export async function probePinnedClaudeAcp(descriptor: AcpDescriptor): Promise<s
     typeof parsed !== "object" ||
     (parsed as { name?: unknown }).name !== PIN.name ||
     (parsed as { version?: unknown }).version !== PIN.version
-  ) throw new Error("ACP pinned package identity mismatch");
+  )
+    throw new Error("ACP pinned package identity mismatch");
   const runtimeFiles = filenames.filter((name) => name.endsWith(".js")).sort();
   if (runtimeFiles.length !== 7) throw new Error("ACP pinned runtime file set mismatch");
   const digest = createHash("sha256");
@@ -48,7 +50,10 @@ export async function probePinnedClaudeAcp(descriptor: AcpDescriptor): Promise<s
     const path = join(dist, name);
     if ((await realpath(path)) !== join(actualDist, name))
       throw new Error("ACP pinned runtime symlink rejected");
-    digest.update(name).update(Buffer.from([0])).update(await readFile(path));
+    digest
+      .update(name)
+      .update(Buffer.from([0]))
+      .update(await readFile(path));
   }
   if (!timingSafeEqual(digest.digest(), Buffer.from(PIN.runtimeSha256, "hex")))
     throw new Error("ACP pinned package byte digest mismatch");
