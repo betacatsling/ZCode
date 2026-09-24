@@ -29,6 +29,39 @@ async function frames(events: ModelEvent[], signal?: AbortSignal) {
   return out;
 }
 
+test("Messages decoder retains per-block system marker and sole tool-result marker", () => {
+  const decoded = decodeAnthropicMessagesRequest({ ...base,
+    system: [{ type: "text", text: "base" }, { type: "text", text: "cached", cache_control: { type: "ephemeral" } }],
+    messages: [
+      { role: "user", content: "run" },
+      { role: "assistant", content: [{ type: "tool_use", id: "call-1", name: "read", input: {} }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "call-1", content: "denied", is_error: true, cache_control: { type: "ephemeral" } }] },
+    ],
+  }, headers);
+  assert.deepEqual(decoded.request.messages, [
+    { role: "system", content: "base" },
+    { role: "system", content: "cached", cacheControl: { type: "ephemeral" } },
+    { role: "user", content: "run" },
+    { role: "assistant", content: "", toolCalls: [{ id: "call-1", name: "read", input: {} }] },
+    { role: "tool", content: "denied", toolCallId: "call-1", toolName: "read", isError: true, cacheControl: { type: "ephemeral" } },
+  ]);
+});
+
+test("Messages decoder preserves image and single-block ephemeral cache marker", () => {
+  const image = { type: "image", source: { type: "base64", media_type: "image/png", data: "aGVsbG8=" } };
+  const decoded = decodeAnthropicMessagesRequest({ ...base, messages: [
+    { role: "user", content: [image, { type: "text", text: "look" }] },
+    { role: "user", content: [{ type: "text", text: "cached", cache_control: { type: "ephemeral" } }] },
+  ] }, headers);
+  assert.deepEqual(decoded.request.messages, [
+    { role: "user", content: [{ type: "image", mediaType: "image/png", dataUrl: "data:image/png;base64,aGVsbG8=" }, { type: "text", text: "look" }] },
+    { role: "user", content: "cached", cacheControl: { type: "ephemeral" } },
+  ]);
+  assert.throws(() => decodeAnthropicMessagesRequest({ ...base, messages: [
+    { role: "user", content: [{ type: "text", text: "one", cache_control: { type: "ephemeral" } }, { type: "text", text: "two" }] },
+  ] }, headers), /unsupported_cache_boundary/);
+});
+
 test("Messages decoding retains system order and pairs two tool results with original tool names", () => {
   const result = decodeAnthropicMessagesRequest(
     {
@@ -149,7 +182,7 @@ test("Messages decoder rejects unsupported headers, flags, versions, malformed t
     messages: [
       {
         role: "assistant",
-        content: [{ type: "thinking", thinking: "hidden", signature: "private" }],
+        content: [{ type: "thinking", thinking: "hidden" }],
       },
     ],
   });
@@ -187,6 +220,47 @@ test("Messages decoder rejects unsupported headers, flags, versions, malformed t
       },
     ],
   });
+});
+
+test("Messages preserves authenticated thinking history and original signature output", async () => {
+  const decoded = decodeAnthropicMessagesRequest({ ...base, messages: [
+    { role: "user", content: "first" },
+    { role: "assistant", content: [
+      { type: "thinking", thinking: "check", signature: "synthetic-signature" },
+      { type: "text", text: "answer" },
+    ] },
+    { role: "user", content: "continue" },
+  ] }, headers);
+  assert.deepEqual(decoded.request.messages[1], {
+    role: "assistant", content: [
+      { type: "reasoning", text: "check", providerOptions: { anthropic: { signature: "synthetic-signature" } } },
+      { type: "text", text: "answer" },
+    ],
+  });
+  const out = await frames([
+    { type: "reasoning_start", id: "thought" },
+    { type: "reasoning_delta", id: "thought", text: "check" },
+    { type: "reasoning_delta", id: "thought", text: "", providerMetadata: { anthropic: { signature: "synthetic-signature" } } },
+    { type: "reasoning_end", id: "thought" },
+    { type: "finish", finishReason: "stop", usage: { inputTokens: 3, outputTokens: 2 } },
+  ]);
+  assert.deepEqual(out.filter((item) => item.event === "content_block_delta").map((item) => (item.data as { delta: unknown }).delta), [
+    { type: "thinking_delta", thinking: "check" }, { type: "signature_delta", signature: "synthetic-signature" },
+  ]);
+  assert.equal(out.at(-1)?.event, "message_stop");
+  const unsigned = await frames([{ type: "reasoning_start", id: "r" }, { type: "reasoning_delta", id: "r", text: "check" }, { type: "reasoning_end", id: "r" }]);
+  assert.equal(unsigned.at(-1)?.event, "error");
+});
+
+test("Messages terminal usage subtracts cached counts from inclusive AI SDK input tokens", async () => {
+  const out = await frames([
+    { type: "start" },
+    { type: "finish", finishReason: "stop", usage: { inputTokens: 120, outputTokens: 8, cacheReadTokens: 90, cacheWriteTokens: 20 } },
+  ]);
+  const delta = out.find((item) => item.event === "message_delta")?.data as { usage: unknown };
+  assert.deepEqual(delta.usage, { input_tokens: 10, output_tokens: 8, cache_read_input_tokens: 90, cache_creation_input_tokens: 20 });
+  const invalid = await frames([{ type: "finish", finishReason: "stop", usage: { inputTokens: 10, outputTokens: 8, cacheReadTokens: 12 } }]);
+  assert.equal(invalid.at(-1)?.event, "error");
 });
 
 test("Messages stream indexes fragmented text and two tools; usage is replacement, not cumulative", async () => {

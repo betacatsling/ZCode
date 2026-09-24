@@ -30,6 +30,14 @@ function fakeSdk(frames: SDKMessage[], exitCode = 0, onStart?: (options: Paramet
 const init = { type: "system", subtype: "init", session_id: "native-1", claude_code_version: "2.1.263", tools: ["Edit", "Read"] } as SDKMessage;
 const result = { type: "result", subtype: "success", is_error: false, session_id: "native-1" } as SDKMessage;
 
+test("Claude SDK uses documented explicit no-thinking control without removing tool hook", async () => {
+  const transport = new ClaudeCodeTransport({ ...base, ...fakeSdk([init, result], 0, async (options) => {
+    assert.deepEqual(options?.thinking, { type: "disabled" });
+    assert.equal(options?.hooks?.PreToolUse?.[0]?.hooks.length, 1);
+  }) });
+  await transport.run("synthetic", () => {});
+});
+
 test("Claude SDK native session/text/tool/result is structured and successful only with zero process exit", async () => {
   const transport = new ClaudeCodeTransport({ ...base, ...fakeSdk([init, { type: "stream_event", session_id: "native-1", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "hi" } } }, { type: "assistant", session_id: "native-1", message: { content: [{ type: "tool_use", id: "tool-1", name: "Read", input: { file_path: "x" } }] } }, result] as SDKMessage[]) });
   const events: ClaudeTransportEvent[] = [];
