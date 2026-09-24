@@ -118,12 +118,12 @@ if (process.env.ZCODE_NATIVE_CONTROL_TEST_CHILD === '1') {
       const replacement = spawnWorker();
       const next = createInterface({ input: replacement.stdout })[Symbol.asyncIterator]();
       replacement.stdin.write(JSON.stringify({ id: 5, method: zcodeProtocolMethods.nativeMaintenanceFreeze, params: {} }) + '\n');
-      const newLease = JSON.parse((await next.next()).value).result.lease;
+      const newLease = JSON.parse((await next.next()).value ?? 'null').result.lease;
       assert.notEqual(newLease.epoch, frozen.result.lease.epoch);
       replacement.stdin.write(JSON.stringify({ id: 6, method: zcodeProtocolMethods.nativeMaintenanceRelease, params: frozen.result.lease }) + '\n');
-      assert.ok(JSON.parse((await next.next()).value).error);
+      assert.ok(JSON.parse((await next.next()).value ?? 'null').error);
       replacement.stdin.write(JSON.stringify({ id: 7, method: zcodeProtocolMethods.nativeMaintenanceGetActivity, params: newLease }) + '\n');
-      assert.equal(JSON.parse((await next.next()).value).result.frozen, true);
+      assert.equal(JSON.parse((await next.next()).value ?? 'null').result.frozen, true);
       replacement.stdin.end();
       await new Promise<void>((resolve, reject) => replacement.once('exit', code => code === 0 ? resolve() : reject(new Error(`replacement exit ${code}`))));
     } finally {
