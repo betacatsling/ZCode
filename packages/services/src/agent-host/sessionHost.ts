@@ -165,6 +165,39 @@ export class SessionHost {
     return summaries.sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
+  static async historyActivity(root: string, spec: LegacySessionSpec | SessionSpecV2): Promise<"uncertain" | "waiting" | "idle"> {
+    let stored;
+    try { stored = await SessionHost.#storedHistory(root, spec); }
+    catch (error) {
+      if (error instanceof Error && error.message.includes("backend create was not confirmed")) return "uncertain";
+      throw error;
+    }
+    const { identity } = stored;
+    if (await CommandJournal.hasUnresolvedHistory(root, identity)) return "uncertain";
+    const events = await EventJournal.readHistory(root, identity);
+    const activeTurns = new Set<string>();
+    const pendingInteractions = new Map<string, string>();
+    const pendingTools = new Map<string, string>();
+    let backendUnknown = false;
+    for (const event of events) {
+      if (event.kind === "turn.started") activeTurns.add(event.turnId);
+      if (event.kind === "turn.finished") {
+        activeTurns.delete(event.turnId);
+        for (const [id, turnId] of pendingInteractions) if (turnId === event.turnId) pendingInteractions.delete(id);
+        for (const [id, turnId] of pendingTools) if (turnId === event.turnId) pendingTools.delete(id);
+        if (event.outcome === "unknown") backendUnknown = true;
+      }
+      if (event.kind === "interaction.requested") pendingInteractions.set(event.interactionId, event.turnId);
+      if (event.kind === "interaction.resolved") pendingInteractions.delete(event.interactionId);
+      if (event.kind === "tool.started") pendingTools.set(event.toolCallId, event.turnId);
+      if (event.kind === "tool.finished") pendingTools.delete(event.toolCallId);
+      if (event.kind === "session.status" && (event.state === "execution-unknown" || event.state === "interrupted")) backendUnknown = true;
+      if (event.kind === "session.status" && event.state === "idle") backendUnknown = false;
+    }
+    if (backendUnknown || activeTurns.size || pendingTools.size) return "uncertain";
+    return pendingInteractions.size ? "waiting" : "idle";
+  }
+
   static async rowsRangeHistory(root: string, spec: LegacySessionSpec | SessionSpecV2, request: V4ConversationRowsRangeParams): Promise<V4ConversationRowsRangeResult> {
     const params = v4ConversationRowsRangeParamsSchema.parse(request);
     if (params.sessionId !== spec.hostSessionId) throw new Error("foreign rows session");
@@ -303,7 +336,7 @@ export class SessionHost {
   getActivity(): "running" | "waiting" | "uncertain" | "idle" {
     if (this.#eventError || this.#commands.hasUncertainSend()) return "uncertain";
     if (this.#interactions.size) return "waiting";
-    return this.#activeTurn ? "running" : "idle";
+    return this.#activeTurn || this.#commands.hasPendingSend() ? "running" : "idle";
   }
   rowsRange(request: V4ConversationRowsRangeParams): V4ConversationRowsRangeResult {
     const params = v4ConversationRowsRangeParamsSchema.parse(request);
