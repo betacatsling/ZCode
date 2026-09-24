@@ -167,6 +167,7 @@ export function createWorkspaceHierarchyService(input: {
           worktreeGeneration: workspace.worktreeGeneration,
           workspaceIdentity: scope.workspaceIdentity,
           workspacePath: scope.workspacePath,
+          ...(scope.remoteSessionId ? { remoteSessionId: scope.remoteSessionId } : {}),
         });
       };
       // 中文：已提交的完成收据重连是只读行为，不能因为新创建门禁关闭而重新分配 ID。
@@ -176,6 +177,9 @@ export function createWorkspaceHierarchyService(input: {
         // 中文：Core 原始 ID 的只读恢复无需重开创建 admission；可执行性仍须
         // Target 当下确认同代实例，Catalog 路径相等不能签发 writable owner。
         const target = await input.recoveryFacts?.(workspace.id);
+        const currentAttachment = scope.remoteSessionId
+          ? await input.resolveRemoteSession?.(scope.workspaceIdentity)
+          : undefined;
         return {
           owner: {
             kind: "native" as const,
@@ -183,6 +187,8 @@ export function createWorkspaceHierarchyService(input: {
             originalSessionId: recovered.originalSessionId,
             historyOnly:
               target?.status !== "confirmed" ||
+              (scope.remoteSessionId !== undefined &&
+                currentAttachment !== scope.remoteSessionId) ||
               target.generation !== workspace.worktreeGeneration ||
               project.archived ||
               workspace.archived ||
@@ -310,6 +316,11 @@ export function createWorkspaceHierarchyService(input: {
       const snapshot = await input.catalog.sidebarSnapshot();
       const workspace = snapshot.workspaces.find((row) => row.id === request.workspaceId);
       const binding = snapshot.bindings.find((row) => row.id === workspace?.repositoryBindingId);
+      // 中文：旧 attachment ID 只是创建时来源；重连后必须由当前认证 registry
+      // 再证明 scope，否则不得仅凭原路径/旧 lease 发放可写 owner。
+      const currentAttachment = found.remoteSessionId
+        ? await input.resolveRemoteSession?.(found.workspaceIdentity)
+        : undefined;
       // 中文：原生旧索引若缺少 generation/仓库绑定证明，不能按相同路径重新关联到新 worktree 执行。
       const current =
         !!workspace &&
@@ -319,7 +330,8 @@ export function createWorkspaceHierarchyService(input: {
         binding.projectId === workspace.projectId &&
         found.worktreeGeneration === workspace.worktreeGeneration &&
         found.repositoryBindingId === binding.id &&
-        found.workspaceIdentity === workspace.workspaceIdentity;
+        found.workspaceIdentity === workspace.workspaceIdentity &&
+        (!found.remoteSessionId || currentAttachment === found.remoteSessionId);
       // Native IDs are not tree aliases. Preserve the exact source scope used by V4 transport.
       return {
         kind: "native",

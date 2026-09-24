@@ -29,7 +29,7 @@ test(
     const address = server.address();
     assert.ok(address && typeof address !== "string");
     const children: ChildProcess[] = [];
-    const launch = async () => {
+    const launch = async (sourceDb = dbPath) => {
       const child = spawn(
         process.execPath,
         [
@@ -47,7 +47,7 @@ test(
             HOME: root,
             XDG_CONFIG_HOME: root,
             ZCODE_DATA_BASE_DIR: root,
-            ZCODE_SESSION_DB_PATH: dbPath,
+            ZCODE_SESSION_DB_PATH: sourceDb,
             ZCODE_NATIVE_BOOT_FIXTURE_CHILD: "1",
             ZCODE_BOOT_FIXTURE_CWD: cwd,
             ZCODE_BOOT_FIXTURE_URL: `http://127.0.0.1:${address.port}/fixture`,
@@ -220,6 +220,52 @@ test(
       });
       assert.equal(query.result?.results?.[0]?.result?.result?.sessionId, original);
       assert.equal((await journal.complete(intent.commandId)).originalSessionId, original);
+      // 中文：第二份事实由另一真实 CLI SQLite owner 写入；破坏首库不能影响第二库的认证。
+      restarted.child.kill("SIGKILL");
+      await new Promise<void>((resolve) => restarted.child.once("exit", resolve));
+      const secondDb = join(root, "other-sessions.sqlite");
+      const second = {
+        ...intent,
+        commandId: "core-second-draft",
+        nativeDatabasePath: secondDb,
+        databaseId: createHash("sha256").update(secondDb).digest("hex"),
+      };
+      await journal.stage(second);
+      const other = await launch(secondDb);
+      const secondAck = await other.send(4, V4_METHODS.command, {
+        commandId: second.commandId,
+        clientId: "desktop",
+        sessionId: null,
+        type: "createSession",
+        issuedAt: 2,
+        payload,
+      });
+      assert.equal(secondAck.result?.status, "accepted");
+      const secondId = (await journal.complete(second.commandId)).originalSessionId;
+      assert.notEqual(secondId, original);
+      other.child.kill("SIGKILL");
+      await new Promise<void>((resolve) => other.child.once("exit", resolve));
+      // 中文：另一份完成映射仍可认证；损坏的 CLI 源库不能成为可写 owner，也不启动 CLI 修复。
+      const { DatabaseSync } = await import("node:sqlite");
+      const damagedDb = new DatabaseSync(dbPath);
+      try {
+        damagedDb.exec("PRAGMA user_version = 77");
+      } finally {
+        damagedDb.close();
+      }
+      const readOnly = new NativeCreateJournal(join(root, "native-create"));
+      const listed = await readOnly.listCompletedWithDiagnostics();
+      assert.deepEqual(
+        listed.rows.map((row) => row.originalSessionId),
+        [secondId],
+      );
+      assert.equal(listed.diagnostics.length, 1);
+      assert.equal(
+        listed.diagnostics[0]?.entryId,
+        createHash("sha256").update(intent.commandId).digest("hex"),
+      );
+      await assert.rejects(readOnly.read(intent.commandId));
+      assert.equal(httpCalls, 0, "history reads must not issue a Model request");
     } finally {
       await Promise.all(
         children.map(async (child) => {

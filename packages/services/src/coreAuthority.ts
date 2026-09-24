@@ -18,6 +18,7 @@ import type { NativeRuntimeFactsPort } from "./workspace-hierarchy/nativeProduct
 import {
   getNativeProcessControlPort,
   getNativeCreationControlPort,
+  NativeCreationOwnershipChangedError,
 } from "./zcode-agent/zcodeAgentService.js";
 import { readNativeCatalogReferences } from "./project-workspaces/projectCatalog.js";
 import { NativeCreateJournal } from "./workspace-hierarchy/nativeCreateJournal.js";
@@ -127,7 +128,8 @@ export async function createCoreAuthority(
                 ref.repositoryBindingId === intent.repositoryBindingId &&
                 ref.worktreeGeneration === intent.worktreeGeneration &&
                 ref.workspaceIdentity === intent.workspaceIdentity &&
-                ref.workspacePath === intent.workspacePath,
+                ref.workspacePath === intent.workspacePath &&
+                ref.remoteSessionId === intent.remoteSessionId,
             ),
           )
           .map(({ intent, originalSessionId }) => ({
@@ -137,6 +139,7 @@ export async function createCoreAuthority(
             nativeSessionId: originalSessionId,
             sourceWorkspaceKey: intent.workspaceIdentity,
             sourceWorkspacePath: intent.workspacePath,
+            ...(intent.remoteSessionId ? { remoteSessionId: intent.remoteSessionId } : {}),
             targetId: intent.targetId,
             projectId: intent.projectId,
             workspaceId: intent.workspaceId,
@@ -215,6 +218,9 @@ export async function createCoreAuthority(
         try {
           await creation.create(target, description, { commandId: input.commandId, payload });
         } catch (error) {
+          // 中文：worker/DB 换代时即便旧库已有完成收据，也不能在本次调用签发
+          // 当前可写 owner；只允许随后经 Target/Catalog 重验的只读恢复。
+          if (error instanceof NativeCreationOwnershipChangedError) throw error;
           try {
             return {
               originalSessionId: (await journal.complete(input.commandId)).originalSessionId,

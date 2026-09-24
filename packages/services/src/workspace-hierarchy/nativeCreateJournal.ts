@@ -5,6 +5,14 @@ import { ReadonlyNativeSessionMetadataView } from "@zcode/adapters/storage";
 import { modelBindingRequestSchema, cwdRelativeToWorktreeSchema } from "@zcode/shared/agent-host";
 import { z } from "zod";
 import { atomicJsonWrite } from "../project-workspaces/profilePersistence.js";
+import { createServiceLogger } from "../logger/serviceLogger.js";
+
+const logger = createServiceLogger("native-create-journal");
+export interface NativeCreateDiagnostic {
+  /** Hash of the mapping filename, never a user path or a raw command identifier. */
+  entryId: string;
+  reason: "uncertified-mapping";
+}
 
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 const hex = z.string().regex(/^[a-f0-9]{64}$/);
@@ -144,24 +152,41 @@ export class NativeCreateJournal {
     return { intent, mapping };
   }
 
-  /** Only committed, still source-certified mappings; no CLI spawn or migration on directory reads. */
-  async listCompleted(): Promise<Array<{ intent: NativeCreateIntent; originalSessionId: string }>> {
+  /** Only committed, individually source-certified mappings; no CLI spawn/migration on reads. */
+  async listCompletedWithDiagnostics(): Promise<{
+    rows: Array<{ intent: NativeCreateIntent; originalSessionId: string }>;
+    diagnostics: NativeCreateDiagnostic[];
+  }> {
     let files: string[];
     try {
       files = await readdir(this.root);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { rows: [], diagnostics: [] };
       throw error;
     }
     const rows: Array<{ intent: NativeCreateIntent; originalSessionId: string }> = [];
+    const diagnostics: NativeCreateDiagnostic[] = [];
     for (const file of files.filter((name) => /^[a-f0-9]{64}\.mapping\.json$/.test(name))) {
-      const mapping = mappingSchema.parse(await readJson(join(this.root, file)));
-      if (file !== `${digest(mapping.commandId)}.mapping.json`)
-        throw new Error("native-create-mapping-name-conflict");
-      const state = await this.read(mapping.commandId);
-      if (!state?.mapping) throw new Error("native-create-mapping-source-conflict");
-      rows.push({ intent: state.intent, originalSessionId: mapping.originalSessionId });
+      try {
+        const mapping = mappingSchema.parse(await readJson(join(this.root, file)));
+        if (file !== `${digest(mapping.commandId)}.mapping.json`)
+          throw new Error("native-create-mapping-name-conflict");
+        const state = await this.read(mapping.commandId);
+        if (!state?.mapping) throw new Error("native-create-mapping-source-conflict");
+        rows.push({ intent: state.intent, originalSessionId: mapping.originalSessionId });
+      } catch {
+        // 中文：一份映射/源库损坏不能遮蔽其他 CLI 已认证历史；不返回损坏 owner，
+        // 也不写入修复或把故障解释为无业务记录。根目录读取失败仍向上抛出。
+        diagnostics.push({ entryId: file.slice(0, 64), reason: "uncertified-mapping" });
+      }
     }
+    return { rows, diagnostics };
+  }
+
+  async listCompleted(): Promise<Array<{ intent: NativeCreateIntent; originalSessionId: string }>> {
+    const { rows, diagnostics } = await this.listCompletedWithDiagnostics();
+    for (const diagnostic of diagnostics)
+      logger.warn(undefined, "quarantined uncertified native mapping", diagnostic);
     return rows;
   }
 

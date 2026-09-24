@@ -9,6 +9,8 @@ export type NativeCreatedMapping = Omit<LegacyMapping, "legacyId"> & {
   commandId: string;
   nativeDatabasePath: string;
   databaseId: string;
+  /** Stored provenance; current attachment authorization belongs to the window registry. */
+  remoteSessionId?: string;
 };
 type DirectoryMapping = LegacyMapping | NativeCreatedMapping;
 
@@ -30,6 +32,7 @@ export interface NativeSessionOwnerRef {
   repositoryBindingId?: string;
   sourceWorkspaceKey: string;
   sourceWorkspacePath: string;
+  remoteSessionId?: string;
   nativeSessionId: string;
   cwdRelativeToWorktree: string;
 }
@@ -134,6 +137,9 @@ export class NativeSessionDirectory implements NativeSessionCatalogPort {
       repositoryBindingId: mapping.repositoryBindingId,
       sourceWorkspaceKey: mapping.sourceWorkspaceKey,
       sourceWorkspacePath: mapping.sourceWorkspacePath,
+      ...("remoteSessionId" in mapping && mapping.remoteSessionId
+        ? { remoteSessionId: mapping.remoteSessionId }
+        : {}),
       nativeSessionId: mapping.nativeSessionId,
       cwdRelativeToWorktree: mapping.cwdRelativeToWorktree,
     };

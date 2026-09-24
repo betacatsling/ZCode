@@ -1,0 +1,251 @@
+import assert from "node:assert/strict";
+import { fork } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { test } from "node:test";
+
+async function removeIsolatedProfile(root: string): Promise<void> {
+  for (let attempt = 0; attempt < 15; attempt++) {
+    try {
+      await rm(root, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOTEMPTY" || attempt === 14) throw error;
+      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    }
+  }
+}
+
+// The first process uses the existing public factory, real Git/Target/Catalog/CLI/SQLite.
+// Two independent restarts prove scoped degradation and per-original-ID execution separately.
+for (const variant of ["damaged", "per-id-model"] as const)
+  test(`public native factory ${variant}`, async () => {
+    const root = await mkdtemp(join(tmpdir(), "native-factory-boundaries-"));
+    const calls: Array<{ model: string; body: string }> = [];
+    const server = createServer(async (request, response) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      const body = Buffer.concat(chunks).toString();
+      const parsed = JSON.parse(body) as { model: string; stream?: boolean };
+      calls.push({ model: parsed.model, body });
+      if (parsed.stream === false) {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            id: "msg_fixture",
+            type: "message",
+            role: "assistant",
+            model: parsed.model,
+            content: [{ type: "text", text: "fixture completed" }],
+            stop_reason: "end_turn",
+            stop_sequence: null,
+            usage: { input_tokens: 4, output_tokens: 4 },
+          }),
+        );
+        return;
+      }
+      const event = (type: string, data: object) =>
+        `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`;
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(
+        event("message_start", {
+          message: {
+            id: "msg_fixture",
+            type: "message",
+            role: "assistant",
+            model: parsed.model,
+            content: [],
+            stop_reason: null,
+            stop_sequence: null,
+            usage: { input_tokens: 4, output_tokens: 0 },
+          },
+        }) +
+          event("content_block_start", { index: 0, content_block: { type: "text", text: "" } }) +
+          event("content_block_delta", {
+            index: 0,
+            delta: { type: "text_delta", text: "fixture completed" },
+          }) +
+          event("content_block_stop", { index: 0 }) +
+          event("message_delta", {
+            delta: { stop_reason: "end_turn", stop_sequence: null },
+            usage: { output_tokens: 4 },
+          }) +
+          event("message_stop", {}),
+      );
+    });
+    const children: ReturnType<typeof fork>[] = [];
+    try {
+      const config = join(root, "builtin.json");
+      await writeFile(
+        config,
+        JSON.stringify({
+          schemaVersion: 1,
+          revision: 0,
+          config: {
+            providerConfigRules: { templateRules: [], providerRules: [] },
+            modelConfigRules: {
+              modelRules: [],
+              modelApiRules: [],
+              providerSiteRules: [],
+              templateModelRules: [],
+              builtinProviderModelRules: [],
+            },
+          },
+        }),
+      );
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const address = server.address();
+      assert.ok(address && typeof address !== "string");
+      const dbPath = join(root, "native.sqlite");
+      const baseEnv = {
+        ...process.env,
+        HOME: root,
+        XDG_CONFIG_HOME: root,
+        ZCODE_DATA_BASE_DIR: root,
+        ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: config,
+        CORE_NATIVE_FIXTURE_URL: `http://127.0.0.1:${address.port}/fixture`,
+        ZCODE_SESSION_DB_PATH: dbPath,
+        ZCODE_TELEMETRY_ENABLED: "false",
+        ZCODE_AGENT_SERVER_REQUIRES_STORAGE_STARTUP: "1",
+        ZCODE_AGENT_SERVER_COMMAND: process.execPath,
+        ZCODE_AGENT_SERVER_ARGS_JSON: JSON.stringify([
+          "--import",
+          import.meta.resolve("tsx"),
+          fileURLToPath(
+            new URL("../../../../apps/zcode-cli/packages/cli/src/main.ts", import.meta.url),
+          ),
+          "app-server",
+          "--stdio",
+        ]),
+      };
+      const boot = async (fixture: string, env: NodeJS.ProcessEnv) => {
+        const child = fork(fileURLToPath(new URL(fixture, import.meta.url)), [], {
+          cwd: root,
+          execArgv: ["--import", import.meta.resolve("tsx")],
+          env: { ...baseEnv, ...env },
+          stdio: ["ignore", "ignore", "pipe", "ipc"],
+        });
+        children.push(child);
+        let stderr = "";
+        child.stderr?.on("data", (chunk: Buffer) => {
+          stderr += chunk.toString().slice(0, 2000);
+        });
+        // 中文：进程在注册监听前退出、或 Core 无法收尾时都有限时失败并回收自己的子进程。
+        const reply = await new Promise<any>((resolve, reject) => {
+          const timer = setTimeout(
+            () => settle(new Error(`factory fixture timeout: ${stderr}`)),
+            40000,
+          );
+          const onMessage = (message: unknown) => settle(undefined, message);
+          const onExit = (code: number | null, signal: NodeJS.Signals | null) =>
+            settle(new Error(`factory exited ${code}/${signal}: ${stderr}`));
+          function settle(error?: Error, value?: unknown) {
+            clearTimeout(timer);
+            child.off("message", onMessage);
+            child.off("exit", onExit);
+            if (error) reject(error);
+            else resolve(value);
+          }
+          child.once("message", onMessage);
+          child.once("exit", onExit);
+        });
+        if (reply?.type === "error" || reply?.type === "native-error")
+          throw new Error(JSON.stringify(reply) + stderr);
+        if (child.exitCode === null && child.signalCode === null)
+          await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(() => {
+              child.off("exit", onExit);
+              child.kill("SIGKILL");
+              reject(new Error("factory did not exit"));
+            }, 5000);
+            const onExit = () => {
+              clearTimeout(timer);
+              resolve();
+            };
+            child.once("exit", onExit);
+          });
+        return reply;
+      };
+      const first = await boot("./coreNativeMountChild.fixture.ts", {
+        ZCODE_MULTI_HARNESS_ENABLED: "1",
+        ZCODE_CORE_NATIVE_CREATE_TEST_ONLY: "1",
+        ZCODE_CORE_NATIVE_CATALOG_FAULT_TEST_ONLY: "native-create-catalog-fault",
+        ZCODE_CORE_NATIVE_DROP_ACK_TEST_ONLY: "native-create-1",
+        ZCODE_CORE_NATIVE_MAPPING_FSYNC_FAULT_TEST_ONLY: "native-create-fsync-fault",
+      });
+      assert.equal(first.type, "native-created");
+      assert.equal(first.ids.length, 2);
+      assert.equal(first.worktreeCount, 1);
+      const { DatabaseSync } = await import("node:sqlite");
+      const count = () => {
+        const db = new DatabaseSync(dbPath, { readOnly: true });
+        try {
+          return (db.prepare("select count(*) as total from session").get() as { total: number })
+            .total;
+        } finally {
+          db.close();
+        }
+      };
+      const before = count();
+      const mappingPath = join(
+        root,
+        ".zcode",
+        "v2",
+        "native-create",
+        `${createHash("sha256").update("native-create-1").digest("hex")}.mapping.json`,
+      );
+      assert.ok((await readFile(mappingPath, "utf8")).includes(first.ids[0]));
+      if (variant === "damaged") await writeFile(mappingPath, "{damaged");
+      else {
+        const personal = join(root, ".zcode", "v2", "provider_config.json");
+        const settings = JSON.parse(await readFile(personal, "utf8"));
+        settings.config.defaultModelSelection.modelId = "fixture-other";
+        await writeFile(personal, JSON.stringify(settings));
+      }
+      const result = await boot("./nativeFactoryBoundariesChild.fixture.ts", {
+        ZCODE_MULTI_HARNESS_ENABLED: "0",
+        ZCODE_CORE_NATIVE_CREATE_TEST_ONLY: "0",
+        CORE_NATIVE_IDS: JSON.stringify(first.ids),
+        CORE_NATIVE_VERIFY_INPUT: variant === "per-id-model" ? "1" : "0",
+      });
+      if (variant === "damaged") {
+        assert.equal(result.type, "read");
+        assert.equal(result.healthy, true);
+        assert.equal(result.damaged, true);
+        assert.equal(result.sessionIds.length, 1, "damaged owner is quarantined, not recreated");
+        assert.equal(calls.length, 0, "read-only history must not submit an input");
+      } else {
+        assert.equal(result.type, "input");
+        assert.deepEqual(
+          result.facts.map((row: { modelId: string }) => row.modelId),
+          ["fixture-model", "fixture-other"],
+        );
+        // 中文：按主命令独有提示关联每个原始 ID；仅检查聚合 some(A) && some(B) 会漏掉互换路由。
+        for (const [index, expected] of ["fixture-model", "fixture-other"].entries()) {
+          const main = calls.filter((call) => call.body.includes(`proof-original-${index}`));
+          assert.ok(main.length > 0, `missing actual input for original ${index}`);
+          assert.ok(
+            main.every((call) => call.model === expected),
+            `original ${index} used another model: ${JSON.stringify(main.map((call) => call.model))}`,
+          );
+        }
+      }
+      assert.equal(count(), before);
+    } finally {
+      await Promise.all(
+        children.map(async (child) => {
+          if (child.exitCode !== null || child.signalCode !== null) return;
+          const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+          child.kill("SIGKILL");
+          await Promise.race([exited, new Promise<void>((resolve) => setTimeout(resolve, 5000))]);
+        }),
+      );
+      server.closeAllConnections();
+      if (server.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
+      await removeIsolatedProfile(root);
+    }
+  });

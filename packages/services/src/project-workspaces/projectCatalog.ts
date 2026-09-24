@@ -57,6 +57,8 @@ export const nativeCatalogReferenceSchema = z.strictObject({
   worktreeGeneration: z.string().min(1),
   workspaceIdentity: z.string().min(1),
   workspacePath: z.string().min(1),
+  /** Creation provenance only; never a current authenticated attachment lease. */
+  remoteSessionId: z.string().min(1).optional(),
 });
 export type NativeCatalogReference = z.infer<typeof nativeCatalogReferenceSchema>;
 

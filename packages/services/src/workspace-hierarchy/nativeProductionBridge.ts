@@ -100,9 +100,14 @@ export function createReadonlyNativeDirectory(options: {
     listMappings: options.listMappings,
     listNewMappings: options.listNewMappings,
     readFacts: () => index.readFacts(),
-    // 中文：即使迁移 sidecar 尚无映射，也必须确认 CLI 数据库真实存在且 schema 可读。
+    // 中文：旧迁移映射仍要校验其原始 DB；但仅含新映射时每条映射已按自身
+    // CLI 报告的 source DB 完成收据认证，不应让无关 bootstrap DB 遮蔽有效历史。
+    // 两种映射皆无时保留旧的来源校验，不把坏库伪装成正常空目录。
     verifySource: async () => {
-      await new ReadonlyNativeSessionMetadataView(databasePath()).read("");
+      const legacy = await options.listMappings();
+      const fresh = await options.listNewMappings?.();
+      if (legacy.length > 0 || !fresh?.length)
+        await new ReadonlyNativeSessionMetadataView(databasePath()).read("");
     },
     onChange: (listener) => index.onChange(listener),
     metadata,
@@ -150,6 +155,7 @@ export function createNativeProductionBridge(options: {
         originalSessionId: scoped.owner.nativeSessionId,
         sourceWorkspacePath: scoped.owner.sourceWorkspacePath,
         workspaceIdentity: scoped.owner.sourceWorkspaceKey,
+        ...(scoped.owner.remoteSessionId ? { remoteSessionId: scoped.owner.remoteSessionId } : {}),
         worktreeGeneration: scoped.owner.worktreeGeneration,
         repositoryBindingId: scoped.owner.repositoryBindingId,
       };

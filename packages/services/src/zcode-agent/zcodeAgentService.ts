@@ -1094,6 +1094,11 @@ export interface NativeProcessControlPort {
   activity(): Promise<NativeProcessActivity>;
   fenceAdmissions(): Promise<{ verify(): Promise<boolean>; release(): Promise<void> }>;
 }
+export class NativeCreationOwnershipChangedError extends Error {
+  constructor(phase: "before-effect" | "after-effect") {
+    super(`native-create-owner-changed-${phase}`);
+  }
+}
 export interface NativeCreationControlPort {
   describe(target: ZCodeAgentWorkspaceTarget): Promise<{
     nativeDatabasePath: string;
@@ -1103,7 +1108,7 @@ export interface NativeCreationControlPort {
   }>;
   create(
     target: ZCodeAgentWorkspaceTarget,
-    expected: { runtimeIdentity: string; databaseId: string },
+    expected: { runtimeIdentity: string; generation: number; databaseId: string },
     envelope: {
       commandId: string;
       payload: ReturnType<typeof commandPayloadSchemas.createSession.parse>;
@@ -5917,32 +5922,65 @@ export function createZCodeAgentService(
       const current = await this.describe(target);
       if (
         current.runtimeIdentity !== expected.runtimeIdentity ||
+        current.generation !== expected.generation ||
         current.databaseId !== expected.databaseId
       )
-        throw new Error("native-create-worker-changed-before-effect");
+        throw new NativeCreationOwnershipChangedError("before-effect");
       await getClient(target); // existing readiness owner validates real Registry before enabling a writable native command
       const { key, client } = await currentClient(target);
       const runtime = await processManager.getRuntimeIdentity(target);
       assertCurrent(key, client);
       if (
         runtime.identity !== expected.runtimeIdentity ||
+        runtime.generation !== expected.generation ||
         client.storageStartup.snapshot?.databaseId !== expected.databaseId ||
         client.storageStartup.snapshot?.phase !== "ready"
       )
-        throw new Error("native-create-stale-client-before-effect");
-      const ack = await client.request(
-        V4_METHODS.command,
-        {
-          commandId: envelope.commandId,
-          clientId: "core-native-create",
-          sessionId: null,
-          type: "createSession",
-          issuedAt: Date.now(),
-          payload: envelope.payload,
-        },
-        commandAckSchema,
-      );
-      assertCurrent(key, client);
+        throw new NativeCreationOwnershipChangedError("before-effect");
+      let ack: CommandAck;
+      try {
+        ack = await client.request(
+          V4_METHODS.command,
+          {
+            commandId: envelope.commandId,
+            clientId: "core-native-create",
+            sessionId: null,
+            type: "createSession",
+            issuedAt: Date.now(),
+            payload: envelope.payload,
+          },
+          commandAckSchema,
+        );
+      } catch (error) {
+        // 中文：丢 ACK 与 worker 换代不同；后者不可由 Core 本次只读收据直接升级为可写。
+        const after = await processManager.getRuntimeIdentity(target).catch(() => undefined);
+        if (
+          !after ||
+          after.identity !== expected.runtimeIdentity ||
+          after.generation !== expected.generation ||
+          client.storageStartup.snapshot?.databaseId !== expected.databaseId ||
+          client.storageStartup.snapshot?.phase !== "ready"
+        )
+          throw new NativeCreationOwnershipChangedError("after-effect");
+        assertCurrent(key, client);
+        throw error;
+      }
+      // 中文：ACK 可能已提交；若 worker/DB 在 await 期间换代，不可将旧收据
+      // 当成当前 writable owner。调用方须保留 uncertain，由下一次只读恢复处理。
+      try {
+        assertCurrent(key, client);
+        const after = await processManager.getRuntimeIdentity(target);
+        assertCurrent(key, client);
+        if (
+          after.identity !== expected.runtimeIdentity ||
+          after.generation !== expected.generation ||
+          client.storageStartup.snapshot?.databaseId !== expected.databaseId ||
+          client.storageStartup.snapshot?.phase !== "ready"
+        )
+          throw new NativeCreationOwnershipChangedError("after-effect");
+      } catch {
+        throw new NativeCreationOwnershipChangedError("after-effect");
+      }
       // 中文：仅隔离进程中的测试故障注入：CLI 已写 completed，Node 服务在 Core
       // 收到 ACK 之前丢弃结果；Core 只能凭只读收据恢复，不能重发 CommandInbox。
       if (process.env.ZCODE_CORE_NATIVE_DROP_ACK_TEST_ONLY === envelope.commandId)
