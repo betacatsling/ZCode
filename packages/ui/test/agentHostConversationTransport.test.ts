@@ -690,7 +690,7 @@ test("external older-page view slides past multiple cache budgets and returns to
   const { service, history, transport, publish } = harness([spec]);
   const { SessionDataLayer } = await import("../src/v4/SessionDataLayer.js");
   const events = history.get(spec.hostSessionId)!.events;
-  for (let i = 1; i <= 2200; i++) {
+  for (let i = 1; i <= 4400; i++) {
     events.push({ ...turn(spec.hostSessionId, 2 * i - 1), turnId: `t${i}` });
     events.push({
       ...turn(spec.hostSessionId, 2 * i),
@@ -725,7 +725,7 @@ test("external older-page view slides past multiple cache budgets and returns to
   }
   assert.equal(lease.store.countProjectionRows(), 2000);
   // A full cache is not a history terminus. Multiple shifts must reach the journal's first row.
-  for (let i = 0; i < 15 && lease.store.getState().snapshot?.rows.window[0]?.rowId !== 1; i++) {
+  for (let i = 0; i < 25 && lease.store.getState().snapshot?.rows.window[0]?.rowId !== 1; i++) {
     await lease.store.loadOlder(200);
     assert.ok(lease.store.countProjectionRows() <= 2000);
   }
@@ -733,16 +733,21 @@ test("external older-page view slides past multiple cache budgets and returns to
   assert.equal(lease.store.getState().snapshot?.rows.firstRowId, 1);
   assert.equal(lease.store.getState().snapshot?.rows.window.at(-1)?.rowId, 2000);
   // Live authoritative stream continues while the held view stays contiguous and bounded.
-  publish(spec, { ...turn(spec.hostSessionId, 4401), turnId: "live" });
+  publish(spec, { ...turn(spec.hostSessionId, 8801), turnId: "live" });
   // A real subscription notification causes the transport to read the new canonical Host snapshot.
   await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.equal(lease.store.getState().snapshot?.seq, 4401);
+  assert.equal(lease.store.getState().snapshot?.seq, 8801);
   assert.equal(lease.store.getState().snapshot?.rows.window.at(-1)?.rowId, 2000);
-  await lease.store.loadNewer(200);
-  assert.equal(lease.store.getState().snapshot?.rows.window[0]?.rowId, 201);
-  assert.equal(lease.store.getState().snapshot?.rows.window.at(-1)?.rowId, 2200);
+  for (let i = 0; i < 15 && (lease.store.getState().snapshot?.rows.window.at(-1)?.rowId ?? 0) < 4400; i++) {
+    await lease.store.loadNewer(200);
+    assert.ok(lease.store.countProjectionRows() <= 2000);
+  }
+  assert.equal(lease.store.getState().snapshot?.rows.window[0]?.rowId, 2401);
+  assert.equal(lease.store.getState().snapshot?.rows.window.at(-1)?.rowId, 4400);
+  await lease.store.loadOlder(200);
+  assert.equal(lease.store.getState().snapshot?.rows.window.at(-1)?.rowId, 4200);
   await lease.store.jumpToLatest();
-  assert.equal(lease.store.getState().snapshot?.rows.window.at(-1)?.rowId, 2201);
+  assert.equal(lease.store.getState().snapshot?.rows.window.at(-1)?.rowId, 4401);
   lease.release();
   layer.dispose();
   transport.dispose();
