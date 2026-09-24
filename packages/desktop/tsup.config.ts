@@ -2,8 +2,9 @@ import { pickProductEndpointEnv } from "@zcode/shared/zcodeEndpoint";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { defineConfig } from "tsup";
+import { defineConfig, type Options } from "tsup";
 import { getBuildMetadata } from "./scripts/build-metadata.mjs";
+import { selectDesktopTsupConfigs } from "./scripts/desktop-tsup-part-selector.mjs";
 import { resolveDesktopProductFlavor } from "./scripts/desktop-product-identity.mjs";
 // tsup 会先打包配置文件；动态加载构建工具，避免其 import.meta.dirname 被重定位到 desktop。
 const { loadBuiltinProviderConfig } = await import(
@@ -137,7 +138,7 @@ function createDevReadyMarkerHook(target: "main" | "host" | "preload"): string {
   return `node scripts/write-dev-ready-marker.mjs ${target}`;
 }
 
-export default defineConfig([
+const desktopConfigs: Options[] = [
   {
     name: "main",
     entry: {
@@ -281,4 +282,8 @@ export default defineConfig([
     onSuccess: createDevReadyMarkerHook("scheduler"),
     ...desktopTsupBundleSecurityOptions,
   },
-]);
+];
+
+export default defineConfig(
+  selectDesktopTsupConfigs(desktopConfigs, process.env.ZCODE_DESKTOP_BUILD_PART),
+);

@@ -650,6 +650,49 @@ export function createWindowRemoteConnectionRegistry<TServices, TCapabilities = 
     return session.entry.handle;
   }
 
+  /**
+   * Trusted Host-only routing: the renderer cannot supply a service object or lease. An effect may
+   * have been durably accepted before an await returns; never retry it when the view rotates.
+   */
+  async function withCurrentScopedServices<T>(
+    scope: Extract<WindowHostAttachmentScope, { kind: "remote" }>,
+    expectedGeneration: number,
+    action: (
+      services: TServices,
+      lease: { remoteSessionId: string; generation: number },
+    ) => Promise<T>,
+  ): Promise<
+    | { status: "committed"; value: T }
+    | { status: "uncertain"; recovery: "query-by-stable-command-id" }
+  > {
+    const services = resolveScopedHandle(scope).services;
+    const session = sessionsById.get(scope.remoteSessionId)!;
+    const generation = session.generation;
+    // 中文：只用当前 registry 里的代际鉴权，不接受旧 attachment 的 retained provenance 继续写入。
+    if (generation !== expectedGeneration) {
+      throw new Error("remote attachment generation mismatch");
+    }
+    // 中文：远端异步提交后换代时不能根据旧连接重试；只能用稳定 commandId 在新认证视图只读查询。
+    let value: T;
+    try {
+      value = await action(services, { remoteSessionId: scope.remoteSessionId, generation });
+    } catch {
+      return { status: "uncertain", recovery: "query-by-stable-command-id" };
+    }
+    try {
+      if (
+        sessionsById.get(scope.remoteSessionId) !== session ||
+        session.generation !== generation ||
+        resolveScopedHandle(scope).services !== services
+      ) {
+        return { status: "uncertain", recovery: "query-by-stable-command-id" };
+      }
+    } catch {
+      return { status: "uncertain", recovery: "query-by-stable-command-id" };
+    }
+    return { status: "committed", value };
+  }
+
   function resolveScopedServices(scope: WindowHostAttachmentScope): TServices {
     return resolveScopedHandle(scope).services;
   }
@@ -691,6 +734,7 @@ export function createWindowRemoteConnectionRegistry<TServices, TCapabilities = 
     cancelConnect,
     bindWorkspaceContext,
     resolveScopedServices,
+    withCurrentScopedServices,
     resolveScopedCapabilities,
     getSession(remoteSessionId: string): WindowRemoteLogicalSessionSnapshot | null {
       const session = sessionsById.get(remoteSessionId);
