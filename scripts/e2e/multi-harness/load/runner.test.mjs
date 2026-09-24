@@ -40,14 +40,14 @@ test('50 Git candidates are real disposable worktrees including main; no project
   for (const path of fixture.worktrees) assert.match(await readFile(join(path, 'tiny.txt'), 'utf8'), /tiny fixture/);
 });
 
-function driver({ bad = false, missing = false, backlog = 0, lingering = false, delivery = 'desktop-continuous', gateway = false, productionCommit = 'test-only', latency = 5 } = {}) {
+function driver({ bad = false, missing = false, backlog = 0, lingering = false, delivery = 'desktop-continuous', gateway = false, productionCommit = 'test-only', driverVersion = 'contract-stub', latency = 5 } = {}) {
   let events = 0, detached = false, samples = 0, closed = false, reconnects = 0;
   return {
     async dispose() { closed = true; },
     async open(input) {
       assert.match(input.isolation.home, /load-/);
       return {
-        metadata: { productionCommit, driverVersion: 'contract-stub', paths: input.isolation },
+        metadata: { productionCommit, driverVersion, paths: input.isolation },
         async discover({ candidates }) { return candidates.map((path, index) => ({ id: `candidate-${index}`, path })); },
         async mount({ sessions }) {
           assert.equal(new Set(sessions.map(s => s.id)).size, sessions.length);
@@ -124,7 +124,7 @@ test('baseline absent cannot produce a <=10% regression claim', async () => {
   assert.equal(result.comparison.typedInputRatio,undefined);
 });
 
-const short = { mode:'benchmark',benchmarkDatasetId:'fixed-fixture-v1',durationMs:10,eventCount:4,worktreeCount:2,sessionCount:2,expandedCount:1,sampleEveryMs:1,reconnectEveryMs:1,idleMs:0 };
+const short = { mode:'benchmark',benchmarkDatasetId:'fixed-fixture-v1',durationMs:500,eventCount:4,worktreeCount:2,sessionCount:2,expandedCount:1,sampleEveryMs:25,reconnectEveryMs:50,idleMs:0 };
 async function preservedSource() {
   const {repo} = await createFixture(await temp(),1);
   const commit = execFileSync('git',['rev-parse','HEAD'],{cwd:repo,encoding:'utf8'}).trim();
@@ -150,6 +150,38 @@ async function baselinePair({candidateLatency = 5, baselineMutate, candidateMuta
   const result = await runLoad({...short,driver:driver({productionCommit:candidate.commit,latency:candidateLatency}),artifactBase:await temp(),baselinePath,sourceCheckout:candidate.repo,buildArtifactPath:candidate.buildArtifactPath});
   return {result,baseline,candidate};
 }
+
+test('production benchmark requires preserved source-to-build preparation, not just an artifact hash', async () => {
+  const preserved=await preservedSource();
+  const result=await runLoad({...short,driver:driver({productionCommit:preserved.commit,driverVersion:'production-driver-1'}),artifactBase:await temp(),sourceCheckout:preserved.repo,buildArtifactPath:preserved.buildArtifactPath});
+  assert.equal(result.status,'failed');
+  assert.ok(result.failures.includes('gate-failed:source-provenance'));
+});
+
+test('benchmark rejects changed sample population, session coverage, schedule and out-of-window timing', async () => {
+  for (const change of [
+    json => { json.samples.sessionIds[0]='foreign'; },
+    json => { json.samples.sessionIds[0]=json.samples.sessionIds[1]; },
+    json => { json.samples.plannedAtMs[0]++; },
+    json => { json.samples.elapsedMs[0]=-1; },
+    json => { json.samples.elapsedMs[1]=json.measurement.plan.slotMs*2; },
+    json => { json.samples.sessionSwitchMs.pop(); },
+    json => { json.measurement.plan.rounds++; },
+  ]) {
+    const {result} = await baselinePair({baselineMutate:async json => change(json)});
+    assert.equal(result.comparison.status,'incomparable-baseline');
+  }
+});
+
+test('benchmark collects >=20 input and switch samples for EACH session and same deterministic plan across runs', async () => {
+  const {result} = await baselinePair();
+  assert.equal(result.status,'latency-measured');
+  for (const id of result.measurement.plan.sessionIds) {
+    assert.ok(result.samples.sessionIds.filter(value=>value===id).length>=20);
+  }
+  assert.equal(result.samples.typedInputMs.length,result.samples.sessionSwitchMs.length);
+  assert.equal(result.samples.plannedAtMs.length,result.samples.typedInputMs.length);
+});
 
 test('partial open disposes registered real child exactly once and proves exit', async () => {
   let child, disposals = 0, cleanups = 0;
@@ -304,4 +336,5 @@ test('session-switch budget fails independently and exact benchmark provenance s
   assert.equal(saved.measurement.windowMs,short.durationMs);
   assert.equal(saved.measurement.datasetId,short.benchmarkDatasetId);
   assert.ok(saved.samples.elapsedMs.at(-1) >= saved.measurement.windowMs);
+  assert.ok(saved.measurement.plan.rounds >= 20);
 });

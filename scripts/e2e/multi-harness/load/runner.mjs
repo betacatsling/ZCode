@@ -4,7 +4,9 @@ import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, realpath, rename, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { pathToFileURL } from 'node:url';
+import { validMeasurement } from './measurement.mjs';
+import { validateProductFacts, checkSample } from './facts.mjs';
+export { validateProductFacts } from './facts.mjs';
 
 const HOUR8 = 8 * 60 * 60 * 1000;
 const LATENCY_BUDGET = 1.10;
@@ -65,31 +67,8 @@ export async function createFixture(artifactDir, count) {
   return { repo, worktrees };
 }
 
-function number(facts, key) { if (!Number.isFinite(facts?.[key]) || facts[key] < 0) throw new Error(`missing/invalid owner counter ${key}`); return facts[key]; }
-function checkFacts(facts) {
-  for (const key of ['durableEvents','backlog','backlogHighWater','implicitCliStarts','fullHistorySidebarReads','worktreeMutations','childProcesses','acceptedPrompts','heapBytes','rssBytes']) number(facts, key);
-  if (facts.backlogHighWater < facts.backlog) throw new Error('invalid owner backlog high water');
-  for (const key of ['focusStable','draftStable','selectedStable']) if (facts[key] !== true) throw new Error(`unstable owner fact ${key}`);
-  for (const key of ['implicitCliStarts','fullHistorySidebarReads','worktreeMutations','acceptedPrompts']) if (facts[key] !== 0) throw new Error(`unexpected owner side effect ${key}: ${facts[key]}`);
-  return facts;
-}
-export function validateProductFacts(facts, {mode, phase}) {
-  checkFacts(facts);
-  if (mode === 'acceptance') {
-    const required = phase.startsWith('post-') ? ['host'] : ['host','renderer'];
-    for (const processName of required) {
-      const processFacts = facts.processes?.[processName];
-      if (!processFacts || !Number.isFinite(processFacts.heapBytes) || processFacts.heapBytes <= 0 || !Number.isFinite(processFacts.rssBytes) || processFacts.rssBytes <= 0) throw new Error(`missing product process memory: ${processName}`);
-    }
-  }
-  return facts;
-}
-function checkSample(sample) {
-  for (const key of ['typedInputMs','sessionSwitchMs']) number(sample, key);
-  for (const key of ['focusStable','draftStable','selectedStable','worktreesStable']) if (sample[key] !== true) throw new Error(`unstable mounted UI ${key}`);
-}
 function p95(values) { if (!values.length) return null; const sorted = [...values].sort((a,b) => a-b); return sorted[Math.ceil(sorted.length * .95) - 1]; }
-async function isolation(root) {
+export async function isolation(root) {
   const paths = { home: join(root, 'home'), xdgConfig: join(root, 'xdg-config'), xdgData: join(root, 'xdg-data'), desktopUserData: join(root, 'desktop-user-data'), webProfile: join(root, 'web-profile'), temporary: join(root, 'temporary') };
   for (const path of Object.values(paths)) { await mkdir(path); if (!inside(root, await realpath(path))) throw new Error('isolation path escaped artifact root'); }
   return paths;
@@ -112,22 +91,25 @@ async function buildHash(path) {
   if (typeof path !== 'string' || !isAbsolute(path)) throw new Error('missing preserved build artifact');
   return createHash('sha256').update(await readFile(await realpath(path))).digest('hex');
 }
-async function verifiedProvenance(checkout, buildArtifactPath, commit, artifactRoot) {
+async function verifiedProvenance(checkout, buildArtifactPath, commit, artifactRoot, preparationPath, driverVersion) {
   const sourceCheckout = await preservedSource(checkout,commit);
   const build = await realpath(buildArtifactPath);
   if (inside(artifactRoot,sourceCheckout) || inside(artifactRoot,build)) throw new Error('provenance cannot be disposable fixture');
-  return {sourceCheckout,buildArtifactPath:build,buildSha256:await buildHash(build)};
-}
-// 中文：只比较有明确窗口、数据集和逐次采样时间的实际测量，不能将快测冒充基准。
-function validMeasurement(run) {
-  const m = run.measurement, samples = run.samples;
-  return m && m.datasetId === run.config?.benchmarkDatasetId && m.windowMs === run.config?.durationMs &&
-    m.startedAtElapsedMs === 0 && Number.isFinite(m.endedAtElapsedMs) &&
-    m.endedAtElapsedMs === run.elapsedMs && run.elapsedMs >= m.windowMs &&
-    Array.isArray(samples?.elapsedMs) && samples.elapsedMs.length > 0 &&
-    samples.elapsedMs.length === samples.typedInputMs?.length &&
-    samples.elapsedMs.at(-1) >= m.windowMs &&
-    samples.elapsedMs.every((t,i) => Number.isFinite(t) && t >= 0 && t <= m.endedAtElapsedMs && (i === 0 || t >= samples.elapsedMs[i-1]));
+  const buildSha256=await buildHash(build);
+  if (!preparationPath && driverVersion !== 'contract-stub') throw new Error('production build preparation missing');
+  let buildPreparation;
+  if (preparationPath) {
+    const manifestPath=await realpath(preparationPath);
+    if (inside(artifactRoot,manifestPath)) throw new Error('build preparation cannot be disposable');
+    const raw=await readFile(manifestPath);
+    const manifest=JSON.parse(raw.toString('utf8'));
+    const artifact=manifest.artifactFiles?.find(file=>file.path===relative(sourceCheckout,build));
+    if (manifest.kind !== 'preserved-baseline-desktop-bundle-preparation' || manifest.status !== 'built-unmounted' ||
+      manifest.sourceCheckout !== sourceCheckout || manifest.productionCommit !== commit || manifest.postBuildCommit !== commit ||
+      !Array.isArray(manifest.steps) || manifest.steps.length < 1 || manifest.steps.some(step=>step.exit !== 0) || artifact?.sha256 !== buildSha256) throw new Error('source-to-build preparation unproven');
+    buildPreparation={manifestPath,manifestSha256:createHash('sha256').update(raw).digest('hex')};
+  }
+  return {sourceCheckout,buildArtifactPath:build,buildSha256,...(buildPreparation?{buildPreparation}:{})};
 }
 async function comparison(path, result) {
   if (!path) return {status:'missing-baseline'};
@@ -137,7 +119,8 @@ async function comparison(path, result) {
   if (!a || !b || !['latency-baseline-pending','latency-measured'].includes(base.status) ||
     base.mode !== 'benchmark' || base.machine !== result.machine || JSON.stringify(base.config) !== JSON.stringify(result.config) ||
     a.driverVersion !== b.driverVersion || a.delivery !== b.delivery || a.productionCommit === b.productionCommit ||
-    !validMeasurement(base) || !validMeasurement(result) ||
+    !validMeasurement(base) || !validMeasurement(result) || JSON.stringify(base.measurement.plan) !== JSON.stringify(result.measurement.plan) ||
+    (a.driverVersion !== 'contract-stub' && (!a.buildPreparation || !b.buildPreparation)) ||
     !Number.isFinite(result.elapsedMs) || result.elapsedMs < result.config.durationMs ||
     !Array.isArray(base.samples?.typedInputMs) || !Array.isArray(base.samples?.sessionSwitchMs) ||
     !base.samples.typedInputMs.length || base.samples.typedInputMs.length !== base.samples.sessionSwitchMs.length ||
@@ -151,8 +134,10 @@ async function comparison(path, result) {
     if (inside(resolve(base.artifacts),a.sourceCheckout) || inside(resolve(base.artifacts),a.buildArtifactPath) || inside(result.artifacts,b.sourceCheckout) || inside(result.artifacts,b.buildArtifactPath) ||
       await preservedSource(a.sourceCheckout,a.productionCommit) !== a.sourceCheckout ||
       await buildHash(a.buildArtifactPath) !== a.buildSha256 ||
+      (a.buildPreparation && createHash('sha256').update(await readFile(a.buildPreparation.manifestPath)).digest('hex') !== a.buildPreparation.manifestSha256) ||
       await preservedSource(b.sourceCheckout,b.productionCommit) !== b.sourceCheckout ||
-      await buildHash(b.buildArtifactPath) !== b.buildSha256) return {status:'incomparable-baseline'};
+      await buildHash(b.buildArtifactPath) !== b.buildSha256 ||
+      (b.buildPreparation && createHash('sha256').update(await readFile(b.buildPreparation.manifestPath)).digest('hex') !== b.buildPreparation.manifestSha256)) return {status:'incomparable-baseline'};
   } catch { return {status:'incomparable-baseline'}; }
   const typedInputRatio = result.p95.typedInputMs / base.p95.typedInputMs;
   const sessionSwitchRatio = result.p95.sessionSwitchMs / base.p95.sessionSwitchMs;
@@ -228,7 +213,7 @@ async function rejectGitArtifactLocation(path) {
   if (enclosingGit || enclosingBare) throw new Error('artifact base must be outside all Git checkouts');
 }
 
-async function prepareArtifactBase(base) {
+export async function prepareArtifactBase(base) {
   const cwd = await realpath(process.cwd());
   if (inside(cwd, base) || inside(base, cwd)) throw new Error('artifact base must be outside the project checkout');
   const ancestor = await existingAncestor(base);
@@ -245,7 +230,7 @@ export function isolatedEnvironment(current, paths) {
   const allowed = Object.fromEntries(['PATH','LANG','LC_ALL','TZ'].filter(key => current[key] !== undefined).map(key => [key,current[key]]));
   return {...allowed,HOME:paths.home,XDG_CONFIG_HOME:paths.xdgConfig,XDG_DATA_HOME:paths.xdgData,ZCODE_DATA_BASE_DIR:paths.desktopUserData,TMPDIR:paths.temporary ?? paths.home};
 }
-function applyIsolation(paths) {
+export function applyIsolation(paths) {
   const next = isolatedEnvironment(process.env, paths);
   for (const key of Object.keys(process.env)) delete process.env[key];
   Object.assign(process.env,next);
@@ -256,11 +241,14 @@ export async function runLoad(input = {}) {
   if (!input.driver || typeof input.driver.open !== 'function' || typeof input.driver.dispose !== 'function') throw new Error('production driver with top-level disposer required');
   if (o.mode === 'acceptance' && input.isolateProcessEnv !== true) throw new Error('acceptance requires isolated launch environment');
   const base = resolve(input.artifactBase ?? tmpdir());
+  // 中文：驱动可能来自另一 checkout，仅核对 cwd 会将工件写进被测源码树。
+  const driverCheckout = input.driver.sourceCheckout ? await realpath(input.driver.sourceCheckout) : null;
+  if (driverCheckout && (inside(driverCheckout,base) || inside(base,driverCheckout))) throw new Error('artifact base must be outside driver checkout');
   const baseReal = await prepareArtifactBase(base);
   const root = await mkdtemp(join(baseReal, 'load-'));
   const paths = await isolation(root);
   if (input.isolateProcessEnv) applyIsolation(paths);
-  const result = { mode:o.mode, status:'failed', artifacts:root, machine, config:configOf(o), metadata:null, discovered:0, expanded:0, sessions:0, committedEvents:0, reconnects:0, elapsedMs:0, samples:{typedInputMs:[],sessionSwitchMs:[],sessionIds:[],elapsedMs:[]}, measurement:null, p95:{typedInputMs:null,sessionSwitchMs:null}, backlog:[], backlogSummary:null, memory:[], cleanup:null, comparison:{status:'missing-baseline'}, gateway:{status:'unsupported'}, unsupported:['live-provider-latency-not-measured','paid-provider-not-used','ssh-not-used','desktop-and-web-require-separate-runs'], failures:[] };
+  const result = { mode:o.mode, status:'failed', artifacts:root, machine, config:configOf(o), metadata:null, discovered:0, expanded:0, sessions:0, committedEvents:0, reconnects:0, elapsedMs:0, samples:{typedInputMs:[],sessionSwitchMs:[],sessionIds:[],elapsedMs:[],plannedAtMs:[]}, measurement:null, p95:{typedInputMs:null,sessionSwitchMs:null}, backlog:[], backlogSummary:null, memory:[], cleanup:null, comparison:{status:'missing-baseline'}, gateway:{status:'unsupported'}, unsupported:['live-provider-latency-not-measured','paid-provider-not-used','ssh-not-used','desktop-and-web-require-separate-runs'], failures:[] };
   let mount, start, startingEvents = 0, phase = 'fixture';
   const cleanup = cleanupRegistry(input.driver);
   const takeFacts = async phase => {
@@ -273,14 +261,14 @@ export async function runLoad(input = {}) {
   try {
     const fixture = await createFixture(root, o.worktreeCount);
     phase = 'driver-open';
-    mount = await input.driver.open({root,repo:fixture.repo,worktrees:fixture.worktrees,artifacts:root,isolation:paths,mode:o.mode,registerCleanup:cleanup.registerCleanup,registerChild:cleanup.registerChild});
+    mount = await input.driver.open({root,repo:fixture.repo,worktrees:fixture.worktrees,artifacts:root,isolation:paths,mode:o.mode,delivery:o.delivery,sourceCheckout:input.sourceCheckout,buildArtifactPath:input.buildArtifactPath,registerCleanup:cleanup.registerCleanup,registerChild:cleanup.registerChild});
     for (const name of ['discover','mount','emit','sample','detach','reconnect','facts','close']) if (typeof mount?.[name] !== 'function') throw new Error(`missing production hook ${name}`);
     metadataCheck(mount.metadata, paths, o.mode);
     result.metadata = {productionCommit:mount.metadata.productionCommit,driverVersion:mount.metadata.driverVersion};
     // Smoke stubs remain incomparable unless both independently verified sources are provided.
     if (input.sourceCheckout || input.buildArtifactPath || o.mode === 'acceptance') {
       phase = 'source-provenance';
-      Object.assign(result.metadata,await verifiedProvenance(input.sourceCheckout,input.buildArtifactPath,mount.metadata.productionCommit,root));
+      Object.assign(result.metadata,await verifiedProvenance(input.sourceCheckout,input.buildArtifactPath,mount.metadata.productionCommit,root,input.buildProvenancePath,mount.metadata.driverVersion));
     }
     phase = 'discovery';
     const discovered = await mount.discover({repo:fixture.repo,candidates:fixture.worktrees});
@@ -297,8 +285,27 @@ export async function runLoad(input = {}) {
     startingEvents = (await takeFacts('start')).durableEvents;
     start = performance.now();
     let nextSample = 0, nextReconnect = o.reconnectEveryMs;
+    const plannedIds = sessions.map(s=>s.id);
+    const rounds = Math.max(20,Math.ceil(o.durationMs / o.sampleEveryMs));
+    const slotMs = o.durationMs / rounds;
+    let nextRound = 0;
+    const plannedSample = async round => {
+      const due = round * slotMs;
+      while (performance.now()-start < due) await sleep(Math.max(1,Math.ceil(due-(performance.now()-start))));
+      for (const sessionId of plannedIds) {
+        phase = 'mounted-sample';
+        const sampledAt = performance.now()-start;
+        const sample = await mount.sample({sessionId}); checkSample(sample);
+        result.samples.sessionIds.push(sessionId); result.samples.plannedAtMs.push(due);
+        result.samples.elapsedMs.push(sampledAt);
+        result.samples.typedInputMs.push(sample.typedInputMs); result.samples.sessionSwitchMs.push(sample.sessionSwitchMs);
+      }
+      await takeFacts('sample');
+    };
     for (let i=0;i<o.eventCount;i++) {
       const due = o.durationMs * i / o.eventCount;
+      // 中文：先执行本时段的计划采样；不能让事件等待跨过采样窗，再补写过期时间戳。
+      if (o.mode !== 'smoke') while (nextRound < rounds && nextRound*slotMs <= due) await plannedSample(nextRound++);
       const remaining = due - (performance.now()-start);
       if (remaining > 1) await sleep(remaining);
       const session = sessions[i % sessions.length];
@@ -306,11 +313,11 @@ export async function runLoad(input = {}) {
       await mount.emit({sessionId:session.id,eventId:`synthetic-event-${i}`});
       result.committedEvents++;
       const elapsed = performance.now()-start;
-      if (elapsed >= nextSample) {
+      if (o.mode === 'smoke' && elapsed >= nextSample) {
         phase = 'mounted-sample';
         const sampledId = sessions[result.samples.sessionIds.length % sessions.length].id;
         const sample = await mount.sample({sessionId:sampledId}); checkSample(sample);
-        result.samples.sessionIds.push(sampledId); result.samples.elapsedMs.push(performance.now()-start);
+        result.samples.sessionIds.push(sampledId); result.samples.elapsedMs.push(performance.now()-start); result.samples.plannedAtMs.push(null);
         result.samples.typedInputMs.push(sample.typedInputMs); result.samples.sessionSwitchMs.push(sample.sessionSwitchMs);
         await takeFacts('sample'); nextSample = elapsed + o.sampleEveryMs;
       }
@@ -323,22 +330,16 @@ export async function runLoad(input = {}) {
         await takeFacts('reconnect'); nextReconnect = elapsed + o.reconnectEveryMs;
       }
     }
-    while (performance.now()-start < o.durationMs) await sleep(Math.min(1000,o.durationMs-(performance.now()-start)));
-    if (o.mode === 'benchmark') {
-      // 中文：基准窗口终点必须有实际挂载交互样本，不能用等待计时器填充延迟证据。
-      phase = 'mounted-sample';
-      const sampledId = sessions[result.samples.sessionIds.length % sessions.length].id;
-      const sample = await mount.sample({sessionId:sampledId}); checkSample(sample);
-      result.samples.sessionIds.push(sampledId); result.samples.elapsedMs.push(performance.now()-start);
-      result.samples.typedInputMs.push(sample.typedInputMs); result.samples.sessionSwitchMs.push(sample.sessionSwitchMs);
-      await takeFacts('sample');
-    }
+    if (o.mode !== 'smoke') {
+      // 中文：定额轮次不依赖事件发送速度；所有会话在窗口末仍需实际测量，不能用计时器凑数。
+      while (nextRound <= rounds) await plannedSample(nextRound++);
+    } else while (performance.now()-start < o.durationMs) await sleep(Math.min(1000,o.durationMs-(performance.now()-start)));
     result.elapsedMs = performance.now()-start;
     phase = 'final-owner-facts';
     const facts = await takeFacts('end');
     if (facts.durableEvents - startingEvents < o.eventCount || facts.backlog !== 0) throw new Error('Host events not durably caught up');
     if (result.reconnects < 1) throw new Error('no detach/reconnect exercised');
-    if (o.mode === 'acceptance' && (result.reconnects < 2 || result.samples.typedInputMs.length < 20 || new Set(result.samples.sessionIds).size < o.sessionCount)) throw new Error('insufficient acceptance interaction/reconnect samples');
+    if (o.mode === 'acceptance' && (result.reconnects < 2 || plannedIds.some(id => result.samples.sessionIds.filter(value=>value===id).length < 20) || result.samples.sessionSwitchMs.length !== result.samples.typedInputMs.length)) throw new Error('insufficient acceptance interaction/reconnect samples');
     if (typeof mount.gatewayProbe === 'function') {
       phase = 'fake-provider-probe';
       const values = await mount.gatewayProbe();
@@ -371,7 +372,11 @@ export async function runLoad(input = {}) {
       }
     } catch { result.failures.push('gate-failed:cleanup-or-idle'); }
     result.p95 = {typedInputMs:p95(result.samples.typedInputMs),sessionSwitchMs:p95(result.samples.sessionSwitchMs)};
-    if (o.mode === 'benchmark') result.measurement = {datasetId:o.benchmarkDatasetId,windowMs:o.durationMs,startedAtElapsedMs:0,endedAtElapsedMs:result.elapsedMs};
+    if (o.mode === 'benchmark') {
+      const rounds=Math.max(20,Math.ceil(o.durationMs/o.sampleEveryMs));
+      result.measurement = {datasetId:o.benchmarkDatasetId,windowMs:o.durationMs,startedAtElapsedMs:0,endedAtElapsedMs:result.elapsedMs,plan:{rounds,slotMs:o.durationMs/rounds,sessionIds:Array.from({length:o.sessionCount},(_,i)=>`synthetic-${i}`)}};
+      if (!validMeasurement(result)) result.failures.push('gate-failed:measurement-population');
+    }
     if (result.backlog.length) result.backlogSummary = {max:Math.max(...result.backlog.map(b=>b.highWater)),final:result.backlog.findLast(b=>b.phase==='end')?.count ?? null};
     try { result.comparison = await comparison(input.baselinePath,result); } catch { result.failures.push('gate-failed:baseline-unreadable'); }
     if (result.comparison.status === 'over-budget') result.failures.push('gate-failed:latency-regression');
@@ -382,24 +387,6 @@ export async function runLoad(input = {}) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(new URL(import.meta.url).pathname)) {
-  const args = process.argv.slice(2);
-  const val = flag => { const i = args.indexOf(flag); return i < 0 ? undefined : args[i+1]; };
-  const driverPath = val('--driver');
-  if (!driverPath || !isAbsolute(driverPath)) throw new Error('--driver requires an absolute trusted .mjs path (no built-in production driver)');
-  // Fail-fast before importing the driver: isolate launch environment, never inherit account credentials.
-  const mode = val('--mode') ?? 'acceptance';
-  const delivery = val('--delivery') ?? 'desktop-continuous';
-  if (['smoke','benchmark'].includes(mode) && (val('--duration-ms') === undefined || val('--events') === undefined)) throw new Error(`${mode} requires explicit --duration-ms and --events`);
-  const numbers = { '--duration-ms':'durationMs', '--events':'eventCount', '--worktrees':'worktreeCount', '--sessions':'sessionCount', '--expanded':'expandedCount', '--sample-every-ms':'sampleEveryMs', '--reconnect-every-ms':'reconnectEveryMs', '--idle-ms':'idleMs', '--max-backlog':'maxBacklog', '--max-owned-children':'maxOwnedChildren' };
-  const numeric = Object.fromEntries(Object.entries(numbers).filter(([flag]) => val(flag) !== undefined).map(([flag,key])=>[key,Number(val(flag))]));
-  const options = validateOptions({mode,delivery,benchmarkDatasetId:val('--benchmark-dataset-id'),...numeric});
-  const base = resolve(val('--artifact-base') ?? tmpdir());
-  const safeBase = await prepareArtifactBase(base);
-  const launch = await mkdtemp(join(safeBase,'load-launch-'));
-  const launchPaths = await isolation(launch);
-  applyIsolation(launchPaths);
-  const driver = (await import(pathToFileURL(driverPath).href)).default;
-  const result = await runLoad({driver,...options,artifactBase:base,baselinePath:val('--baseline'),sourceCheckout:val('--source-checkout'),buildArtifactPath:val('--build-artifact'),isolateProcessEnv:true});
-  console.log(JSON.stringify({status:result.status,artifacts:result.artifacts,elapsedMs:Math.round(result.elapsedMs),failures:result.failures}));
-  if (result.status === 'failed') process.exitCode = 1;
+  const {runCli} = await import('./runner-cli.mjs');
+  await runCli();
 }
