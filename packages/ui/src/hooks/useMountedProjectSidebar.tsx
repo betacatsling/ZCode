@@ -208,6 +208,7 @@ export function useMountedProjectSidebar({
     async (summary: SessionSummary) => {
       // Bug 原因：较早的 owner lookup 晚完成会覆盖最后点击；旧请求的拒绝也不能报错。
       const request = ++navigationSequence.current;
+      const catalogRequest = refreshSequence.current;
       const source = snapshot;
       const generation = source?.workspaces.find(
         (w) => w.id === summary.session.workspaceId,
@@ -216,6 +217,7 @@ export function useMountedProjectSidebar({
         const owner = await resolveMountedSidebarOwner(summary, source, hierarchy);
         if (
           request !== navigationSequence.current ||
+          catalogRequest !== refreshSequence.current ||
           source !== snapshotRef.current ||
           source?.workspaces.find((w) => w.id === owner.scope.workspaceId)?.worktreeGeneration !==
             generation
@@ -223,7 +225,12 @@ export function useMountedProjectSidebar({
           return;
         onNavigate(owner);
       } catch (cause) {
-        if (request !== navigationSequence.current || source !== snapshotRef.current) return;
+        if (
+          request !== navigationSequence.current ||
+          catalogRequest !== refreshSequence.current ||
+          source !== snapshotRef.current
+        )
+          return;
         throw cause;
       }
     },
