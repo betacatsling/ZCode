@@ -1,4 +1,7 @@
 import { memo } from "react";
+import type { HarnessCatalogEntry } from "@zcode/shared/agent-host";
+import { HarnessIcon } from "@/agent-host/HarnessIcon.js";
+import type { SidebarIconAsset } from "@/agent-host/harnessAssetResolver.js";
 import {
   TID_V4_PANE_WORKSPACE_BADGE,
   TID_V4_SESSION_TITLE,
@@ -30,15 +33,28 @@ interface ConversationHeaderProps {
   onClosePane?: () => void;
   /** 跨 workspace pane 的归属徽标（pane workspace ≠ shell 当前 workspace 时下发）。 */
   workspaceBadge?: PaneWorkspaceBadge;
+  /** Owner-sourced harness identity; model is independent of harness branding. */
+  harness?: {
+    id: string;
+    catalog: readonly HarnessCatalogEntry[];
+    resolveIconAsset: (id: string) => SidebarIconAsset | undefined;
+    theme: "light" | "dark";
+    model: string;
+  };
 }
 
 /**
  * pane chrome：不占布局高度，只在右上角悬浮拆分/关闭入口。
  * 保留 title data 节点，供 E2E 读取投影但不恢复旧横条。
  */
-function ConversationHeaderImpl({ title, onClosePane, workspaceBadge }: ConversationHeaderProps) {
+function ConversationHeaderImpl({
+  title,
+  onClosePane,
+  workspaceBadge,
+  harness,
+}: ConversationHeaderProps) {
   const { intl } = useZCodeIntl();
-  const hasFloatingActions = Boolean(workspaceBadge) || Boolean(onClosePane);
+  const hasFloatingActions = Boolean(workspaceBadge) || Boolean(onClosePane) || Boolean(harness);
 
   return (
     <>
@@ -48,6 +64,22 @@ function ConversationHeaderImpl({ title, onClosePane, workspaceBadge }: Conversa
           data-v4-pane-actions="floating"
           className="pointer-events-none absolute left-2 top-2 z-20 flex max-w-[calc(100%-1rem)] items-center gap-1"
         >
+          {harness ? (
+            <span
+              className="pointer-events-auto flex h-7 min-w-0 items-center gap-1 rounded-md border border-border bg-popover px-2 text-ui-sm text-foreground-subtle shadow-md"
+              title={`${harness.id} · ${harness.model}`}
+            >
+              <HarnessIcon
+                harnessId={harness.id}
+                catalog={harness.catalog}
+                resolveIconAsset={harness.resolveIconAsset}
+                theme={harness.theme}
+              />
+              <span className="truncate">
+                {harness.id} · {harness.model}
+              </span>
+            </span>
+          ) : null}
           {workspaceBadge ? (
             <span
               data-testid={TID_V4_PANE_WORKSPACE_BADGE}
