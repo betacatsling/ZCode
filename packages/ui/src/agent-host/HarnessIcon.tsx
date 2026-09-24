@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { HarnessCatalogEntry } from "@zcode/shared/agent-host";
+import { safeHarnessPngDataUrl, type HarnessAssetDescriptor } from "./harnessAssetResolver.js";
 
 export function safeIconUrl(
   assetId: string | undefined,
@@ -22,7 +23,7 @@ export function HarnessIcon({
 }: {
   harnessId: string;
   catalog: readonly HarnessCatalogEntry[];
-  resolveIconAsset: (assetId: string) => string | undefined;
+  resolveIconAsset: (assetId: string) => HarnessAssetDescriptor | string | undefined;
   theme?: "light" | "dark";
 }) {
   const entry = catalog.find((item) => item.manifest.id === harnessId);
@@ -31,7 +32,8 @@ export function HarnessIcon({
     theme === "dark"
       ? (entry?.manifest.icon?.dark ?? entry?.manifest.icon?.light)
       : (entry?.manifest.icon?.light ?? entry?.manifest.icon?.dark);
-  const url = safeIconUrl(assetId, resolveIconAsset);
+  // Harness 只能显示已验证的打包 PNG 描述符；旧路径解析器仅供 Project 图标使用。
+  const url = safeHarnessPngDataUrl(assetId, resolveIconAsset);
   const [brokenUrl, setBrokenUrl] = useState<string>();
   // 资源缺失/加载失败只显示中性占位，不能误认成另一种 Harness 品牌。
   return (
