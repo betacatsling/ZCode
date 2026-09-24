@@ -98,7 +98,27 @@ export { CommandJournal } from "./agent-host/commandJournal.js";
 export { EventJournal } from "./agent-host/eventJournal.js";
 export { SessionHost } from "./agent-host/sessionHost.js";
 export { AgentHostTargetService } from "./agent-host/targetService.js";
+export type { WorkspaceAdmissionPort } from "./agent-host/targetService.js";
 export { SessionRouter } from "./agent-host/sessionRouter.js";
+export { ProjectCatalog } from "./project-workspaces/projectCatalog.js";
+export { TargetWorktreeService } from "./project-workspaces/worktreeService.js";
+export { LegacyWorkspaceMigration } from "./project-workspaces/legacyWorkspaceMigration.js";
+export type {
+  LegacyPersistentSessionIndexReader,
+  LegacyTargetResolver,
+} from "./project-workspaces/legacyWorkspaceMigration.js";
+export type { CatalogSessionIndex } from "./project-workspaces/sidebarIndexService.js";
+export { createModelGateway } from "./model-gateway/gateway.js";
+export type {
+  ModelGateway,
+  ModelGatewayOptions,
+  GatewayTokenBinding,
+} from "./model-gateway/contract.js";
+export { responsesProtocol } from "./model-gateway/ingress/responses.js";
+export { anthropicMessagesProtocol } from "./model-gateway/ingress/anthropicMessages.js";
+export { ClaudeCodeTransport } from "./agent-adapters/claude-code/claudeTransport.js";
+export { CodexTransport, createCodexTransport } from "./agent-adapters/codex/codexTransport.js";
+export { AcpTransport, createAcpTransport } from "./agent-adapters/acp/acpTransport.js";
 export { createZCodeTaskServiceAdapter } from "./zcode-agent/zcodeTaskServiceAdapter.js";
 export { createZCodeSessionService } from "./zcode-session/zcodeSessionService.js";
 export {

@@ -1,4 +1,11 @@
 export { App } from "./App.js";
+export { ProjectSidebar } from "./project-sidebar/ProjectSidebar.js";
+export type { ProjectSidebarProps, SidebarActions } from "./project-sidebar/types.js";
+export { HarnessIcon } from "./agent-host/HarnessIcon.js";
+export { HarnessSelector } from "./agent-host/HarnessSelector.js";
+export { ModelBindingSelector } from "./agent-host/ModelBindingSelector.js";
+export { SessionStatusIcon } from "./agent-host/SessionStatusIcon.js";
+export { CompatibilityStatus } from "./agent-host/CompatibilityStatus.js";
 export { AppErrorBoundary, ScopedErrorBoundary } from "./ErrorBoundary.js";
 export type { ScopedErrorBoundaryVariant } from "./ErrorBoundary.js";
 export { Button, buttonVariants } from "./components/ui/button.js";
