@@ -151,7 +151,7 @@ async function baselinePair({candidateLatency = 5, baselineMutate, candidateMuta
   return {result,baseline,candidate};
 }
 
-test('partial open always disposes registered real child, including repeated disposal', async () => {
+test('partial open disposes registered real child exactly once and proves exit', async () => {
   let child, disposals = 0, cleanups = 0;
   const partial = {
     async dispose() { disposals++; if (child && child.exitCode === null && child.signalCode === null) child.kill(); },
@@ -171,9 +171,39 @@ test('partial open always disposes registered real child, including repeated dis
   assert.ok(!JSON.stringify(result).includes('sensitive'));
 });
 
+test('broken top-level disposer still reaps registered real child and fails cleanup', async () => {
+  let child;
+  const broken = {
+    async dispose() { throw new Error('sensitive disposer failure'); },
+    async open({registerChild}) {
+      child = spawn(process.execPath,['-e','setInterval(() => {}, 10000)'],{stdio:'ignore'});
+      registerChild(child);
+      throw new Error('sensitive open failure');
+    },
+  };
+  const result = await runLoad({...short,driver:broken,artifactBase:await temp()});
+  assert.equal(result.status,'failed');
+  assert.ok(result.failures.includes('gate-failed:cleanup-or-idle'));
+  assert.ok(child.exitCode !== null || child.signalCode !== null);
+  assert.ok(!JSON.stringify(result).includes('sensitive'));
+});
+
+test('changed preserved baseline checkout cannot be adopted from unchanged JSON', async () => {
+  const {result} = await baselinePair({baselineMutate:async (_json, baseline) => {
+    execFileSync('git',['-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','--allow-empty','-qm','modified preserved baseline'],{cwd:baseline.repo});
+  }});
+  assert.equal(result.comparison.status,'incomparable-baseline');
+});
+
 test('wrong preserved Git HEAD cannot be adopted from baseline JSON', async () => {
   const {result} = await baselinePair({baselineMutate:async (json) => { json.metadata.productionCommit = 'a'.repeat(40); }});
   assert.equal(result.comparison.status,'incomparable-baseline');
+});
+
+test('candidate commit mismatch rejects self-reported driver provenance', async () => {
+  const {result} = await baselinePair({candidateMutate:async candidate => { candidate.commit = 'a'.repeat(40); }});
+  assert.equal(result.status,'failed');
+  assert.ok(result.failures.includes('gate-failed:source-provenance'));
 });
 
 test('missing build or idle provenance is incomparable', async () => {
@@ -186,9 +216,14 @@ test('missing build or idle provenance is incomparable', async () => {
   }
 });
 
-test('controlled short latency window remains smoke, +10% budget enforced', async () => {
+test('tampered p95 does not launder preserved samples into a baseline', async () => {
+  const {result} = await baselinePair({baselineMutate:async json => { json.p95.typedInputMs = 100; }});
+  assert.equal(result.comparison.status,'incomparable-baseline');
+});
+
+test('controlled short latency window over budget is failed, not 8h', async () => {
   const {result} = await baselinePair({candidateLatency:6});
-  assert.equal(result.status,'smoke-only');
+  assert.equal(result.status,'failed');
   assert.equal(result.comparison.status,'over-budget');
   assert.ok(result.failures.includes('gate-failed:latency-regression'));
   assert.equal(result.comparison.typedInputRatio,1.2);
