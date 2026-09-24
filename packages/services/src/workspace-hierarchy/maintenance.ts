@@ -27,6 +27,8 @@ export interface MaintenanceCoordination extends MaintenanceLeasePort {
   /** Local-only convenience; do not serialize callbacks across RPC. */
   withMaintenance<T>(action: () => Promise<T>): Promise<T>;
   admissionEnabled(): boolean;
+  /** Instance-local initial hold, independent of ordinary maintenance leases. */
+  releaseInitialHold(): void;
   withAdmission<T>(action: () => Promise<T>): Promise<T>;
 }
 
@@ -34,7 +36,9 @@ export interface MaintenanceCoordination extends MaintenanceLeasePort {
 export function createMaintenanceCoordination(input: {
   nativeFence: () => Promise<NativeAdmissionFence | (() => Promise<void>)>;
   activity: () => Promise<MaintenanceActivity>;
+  initiallyHeld?: boolean;
 }): MaintenanceCoordination {
+  let initialHold = input.initiallyHeld === true;
   let phase: "open" | "acquiring" | "held" | "releasing" | "poisoned" = "open";
   let epoch = 0;
   let held: MaintenanceLease | undefined;
@@ -55,9 +59,13 @@ export function createMaintenanceCoordination(input: {
     phase = "open";
   };
   const port: MaintenanceCoordination = {
-    admissionEnabled: () => phase === "open",
+    admissionEnabled: () => phase === "open" && !initialHold,
+    releaseInitialHold() {
+      // 中文：启动持有与后续维护令牌是不同所有权；旧 maintenance 释放不能解除启动冻结。
+      initialHold = false;
+    },
     async withAdmission(action) {
-      if (phase !== "open") throw new Error("New admission frozen for maintenance");
+      if (phase !== "open" || initialHold) throw new Error("New admission frozen for maintenance");
       inflight++;
       try {
         return await action();
@@ -73,11 +81,16 @@ export function createMaintenanceCoordination(input: {
       const nextEpoch = ++epoch;
       try {
         const acquired = await input.nativeFence();
-        native = typeof acquired === "function" ? {
-          release: acquired,
-          // 中文：旧回调只有解除能力，无法确认 CLI epoch；拒绝发放可停机的 lease。
-          verify: async () => { throw new Error("Unverifiable native maintenance fence"); },
-        } : acquired;
+        native =
+          typeof acquired === "function"
+            ? {
+                release: acquired,
+                // 中文：旧回调只有解除能力，无法确认 CLI epoch；拒绝发放可停机的 lease。
+                verify: async () => {
+                  throw new Error("Unverifiable native maintenance fence");
+                },
+              }
+            : acquired;
         if (!native || typeof native.release !== "function" || typeof native.verify !== "function")
           throw new Error("Native CLI fence did not provide a verifiable release capability");
       } catch (error) {

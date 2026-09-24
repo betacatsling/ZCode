@@ -173,6 +173,7 @@ for (const variant of ["damaged", "per-id-model"] as const)
       const first = await boot("./coreNativeMountChild.fixture.ts", {
         ZCODE_MULTI_HARNESS_ENABLED: "1",
         ZCODE_CORE_NATIVE_CREATE_TEST_ONLY: "1",
+        CORE_NATIVE_BOOT_FENCE_TEST_ONLY: variant === "per-id-model" ? "1" : "0",
         ZCODE_CORE_NATIVE_CATALOG_FAULT_TEST_ONLY: "native-create-catalog-fault",
         ZCODE_CORE_NATIVE_DROP_ACK_TEST_ONLY: "native-create-1",
         ZCODE_CORE_NATIVE_MAPPING_FSYNC_FAULT_TEST_ONLY: "native-create-fsync-fault",

@@ -26,6 +26,7 @@ import { nativeCreatePayloadFingerprint } from "@zcode/shared/zcode-protocol-v4/
 import { commandPayloadSchemas } from "@zcode/shared/zcode-protocol-v4";
 import { IZCodeAgentService } from "./zcode-agent/zcodeAgent.js";
 import type { ServiceCollection } from "./collection.js";
+import type { CompositionOptions } from "./workspace-hierarchy/lazyComposition.js";
 import {
   createLocalServices,
   disposeServiceResourcesAndWait,
@@ -38,6 +39,10 @@ export interface CoreAuthorityOptions {
   /** Installation/runtime layout, not the writable profile root. */
   profileRoot: string;
   zcodeBuiltinProviderConfigFilePath: string;
+  /** Default open; held is installed before composition initialization/reconciliation. */
+  admissionFence?: "open" | "held";
+  /** Node-only trusted harness factories; never a serialized renderer capability. */
+  additionalTrustedHarnesses?: CompositionOptions["additionalTrustedHarnesses"];
 }
 export interface CoreAuthorityResult {
   services: ServiceCollection;
@@ -49,6 +54,7 @@ export interface CoreAuthorityResult {
     }>;
   };
   reconcileBeforeAdmission(): Promise<void>;
+  bootAdmissionLease?: { release(): Promise<void> };
   dispose(): Promise<void>;
 }
 
@@ -281,6 +287,8 @@ export async function createCoreAuthority(
       agentHostTargetId: options.installationId,
       workspaceCompositionRoot: join(configRoot, "workspace-hierarchy"),
       workspaceComposition: bridge,
+      initiallyHeld: options.admissionFence === "held",
+      additionalTrustedHarnesses: options.additionalTrustedHarnesses,
     });
     const nativeService = services.get(IZCodeAgentService);
     live = getNativeProcessControlPort(nativeService);
@@ -306,6 +314,19 @@ export async function createCoreAuthority(
     const coordinator = getWorkspaceMaintenanceCoordination(collection);
     if (!coordinator) throw new Error("Core maintenance coordinator missing");
     let disposing: Promise<void> | undefined;
+    let disposed = false;
+    const bootAdmissionLease =
+      options.admissionFence === "held"
+        ? {
+            async release() {
+              if (disposed) throw new Error("Core boot admission owner disposed");
+              await getWorkspaceCompositionReady(collection);
+              if (disposed) throw new Error("Core boot admission owner disposed");
+              // 中文：同一 Core 的启动门禁只解除一次；维护租约依旧独立持有，不能被旧启动令牌清空。
+              coordinator.releaseInitialHold();
+            },
+          }
+        : undefined;
     return {
       services: collection,
       maintenance: {
@@ -328,7 +349,9 @@ export async function createCoreAuthority(
         },
       },
       reconcileBeforeAdmission: () => getWorkspaceCompositionReady(collection),
+      ...(bootAdmissionLease ? { bootAdmissionLease } : {}),
       dispose() {
+        disposed = true;
         return (disposing ??= (async () => {
           try {
             await disposeServiceResourcesAndWait(collection);

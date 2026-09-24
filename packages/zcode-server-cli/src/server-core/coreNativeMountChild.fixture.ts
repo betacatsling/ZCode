@@ -113,9 +113,28 @@ try {
     installationId: "native-mount-fixture",
     profileRoot: root,
     zcodeBuiltinProviderConfigFilePath: process.env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE!,
+    admissionFence: process.env.CORE_NATIVE_BOOT_FENCE_TEST_ONLY === "1" ? "held" : "open",
   });
   await authority.reconcileBeforeAdmission();
   const catalog = authority.services.get(IProjectCatalogRpcService);
+  if (process.env.CORE_NATIVE_BOOT_FENCE_TEST_ONLY === "1") {
+    // 中文：真实 Core/Target/Catalog 即使已完成启动核对，也不得在 Supervisor 决策前接收新命令。
+    if (!authority.bootAdmissionLease) throw new Error("missing held boot lease");
+    try {
+      await catalog.importProject({
+        id: "premature",
+        name: "Premature",
+        targetId: "native-mount-fixture",
+        repositoryPath: join(root, "real-repo"),
+        bindingId: "premature-binding",
+      });
+      throw new Error("held Core accepted mutation");
+    } catch (error) {
+      if (!String(error).includes("frozen")) throw error;
+    }
+    await authority.bootAdmissionLease.release();
+    await authority.bootAdmissionLease.release();
+  }
   const hierarchy = authority.services.get(IWorkspaceHierarchyService);
   if (process.argv[2] !== "restart") {
     await catalog.importProject({

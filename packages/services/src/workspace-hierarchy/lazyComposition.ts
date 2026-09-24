@@ -1,7 +1,8 @@
 import { join } from "node:path";
 import { Emitter } from "@zcode/rpc";
 import type { ProviderRegistryService } from "@zcode/provider";
-import type { ExecutionTarget, SessionSpecV2 } from "@zcode/shared/agent-host";
+import type { ExecutionTarget, SessionSpecV2, HarnessManifest } from "@zcode/shared/agent-host";
+import type { HarnessAdapter } from "../agent-host/harnessRegistry.js";
 import type { IAgentHostService } from "../agent-host/serviceContract.js";
 import { createLazyTargetAgentHostService } from "../agent-host/lazyTargetService.js";
 import { ProjectCatalog } from "../project-workspaces/projectCatalog.js";
@@ -39,6 +40,11 @@ export interface CompositionOptions {
   nativeActivity: (workspaceId?: string) => Promise<TargetRuntimeActivity>;
   newAdmissionsEnabled: () => boolean;
   nativeAdmissionFence: () => Promise<NativeAdmissionFence>;
+  initiallyHeld?: boolean;
+  additionalTrustedHarnesses?: readonly {
+    manifest: HarnessManifest;
+    factory: () => HarnessAdapter;
+  }[];
   /** Core binds the real Catalog receipt/archive reconciliation, not a window-local fallback. */
   reconcileBoot: (catalog: ProjectCatalog) => Promise<void>;
   resolveRemoteSession?: (workspaceIdentity: string) => Promise<string | undefined>;
@@ -69,6 +75,7 @@ export function createLazyWorkspaceComposition(options: CompositionOptions): {
   let host: IAgentHostService;
   const maintenance = createMaintenanceCoordination({
     nativeFence: options.nativeAdmissionFence,
+    initiallyHeld: options.initiallyHeld,
     activity: async () => {
       const [native, external] = await Promise.all([
         options.nativeActivity(),
@@ -190,6 +197,7 @@ export function createLazyWorkspaceComposition(options: CompositionOptions): {
     registry: options.registry,
     admission,
     allowNewSessions: newAdmissionsEnabled,
+    additionalTrustedHarnesses: options.additionalTrustedHarnesses,
   });
   host = agent.service;
   const catalog: ProjectCatalogRpcService = {
