@@ -69,3 +69,22 @@ test('pending trust/preference/policy writers are registered before residency aw
     server.disposeProjections();
   }
 });
+
+test('shutdown while awaiting residency cannot dispatch a late provider write', async () => {
+  let wrote = false;
+  const server = new ZCodeProtocolAgentServer({ createZCodeApp: () => { throw new Error('unexpected agent'); },
+    syncAccountProviderConfig: async () => { wrote = true; return true; },
+  });
+  let release!: () => void;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const context = (server as unknown as { context: { sessionResidentPool: { acquireOperation: (ids: string[]) => Promise<() => void> } } }).context;
+  context.sessionResidentPool.acquireOperation = async () => { await blocked; return () => {}; };
+  const request = server.handleMessage({ id: 201, method: zcodeProtocolMethods.providerUpdateAccountConfig,
+    params: { revision: 'late', basedOnZCodeBuiltinRevision: 'builtin', providers: {}, states: {} } });
+  await server.shutdown();
+  release();
+  const result = await request;
+  assert.ok(result && 'error' in result);
+  assert.equal(wrote, false);
+  server.disposeProjections();
+});

@@ -534,6 +534,8 @@ export class ZCodeProtocolAgentServer {
       releaseResidencyOperation = await this.context.sessionResidentPool?.acquireOperation(
         collectResidencySessionIds(request.params),
       );
+      // 中文：shutdown 可能在 residency await 期间关闭运行时，不能随后写盘/启动执行。
+      this.runtimeResources.assertServing();
       // 中文：等待 residency 时可能刚被冻结，非 v4 写请求必须在派发前重查；
       // v4 命令由 Inbox 在持久查询后裁决重复/控制与新 admission。
       if (protocolMutation && request.method !== V4_METHODS.command && this.nativeLease)
