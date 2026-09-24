@@ -62,6 +62,8 @@ function fixture() {
           });
           return version as any;
         }
+        assert.ok(args.includes('web_search="disabled"'));
+        assert.ok(args.includes("features.multi_agent=false"));
         return child as any;
       },
     });

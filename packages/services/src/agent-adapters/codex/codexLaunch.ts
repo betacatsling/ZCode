@@ -103,6 +103,8 @@ export async function launchCodex(
     'model_providers.zcode.wire_api="responses"',
     "-c",
     'model_provider="zcode"',
+    'web_search="disabled"',
+    'features.multi_agent=false',
   ];
   return start(executable, args, {
     cwd: options.cwd,

@@ -26,7 +26,19 @@ const server = createServer(async (req, res) => {
   if (!req.url?.startsWith("/v1/messages")) { res.writeHead(404).end(); return; }
   const body = JSON.parse(raw);
   requests++;
-  observations.push({ path: req.url, keys: Object.keys(body).sort(), tools: body.tools?.map((tool) => tool.name), roles: body.messages?.map((m) => m.role) });
+  observations.push({ path: req.url, keys: Object.keys(body).sort(), tools: body.tools?.map((tool) => tool.name), roles: body.messages?.map((m) => m.role),
+    beta: String(req.headers["anthropic-beta"] ?? "").split(",").map((entry) => entry.trim()).filter(Boolean).sort(),
+    thinkingType: body.thinking?.type, outputConfigKeys: body.output_config ? Object.keys(body.output_config).sort() : [],
+    contextManagementKeys: body.context_management ? Object.keys(body.context_management).sort() : [],
+    metadataKeys: body.metadata ? Object.keys(body.metadata).sort() : [],
+    temperature: body.temperature, effort: body.output_config?.effort,
+    system: Array.isArray(body.system) ? body.system.map((block) => ({ type: block.type, keys: Object.keys(block).sort(), cache: block.cache_control })) : typeof body.system,
+    toolsShape: body.tools?.map((tool) => ({ name: tool.name, keys: Object.keys(tool).sort(), cache: tool.cache_control })),
+    messagesShape: body.messages?.map((message) => ({ role: message.role, content: Array.isArray(message.content) ? message.content.map((block) => ({ type: block.type, keys: Object.keys(block).sort(), cache: block.cache_control })) : typeof message.content })),
+    metadataTypes: body.metadata ? Object.fromEntries(Object.entries(body.metadata).map(([key, value]) => [key, typeof value])) : {},
+    userIdShape: typeof body.metadata?.user_id === "string" ? { length: body.metadata.user_id.length, uuid: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.metadata.user_id), hex: /^[0-9a-f]+$/i.test(body.metadata.user_id), hasWhitespace: /\s/.test(body.metadata.user_id) } : null,
+    headers: Object.keys(req.headers).filter((key) => key.startsWith("anthropic-")).sort(),
+  });
   res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
   const event = (name, data) => res.write(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`);
   const id = `msg_fixture_${requests}`;

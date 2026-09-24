@@ -92,7 +92,7 @@ export class ClaudeCodeTransport {
       const sdk = this.options.queryFactory ?? query;
       const stream = sdk({ prompt, options: {
         cwd: this.options.cwd, model: this.options.model, resume: this.options.resumeId,
-        abortController: this.controller, settingSources: [], strictMcpConfig: true,
+        thinking: { type: "disabled" }, abortController: this.controller, settingSources: [], strictMcpConfig: true,
         tools: ["Read", "Edit", "Write", "Bash"], permissionMode: "default", permissionPrompts: "host", includePartialMessages: true,
         env: { PATH: process.env.PATH ?? "", HOME: this.options.profileDir, CLAUDE_CONFIG_DIR: this.options.profileDir,
           ANTHROPIC_BASE_URL: this.options.gatewayUrl, ANTHROPIC_API_KEY: this.options.gatewayToken,

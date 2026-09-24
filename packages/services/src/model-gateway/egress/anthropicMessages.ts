@@ -4,6 +4,7 @@ import type { ModelEvent } from "@zcode/contracts";
 type Context = { requestId: string; modelId: string; createdAt: number; signal?: AbortSignal };
 type Frame = { event?: string; data: unknown };
 type OpenText = { index: number; closed: boolean };
+type OpenReasoning = { index: number; signature?: string; closed: boolean };
 type OpenTool = { index: number; name: string; json: string; ended: boolean };
 const frame = (event: string, data: Record<string, unknown>): Frame => ({
   event,
@@ -22,6 +23,14 @@ export async function* encodeAnthropicMessagesStream(
   let completedTools = 0;
   const texts = new Map<string, OpenText>();
   const tools = new Map<string, OpenTool>();
+  const reasoning = new Map<string, OpenReasoning>();
+  const signature = (metadata: Record<string, unknown> | undefined): string | undefined => {
+    if (metadata === undefined) return undefined;
+    if (Object.keys(metadata).length !== 1 || typeof metadata.anthropic !== "object" || !metadata.anthropic || Array.isArray(metadata.anthropic)) fail("unsupported_reasoning_metadata");
+    const value = metadata.anthropic as Record<string, unknown>;
+    if (Object.keys(value).length !== 1 || typeof value.signature !== "string" || !value.signature) fail("unsupported_reasoning_metadata");
+    return value.signature as string;
+  };
   const fail = (code: string): never => {
     throw new Error(code);
   };
@@ -52,7 +61,7 @@ export async function* encodeAnthropicMessagesStream(
         case "start":
           break;
         case "text_start": {
-          if (texts.has(event.id) || tools.has(event.id)) fail("duplicate_block_id");
+          if (texts.has(event.id) || tools.has(event.id) || reasoning.has(event.id)) fail("duplicate_block_id");
           const blockIndex = index++;
           texts.set(event.id, { index: blockIndex, closed: false });
           yield frame("content_block_start", {
@@ -80,7 +89,7 @@ export async function* encodeAnthropicMessagesStream(
           break;
         }
         case "tool_input_start": {
-          if (texts.has(event.id) || tools.has(event.id) || event.providerExecuted)
+          if (texts.has(event.id) || tools.has(event.id) || reasoning.has(event.id) || event.providerExecuted)
             fail("unsupported_tool_start");
           const blockIndex = index++;
           tools.set(event.id, { index: blockIndex, name: event.toolName, json: "", ended: false });
@@ -142,8 +151,42 @@ export async function* encodeAnthropicMessagesStream(
           yield frame("content_block_stop", { index: tool.index });
           break;
         }
+        case "reasoning_start": {
+          if (texts.has(event.id) || tools.has(event.id) || reasoning.has(event.id)) fail("duplicate_block_id");
+          const blockIndex = index++;
+          reasoning.set(event.id, { index: blockIndex, signature: signature(event.providerMetadata), closed: false });
+          yield frame("content_block_start", { index: blockIndex, content_block: { type: "thinking", thinking: "" } });
+          break;
+        }
+        case "reasoning_delta": {
+          const open = [...reasoning].filter(([, value]) => !value.closed).map(([id]) => id);
+          if (!event.id && open.length !== 1) fail("ambiguous_reasoning_delta");
+          const block = reasoning.get(event.id ?? open[0]!);
+          if (!block || block.closed) throw new Error("reasoning_delta_without_start");
+          const original = signature(event.providerMetadata);
+          if (original) {
+            if (block.signature && block.signature !== original) fail("reasoning_signature_mismatch");
+            block.signature = original;
+          }
+          if (event.text) yield frame("content_block_delta", { index: block.index, delta: { type: "thinking_delta", thinking: event.text } });
+          break;
+        }
+        case "reasoning_end": {
+          const block = reasoning.get(event.id);
+          if (!block || block.closed) throw new Error("reasoning_end_without_start");
+          const original = signature(event.providerMetadata);
+          if (original) {
+            if (block.signature && block.signature !== original) fail("reasoning_signature_mismatch");
+            block.signature = original;
+          }
+          if (!block.signature) fail("unsigned_reasoning");
+          yield frame("content_block_delta", { index: block.index, delta: { type: "signature_delta", signature: block.signature } });
+          block.closed = true;
+          yield frame("content_block_stop", { index: block.index });
+          break;
+        }
         case "finish": {
-          if (tools.size || [...texts.values()].some((text) => !text.closed))
+          if (tools.size || [...texts.values()].some((text) => !text.closed) || [...reasoning.values()].some((block) => !block.closed))
             fail("unfinished_content_block");
           const reason =
             event.finishReason === "stop"
@@ -173,26 +216,29 @@ export async function* encodeAnthropicMessagesStream(
             (inputTokens as number) < 0 ||
             !Number.isSafeInteger(outputTokens) ||
             (outputTokens as number) < 0 ||
-            cacheReadTokens ||
-            cacheWriteTokens ||
-            reasoningTokens ||
-            serverToolUse
+            (cacheReadTokens !== undefined && (!Number.isSafeInteger(cacheReadTokens) || cacheReadTokens < 0)) ||
+            (cacheWriteTokens !== undefined && (!Number.isSafeInteger(cacheWriteTokens) || cacheWriteTokens < 0)) ||
+            (reasoningTokens !== undefined && (!Number.isSafeInteger(reasoningTokens) || reasoningTokens < 0)) ||
+            serverToolUse ||
+            (inputTokens as number) < (cacheReadTokens ?? 0) + (cacheWriteTokens ?? 0)
           )
             fail("unsupported_usage");
           checkAbort();
+          // 修复原因：AI SDK 的 inputTokens 已含缓存命中/写入；Messages 的 input_tokens 只计未缓存部分。
           terminal = frame("message_delta", {
             delta: { stop_reason: reason, stop_sequence: null },
-            usage: { input_tokens: inputTokens, output_tokens: outputTokens },
+            usage: {
+              input_tokens: (inputTokens as number) - (cacheReadTokens ?? 0) - (cacheWriteTokens ?? 0),
+              output_tokens: outputTokens,
+              ...(cacheReadTokens !== undefined ? { cache_read_input_tokens: cacheReadTokens } : {}),
+              ...(cacheWriteTokens !== undefined ? { cache_creation_input_tokens: cacheWriteTokens } : {}),
+            },
           });
           finished = true;
           break;
         }
         case "error":
           fail("executor_error");
-        case "reasoning_start":
-        case "reasoning_delta":
-        case "reasoning_end":
-          fail("unsupported_reasoning");
         case "compact_stream_boundary":
           break;
       }
