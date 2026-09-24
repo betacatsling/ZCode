@@ -16,6 +16,7 @@ export function createRpcAgentHostService(target: AgentHostTargetService, admiss
     catalogForTarget: (targetId) => target.catalogForTarget(targetId),
     getSessionCapabilities: (spec) => target.getSessionCapabilities(spec),
     getRuntimeActivity: (workspaceId) => target.getRuntimeActivity(workspaceId),
+    getSessionReadModel: (spec) => target.getSessionReadModel(spec),
     getSessionSpec: (scope) => target.getSessionSpec(scope),
     listWorkspaceSessions: (workspaceId) => target.listWorkspaceSessions(workspaceId),
     rowsRange: (spec, request) => target.rowsRange(spec, request),
