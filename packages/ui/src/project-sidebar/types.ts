@@ -62,4 +62,6 @@ export interface ProjectSidebarProps {
   discovery?: Readonly<Record<string, readonly DiscoveryCandidate[]>>;
   locale: "en" | "zh";
   modelOptions?: readonly { harnessId: string; label: string; binding: ModelBindingRequest }[];
+  /** Mounted Host-certified choices keyed by the selected workspace; never shared across targets. */
+  modelOptionsByWorkspace?: ReadonlyMap<string, readonly { harnessId: string; label: string; binding: ModelBindingRequest }[]>;
 }
