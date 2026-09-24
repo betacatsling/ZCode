@@ -249,9 +249,11 @@ test("migration full persistent export dry-run, backup, retry, rollback and futu
       {
         id: "s1",
         nativeSessionId: "native-1",
+        workspaceKey: "local-main",
         targetId: "local",
         workspaceIdentity: "local-main",
         workspacePath: "/repo/src",
+        nativeCwd: "/repo/src",
         cwdRelativeToWorktree: "src",
         harnessId: "zcode",
         modelBinding,
@@ -259,14 +261,22 @@ test("migration full persistent export dry-run, backup, retry, rollback and futu
       {
         id: "s2",
         nativeSessionId: "native-2",
+        workspaceKey: "remote:offline",
         targetId: "ssh",
         workspaceIdentity: "remote:offline",
         workspacePath: "/repo",
+        nativeCwd: "/repo",
         cwdRelativeToWorktree: ".",
         harnessId: "unknown",
         modelBinding,
       },
-      { id: "s3", nativeSessionId: "native-3", workspacePath: "/unknown", modelBinding },
+      {
+        id: "s3",
+        nativeSessionId: "native-3",
+        workspaceKey: "/unknown",
+        workspacePath: "/unknown",
+        modelBinding,
+      },
     ],
   };
   const backup = {
@@ -300,7 +310,11 @@ test("migration full persistent export dry-run, backup, retry, rollback and futu
           failures++;
           throw new Error("offline");
         }
-        return { binding: hierarchyFixture.bindings[0]!, workspace: original };
+        return {
+          binding: hierarchyFixture.bindings[0]!,
+          workspace: original,
+          cwdRelativeToWorktree: "src",
+        };
       },
     });
     const preview = await migration.dryRun();
