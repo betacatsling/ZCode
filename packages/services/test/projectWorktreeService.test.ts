@@ -112,6 +112,7 @@ test("remove freezes admission, rejects busy/dirty, and preserves branch/history
     await writeFile(path.join(linkedPath, "dirty"), "data");
     await assert.rejects(f.service.remove("w", record.generation, true));
     await rm(path.join(linkedPath, "dirty"));
+    assert.equal((await f.service.previewRemoval("w", record.generation)).safe, true);
     let release!: () => void;
     const pending = new Promise<void>((resolve) => {
       release = resolve;

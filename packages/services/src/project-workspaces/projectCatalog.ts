@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { Emitter } from "@zcode/rpc";
 import {
   projectSchema,
   repositoryBindingSchema,
@@ -36,6 +37,8 @@ export class ProjectCatalog implements IProjectCatalogService {
   private state: State;
   private queue: Promise<unknown> = Promise.resolve();
   private readonly listeners = new Set<(revision: number) => void>();
+  private readonly changes = new Emitter<number>();
+  readonly onDidChange = this.changes.event;
   private currentRevision: number;
   private unsubscribeIndex?: () => void;
   private closing = false;
@@ -55,6 +58,7 @@ export class ProjectCatalog implements IProjectCatalogService {
 
   private emitChange(): void {
     const revision = ++this.currentRevision;
+    this.changes.fire(revision);
     for (const listener of this.listeners) {
       try {
         listener(revision);
@@ -85,6 +89,10 @@ export class ProjectCatalog implements IProjectCatalogService {
   get revision(): number {
     return this.currentRevision;
   }
+  async getRevision(): Promise<number> {
+    await this.queue;
+    return this.currentRevision;
+  }
   onChange(listener: (revision: number) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
@@ -94,12 +102,16 @@ export class ProjectCatalog implements IProjectCatalogService {
     this.unsubscribeIndex?.();
     await this.queue;
     await this.owner.close();
+    this.changes.dispose();
   }
   async project(id: string): Promise<Project | undefined> {
     return this.state.projects.find((p) => p.id === id);
   }
   async binding(id: string): Promise<RepositoryBinding | undefined> {
     return this.state.bindings.find((b) => b.id === id);
+  }
+  async workspace(id: string): Promise<WorktreeWorkspace | undefined> {
+    return this.state.workspaces.find((w) => w.id === id);
   }
   async sidebarSnapshot() {
     await this.queue;
@@ -117,16 +129,23 @@ export class ProjectCatalog implements IProjectCatalogService {
       revision: this.currentRevision,
     });
   }
-  private mutate<T>(action: (state: State) => Promise<{ state: State; result: T }>): Promise<T> {
+  private mutate<T>(
+    action: (state: State) => Promise<{
+      state: State;
+      result: T;
+      afterCommit?: () => Promise<void>;
+    }>,
+  ): Promise<T> {
     if (this.closing) return Promise.reject(new Error("catalog-closed"));
     const job = this.queue.then(async () => {
-      const { state, result } = await action(this.state);
+      const { state, result, afterCommit } = await action(this.state);
       const next = catalogSchema.parse({ ...state, revision: this.currentRevision + 1 });
       sidebarIndex({ ...next, sessions: [], freshness: new Map() });
       await this.owner.write(next);
       this.state = next;
       this.currentRevision = Math.max(this.currentRevision, next.revision - 1);
       this.emitChange();
+      await afterCommit?.();
       return result;
     });
     this.queue = job.catch(() => undefined);
@@ -150,14 +169,13 @@ export class ProjectCatalog implements IProjectCatalogService {
         path: input.repositoryPath,
       });
       if (facts.executionTargetId !== input.targetId) throw new Error("invalid-target");
-      if (
-        state.bindings.some(
-          (b) =>
-            b.executionTargetId === facts.executionTargetId &&
-            b.gitCommonDir === facts.gitCommonDir,
+      for (const binding of state.bindings) {
+        if (
+          binding.executionTargetId === facts.executionTargetId &&
+          (await this.target.sameRepository(binding, input.repositoryPath))
         )
-      )
-        throw new Error("repository-already-imported");
+          throw new Error("repository-already-imported");
+      }
       const project = projectSchema.parse({
         schemaVersion: 1,
         id: input.id,
@@ -170,6 +188,7 @@ export class ProjectCatalog implements IProjectCatalogService {
         projectId: project.id,
         ...facts,
       });
+      await this.target.registerBinding(binding, input.repositoryPath);
       return {
         state: {
           ...state,
@@ -210,9 +229,21 @@ export class ProjectCatalog implements IProjectCatalogService {
         !state.workspaces.some((w) => w.id === project.defaultWorkspaceId && w.projectId === id)
       )
         throw new Error("invalid-ownership");
+      if (update.archived === true) {
+        // 中文：目标先拒绝新 admission；失败时不能将本地目录谎报为已归档。
+        for (const binding of state.bindings.filter((b) => b.projectId === id))
+          await this.target.setArchivePolicy("binding", binding.id, true);
+      }
       return {
         state: { ...state, projects: state.projects.map((p) => (p.id === id ? project : p)) },
         result: project,
+        afterCommit:
+          update.archived === false
+            ? async () => {
+                for (const binding of state.bindings.filter((b) => b.projectId === id))
+                  await this.target.setArchivePolicy("binding", binding.id, false);
+              }
+            : undefined,
       };
     });
   }
@@ -223,11 +254,16 @@ export class ProjectCatalog implements IProjectCatalogService {
     return this.mutate(async (state) => {
       const old = state.workspaces.find((w) => w.id === id);
       if (!old) throw new Error("unknown-workspace");
-      // 中文：归档只是目录展示偏好，不能伪造目标端 worktree 的生命周期事实。
+      // 中文：归档不修改 Git 生命周期，但必须先让目标 admission 持久拒绝新命令。
       const workspace = worktreeWorkspaceSchema.parse({ ...old, ...update });
+      if (update.archived === true) await this.target.setArchivePolicy("workspace", id, true);
       return {
         state: { ...state, workspaces: state.workspaces.map((w) => (w.id === id ? workspace : w)) },
         result: workspace,
+        afterCommit:
+          update.archived === false
+            ? () => this.target.setArchivePolicy("workspace", id, false)
+            : undefined,
       };
     });
   }
@@ -241,7 +277,7 @@ export class ProjectCatalog implements IProjectCatalogService {
       return parsed;
     });
   }
-  private workspace(
+  private addWorkspace(
     input: {
       bindingId: string;
       workspaceId: string;
@@ -255,6 +291,8 @@ export class ProjectCatalog implements IProjectCatalogService {
     return this.mutate(async (state) => {
       const binding = state.bindings.find((b) => b.id === input.bindingId);
       if (!binding) throw new Error("unknown-binding");
+      if (state.projects.find((p) => p.id === binding.projectId)?.archived)
+        throw new Error("project-archived");
       if (state.workspaces.some((w) => w.id === input.workspaceId)) throw new Error("duplicate-id");
       const args = {
         binding,
@@ -274,7 +312,7 @@ export class ProjectCatalog implements IProjectCatalogService {
         workspace.projectId !== binding.projectId ||
         workspace.origin !== (kind === "adopt" ? "adopted" : "created") ||
         workspace.lifecycle !== "active" ||
-        workspace.worktreePath !== input.worktreePath ||
+        // 中文：目标端返回规范路径；macOS /var 与 /private/var 等别名不能用输入字符串判等。
         state.workspaces.some(
           (w) =>
             w.repositoryBindingId === binding.id &&
@@ -290,7 +328,7 @@ export class ProjectCatalog implements IProjectCatalogService {
     });
   }
   adopt(input: { bindingId: string; workspaceId: string; title: string; worktreePath: string }) {
-    return this.workspace(input, "adopt");
+    return this.addWorkspace(input, "adopt");
   }
   create(input: {
     bindingId: string;
@@ -300,7 +338,13 @@ export class ProjectCatalog implements IProjectCatalogService {
     baseRef: string;
     branch: string;
   }) {
-    return this.workspace(input, "create");
+    return this.addWorkspace(input, "create");
+  }
+  async previewRemoval(workspaceId: string, expectedGeneration: string) {
+    const workspace = this.state.workspaces.find((w) => w.id === workspaceId);
+    if (!workspace || workspace.worktreeGeneration !== expectedGeneration)
+      throw new Error("stale-workspace");
+    return this.target.previewRemoval(workspaceId, expectedGeneration);
   }
   remove(input: {
     workspaceId: string;
@@ -315,7 +359,9 @@ export class ProjectCatalog implements IProjectCatalogService {
         input.confirmation !== true
       )
         throw new Error("stale-workspace-or-confirmation");
-      const facts = worktreeWorkspaceSchema.parse(await this.target.remove(input));
+      const facts = worktreeWorkspaceSchema.parse(
+        await this.target.remove({ ...input, workspace: old }),
+      );
       if (
         facts.id !== old.id ||
         facts.projectId !== old.projectId ||

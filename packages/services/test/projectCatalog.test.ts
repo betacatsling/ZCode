@@ -18,6 +18,14 @@ function port(): ProjectCatalogTargetPort & { calls: string[] } {
       calls.push("inspect");
       return { executionTargetId: targetId, gitCommonDir: "/same/.git" };
     },
+    async sameRepository() {
+      return false;
+    },
+    async registerBinding() {},
+    async setArchivePolicy() {},
+    async previewRemoval(workspaceId, generation) {
+      return { workspaceId, generation, git: null, activity: null, unknown: true, safe: false };
+    },
     async discover(binding) {
       calls.push("discover");
       return [
@@ -75,6 +83,8 @@ test("catalog persists empty projects, order and preferences without tabs, secon
     assert.deepEqual((await catalog.sidebarSnapshot()).projects, []);
     const changes: number[] = [];
     catalog.onChange((revision) => changes.push(revision));
+    const rpcChanges: number[] = [];
+    const subscription = catalog.onDidChange((revision) => rpcChanges.push(revision));
     await catalog.importProject({
       id: "p1",
       bindingId: "b1",
@@ -124,6 +134,9 @@ test("catalog persists empty projects, order and preferences without tabs, secon
       /stale-workspace/,
     );
     assert.deepEqual(changes, [1, 2, 3, 4]);
+    assert.deepEqual(rpcChanges, changes);
+    assert.equal(await catalog.getRevision(), 4);
+    subscription.dispose();
     assert.deepEqual(target.calls, ["inspect", "discover", "adopt"]);
     await catalog.close();
     const restored = await ProjectCatalog.open(path, target, index);
@@ -166,6 +179,37 @@ test("catalog persists empty projects, order and preferences without tabs, secon
     await assert.rejects(() => ProjectCatalog.open(path, target, index));
     assert.equal(JSON.parse(await readFile(path, "utf8")).schemaVersion, 99);
   } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("failed target unarchive remains denied and explicit retry reconciles target policy", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "catalog-archive-"));
+  const target = port();
+  const policies: boolean[] = [];
+  let failAllow = true;
+  target.setArchivePolicy = async (_kind, _id, archived) => {
+    policies.push(archived);
+    if (!archived && failAllow) throw new Error("target-offline");
+  };
+  const catalog = await ProjectCatalog.open(join(dir, "catalog.json"), target, index);
+  try {
+    await catalog.importProject({
+      id: "p",
+      bindingId: "b",
+      name: "A",
+      targetId: "local",
+      repositoryPath: "/same",
+    });
+    await catalog.adopt({ bindingId: "b", workspaceId: "w", title: "W", worktreePath: "/same" });
+    await catalog.updateWorkspace("w", { archived: true });
+    await assert.rejects(catalog.updateWorkspace("w", { archived: false }), /target-offline/);
+    assert.equal((await catalog.workspace("w"))?.archived, false);
+    failAllow = false;
+    await catalog.updateWorkspace("w", { archived: false });
+    assert.deepEqual(policies, [true, false, false]);
+  } finally {
+    await catalog.close();
     await rm(dir, { recursive: true, force: true });
   }
 });
