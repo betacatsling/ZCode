@@ -96,6 +96,13 @@ export class TargetAuthorityStore {
         !Array.isArray(state.bindings) ||
         !Array.isArray(state.workspaces) ||
         !Number.isSafeInteger(state.revision) ||
+        ![state.archivedBindings, state.archivedWorkspaces].every(
+          (ids) =>
+            ids === undefined ||
+            (Array.isArray(ids) &&
+              ids.every((id) => typeof id === "string" && id.length > 0) &&
+              new Set(ids).size === ids.length),
+        ) ||
         !state.bindings.every(
           (binding) =>
             binding &&
