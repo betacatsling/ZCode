@@ -15,3 +15,8 @@ type NativeProductionFacts = Pick<CompositionOptions,
 // }
 ```
 Core should await `ready()` through an exported Node getter before advertising new admission. Target receipts must be authoritative: `ProjectCatalog.reconcilePending()` and `.reconcileArchivePolicies()` are invoked once after open; boot failure is sticky. No window owns catalog.
+
+Implemented service-boot source SHA: `9e139d6159b553159090a5e3fef31deda66035f7`.
+Core imports `getWorkspaceCompositionReady(services): Promise<void>` from `@zcode/services/node` and awaits it after `createLocalServices({...})`; `workspaceCompositionTarget?: ExecutionTarget` identifies local vs authenticated SSH (not inferred from Linux). The production bridge input MUST be real `NativeProductionBridge`, never the sample test facts. Core must supply `workspaceCompositionRoot` and `workspaceComposition`; malformed inputs throw before startup side effects. New session admission stays disabled before boot, while reads are live; no boot replay after rejection. `getWorkspaceMaintenanceCoordination` is still the existing local callback port, not an IPC lease.
+
+Blocking integration interfaces (not yet implemented in this checkout): native-facts `createNativeProductionBridge` currently throws `native-production-bridge-not-implemented` at c90f18c; Core entry currently creates services with target ID but no root/bridge and thus fails preflight. Target-receipts 2ee18c7 implements durable lookup but is not yet merged here. Core must mount the native-facts configured DB/runtime port plus target receipts and await `getWorkspaceCompositionReady`; no fake idle/empty index.
