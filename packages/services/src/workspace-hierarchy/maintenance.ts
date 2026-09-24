@@ -1,6 +1,14 @@
 export interface MaintenanceActivity { running: number; waiting: number; tools: number; uncertain: number; offline: boolean }
-export interface MaintenanceCoordination {
-  /** Automatic update/restart/uninstall only; explicit operator stop follows a separate contract. */
+/** JSON-safe capability; valid only for this Core instance and this single maintenance operation. */
+export interface MaintenanceLease { token: string; epoch: number }
+export interface MaintenanceLeasePort {
+  /** Automatic maintenance only. Freezes native + workspace admission, drains and verifies fresh activity. */
+  freezeAdmissions(): Promise<MaintenanceLease>;
+  /** Only the exact held lease may reopen admissions; failed native release keeps them closed. */
+  releaseAdmissions(lease: MaintenanceLease): Promise<void>;
+}
+export interface MaintenanceCoordination extends MaintenanceLeasePort {
+  /** Local-only convenience; do not serialize callbacks across RPC. */
   withMaintenance<T>(action: () => Promise<T>): Promise<T>;
   admissionEnabled(): boolean;
   withAdmission<T>(action: () => Promise<T>): Promise<T>;
