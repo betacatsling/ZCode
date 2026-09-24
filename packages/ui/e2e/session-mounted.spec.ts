@@ -38,6 +38,24 @@ test("actual mounted SessionPane keeps Pi sessions separate; reattach does not r
   });
 });
 
+test("background Host event does not steal another Pi draft focus", async ({ page }) => {
+  await page.goto("/session-mounted.html");
+  await expect(page.locator('[data-session-id="pi-one"]')).toBeVisible();
+  await page.getByTestId("external-draft-fixture").fill("first prompt");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(page.getByTestId("dispatch-log")).toContainText("pi-one:send:");
+  await page.getByRole("button", { name: "Pi two" }).click();
+  const draft = page.getByTestId("external-draft-fixture");
+  await draft.fill("unsent second draft");
+  await expect(draft).toBeFocused();
+  await page.evaluate(() =>
+    (window as Window & { __mountedBackgroundEvent: () => void }).__mountedBackgroundEvent(),
+  );
+  await expect(draft).toBeFocused();
+  await expect(draft).toHaveValue("unsent second draft");
+  await expect(page.getByTestId("native-calls")).toHaveText("0");
+});
+
 test("mounted approval rejects without optimistic success, then accepts against current turn", async ({
   page,
 }) => {
