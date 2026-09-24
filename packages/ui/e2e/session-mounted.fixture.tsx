@@ -309,6 +309,22 @@ const host: IAgentHostService = {
     };
   },
 };
+// A background Host event, without a browser click, proves it cannot steal composer focus.
+Object.assign(window, {
+  __mountedBackgroundEvent: () => {
+    const spec = specs[0]!;
+    const events = logs.get(spec.hostSessionId)!;
+    const active = events.find((event) => event.kind === "turn.started");
+    if (!active || active.kind !== "turn.started") return;
+    emit(spec, {
+      kind: "message.finished",
+      turnId: active.turnId,
+      messageId: `background-${events.length}`,
+      role: "assistant",
+      text: "background progress",
+    });
+  },
+});
 // Test-only controlled transport: every native invocation fails and is counted. No production fallback.
 const nativeAgent = new Proxy(
   {},
