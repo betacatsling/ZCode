@@ -173,16 +173,21 @@ export class AgentHostTargetService {
   }
   async dispatch(raw: SessionSpecV2, command: AgentCommand): Promise<AgentCommandReceipt> {
     const spec = writableSessionSpecV2Schema.parse(raw);
-    if (command.type === "send" || command.type === "resumeExecution")
-      return this.#admit(spec, (key) => this.#require(key).dispatch(command));
-    if (command.type === "detach" || command.type === "viewHistory" || command.type === "terminateSession") {
-      this.#readScope(spec);
-      const stored = await SessionHost.listStoredSessions(this.#root, { targetId: this.#target.id });
-      if (!stored.some((row) => JSON.stringify(row.spec) === JSON.stringify(spec))) throw new Error("session identity or configuration mismatch");
-      return this.#require(this.#key(spec)).dispatch(command);
-    }
-    const key = await this.#verify(spec);
-    return this.#require(key).dispatch(command);
+    const control = command.type === "detach" || command.type === "viewHistory" || command.type === "terminateSession" ||
+      command.type === "cancelTurn" || (command.type === "resolveInteraction" && command.decision === "deny");
+    if (control) return this.#dispatchMounted(spec, command);
+    // 修复归档后已接受命令的重复投递被新执行门禁阻断：仅已有 ID 可进 Host 的持久 payload 碰撞校验。
+    // 查询本身不能成为执行许可；没有 ID 的请求仍须持有 workspace admission lease。
+    const mounted = this.#hosts.get(this.#key(spec));
+    if (mounted?.queryCommand(command.commandId)) return this.#dispatchMounted(spec, command);
+    // allow 可能实际执行工具；与新 send 一样必须持有实时 Git generation/cwd 和归档 admission 门禁直到交付。
+    return this.#admit(spec, (key) => this.#require(key).dispatch(command));
+  }
+  async #dispatchMounted(spec: SessionSpecV2, command: AgentCommand): Promise<AgentCommandReceipt> {
+    this.#readScope(spec);
+    const stored = await SessionHost.listStoredSessions(this.#root, { targetId: this.#target.id });
+    if (!stored.some((row) => JSON.stringify(row.spec) === JSON.stringify(spec))) throw new Error("session identity or configuration mismatch");
+    return this.#require(this.#key(spec)).dispatch(command);
   }
   async snapshot(raw: SessionSpecV2 | LegacySessionSpec): Promise<ConversationSnapshot> {
     const spec = this.#readScope(raw);
