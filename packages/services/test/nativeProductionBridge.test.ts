@@ -9,6 +9,7 @@ import type { LegacyMapping } from "../src/project-workspaces/migrationContract.
 import { TaskIndexRepo } from "../src/session/taskIndexRepo.js";
 import {
   createNativeProductionBridge,
+  createConfiguredNativeDirectory,
   createReadonlyNativeDirectory,
   type NativeRuntimeFactsPort,
 } from "../src/workspace-hierarchy/nativeProductionBridge.js";
@@ -144,9 +145,13 @@ test("real SQLite index and native session store join by source scope, not paren
       { ...mapping("/repo", "root"), nativeSessionId: "child", cwdRelativeToWorktree: "src" },
       { ...mapping("/legacy", "legacy"), nativeSessionId: "legacy" },
     ];
-    const directory = createReadonlyNativeDirectory({
+    const directory = createConfiguredNativeDirectory({
       taskIndexDatabasePath,
-      nativeSessionDatabasePath,
+      nativeConfig: {
+        cwd: root,
+        env: { ZCODE_SESSION_DB_PATH: "configured-cli.sqlite" },
+        skipUserConfig: true,
+      },
       backupDirectory: join(root, "unused-backups"),
       profileId: "profile",
       async listMappings() {
