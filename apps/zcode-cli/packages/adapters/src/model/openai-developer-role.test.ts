@@ -74,7 +74,7 @@ async function withFakeResponses<T>(
     body: Record<string, unknown>,
     headers: Record<string, string | string[] | undefined>,
     index: number,
-  ) => { status: number; body: string },
+  ) => { status: number; body: string; contentType?: string },
   run: (baseUrl: string, captured: Record<string, unknown>[]) => Promise<T>,
 ): Promise<T> {
   const captured: Record<string, unknown>[] = [];
@@ -85,7 +85,9 @@ async function withFakeResponses<T>(
     captured.push(body);
     try {
       const result = respond(body, request.headers, captured.length);
-      response.writeHead(result.status, { "content-type": "application/json" });
+      response.writeHead(result.status, {
+        "content-type": result.contentType ?? "application/json",
+      });
       response.end(result.body);
     } catch (error) {
       response.writeHead(500, { "content-type": "application/json" });
@@ -269,4 +271,55 @@ test("SDK instruction body tampering, extra instruction, and missing instruction
     );
   }
   assert.equal(sent, 0);
+});
+
+test("OpenAI Responses streaming restores instruction roles and reports SDK usage", async () => {
+  const frame = (value: Record<string, unknown>) => `data: ${JSON.stringify(value)}\n\n`;
+  const body =
+    [
+      {
+        type: "response.created",
+        response: { id: "resp_stream", model: "synthetic-model", created_at: 1760000000 },
+      },
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        item: { type: "message", id: "msg_stream" },
+      },
+      { type: "response.output_text.delta", item_id: "msg_stream", delta: "synthetic stream" },
+      { type: "response.completed", response: { usage: { input_tokens: 8, output_tokens: 3 } } },
+    ]
+      .map(frame)
+      .join("") + "data: [DONE]\n\n";
+  await withFakeResponses(
+    (request) => {
+      assert.deepEqual(rolesInWire(request), ["system", "developer"]);
+      assert.equal(request.prompt_cache_key, "synthetic-stream-cache");
+      assert.equal(request.stream, true);
+      return { status: 200, contentType: "text/event-stream", body };
+    },
+    async (baseUrl, captured) => {
+      const model = new AiSdkModelAdapter({ retry: { maxAttempts: 1 } }).createModel(
+        modelOptions(baseUrl),
+      );
+      const events = [];
+      for await (const event of model.streamText({
+        messages: messages("system", "developer"),
+        promptCacheKey: "synthetic-stream-cache",
+      }))
+        events.push(event);
+      assert.equal(captured.length, 1);
+      assert.ok(
+        events.some((event) => event.type === "text_delta" && event.text === "synthetic stream"),
+      );
+      assert.ok(
+        events.some(
+          (event) =>
+            event.type === "finish" &&
+            event.usage.inputTokens === 8 &&
+            event.usage.outputTokens === 3,
+        ),
+      );
+    },
+  );
 });
