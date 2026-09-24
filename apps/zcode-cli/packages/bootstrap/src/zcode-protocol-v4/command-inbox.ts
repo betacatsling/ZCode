@@ -1,6 +1,7 @@
 // Command inbox：统一命令 admission 与查询入口。
 // 三类事实严格分离：in-flight / live input 永远 pinned；只有 settled 进入 512/session LRU。
 import { randomUUID } from "node:crypto";
+import { nativeCreateIntent } from "./native-create-intent.js";
 import type { NativeMaintenanceLease } from "@zcode/shared";
 import type {
   CommandAck,
@@ -33,6 +34,8 @@ interface CommandInboxHost {
   validateRowTarget?(envelope: CommandEnvelope): GuardDecision;
   /** 业务 guard（product-protocol guard id）。缺省一律放行。 */
   guard?(envelope: CommandEnvelope): GuardDecision;
+  /** Check durable intent BEFORE returning a duplicate ACK, including in-flight retries. */
+  validateCreateRetry?(envelope: CommandEnvelope): Promise<boolean>;
   /** 以下回调顺序就是持久化事实优先级；实现必须精确匹配 sourceCommandId。 */
   lookupTranscriptCommand?: PersistentLookup;
   lookupTimelineCommand?: PersistentLookup;
@@ -133,6 +136,7 @@ export class CommandInbox {
   }
 
   private readonly inFlight = new Map<string, Map<string, InFlightEntry>>();
+  private readonly inFlightCreateIntents = new Map<string, string>();
   private readonly liveInputs = new Map<string, Map<string, LiveInputEntry>>();
   private readonly settled = new Map<string, Map<string, CommandAck>>();
   private readonly admissionSeq = new Map<string, number>();
@@ -164,7 +168,17 @@ export class CommandInbox {
     const releaseKey = await this.keyGates.acquire(this.keyGateKey(key));
 
     try {
+      if (envelope.type === "createSession" && this.host.validateCreateRetry &&
+          !(await this.host.validateCreateRetry(envelope))) {
+        return this.ackOnly({ commandId: envelope.commandId, status: "rejected",
+          reasonCode: "guard.nativeCreateIntentConflict", revisionAtDecision: 0 });
+      }
       const pinned = this.inFlight.get(bucketKey)?.get(envelope.commandId);
+      if (pinned && envelope.type === "createSession" &&
+          this.inFlightCreateIntents.get(envelope.commandId) !== nativeCreateIntent(envelope).intentFingerprint) {
+        return this.ackOnly({ commandId: envelope.commandId, status: "rejected",
+          reasonCode: "guard.nativeCreateIntentConflict", revisionAtDecision: 0 });
+      }
       if (pinned) return this.ackOnly(this.retryAck(await pinned.final));
       const existing = await this.lookupExact(key);
       if (existing) return this.ackOnly(this.retryAck(existing));
@@ -209,6 +223,8 @@ export class CommandInbox {
         });
         const entry: InFlightEntry = { ack: decision.ack, final, resolveFinal };
         this.mapFor(this.inFlight, bucketKey).set(envelope.commandId, entry);
+        if (envelope.type === "createSession") this.inFlightCreateIntents.set(envelope.commandId,
+          nativeCreateIntent(envelope).intentFingerprint);
 
         // 旧单表 LRU 会在 >512 条 churn 时淘汰仍在执行/队列里的命令，随后
         // query 返回 unknown、重试再次执行。新命令先 pin，再释放 key gate。
@@ -230,6 +246,7 @@ export class CommandInbox {
               ...final,
             };
             this.inFlight.get(bucketKey)?.delete(envelope.commandId);
+            if (envelope.type === "createSession") this.inFlightCreateIntents.delete(envelope.commandId);
             if (live) {
               live.ack = ack;
             } else {

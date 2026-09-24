@@ -9,6 +9,8 @@ import type {
   CreateScriptWorkflowRunInput,
   CreateSessionTaskLinkInput,
   CreateSessionInput,
+  NativeCreateReceipt,
+  NativeCreateReceiptCommit,
   FileDiff,
   ForkCommitBundle,
   ForkChildSessionMetadata,
@@ -233,11 +235,17 @@ export class SqliteSessionStore
   private readonly db: DatabaseSync;
   private readonly dbPath: string;
   private readonly forkCommitFaultAt?: ForkCommitFaultStage;
+  private readonly nativeCreateFaultAt?:
+    | "beforeTransaction"
+    | "afterSession"
+    | "afterReceipt"
+    | "afterCommit";
   private dwfJournalStore?: JournalStorePort;
 
   constructor(options: SqliteSessionStoreOptions = {}, startupToken?: symbol) {
     this.dbPath = options.dbPath ?? getDefaultSessionDbPath();
     this.forkCommitFaultAt = options.forkCommitFaultAt;
+    this.nativeCreateFaultAt = options.nativeCreateFaultAt;
     const startupLockTimeoutMs =
       options.startupLockTimeoutMs ?? DEFAULT_SQLITE_STARTUP_LOCK_TIMEOUT_MS;
     try {
@@ -305,6 +313,121 @@ export class SqliteSessionStore
     if (this.forkCommitFaultAt === stage) {
       throw new Error(`injected fork commit fault: ${stage}`);
     }
+  }
+
+  async getNativeCreateReceipt(commandId: string): Promise<NativeCreateReceipt | null> {
+    const row = this.db
+      .prepare(`select command_id, session_id, workspace_scope, intent_fingerprint,
+      has_first_input, status from native_create_receipt where command_id = ?`)
+      .get(commandId) as
+      | {
+          command_id: string;
+          session_id: string;
+          workspace_scope: string;
+          intent_fingerprint: string;
+          has_first_input: number;
+          status: string;
+        }
+      | undefined;
+    if (!row) return null;
+    // 账本事实必须有对应 native session，孤儿/部分数据不得变成可写 mapping。
+    const session = sessionRepository.getSession(
+      this.db,
+      row.session_id as NativeCreateReceipt["originalSessionId"],
+    );
+    if (
+      !session ||
+      (session.workspaceID ?? session.directory) !== row.workspace_scope ||
+      !row.command_id ||
+      !row.workspace_scope ||
+      !/^[a-f0-9]{64}$/.test(row.intent_fingerprint) ||
+      ![0, 1].includes(row.has_first_input) ||
+      !["pending", "completed"].includes(row.status)
+    )
+      return null;
+    return {
+      commandId: row.command_id,
+      originalSessionId: row.session_id as NativeCreateReceipt["originalSessionId"],
+      workspaceScope: row.workspace_scope,
+      intentFingerprint: row.intent_fingerprint,
+      hasFirstInput: row.has_first_input === 1,
+      status: row.status === "completed" ? "completed" : "pending",
+    };
+  }
+
+  async commitNativeCreateReceipt(input: NativeCreateReceiptCommit): Promise<NativeCreateReceipt> {
+    if (
+      !input.commandId ||
+      !input.workspaceScope ||
+      !/^[a-f0-9]{64}$/.test(input.intentFingerprint)
+    ) {
+      throw new Error("proto.invalidCreateReceipt");
+    }
+    this.throwBeforeWrite();
+    if (this.nativeCreateFaultAt === "beforeTransaction")
+      throw new Error("injected native create fault beforeTransaction");
+    this.db.exec("begin immediate");
+    let committed = false;
+    try {
+      const prior = await this.getNativeCreateReceipt(input.commandId);
+      if (prior) {
+        if (
+          prior.workspaceScope !== input.workspaceScope ||
+          prior.intentFingerprint !== input.intentFingerprint ||
+          prior.hasFirstInput !== !!input.hasFirstInput
+        ) {
+          throw new Error("guard.nativeCreateIntentConflict");
+        }
+        this.db.exec("commit");
+        return prior;
+      }
+      if (sessionRepository.getSession(this.db, input.session.id))
+        throw new Error("guard.nativeCreateSessionCollision");
+      sessionRepository.createSession(this.db, input.session);
+      if (this.nativeCreateFaultAt === "afterSession")
+        throw new Error("injected native create fault afterSession");
+      this.db
+        .prepare(`insert into native_create_receipt
+        (command_id, session_id, workspace_scope, intent_fingerprint, has_first_input, status)
+        values (?, ?, ?, ?, ?, 'pending')`)
+        .run(
+          input.commandId,
+          input.session.id,
+          input.workspaceScope,
+          input.intentFingerprint,
+          input.hasFirstInput ? 1 : 0,
+        );
+      if (this.nativeCreateFaultAt === "afterReceipt")
+        throw new Error("injected native create fault afterReceipt");
+      const receipt: NativeCreateReceipt = {
+        commandId: input.commandId,
+        originalSessionId: input.session.id,
+        workspaceScope: input.workspaceScope,
+        intentFingerprint: input.intentFingerprint,
+        hasFirstInput: !!input.hasFirstInput,
+        status: "pending",
+      };
+      this.db.exec("commit");
+      committed = true;
+      if (this.nativeCreateFaultAt === "afterCommit")
+        throw new Error("injected native create fault afterCommit");
+      return receipt;
+    } catch (error) {
+      if (!committed) this.db.exec("rollback");
+      throw error;
+    }
+  }
+
+  async completeNativeCreateReceipt(
+    commandId: string,
+    originalSessionId: SessionId,
+  ): Promise<void> {
+    this.throwBeforeWrite();
+    const changed = this.db
+      .prepare(`update native_create_receipt set status = 'completed'
+      where command_id = ? and session_id = ?`)
+      .run(commandId, originalSessionId).changes;
+    if (changed !== 1) throw new Error("fault.command.nativeCreateReceiptMissing");
   }
 
   async createSession(input: CreateSessionInput): Promise<SessionInfo> {

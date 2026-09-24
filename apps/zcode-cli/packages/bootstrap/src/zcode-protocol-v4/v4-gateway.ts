@@ -235,6 +235,7 @@ export interface V4GatewayHost {
    * 未实现（旧宿主）→ sessions-index 路径整体不激活（no-op），不影响 conversation。
    */
   getSessionWorkspaceId?(sessionId: string): string | null;
+  validateCreateRetry?(envelope: CommandEnvelope): Promise<boolean>;
   /** sessions-index：会话的列表用元信息（createdAt/父会话/最后活动时刻）。 */
   getSessionIndexMeta?(sessionId: string): {
     createdAt: number;
@@ -652,6 +653,7 @@ export class ConversationV4Gateway {
         return this.publishers.get(sessionId)?.getSnapshot().revision ?? 0;
       },
       getLogEpoch: (sessionId) => this.publishers.get(sessionId)?.getSnapshot().logEpoch ?? null,
+      validateCreateRetry: (envelope) => this.host.validateCreateRetry?.(envelope) ?? Promise.resolve(true),
       validateRowTarget: (envelope) => {
         const action = rowTargetActionForCommand(envelope.type);
         if (!action || envelope.sessionId === null) return { verdict: "allow" };
