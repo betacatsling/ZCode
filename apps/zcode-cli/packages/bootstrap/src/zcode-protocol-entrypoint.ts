@@ -79,8 +79,22 @@ function applyProtocolProviderRegistry(
   };
 }
 
+/** Trusted in-process Node composition only; never serialized across V4 or account overlay. */
+type ProcessRegistryRuntime = Awaited<ReturnType<typeof startProcessProviderRegistryRuntime>>;
+type NativeProtocolRegistryRuntime = Pick<
+  ProcessRegistryRuntime,
+  "configuredDefaultModelSelection" | "syncAccountProviderConfig" | "snapshot" | "dispose"
+> & { readonly runtime: Pick<ProcessRegistryRuntime["runtime"], "registryService"> };
+
+export interface NativeProtocolBootstrapDependencies {
+  readonly startProviderRegistryRuntime?: (
+    env: Readonly<Record<string, string | undefined>>,
+  ) => Promise<NativeProtocolRegistryRuntime>;
+}
+
 export async function runZCodeProtocolAgent(
   options: RunZCodeProtocolAgentOptions = {},
+  dependencies: NativeProtocolBootstrapDependencies = {},
 ): Promise<void> {
   if (options.prepareStorageOnly) {
     const config = createConfig({ env: options.env });
@@ -130,9 +144,7 @@ export async function runZCodeProtocolAgent(
   let mcpResourceSink: ((samples: ZCodeMcpResourceSample[]) => void) | undefined;
   let mcpTelemetrySink: ((event: ZCodeMcpTelemetryEvent) => void) | undefined;
   let processResourceSampler: ZCodeProcessResourceSampler | undefined;
-  let providerRegistryRuntime:
-    | Awaited<ReturnType<typeof startProcessProviderRegistryRuntime>>
-    | undefined;
+  let providerRegistryRuntime: NativeProtocolRegistryRuntime | undefined;
   try {
     // 数据库准备先于账号、Registry 和遥测，不把远端材料等待混进迁移门禁。
     const configResult = createConfig({ env: options.env });
@@ -142,7 +154,9 @@ export async function runZCodeProtocolAgent(
       disposeLate: (store) => closeSessionStore(store),
       create: () =>
         openProtocolStartupStorage({
-          dbPath: getSessionDbPath(configResult),
+          // 修复：准备与正常启动曾分别按 launch cwd 和 process.cwd() 解析相对路径，
+          // 同一配置会打开两个数据库；二者必须共用唯一的配置与 cwd 语义。
+          dbPath: getSessionDbPath(configResult, options.cwd),
           output,
           onProgress: (progress) =>
             logger.info("SQLite startup state", {
@@ -156,7 +170,8 @@ export async function runZCodeProtocolAgent(
     providerRegistryRuntime = await acquireProtocolStartupResource({
       signal: options.lifecycle?.signal,
       logger,
-      create: () => startProcessProviderRegistryRuntime(runtimeEnv),
+      // 只有可信 Node 调用方能注入真实 Registry runtime；默认启动/账号权益协议不变。
+      create: () => (dependencies.startProviderRegistryRuntime ?? startProcessProviderRegistryRuntime)(runtimeEnv),
       disposeLate: (runtime) => runtime.dispose(),
     });
     options.lifecycle?.signal.throwIfAborted();
