@@ -58,6 +58,7 @@ let sessions: SidebarSnapshot["sessions"] = [
 let offline = false;
 let rejectCreate = true;
 let rejectRemove = true;
+let optionsOffline = false;
 let revision = 1;
 function snapshot(): SidebarSnapshot {
   return {
@@ -154,26 +155,69 @@ const services: MountedHierarchyServices = {
         },
       };
     },
-    listHarnesses: async () => [
+    listHarnesses: async (workspaceId) => [
       {
-        manifest: { schemaVersion: 1, id: "zcode", name: "ZCode", adapterVersion: "1" },
+        manifest: { schemaVersion: 1, id: "pi", name: "Pi", adapterVersion: "1" },
         availability: "supported",
       },
+      {
+        manifest: { schemaVersion: 1, id: "codex", name: "Codex", adapterVersion: "1" },
+        availability: workspaceId === "ws-empty" ? "supported" : "unsupported",
+        reason: workspaceId === "ws-empty" ? undefined : "Approval capability unverified",
+      },
     ],
-    listCreateOptions: async (workspaceId) => ({
-      workspaceId,
-      worktreeGeneration: `gen-${workspaceId.slice(3)}`,
-      options: [
-        { harnessId: "zcode", label: "Provider A / Model B / high", binding: { kind: "host-managed", selection: { providerId: "provider-a", modelId: "model-b", options: { reasoningLevel: "high" } } } },
-      ],
-    }),
+    listCreateOptions: async (workspaceId) => {
+      if (workspaceId === "ws-active" && optionsOffline) {
+        events.push("options:ws-active:offline");
+        throw new Error("Model catalog offline");
+      }
+      return {
+        workspaceId,
+        worktreeGeneration: `gen-${workspaceId.slice(3)}`,
+        options:
+          workspaceId === "ws-active"
+            ? [
+                {
+                  harnessId: "pi",
+                  label: "Provider A / Model B / high",
+                  binding: {
+                    kind: "host-managed",
+                    selection: {
+                      providerId: "provider-a",
+                      modelId: "model-b",
+                      options: { reasoningLevel: "high" },
+                    },
+                  },
+                },
+              ]
+            : [
+                {
+                  harnessId: "pi",
+                  label: "Other target only",
+                  binding: {
+                    kind: "host-managed",
+                    selection: { providerId: "provider-c", modelId: "model-d" },
+                  },
+                },
+                {
+                  harnessId: "codex",
+                  label: "Codex target choice",
+                  binding: {
+                    kind: "host-managed",
+                    selection: { providerId: "provider-c", modelId: "model-d" },
+                  },
+                },
+              ],
+      };
+    },
     previewRemoval: async (workspaceId, generation) => {
       events.push(`preview:${workspaceId}:${generation}`);
-      refresh();
       return { allowed: true, risks: ["External process may change the worktree"] };
     },
     createAgent: async (input) => {
-      events.push(`create:${input.workspaceId}:${input.commandId}:${JSON.stringify(input.modelBinding)}`);
+      events.push(
+        `create:${input.workspaceId}:${input.commandId}:${JSON.stringify(input.modelBinding)}`,
+      );
       refresh();
       if (rejectCreate) throw new Error("Host rejected creation");
       const owner: MountedSessionOwner = {
@@ -233,8 +277,33 @@ function Fixture() {
         Toggle offline
       </button>
       <output data-testid="mounted-events">{events.join("|")}</output>
-      <button type="button" onClick={() => { rejectCreate = false; refresh(); }}>Allow create</button>
-      <button type="button" onClick={() => { rejectRemove = false; refresh(); }}>Allow removal</button>
+      <button
+        type="button"
+        onClick={() => {
+          rejectCreate = false;
+          refresh();
+        }}
+      >
+        Allow create
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          rejectRemove = false;
+          refresh();
+        }}
+      >
+        Allow removal
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          optionsOffline = true;
+          window.dispatchEvent(new Event("focus"));
+        }}
+      >
+        Disable active options
+      </button>
       <span data-testid="tick">{tick}</span>
     </main>
   );

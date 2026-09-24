@@ -49,6 +49,8 @@ export interface RemovalPreview {
 export interface ProjectSidebarProps {
   snapshot: SidebarSnapshot;
   catalog: readonly HarnessCatalogEntry[];
+  /** Per-workspace availability and unsupported/experimental reasons from the Host. */
+  catalogByWorkspace?: ReadonlyMap<string, readonly HarnessCatalogEntry[]>;
   actions: SidebarActions;
   /** Labels are supplied by the target registry, not inferred from paths. */
   targetLabels: Readonly<Record<string, string>>;
@@ -60,5 +62,8 @@ export interface ProjectSidebarProps {
   locale: "en" | "zh";
   modelOptions?: readonly { harnessId: string; label: string; binding: ModelBindingRequest }[];
   /** Mounted Host-certified choices keyed by the selected workspace; never shared across targets. */
-  modelOptionsByWorkspace?: ReadonlyMap<string, readonly { harnessId: string; label: string; binding: ModelBindingRequest }[]>;
+  modelOptionsByWorkspace?: ReadonlyMap<
+    string,
+    readonly { harnessId: string; label: string; binding: ModelBindingRequest }[]
+  >;
 }

@@ -12,6 +12,8 @@ import {
 } from "@zcode/shared/project-workspaces";
 import type { SidebarIconAsset } from "../agent-host/harnessAssetResolver.js";
 import type { ProjectSidebarProps, SidebarActions } from "../project-sidebar/types.js";
+import { readMountedCreateChoices } from "./mountedProjectCreateChoices.js";
+import { resolveMountedSidebarOwner } from "./mountedProjectSidebarNavigation.js";
 
 /** UI's read/command slice of the Host contract. The production accessor supplies this after integration. */
 export type MountedSessionOwner =
@@ -38,7 +40,10 @@ export interface MountedHierarchyService {
     options: readonly { harnessId: string; label: string; binding: ModelBindingRequest }[];
   }>;
   /** Trusted target preflight; the target still rechecks before remove. */
-  previewRemoval?(workspaceId: string, expectedGeneration: string): Promise<{
+  previewRemoval?(
+    workspaceId: string,
+    expectedGeneration: string,
+  ): Promise<{
     allowed: boolean;
     risks: readonly string[];
   }>;
@@ -54,7 +59,13 @@ export interface MountedHierarchyService {
 export type MountedHierarchyServices = {
   projectCatalogService: Pick<
     IProjectCatalogService,
-    "sidebarSnapshot" | "importProject" | "discover" | "adopt" | "create" | "updateWorkspace"
+    | "sidebarSnapshot"
+    | "importProject"
+    | "discover"
+    | "adopt"
+    | "create"
+    | "updateWorkspace"
+    | "remove"
   >;
   workspaceHierarchyService: MountedHierarchyService;
 };
@@ -104,6 +115,8 @@ export function useMountedProjectSidebar({
     | "discovery"
     | "locale"
     | "modelOptions"
+    | "modelOptionsByWorkspace"
+    | "catalogByWorkspace"
   >,
   "snapshot"
 > & { snapshot?: SidebarSnapshot; error?: string } {
@@ -111,11 +124,22 @@ export function useMountedProjectSidebar({
   const hierarchy = services.workspaceHierarchyService;
   const [snapshot, setSnapshot] = useState<SidebarSnapshot>();
   const [catalog, setCatalog] = useState<readonly HarnessCatalogEntry[]>([]);
+  const [catalogByWorkspace, setCatalogByWorkspace] = useState<
+    ReadonlyMap<string, readonly HarnessCatalogEntry[]>
+  >(new Map());
+  const [workspaceOptions, setWorkspaceOptions] = useState<
+    ReadonlyMap<
+      string,
+      readonly { harnessId: string; label: string; binding: ModelBindingRequest }[]
+    >
+  >(new Map());
   const [discovery, setDiscovery] = useState<NonNullable<ProjectSidebarProps["discovery"]>>({});
   const [assets, setAssets] = useState<Record<string, SidebarIconAsset>>({});
   const [error, setError] = useState<string>();
   const [stale, setStale] = useState(false);
-  const creationCommands = useRef(new Map<string, string>());
+  const creationCommands = useRef(
+    new Map<string, { commandId: string; owner?: MountedSessionOwner }>(),
+  );
   const importIds = useRef(new Map<string, { id: string; bindingId: string }>());
   const refreshSequence = useRef(0);
   const refresh = useCallback(async () => {
@@ -123,19 +147,27 @@ export function useMountedProjectSidebar({
     const raw = await catalogService.sidebarSnapshot();
     const next = parseSidebarSnapshot(raw);
     if (request !== refreshSequence.current) return;
-    setSnapshot(next);
-    setError(undefined);
-    setStale(false);
+    const activeWorkspaces = next.workspaces.filter((w) => w.lifecycle === "active");
     const harnessLists = await Promise.all(
-      next.workspaces
-        .filter((w) => w.lifecycle === "active")
-        .map((w) => hierarchy.listHarnesses(w.id)),
+      activeWorkspaces.map((w) => hierarchy.listHarnesses(w.id)),
     );
     const entries = [
       ...new Map(harnessLists.flat().map((entry) => [entry.manifest.id, entry])).values(),
     ];
     if (request !== refreshSequence.current) return;
+    // 修复旧 picker 为每个 supported Harness 伪造 harness-managed 选项：只接受目标
+    // 针对此 workspace/generation 验证过的 Model catalog + capability 结果，缺接口时不可创建。
+    const choices = await readMountedCreateChoices(activeWorkspaces, harnessLists, hierarchy);
+    if (request !== refreshSequence.current) return;
+    // 修复刷新中展示旧 generation 选项：将 snapshot/catalog/options 同批发布。
+    setSnapshot(next);
     setCatalog(entries);
+    setCatalogByWorkspace(
+      new Map(activeWorkspaces.map((workspace, index) => [workspace.id, harnessLists[index]!])),
+    );
+    setWorkspaceOptions(choices);
+    setError(undefined);
+    setStale(false);
     const ids = [
       ...new Set(
         entries
@@ -174,27 +206,7 @@ export function useMountedProjectSidebar({
   }, [refresh]);
   const navigate = useCallback(
     async (summary: SessionSummary) => {
-      const workspace = snapshot?.workspaces.find(
-        (item) => item.id === summary.session.workspaceId,
-      );
-      const binding = snapshot?.bindings.find((item) => item.id === workspace?.repositoryBindingId);
-      if (!workspace || !binding) throw new Error("Unknown workspace owner");
-      const owner = await hierarchy.resolveOwner({
-        targetId: binding.executionTargetId,
-        workspaceId: workspace.id,
-        sessionId: summary.session.id,
-      });
-      if (
-        !owner ||
-        owner.scope.workspaceId !== workspace.id ||
-        owner.scope.targetId !== binding.executionTargetId ||
-        (owner.kind === "external" &&
-          (owner.spec.hostSessionId !== summary.session.id ||
-            owner.spec.workspaceId !== workspace.id ||
-            owner.spec.execution.targetId !== binding.executionTargetId))
-      )
-        throw new Error("Unknown or mismatched session owner");
-      onNavigate(owner);
+      onNavigate(await resolveMountedSidebarOwner(summary, snapshot, hierarchy));
     },
     [hierarchy, onNavigate, snapshot],
   );
@@ -232,28 +244,50 @@ export function useMountedProjectSidebar({
       },
       onCreateAgent: async (input) => {
         const key = JSON.stringify(input);
-        const commandId = creationCommands.current.get(key) ?? crypto.randomUUID();
-        creationCommands.current.set(key, commandId);
+        const intent = creationCommands.current.get(key) ?? { commandId: crypto.randomUUID() };
+        creationCommands.current.set(key, intent);
         // 修复重试误重复分配：同一 intent/dialog 的命令 ID 保留到 Host 确认后才撤销。
         const workspace = snapshot?.workspaces.find((item) => item.id === input.workspaceId);
         const binding = snapshot?.bindings.find(
           (item) => item.id === workspace?.repositoryBindingId,
         );
-        if (!workspace || !binding || workspace.worktreeGeneration !== input.expectedGeneration)
-          throw new Error("Stale workspace generation");
-        const result = await hierarchy.createAgent({
-          workspaceId: input.workspaceId,
-          harnessId: input.harnessId,
-          modelBinding: input.modelBinding,
-          commandId,
-        });
         if (
-          result.owner.scope.workspaceId !== input.workspaceId ||
-          result.owner.scope.targetId !== binding.executionTargetId
+          stale ||
+          !workspace ||
+          !binding ||
+          workspace.worktreeGeneration !== input.expectedGeneration
+        )
+          throw new Error("Stale workspace generation");
+        const allowed = workspaceOptions
+          .get(input.workspaceId)
+          ?.some(
+            (option) =>
+              option.harnessId === input.harnessId &&
+              JSON.stringify(option.binding) === JSON.stringify(input.modelBinding),
+          );
+        if (!allowed) throw new Error("Model binding unavailable for workspace");
+        const owner =
+          intent.owner ??
+          (
+            await hierarchy.createAgent({
+              workspaceId: input.workspaceId,
+              harnessId: input.harnessId,
+              modelBinding: input.modelBinding,
+              commandId: intent.commandId,
+            })
+          ).owner;
+        if (
+          owner.scope.workspaceId !== input.workspaceId ||
+          owner.scope.targetId !== binding.executionTargetId ||
+          (owner.kind === "external" &&
+            (owner.spec.execution.worktreeGeneration !== input.expectedGeneration ||
+              owner.spec.modelBinding.kind !== input.modelBinding.kind))
         )
           throw new Error("Mismatched creation owner");
+        // Host 已接受后记录 receipt；刷新/导航异常不得用新命令重建会话。
+        intent.owner = owner;
         await refresh();
-        onNavigate(result.owner);
+        onNavigate(owner);
         creationCommands.current.delete(key);
       },
       onDiscover: async (bindingId) => {
@@ -293,12 +327,49 @@ export function useMountedProjectSidebar({
         execute(() => catalogService.updateWorkspace(id, { archived: true })),
       onUnarchiveWorkspace: (id) =>
         execute(() => catalogService.updateWorkspace(id, { archived: false })),
-      // No target preview in the current RPC contract. The removal dialog fails closed until it lands.
-      onRemoveWorkspace: async () => {
-        throw new Error("Target removal preview unavailable");
+      onPreviewRemove: async (id, expectedGeneration) => {
+        const workspace = snapshot?.workspaces.find((w) => w.id === id);
+        if (
+          stale ||
+          !workspace ||
+          workspace.isMainWorktree ||
+          workspace.lifecycle !== "active" ||
+          workspace.worktreeGeneration !== expectedGeneration ||
+          !hierarchy.previewRemoval
+        )
+          throw new Error("Target removal preview unavailable");
+        return hierarchy.previewRemoval(id, expectedGeneration);
+      },
+      onRemoveWorkspace: async (id, expectedGeneration) => {
+        const workspace = snapshot?.workspaces.find((w) => w.id === id);
+        if (
+          stale ||
+          !workspace ||
+          workspace.isMainWorktree ||
+          workspace.lifecycle !== "active" ||
+          workspace.worktreeGeneration !== expectedGeneration ||
+          !hierarchy.previewRemoval
+        )
+          throw new Error("Target removal preview unavailable");
+        const preview = await hierarchy.previewRemoval(id, expectedGeneration);
+        if (!preview.allowed)
+          throw new Error(preview.risks.join("; ") || "Target rejected removal");
+        await execute(() =>
+          catalogService.remove({ workspaceId: id, expectedGeneration, confirmation: true }),
+        );
       },
     }),
-    [catalogService, execute, hierarchy, navigate, onNavigate, refresh, snapshot],
+    [
+      catalogService,
+      execute,
+      hierarchy,
+      navigate,
+      onNavigate,
+      refresh,
+      snapshot,
+      stale,
+      workspaceOptions,
+    ],
   );
   const targetLabels = useMemo(
     () =>
@@ -325,21 +396,15 @@ export function useMountedProjectSidebar({
           },
     [snapshot, stale],
   );
-  const modelOptions = catalog
-    .filter((entry) => entry.availability === "supported")
-    .map((entry) => ({
-      harnessId: entry.manifest.id,
-      label: locale === "zh" ? "由 Harness 选择（宿主验证）" : "Harness-managed (Host verifies)",
-      binding: { kind: "harness-managed" as const },
-    }));
   return {
     snapshot: displaySnapshot,
     catalog,
+    catalogByWorkspace,
     actions,
     targetLabels,
     discovery,
     locale,
-    modelOptions,
+    modelOptionsByWorkspace: workspaceOptions,
     resolveIconAsset,
     error,
   };

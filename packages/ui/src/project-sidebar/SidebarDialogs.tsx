@@ -125,16 +125,21 @@ export function AgentCreationDialog({
   props: ProjectSidebarProps;
   onClose: () => void;
 }) {
-  const available = props.catalog.filter((entry) => entry.availability === "supported");
+  const catalog = props.catalogByWorkspace
+    ? (props.catalogByWorkspace.get(workspaceId) ?? [])
+    : props.catalog;
+  const available = catalog.filter((entry) => entry.availability === "supported");
   const [harnessId, setHarnessId] = useState(available[0]?.manifest.id ?? "");
   const [modelIndex, setModelIndex] = useState(0);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
   const draft = useProjectSidebarViewStore((state) => state.drafts[workspaceId] ?? "");
   const setDraft = useProjectSidebarViewStore((state) => state.setDraft);
-  const options = (props.modelOptionsByWorkspace
-    ? props.modelOptionsByWorkspace.get(workspaceId)
-    : props.modelOptions)?.filter((option) => option.harnessId === harnessId) ?? [];
+  const options =
+    (props.modelOptionsByWorkspace
+      ? props.modelOptionsByWorkspace.get(workspaceId)
+      : props.modelOptions
+    )?.filter((option) => option.harnessId === harnessId) ?? [];
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     const binding = options[modelIndex]?.binding;
@@ -170,7 +175,7 @@ export function AgentCreationDialog({
         <form onSubmit={submit} className="space-y-3">
           <p className="text-ui-sm text-foreground-subtle">{workspaceId}</p>
           <HarnessSelector
-            catalog={props.catalog}
+            catalog={catalog}
             value={harnessId}
             onChange={(id) => {
               setHarnessId(id);
