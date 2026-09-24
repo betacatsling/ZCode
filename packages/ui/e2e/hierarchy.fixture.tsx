@@ -175,14 +175,18 @@ function Fixture() {
           ],
         }}
         actions={{
-          onSelectSession: (id) => record(`select:${id}`),
-          onOpenAttention: (id) => record(`attention:${id}`),
+          onSelectSession: async ({ session }) => record(`select:${session.id}`),
+          onOpenAttention: ({ session }) => record(`attention:${session.id}`),
           onCreateAgent: async (value) => record(`agent:${value.workspaceId}:${value.harnessId}`),
           onDiscover: async (id) => record(`discover:${id}`),
           onAdopt: async (bindingId, path) => record(`adopt:${bindingId}:${path}`),
           onCreateWorkspace: async (value) => record(`create:${value.repositoryBindingId}`),
           onHideWorkspace: async (id) => record(`hide:${id}`),
           onArchiveWorkspace: async (id) => record(`archive:${id}`),
+          onPreviewRemove: async () => ({
+            allowed: true,
+            risks: ["Untracked files: unknown", "Locks: unknown"],
+          }),
           onRemoveWorkspace: async (id) => record(`remove:${id}`),
         }}
       />

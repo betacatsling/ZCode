@@ -49,6 +49,8 @@ import { PluginStorePage } from "@/settings/PluginStorePage.js";
 import { TaskFindDialog } from "@/quickpick/TaskFindDialog.js";
 import { WorkspaceHeader } from "@/WorkspaceHeader.js";
 import { WorkspaceSidebar, type SidebarFileTreeOpenRequest } from "@/WorkspaceSidebar.js";
+import { MountedProjectSidebar } from "@/project-sidebar/MountedProjectSidebar.js";
+import { hasMountedHierarchy } from "@/hooks/useMountedProjectSidebar.js";
 import { AnimatedSidePanePanel } from "@/app-shell/AnimatedSidePanePanel.js";
 import {
   findScreenshotSurfaceTabForRender,
@@ -333,7 +335,7 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
   setGitSelectedSourceId,
   taskFindDialogProps,
 }: WorkspaceShellLayoutProps) {
-  const { intl } = useZCodeIntl();
+  const { intl, locale } = useZCodeIntl();
   const isOfficeMode = useIsOfficeMode();
   const baseServices = useBaseWorkspaceServices();
   const tabStoreApi = useTabStoreApi();
@@ -1557,51 +1559,84 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
                 onOpenSession={handleOpenSessionInSplitPane}
               >
                 <WorkflowRunOpenProvider onOpenRun={handleOpenSidebarWorkflowRun}>
-                  <WorkspaceSidebar
-                    workspacePath={workspaceAbsPath}
-                    workspaceRemoteSessionId={workspaceRemoteSessionId}
-                    activePreviewPath={activePreviewPath}
-                    onSelectTask={handleSelectTaskInChat}
-                    onStartDraftInWorkspace={handleCreateProjectDraft}
-                    onOpenCodeViewer={handleOpenCodeViewer}
-                    onOpenBrowserUrl={handleOpenBrowserUrl}
-                    fileTreeOpenRequest={fileTreeOpenRequest}
-                    onCreateTask={handleCreateTaskInChat}
-                    onCreateConversationTask={onCreateConversationTask ?? handleCreateTaskInChat}
-                    onOpenFolderFromWorkspaceMenu={onOpenFolderFromWorkspaceMenu}
-                    onOpenRemoteWorkspace={onOpenRemoteWorkspace}
-                    theme={theme}
-                    onConnectRemote={onConnectRemote}
-                    onSelectRemoteProject={onSelectRemoteProject}
-                    onCancelRemoteProject={onCancelRemoteProject}
-                    onReconnectRemoteWorkspace={onReconnectRemoteWorkspace}
-                    reconnectingRemoteWorkspaceKeys={reconnectingRemoteWorkspaceKeys}
-                    remoteWorkspaceErrorByWorkspaceKey={remoteWorkspaceErrorByWorkspaceKey}
-                    reconnectingRemoteWorkspaceLogsByWorkspaceKey={
-                      reconnectingRemoteWorkspaceLogsByWorkspaceKey
-                    }
-                    onLogout={onLogout}
-                    onLogin={onLogin}
-                    user={user}
-                    isDesktop={isDesktop}
-                    isMacDesktop={isMacDesktop}
-                    isWindowsDesktop={isWindowsDesktop}
-                    isSidebarVisible={isSidebarVisible}
-                    onToggleSidebar={handleToggleSidebar}
-                    toggleSidebarShortcutLabel={toggleSidebarShortcutLabel}
-                    canGoBack={canPrimaryNavigationBack}
-                    canGoForward={canTaskNavForward}
-                    onGoBack={primaryNavigationBack}
-                    onGoForward={handleTaskNavForward}
-                    goBackShortcutLabel={goBackShortcutLabel}
-                    goForwardShortcutLabel={goForwardShortcutLabel}
-                    onOpenCommandCenter={handleOpenCommandCenter}
-                    onOpenAutomations={handleOpenAutomations}
-                    automationsActive={workspaceMainView === "automations"}
-                    onOpenPluginStore={handleOpenPluginStore}
-                    pluginStoreActive={workspaceMainView === "plugin-store"}
-                    onFileTreeOpenChange={setIsSidebarFileTreeOpen}
-                  />
+                  <div className="flex h-full min-h-0 flex-col">
+                    {hasMountedHierarchy(baseServices) ? (
+                      <div className="max-h-[50%] min-h-0 shrink-0 overflow-auto">
+                        <MountedProjectSidebar
+                          services={baseServices}
+                          locale={locale === "zh-CN" ? "zh" : "en"}
+                          onNavigate={(owner) => {
+                            // 修复目录别名误作为原生运行时 ID：只能使用解析所得原始 ID 和目标 scope。
+                            if (owner.kind === "external") {
+                              // 修复 Host ID 误流入原生 task 数据面的风险：SessionPane 的 owner prop 尚未
+                              // 由 split-pane 宿主接线，不能把外部会话伪装为原生 task 导航。
+                              toast(
+                                locale === "zh-CN"
+                                  ? "外部会话视图尚未接入分屏"
+                                  : "External session pane is not connected yet",
+                              );
+                              return;
+                            }
+                            handleSelectTaskInChat(
+                              owner.scope.workspacePath,
+                              owner.originalSessionId,
+                              owner.scope.workspaceIdentity,
+                              owner.scope.remoteSessionId,
+                            );
+                          }}
+                        />
+                      </div>
+                    ) : null}
+                    <div className="min-h-0 flex-1 overflow-hidden">
+                      <WorkspaceSidebar
+                        workspacePath={workspaceAbsPath}
+                        workspaceRemoteSessionId={workspaceRemoteSessionId}
+                        activePreviewPath={activePreviewPath}
+                        onSelectTask={handleSelectTaskInChat}
+                        onStartDraftInWorkspace={handleCreateProjectDraft}
+                        onOpenCodeViewer={handleOpenCodeViewer}
+                        onOpenBrowserUrl={handleOpenBrowserUrl}
+                        fileTreeOpenRequest={fileTreeOpenRequest}
+                        onCreateTask={handleCreateTaskInChat}
+                        onCreateConversationTask={
+                          onCreateConversationTask ?? handleCreateTaskInChat
+                        }
+                        onOpenFolderFromWorkspaceMenu={onOpenFolderFromWorkspaceMenu}
+                        onOpenRemoteWorkspace={onOpenRemoteWorkspace}
+                        theme={theme}
+                        onConnectRemote={onConnectRemote}
+                        onSelectRemoteProject={onSelectRemoteProject}
+                        onCancelRemoteProject={onCancelRemoteProject}
+                        onReconnectRemoteWorkspace={onReconnectRemoteWorkspace}
+                        reconnectingRemoteWorkspaceKeys={reconnectingRemoteWorkspaceKeys}
+                        remoteWorkspaceErrorByWorkspaceKey={remoteWorkspaceErrorByWorkspaceKey}
+                        reconnectingRemoteWorkspaceLogsByWorkspaceKey={
+                          reconnectingRemoteWorkspaceLogsByWorkspaceKey
+                        }
+                        onLogout={onLogout}
+                        onLogin={onLogin}
+                        user={user}
+                        isDesktop={isDesktop}
+                        isMacDesktop={isMacDesktop}
+                        isWindowsDesktop={isWindowsDesktop}
+                        isSidebarVisible={isSidebarVisible}
+                        onToggleSidebar={handleToggleSidebar}
+                        toggleSidebarShortcutLabel={toggleSidebarShortcutLabel}
+                        canGoBack={canPrimaryNavigationBack}
+                        canGoForward={canTaskNavForward}
+                        onGoBack={primaryNavigationBack}
+                        onGoForward={handleTaskNavForward}
+                        goBackShortcutLabel={goBackShortcutLabel}
+                        goForwardShortcutLabel={goForwardShortcutLabel}
+                        onOpenCommandCenter={handleOpenCommandCenter}
+                        onOpenAutomations={handleOpenAutomations}
+                        automationsActive={workspaceMainView === "automations"}
+                        onOpenPluginStore={handleOpenPluginStore}
+                        pluginStoreActive={workspaceMainView === "plugin-store"}
+                        onFileTreeOpenChange={setIsSidebarFileTreeOpen}
+                      />
+                    </div>
+                  </div>
                 </WorkflowRunOpenProvider>
               </V4SplitPaneEntryProvider>
             </ScopedErrorBoundary>

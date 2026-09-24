@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "../components/ui/button.js";
 import { Input } from "../components/ui/input.js";
 import {
@@ -13,7 +13,7 @@ import { HarnessSelector } from "../agent-host/HarnessSelector.js";
 import { ModelBindingSelector } from "../agent-host/ModelBindingSelector.js";
 import { labels } from "../agent-host/labels.js";
 import { useProjectSidebarViewStore } from "../store/projectSidebarViewStore.js";
-import type { ProjectSidebarProps, DiscoveryCandidate } from "./types.js";
+import type { ProjectSidebarProps, DiscoveryCandidate, RemovalPreview } from "./types.js";
 
 export function ConfirmationDialog({
   title,
@@ -22,6 +22,7 @@ export function ConfirmationDialog({
   cancelLabel,
   onConfirm,
   onClose,
+  onPreview,
 }: {
   title: string;
   description: string;
@@ -29,10 +30,28 @@ export function ConfirmationDialog({
   cancelLabel: string;
   onConfirm: () => Promise<void>;
   onClose: () => void;
+  onPreview?: () => Promise<RemovalPreview>;
 }) {
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  const [preview, setPreview] = useState<RemovalPreview>();
+  useEffect(() => {
+    if (!onPreview) return;
+    let active = true;
+    void onPreview().then(
+      (value) => {
+        if (active) setPreview(value);
+      },
+      (cause) => {
+        if (active) setError(cause instanceof Error ? cause.message : String(cause));
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [onPreview]);
   async function submit() {
+    if (onPreview && !preview?.allowed) return;
     setPending(true);
     try {
       await onConfirm();
@@ -55,6 +74,23 @@ export function ConfirmationDialog({
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
+        {onPreview ? (
+          <div className="text-ui-sm text-foreground-subtle" aria-live="polite">
+            {preview ? (
+              preview.risks.length ? (
+                <ul className="list-inside list-disc">
+                  {preview.risks.map((risk) => (
+                    <li key={risk}>{risk}</li>
+                  ))}
+                </ul>
+              ) : (
+                "No target-reported risks"
+              )
+            ) : (
+              "Checking target Git and activity…"
+            )}
+          </div>
+        ) : null}
         {error ? (
           <p role="alert" className="text-ui-sm text-destructive">
             {error}
@@ -64,7 +100,12 @@ export function ConfirmationDialog({
           <Button type="button" variant="outline" onClick={onClose} disabled={pending}>
             {cancelLabel}
           </Button>
-          <Button type="button" variant="destructive" onClick={submit} disabled={pending}>
+          <Button
+            type="button"
+            variant="destructive"
+            onClick={submit}
+            disabled={pending || Boolean(onPreview && !preview?.allowed)}
+          >
             {confirmLabel}
           </Button>
         </DialogFooter>

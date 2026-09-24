@@ -1,6 +1,8 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type { WorktreeWorkspace } from "@zcode/shared/project-workspaces";
 import { ProjectNode } from "./ProjectNode.js";
+import { Button } from "../components/ui/button.js";
+import { ProjectImportDialog } from "./ProjectImportDialog.js";
 import {
   AgentCreationDialog,
   ConfirmationDialog,
@@ -18,9 +20,10 @@ type Modal =
   | {
       kind: "agent" | "confirmation";
       workspace: WorktreeWorkspace;
-      action?: "hide" | "archive" | "remove";
+      action?: "hide" | "show" | "archive" | "unarchive" | "remove";
     }
-  | { kind: "workspace" | "discovered"; bindingId: string };
+  | { kind: "workspace" | "discovered"; bindingId: string }
+  | { kind: "import" };
 
 /** Immutable host facts in; only explicit user actions out. Mount this component with host-backed callbacks. */
 export function ProjectSidebar(props: ProjectSidebarProps) {
@@ -44,21 +47,51 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
     () => new Map(projectSummaries.map((value) => [value.projectId, value])),
     [projectSummaries],
   );
-  function confirmWorkspace(workspace: WorktreeWorkspace, action: "hide" | "archive" | "remove") {
+  function confirmWorkspace(
+    workspace: WorktreeWorkspace,
+    action: "hide" | "show" | "archive" | "unarchive" | "remove",
+  ) {
     if (action === "hide") return props.actions.onHideWorkspace(workspace.id);
+    if (action === "show")
+      return (
+        props.actions.onShowWorkspace?.(workspace.id) ??
+        Promise.reject(new Error("Show unavailable"))
+      );
     if (action === "archive") return props.actions.onArchiveWorkspace(workspace.id);
+    if (action === "unarchive")
+      return (
+        props.actions.onUnarchiveWorkspace?.(workspace.id) ??
+        Promise.reject(new Error("Unarchive unavailable"))
+      );
     return props.actions.onRemoveWorkspace(workspace.id, workspace.worktreeGeneration);
   }
+  const previewWorkspaceId = modal?.kind === "confirmation" ? modal.workspace.id : undefined;
+  const previewGeneration =
+    modal?.kind === "confirmation" ? modal.workspace.worktreeGeneration : undefined;
+  const previewRemove = useCallback(async () => {
+    // 修复旧确认框只展示静态风险文案却允许未预检删除：无服务预览时必须拒绝操作。
+    if (!previewWorkspaceId || !previewGeneration || !props.actions.onPreviewRemove)
+      throw new Error(
+        props.locale === "zh"
+          ? "目标预检不可用，无法移除工作区"
+          : "Target removal preview unavailable",
+      );
+    return props.actions.onPreviewRemove(previewWorkspaceId, previewGeneration);
+  }, [previewWorkspaceId, previewGeneration, props.actions.onPreviewRemove, props.locale]);
   const confirmationText =
     props.locale === "zh"
       ? {
           hide: "仅隐藏显示；Agent 继续运行，项目待处理入口仍可访问。",
+          show: "重新显示工作区，不改变运行中的 Agent。",
+          unarchive: "取消归档后恢复新会话准入，须由宿主重新验证工作区。",
           archive: "归档改变目录展示与新会话准入，不会停止运行中的会话。请先检查活动状态。",
           remove:
             "移除 linked worktree 可能丢失修改或未跟踪文件。外部进程、锁和活动可能无法全部检测；宿主必须重新检查 Git 和活动。历史保留，不删除分支。",
         }
       : {
           hide: "Hide only changes visibility; agents keep running and attention stays accessible.",
+          show: "Show this workspace again; running agents are unaffected.",
+          unarchive: "Unarchive restores new-session admission only after Host verification.",
           archive:
             "Archive changes catalog display and admission, not running sessions. Check active work before continuing.",
           remove:
@@ -66,8 +99,14 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
         };
   const actionLabels =
     props.locale === "zh"
-      ? { hide: "隐藏", archive: "归档", remove: "移除" }
-      : { hide: "hide", archive: "archive", remove: "remove" };
+      ? { hide: "隐藏", show: "显示", archive: "归档", unarchive: "取消归档", remove: "移除" }
+      : {
+          hide: "hide",
+          show: "show",
+          archive: "archive",
+          unarchive: "unarchive",
+          remove: "remove",
+        };
   async function discover(bindingId: string) {
     setDiscoveryError("");
     try {
@@ -90,6 +129,16 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
           }
         }}
       >
+        {props.actions.onImportProject ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setModal({ kind: "import" })}
+          >
+            {props.locale === "zh" ? "导入项目" : "Import project"}
+          </Button>
+        ) : null}
         {discoveryError ? (
           <p role="alert" className="text-ui-sm text-destructive">
             {discoveryError}
@@ -122,6 +171,13 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
           );
         })}
       </nav>
+      {modal?.kind === "import" && props.actions.onImportProject ? (
+        <ProjectImportDialog
+          onImport={props.actions.onImportProject}
+          locale={props.locale}
+          onClose={() => setModal(undefined)}
+        />
+      ) : null}
       {modal?.kind === "agent" ? (
         <AgentCreationDialog
           workspaceId={modal.workspace.id}
@@ -155,6 +211,7 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
           cancelLabel={props.locale === "zh" ? "取消" : "Cancel"}
           onClose={() => setModal(undefined)}
           onConfirm={() => confirmWorkspace(modal.workspace, modal.action!)}
+          onPreview={modal.action === "remove" ? previewRemove : undefined}
         />
       ) : null}
     </>
