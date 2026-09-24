@@ -15,6 +15,8 @@ export interface PiWorkerBoot {
   isolatedAgentDir: string;
   attach: boolean;
   sequence: number;
+  pauseBeforeReadResolver?: boolean;
+  enableNodeTestCrash?: boolean;
   model: {
     providerId: string;
     modelId: string;
@@ -47,7 +49,12 @@ export type ToPiWorker =
   | { type: "model.event"; requestId: string; event: ModelStreamEvent }
   | { type: "model.done"; requestId: string }
   | { type: "model.failure"; requestId: string }
-  | { type: "model.cancel"; requestId: string };
+  | { type: "model.cancel"; requestId: string }
+  | { type: "broker.reply"; requestId: string; result?: unknown; error?: string }
+  | { type: "bash.reply"; requestId: string; exitCode?: number | null; error?: string }
+  | { type: "bash.data"; requestId: string; data: Uint8Array }
+  | { type: "read.resume"; requestId: string }
+  | { type: "nodeTest.crash" };
 
 export type FromPiWorker =
   | { type: "ready"; backendSessionId: string }
@@ -60,4 +67,26 @@ export type FromPiWorker =
       request: Omit<ModelRequest, "abortSignal">;
     }
   | { type: "model.abort"; requestId: string }
-  | { type: "fatal"; message: string };
+  | { type: "fatal"; message: string }
+  | {
+      type: "broker.request";
+      requestId: string;
+      callId: string;
+      action: "open" | "read" | "write" | "close";
+      cwd?: string;
+      leaf?: string;
+      mode?: "read" | "edit" | "write";
+      rootDev?: string;
+      rootIno?: string;
+      content?: string;
+    }
+  | {
+      type: "bash.request";
+      requestId: string;
+      command: string;
+      cwd: string;
+      timeout?: number;
+      env: NodeJS.ProcessEnv;
+    }
+  | { type: "bash.abort"; requestId: string }
+  | { type: "read.pause"; requestId: string; alias: string };

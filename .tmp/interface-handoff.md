@@ -1,23 +1,20 @@
-# convergence-assembly — early combined checkpoint
+# pi-mount-final-1 — Pi-only interface handoff
 
-Clean source checkpoint: `a39d454` (before this handoff commit). Base `f4dc246`; no paid calls or production profile enablement. This is an integration staging point, **not acceptance**.
+Scope: Pi adapter/transport/worker/broker/custom tools/spec/tests. No Core/CLI/UI/Model writes, paid calls, production configs or push. Pinned Node 24.14.0, SDK 0.87.1, actual Host+worker+fake Model.
 
-Native admitted components now equivalent to source `52ae67e/7c2f75e/3c2465d/9c352c3/a7f5542/0ae733d` as `c5e45de/4d7f9ba/b8221b3/9dbdbe3/24d44e4/bba3805`; bootstrap `79f5be3/1cf36ac/47a084e` as `f3fb265/d287ad8/8c75562`; mutation fence `895119b/8e1c597/10aac8b/aae60c2/c2ba291` as `176395c/0710011/5f2614b/512ac5b/8cc3d8d`; CLI role compatibility `a33489d` as `a39d454` (developer instructions through interleaved compaction still unresolved, owner native-live-effects). Native composition prerequisites `7195d35/7c8d524` were empty against existing equivalent `d225d0a/d1bb2d6`; skipped, not silently discarded.
+```text
+Host → Pi adapter [worker lifecycle, broker ChildProcess exit receipts, SDK Bash operation]
+  → Pi worker [SDK loop, immutable call+turn admission, approvals, read FD alias]
+  → parent broker owner [<=8 fixed-code children] → broker [pinned cwd+leaf FD]
+  → parent SDK createLocalBashOperations [separately approved, NOT sandboxed]
+worker unexpectedly exits → parent aborts SDK Bash, closes/reaps every broker,
+  awaits worker/Bash/broker settlement → rejects accepted send as execution-unknown
+```
 
-Typed joins inherited from base: `createLazyWorkspaceComposition({root,target,registry,identity,newAdmissionsEnabled,...})` returns `agentHost/catalog/hierarchy/maintenance/dispose`; `connectTargetHostRpc(ticket)` returns `{services,dispose}`. Native control port comes from `getNativeMaintenanceControlPort(realAgentService)`; `createNativeAdmissionFence` and `createNativeProductionBridge` are available but not yet production-mounted. Core authority needs required `createCoreAuthority(...)` and ready/reconciliation (service-boot/core-boot sources pending). Legacy local path must not be silently interpreted as certified Core.
+The parent/worker transport uses typed per-request IDs and the parent rejects late messages after failure. Existing Write opens `O_WRONLY|O_NOFOLLOW|O_NONBLOCK` without truncation before approval (Edit still `O_RDWR`, Read `O_RDONLY`); effect writes/truncates the held FD. SDK Read resolver probes only the worker-held root `/dev/fd/N` alias; broker Read uses the already-prepared leaf FD. Native Read offset/limit preserved. Model-facing file descriptions explicitly exclude images/new directories/special files and disclose 4 MiB/regular-text/existing-parent limits. Bash remains SDK native shell operations, now parent-owned for abort + SDK wait-for-child receipt; this does not sandbox Bash or guarantee arbitrary detached grandchildren cannot escape SDK process-group control.
 
-Owner/order: CLI CommandInbox owns native accepted mutations; CLI lease and real activity must be verified before Core's automatic maintenance admission. Target owns Git correlated receipts → Catalog reconciles before NEW admission → Host owns accepted external turns; desktop continuous/mobile replayable read one Host owner. No second queue or path-only binding. No schema/profile gate was relaxed. Negative Claude native beta result and experimental ACP guard remain unchanged.
+Node-only test hooks (never passed by the production factory) pause at actual prepared Read→SDK resolver and abruptly exit the actual worker. Crash fixture checks parent ChildProcess `exit` callback, drained requests/effects, pending new file absent and Host command execution-unknown/not-idle. Bash fixture starts an actual marked SDK shell, crashes worker, waits SDK operation settlement, and checks trailing effect absent. See `packages/services/test/piMountFinal.test.ts`.
 
-Pending picks: target receipts; service/native facts/lease/core; controls/hierarchy/desktop/SSH/UI; canonical Pi/question/projection; ACP and Responses; bounded load candidate. Protocol-terminal writer owns Codex/Claude terminal fixes; do not substitute old unsafe Claude or early Codex ACK behavior. No root aggregate gate run at this checkpoint; next stage will run via global heavy slot with workers=1 and report failures as failures.
+**External blocker (not edited here):** root `pnpm typecheck` after dependency builds fails at `packages/ui/src/app-shell/WorkspaceShellLayout.tsx:1693`: UI `MountedSessionOwner` native lacks Core/Services `SessionOwner.historyOnly`. This is UI/Core-owned; focused services `tsc -b` passes. No claim root typecheck green.
 
----
-
-# protocol-v2-closure early public API handoff
-
-Base 6456283 already supplies Host V2 and shared `SessionSpecV2`/`BackendBindingV2`. This lane owns `@zcode/services/agent-host/codex` and `/claude` public trusted factories, not a replacement Host. Codex V2 adapter will reject V1 writes, bind target/workspace/generation, use verified relative cwd and fence all native events by turn ID. Claude final assistant is authoritative over partial text. No paid calls; native fake plus Host replay tests required before certification. No production enablement implied.
-
-# pi-portable-mount wave 2 interface (candidate; not acceptance)
-
-Owner: Pi worker maps SDK call id+active turn to immutable input and a prepared ephemeral Node broker. Broker pins actual directory cwd and existing file FD before approval, verifies ancestor directory chain to pinned worktree root inode, and accepts only leaf-only operations. Approval → SDK custom read/edit/write operations → broker FD; deny/abort/terminate → broker exit/close. Bash approval remains separate and is not sandboxed. SDK 0.87.1 `createAgentSession({tools:['read','edit','write','bash'],customTools})` + `create*ToolDefinition(...,{operations})`; assert active tool names and custom execution identity in actual Host test. Node child broker per pending file operation, bounded 8, no inherited env, no shell; no process.chdir in worker_threads.
-
-Mac/Linux: kernel cwd/`..` ancestry plus `O_NOFOLLOW|O_NONBLOCK` file FD and `O_EXCL` create; detached parent retains same inode after rename. Windows: explicit fail-closed before session creation pending platform-specific validation. No process isolation or Bash sandbox; Linux remote proof pending authorized execution. Unsupported images/new dirs. Review follow-up: worker approval derives target relative path, input byte length and ephemeral keyed SHA-256 fingerprint from the _prepared_ entry (no raw content); SDK Read receives the held root's `/dev/fd/N` alias for its pre-operations pathname probe, then its injected operations read the pinned broker file FD. Child close must prove exit with bounded escalation; worker death disconnects IPC and broker exits. Actual Host tests must cover absent-create replacement, leaf/root/read swaps and pending cancellation; Linux run pending, Windows unsupported. Regression + spec first, then code, root gates via shared memory slot.
+Local macOS evidence only. Linux runtime not executed, Windows unsupported/unexecuted. Root/UI integration, live provider, packaging and long soak remain outside this Pi-only receipt. This handoff is not an independent review or product acceptance.

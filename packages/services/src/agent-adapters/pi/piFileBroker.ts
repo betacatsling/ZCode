@@ -70,7 +70,16 @@ async function init(raw: {
   }
   if (!found) throw new Error("Parent not owned by worktree");
   try {
-    file = await open(leaf, (mode === "read" ? constants.O_RDONLY : constants.O_RDWR) | flags);
+    // 修复：SDK Write 使用 fsWriteFile (仅需写权限)；预备阶段不能以 O_RDWR
+    // 错拒 0200 文件，也不能提前 O_TRUNC。Edit 仍需同一 FD 读写。
+    file = await open(
+      leaf,
+      (mode === "read"
+        ? constants.O_RDONLY
+        : mode === "write"
+          ? constants.O_WRONLY
+          : constants.O_RDWR) | flags,
+    );
     const stat = await file.stat();
     if (!stat.isFile() || stat.size > maxBytes) throw new Error("Nonregular or oversized Pi file");
   } catch (error) {
