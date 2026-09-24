@@ -2,6 +2,7 @@ import type { HarnessManifest } from "@zcode/shared/agent-host";
 import type { SessionSummary, WorktreeWorkspace } from "@zcode/shared/project-workspaces";
 import type { CatalogSessionIndex } from "../project-workspaces/sidebarIndexService.js";
 import type { NativeSessionOwnerRef } from "./nativeSessionDirectory.js";
+import { nativeHarnessAssetMetadata } from "../harness-assets/index.js";
 
 /** Metadata only. Native commands and live state remain in the existing V4 owner/lease transport. */
 export const nativeZcodeManifest: HarnessManifest = {
@@ -9,7 +10,7 @@ export const nativeZcodeManifest: HarnessManifest = {
   id: "zcode",
   name: "ZCode",
   adapterVersion: "native-v4",
-  icon: { light: "zcode:logo-light", dark: "zcode:logo-dark" },
+  icon: nativeHarnessAssetMetadata.zcode?.icon,
 };
 
 export interface NativeSessionNavigation {
@@ -20,12 +21,16 @@ export interface NativeSessionNavigation {
 
 /** A trusted UI/DI boundary; never convert treeSessionId into a V4 task ID. */
 export interface NativeSessionCatalogPort extends CatalogSessionIndex {
-  resolveOwner(input: {
-    targetId: string;
-    workspaceId: string;
-    sourceWorkspaceKey: string;
-    nativeSessionId: string;
-  }): Promise<NativeSessionNavigation | undefined>;
+  resolveOwner(
+    input:
+      | {
+          targetId: string;
+          workspaceId: string;
+          sourceWorkspaceKey: string;
+          nativeSessionId: string;
+        }
+      | { treeSessionId: string },
+  ): Promise<NativeSessionNavigation | undefined>;
 }
 
 /** Both sources are complete, not open-tab subsets. Upstream change notifications invalidate only. */

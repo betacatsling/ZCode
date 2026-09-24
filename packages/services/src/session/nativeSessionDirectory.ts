@@ -1,9 +1,11 @@
+import { createHash } from "node:crypto";
 import type { SessionSummary, WorktreeWorkspace } from "@zcode/shared/project-workspaces";
+import type { NativeSessionCatalogPort, NativeSessionNavigation } from "./nativeComposition.js";
 import type { LegacyMapping } from "../project-workspaces/migrationContract.js";
-import type { CatalogSessionIndex } from "../project-workspaces/sidebarIndexService.js";
 import type { NativeIndexFact } from "./nativePersistentSessionIndex.js";
 
 export interface NativeSessionDirectorySource {
+  onChange?(listener: () => void): () => void;
   listMappings(): Promise<readonly LegacyMapping[]>;
   readFacts(): Promise<readonly NativeIndexFact[]>;
 }
@@ -19,17 +21,32 @@ export interface NativeSessionOwnerRef {
 }
 
 /** Async owner lookup for Host/UI; target+workspace+native scope cannot be inferred from an unscoped task id. */
-export class NativeSessionDirectory implements CatalogSessionIndex {
+export function nativeTreeSessionId(
+  owner: Pick<NativeSessionOwnerRef, "targetId" | "sourceWorkspaceKey" | "nativeSessionId">,
+): string {
+  return `native:${createHash("sha256")
+    .update(JSON.stringify([owner.targetId, owner.sourceWorkspaceKey, owner.nativeSessionId]))
+    .digest("hex")}`;
+}
+
+export class NativeSessionDirectory implements NativeSessionCatalogPort {
   constructor(private readonly source: NativeSessionDirectorySource) {}
+
+  onChange(listener: () => void): () => void {
+    return this.source.onChange?.(listener) ?? (() => {});
+  }
 
   private async joined(): Promise<Array<{ mapping: LegacyMapping; fact: NativeIndexFact }>> {
     const [mappings, facts] = await Promise.all([
       this.source.listMappings(),
       this.source.readFacts(),
     ]);
-    const byScope = new Map(
-      facts.map((fact) => [JSON.stringify([fact.workspaceKey, fact.nativeSessionId]), fact]),
-    );
+    const byScope = new Map<string, NativeIndexFact>();
+    for (const fact of facts) {
+      const key = JSON.stringify([fact.workspaceKey, fact.nativeSessionId]);
+      if (byScope.has(key)) throw new Error("duplicate-native-scope");
+      byScope.set(key, fact);
+    }
     return mappings.flatMap((mapping) => {
       const fact = byScope.get(
         JSON.stringify([mapping.sourceWorkspaceKey, mapping.nativeSessionId]),
@@ -38,22 +55,33 @@ export class NativeSessionDirectory implements CatalogSessionIndex {
     });
   }
 
-  async resolve(input: {
-    targetId: string;
-    workspaceId: string;
-    sourceWorkspaceKey: string;
-    nativeSessionId: string;
-  }): Promise<NativeSessionOwnerRef | undefined> {
-    const found = (await this.joined()).find(
-      ({ mapping }) =>
-        mapping.targetId === input.targetId &&
-        mapping.workspaceId === input.workspaceId &&
-        mapping.sourceWorkspaceKey === input.sourceWorkspaceKey &&
-        mapping.nativeSessionId === input.nativeSessionId,
+  async resolveOwner(
+    input:
+      | {
+          targetId: string;
+          workspaceId: string;
+          sourceWorkspaceKey: string;
+          nativeSessionId: string;
+        }
+      | { treeSessionId: string },
+  ): Promise<NativeSessionNavigation | undefined> {
+    const matches = (await this.joined()).filter(({ mapping }) =>
+      "treeSessionId" in input
+        ? nativeTreeSessionId({
+            targetId: mapping.targetId,
+            sourceWorkspaceKey: mapping.sourceWorkspaceKey,
+            nativeSessionId: mapping.nativeSessionId,
+          }) === input.treeSessionId
+        : mapping.targetId === input.targetId &&
+          mapping.workspaceId === input.workspaceId &&
+          mapping.sourceWorkspaceKey === input.sourceWorkspaceKey &&
+          mapping.nativeSessionId === input.nativeSessionId,
     );
+    if (matches.length > 1) throw new Error("ambiguous-native-owner");
+    const found = matches[0];
     if (!found) return undefined;
     const { mapping } = found;
-    return {
+    const owner: NativeSessionOwnerRef = {
       targetId: mapping.targetId,
       projectId: mapping.projectId,
       workspaceId: mapping.workspaceId,
@@ -63,13 +91,29 @@ export class NativeSessionDirectory implements CatalogSessionIndex {
       nativeSessionId: mapping.nativeSessionId,
       cwdRelativeToWorktree: mapping.cwdRelativeToWorktree,
     };
+    return { transport: "native-v4", treeSessionId: nativeTreeSessionId(owner), owner };
   }
 
   async allSessions(): Promise<readonly SessionSummary[]> {
-    return (await this.joined()).map(({ mapping, fact }) => ({
+    const joined = await this.joined();
+    const ids = new Set<string>();
+    for (const { mapping } of joined) {
+      const id = nativeTreeSessionId({
+        targetId: mapping.targetId,
+        sourceWorkspaceKey: mapping.sourceWorkspaceKey,
+        nativeSessionId: mapping.nativeSessionId,
+      });
+      if (ids.has(id)) throw new Error("duplicate-native-tree-id");
+      ids.add(id);
+    }
+    return joined.map(({ mapping, fact }) => ({
       session: {
         schemaVersion: 1,
-        id: mapping.legacyId,
+        id: nativeTreeSessionId({
+          targetId: mapping.targetId,
+          sourceWorkspaceKey: mapping.sourceWorkspaceKey,
+          nativeSessionId: mapping.nativeSessionId,
+        }),
         projectId: mapping.projectId,
         workspaceId: mapping.workspaceId,
         harnessId: "zcode",
@@ -78,7 +122,7 @@ export class NativeSessionDirectory implements CatalogSessionIndex {
         archived: fact.archived,
       },
       updatedAt: fact.updatedAt,
-      activity: fact.waiting ? ("waiting" as const) : ("unknown" as const),
+      activity: "unknown" as const,
       freshness: "unknown" as const,
       ...(fact.status === "completed" ? { lastTurn: "succeeded" as const } : {}),
       ...(fact.status === "error" ? { lastTurn: "failed" as const } : {}),

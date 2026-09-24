@@ -24,6 +24,8 @@ export type {
   DwfRunTimestamps,
   DwfWorldNodeRow,
 } from "./session-store/repositories/dwf-journal-codecs.js";
+export { ReadonlyNativeSessionMetadataView } from "./session-store/native-metadata.js";
+export type { NativeStoredSessionMetadata } from "./session-store/native-metadata.js";
 export { SqliteSessionMigrationError } from "./session-store/errors.js";
 export type {
   SqliteSessionMigrationErrorKind,

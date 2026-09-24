@@ -14,6 +14,7 @@
     "./agent-host/pi": "./src/agent-adapters/pi/createPiHarness.ts",
     "./session/native-index": "./src/session/nativePersistentSessionIndex.ts",
     "./session/native-directory": "./src/session/nativeSessionDirectory.ts",
+    "./session/native-composition": "./src/session/nativeComposition.ts",
     "./project-workspaces/migration": "./src/project-workspaces/legacyWorkspaceMigration.ts",
     "./project-workspaces/migration-contract": "./src/project-workspaces/migrationContract.ts"
   },
