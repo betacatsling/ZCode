@@ -100,6 +100,20 @@ test(
     assert.equal(report.scenarioVerified, true);
     assert.equal(report.matchingTerminals, 3);
     assert.deepEqual(Object.values(report.effects), [true, true, true, true]);
+    assert.deepEqual(
+      report.shellObservation,
+      {
+        selectionTrusted: true,
+        preludeTrusted: true,
+        envTrusted: true,
+        scriptTrusted: true,
+        forwarded: true,
+        backendKind: "native-binaries",
+        findAndGrepEnabled: false,
+        backendDefaults: [true, true, true],
+      },
+      "real native shell request must reach the adapter without argv substitution",
+    );
     assert.ok(report.httpAttempts <= 12 && report.modelCalls.stream > 0);
     assert.equal(
       report.modelUsageCalls.length,
@@ -174,6 +188,21 @@ for (const fault of [
   "shell-profile",
   "shell-override",
   "inherited-path",
+  "shell-dialect",
+  "shell-foreign-path",
+  "shell-source",
+  "foreign-home",
+  "prelude-command",
+  "prelude-args",
+  "prelude-env",
+  "prelude-binary",
+  "prelude-drop",
+  "prelude-extra-env",
+  "profile-startup",
+  "stdin",
+  "unsafe-sandbox",
+  "script-mismatch",
+  "cwd-mismatch",
   "no-read",
   "wrong-read",
   "echo-500",
@@ -247,9 +276,36 @@ for (const fault of [
           "foreign permission cannot mutate files before denial",
         );
       }
-      if (["shell-profile", "shell-override", "inherited-path"].includes(fault)) {
+      if (
+        [
+          "shell-profile",
+          "shell-override",
+          "inherited-path",
+          "shell-dialect",
+          "shell-foreign-path",
+          "shell-source",
+          "foreign-home",
+          "prelude-command",
+          "prelude-args",
+          "prelude-env",
+          "prelude-binary",
+          "prelude-drop",
+          "prelude-extra-env",
+          "profile-startup",
+          "stdin",
+          "unsafe-sandbox",
+          "script-mismatch",
+          "cwd-mismatch",
+        ].includes(fault)
+      ) {
         assert.equal(report.effects.bash, false, "no unapproved subprocess effect");
         assert.equal(report.unapprovedSubprocessAbsent, true);
+        assert.equal(report.shellObservation?.forwarded, false);
+        assert.equal(
+          report.effects.allowedWrite,
+          false,
+          "Bash result cannot be accepted after guard rejection",
+        );
       }
       if (fault === "endpoint-leak") assert.equal(report.privateArtifactScan, false);
       if (["broken-sse", "chunked-oversize-json", "truncated-sse"].includes(fault))

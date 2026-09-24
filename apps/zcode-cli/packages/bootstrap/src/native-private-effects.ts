@@ -1,11 +1,184 @@
-import { readFile, realpath } from "node:fs/promises";
-import { join } from "node:path";
+import { readFile, readdir, realpath } from "node:fs/promises";
+import { delimiter, dirname } from "node:path";
 import { createNodeFileSystemAdapter } from "@zcode/adapters/fs";
 import { createNodeExecutionAdapter } from "@zcode/adapters/exec";
-import type { ExecutionPort, FileSystemPort } from "@zcode/contracts";
+import type { ExecutionPort, ExecutionRequest, FileSystemPort } from "@zcode/contracts";
+import {
+  PRIVATE_SHELL_SCRIPT,
+  privateShellCommand,
+  privateShellScriptPath,
+} from "./native-private-shell-fixture.js";
 
-// 可信 Node 测试装配：借用现有 I/O adapters，不模拟工具/Model executor。
-// Read 在 CLI 可免权限，因此仅有交互 permission gate 并不足以限制 Read 的真实文件副作用。
+const TRUSTED_SHELL = "/bin/bash";
+const TRUSTED_SYSTEM_PATH = ["/usr/bin", "/bin"].join(delimiter);
+
+type FixtureFault =
+  | "shell-profile"
+  | "shell-override"
+  | "inherited-path"
+  | "shell-dialect"
+  | "shell-foreign-path"
+  | "shell-source"
+  | "foreign-home"
+  | "prelude-command"
+  | "prelude-args"
+  | "prelude-env"
+  | "stdin"
+  | "unsafe-sandbox"
+  | "script-mismatch"
+  | "cwd-mismatch"
+  | "prelude-binary"
+  | "profile-startup"
+  | "prelude-drop"
+  | "prelude-extra-env";
+
+// Test-only mutations at the pre-effect port: each must be rejected before adapter I/O.
+function mutateRequest(request: ExecutionRequest, fault?: FixtureFault): ExecutionRequest {
+  const command = request.command;
+  switch (fault) {
+    case "shell-profile":
+      return command.mode === "shell"
+        ? { ...request, command: { ...command, shellProfile: undefined } }
+        : request;
+    case "shell-override":
+      return command.mode === "shell"
+        ? { ...request, command: { ...command, shell: "/bin/sh" } }
+        : request;
+    case "shell-dialect":
+      return command.mode === "shell"
+        ? {
+            ...request,
+            command: {
+              ...command,
+              shellOverride: {
+                dialect: "cmd",
+                path: TRUSTED_SHELL,
+                source: "auto-detected",
+                display: { name: "bash" },
+              },
+            },
+          }
+        : request;
+    case "shell-foreign-path":
+      return command.mode === "shell"
+        ? {
+            ...request,
+            command: {
+              ...command,
+              shellOverride: {
+                dialect: "posix",
+                path: "/bin/sh",
+                source: "auto-detected",
+                display: { name: "bash" },
+              },
+            },
+          }
+        : request;
+    case "shell-source":
+      return command.mode === "shell"
+        ? {
+            ...request,
+            command: {
+              ...command,
+              shellOverride: {
+                dialect: "posix",
+                path: TRUSTED_SHELL,
+                source: "user-config",
+                display: { name: "bash" },
+              },
+            },
+          }
+        : request;
+    case "inherited-path":
+      return { ...request, env: { base: "inherit", set: { PATH: request.cwd ?? "" } } };
+    case "foreign-home":
+      return { ...request, env: { set: { HOME: request.cwd ?? "" } } };
+    case "prelude-command":
+      return {
+        ...request,
+        bashPrelude: {
+          kind: "embedded-search",
+          backend: { kind: "internal-cli", command: "/bin/sh", args: ["__internal-search"] },
+        },
+      };
+    case "prelude-drop":
+      return { ...request, bashPrelude: undefined };
+    case "prelude-extra-env": {
+      if (!request.bashPrelude) return request;
+      const backend = Object.assign({}, request.bashPrelude.backend, { env: { FOREIGN: "1" } });
+      return { ...request, bashPrelude: { ...request.bashPrelude, backend } };
+    }
+    case "prelude-binary":
+      return {
+        ...request,
+        bashPrelude: {
+          kind: "embedded-search",
+          backend: {
+            kind: "native-binaries",
+            findCommand: "/bin/sh",
+            grepCommand: "ugrep",
+            rgCommand: "rg",
+          },
+          findAndGrepEnabled: false,
+        },
+      };
+    case "prelude-args":
+      return {
+        ...request,
+        bashPrelude: {
+          kind: "embedded-search",
+          backend: { kind: "internal-cli", command: process.execPath, args: ["foreign"] },
+        },
+      };
+    case "prelude-env":
+      return {
+        ...request,
+        bashPrelude: {
+          kind: "embedded-search",
+          backend: {
+            kind: "internal-cli",
+            command: process.execPath,
+            args: ["__internal-search"],
+            env: { FOREIGN: "1" },
+          },
+        },
+      };
+    case "stdin":
+      return { ...request, stdin: "foreign" };
+    case "unsafe-sandbox":
+      return { ...request, sandbox: { enabled: false, dangerouslyDisableSandbox: true } };
+    case "cwd-mismatch":
+      return { ...request, cwd: dirname(request.cwd ?? "") };
+    default:
+      return request;
+  }
+}
+
+function exactKeys(value: object, keys: string[]): boolean {
+  return Object.keys(value).sort().join("\0") === keys.sort().join("\0");
+}
+
+function trustedPrelude(request: ExecutionRequest): boolean {
+  const prelude = request.bashPrelude;
+  if (prelude === undefined) return false;
+  // Only the default isolated runtime backend is allowed. No externally configured command,
+  // argv, env or backend binary may enter the shell startup script.
+  if (
+    prelude.kind !== "embedded-search" ||
+    prelude.findAndGrepEnabled !== false ||
+    !exactKeys(prelude, ["kind", "backend", "findAndGrepEnabled"])
+  )
+    return false;
+  const backend = prelude.backend;
+  return (
+    backend.kind === "native-binaries" &&
+    exactKeys(backend, ["kind", "findCommand", "grepCommand", "rgCommand"]) &&
+    backend.findCommand === "bfs" &&
+    backend.grepCommand === "ugrep" &&
+    backend.rgCommand === "rg"
+  );
+}
+
 export function createPrivateEffectPorts(input: {
   cwd: string;
   readPath: string;
@@ -13,8 +186,17 @@ export function createPrivateEffectPorts(input: {
   writeContent: string;
   bashCommand: string;
   processEnv: NodeJS.ProcessEnv;
-  /** Same-child synthetic request mutation at the ExecutionPort, never a product setting. */
-  fakeExecFault?: "shell-profile" | "shell-override" | "inherited-path";
+  fakeExecFault?: FixtureFault;
+  onShellObservation?: (fact: {
+    selectionTrusted: boolean;
+    preludeTrusted: boolean;
+    envTrusted: boolean;
+    scriptTrusted: boolean;
+    forwarded: boolean;
+    backendKind: string;
+    findAndGrepEnabled: boolean | null;
+    backendDefaults: boolean[];
+  }) => void;
 }): {
   fileSystemPort: FileSystemPort;
   executionPort: ExecutionPort;
@@ -24,10 +206,12 @@ export function createPrivateEffectPorts(input: {
   let phase = 0;
   const fs = createNodeFileSystemAdapter();
   const nodeBinary = process.execPath;
-  const exec = createNodeExecutionAdapter({
-    processEnv: { PATH: input.processEnv.PATH, HOME: input.processEnv.HOME },
-    outputRootDir: input.cwd,
-  });
+  const trustedEnv = {
+    PATH: [dirname(nodeBinary), TRUSTED_SYSTEM_PATH].join(delimiter),
+    HOME: input.processEnv.HOME,
+    SHELL: TRUSTED_SHELL,
+  };
+  const exec = createNodeExecutionAdapter({ processEnv: trustedEnv, outputRootDir: input.cwd });
   const reject = (): never => {
     throw new Error("private fixture effect scope denied");
   };
@@ -67,45 +251,79 @@ export function createPrivateEffectPorts(input: {
     searchText: async () => reject(),
   };
   const executionPort: ExecutionPort = {
-    async run(request, options) {
-      if (input.fakeExecFault === "inherited-path") {
-        // 即使环境 PATH 被错误继承，也不得让 shell 解析另一个 node。
-        request = { ...request, env: { base: "inherit", set: { PATH: input.cwd } } };
-      }
-      if (input.fakeExecFault === "shell-profile" && request.command.mode === "shell")
-        request = { ...request, command: { ...request.command, shellProfile: undefined } };
-      if (input.fakeExecFault === "shell-override" && request.command.mode === "shell")
-        request = { ...request, command: { ...request.command, shell: "/bin/sh" } };
+    async run(original, options) {
+      const request = mutateRequest(original, input.fakeExecFault);
+      const shell = request.command.mode === "shell" ? request.command.shellOverride : undefined;
+      const selectionTrusted =
+        shell?.source === "auto-detected" &&
+        shell.dialect === "posix" &&
+        shell.path === TRUSTED_SHELL &&
+        shell.id === "auto:bash" &&
+        shell.label === "bash" &&
+        shell.display.name === "bash" &&
+        exactKeys(shell, ["id", "label", "path", "dialect", "source", "display"]) &&
+        exactKeys(shell.display, ["name"]);
+      const preludeTrusted = trustedPrelude(request);
+      const envTrusted =
+        trustedEnv.HOME === dirname(input.cwd) &&
+        input.processEnv.PATH === trustedEnv.PATH &&
+        input.processEnv.SHELL === TRUSTED_SHELL;
+      const observe = (scriptTrusted: boolean, forwarded: boolean) =>
+        input.onShellObservation?.({
+          selectionTrusted,
+          preludeTrusted,
+          envTrusted,
+          scriptTrusted,
+          forwarded,
+          backendKind: request.bashPrelude?.backend.kind ?? "absent",
+          findAndGrepEnabled: request.bashPrelude?.findAndGrepEnabled ?? null,
+          backendDefaults:
+            request.bashPrelude?.backend.kind === "native-binaries"
+              ? [
+                  request.bashPrelude.backend.findCommand === "bfs",
+                  request.bashPrelude.backend.grepCommand === "ugrep",
+                  request.bashPrelude.backend.rgCommand === "rg",
+                ]
+              : [],
+        });
       if (
         phase !== 2 ||
+        process.platform !== "darwin" ||
         request.cwd !== input.cwd ||
         request.command.mode !== "shell" ||
         request.command.command !== input.bashCommand ||
+        input.bashCommand !== privateShellCommand(nodeBinary) ||
         request.command.shellProfile !== "posix-bash" ||
         request.command.shell !== undefined ||
-        (request.command.shellOverride !== undefined &&
-          (request.command.shellOverride.source !== "auto-detected" &&
-           request.command.shellOverride.source !== "legacy-fallback")) ||
-        (request.bashPrelude !== undefined && request.bashPrelude.kind !== "embedded-search") ||
+        !selectionTrusted ||
+        !preludeTrusted ||
         request.stdin !== undefined ||
         request.env !== undefined ||
         request.sandbox?.enabled !== true ||
-        request.sandbox.dangerouslyDisableSandbox === true
-      )
+        request.sandbox.dangerouslyDisableSandbox === true ||
+        !envTrusted ||
+        !process.version.startsWith("v24.")
+      ) {
+        observe(false, false);
         return reject();
-      // 修复：命令文本相同不保证 PATH 解析同一个 node；固定当前 Node 24 二进制、
-      // 脚本字节和隔离 cwd，再借用现有执行端口。此处不是通用 shell 沙箱。
-      if (!/^v24\./u.test(process.version) ||
-          (await realpath(join(input.cwd, "verify.cjs"))) !== join(input.cwd, "verify.cjs") ||
-          (await readFile(join(input.cwd, "verify.cjs"), "utf8")) !==
-            "require('node:fs').writeFileSync('bash-effect.txt', 'bash-verified|' + process.execPath); console.log('exit=0')\n")
+      }
+      const script = privateShellScriptPath(input.cwd);
+      if (
+        (await realpath(input.cwd)) !== input.cwd ||
+        (await realpath(script)) !== script ||
+        (await readFile(script, "utf8")) !== PRIVATE_SHELL_SCRIPT ||
+        (await readdir(dirname(input.cwd))).some((name) => /^\.(?:bash|profile|zsh)/u.test(name)) ||
+        !nodeBinary.startsWith("/") ||
+        (await realpath(nodeBinary)) !== nodeBinary
+      ) {
+        observe(false, false);
         return reject();
-      // 已验证唯一脚本和固定二进制后借用原执行 adapter 的 argv 模式，彻底绕开
-      // login shell / profile / PATH 解析；此证明仅限这一个已知 fixture。
-      return exec.run({ ...request, bashPrelude: undefined, command: { mode: "argv", file: nodeBinary, args: ["verify.cjs"] } },
-        options);
+      }
+      observe(true, true);
+      // 修复：argv 替换会丢失赋值、profile/prelude 和 cwd 捕获；仅验证 fixture，
+      // 将原请求不变交给真实 shell adapter，不能代替或伪造其 spawn 回执。
+      return exec.run(request, options);
     },
-    // 禁止 auto-background、额外进程、输出检索或注册表动作；只借用 foreground run。
   };
   return {
     fileSystemPort,

@@ -2,6 +2,7 @@
 import { readFile } from "node:fs/promises";
 import { scanDisposable } from "../../../../../scripts/native-private-artifacts.mjs";
 import { join } from "node:path";
+import { privateShellCommand } from "./native-private-shell-fixture.js";
 
 const route = process.argv[2];
 const fake = route === "fixture/fixture-model";
@@ -19,10 +20,16 @@ const execFault = fake ? process.env.ZCODE_NATIVE_FAKE_EXEC_FAULT : undefined;
 const isolated = process.cwd();
 // 修复：父环境的密钥、代理、项目配置和运行时开关不能进入私有原生执行器。
 for (const key of Object.keys(process.env)) {
-  if (!["PATH", "SYSTEMROOT", "WINDIR", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "HOME"].includes(key)) delete process.env[key];
+  if (
+    !["PATH", "SYSTEMROOT", "WINDIR", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "HOME"].includes(
+      key,
+    )
+  )
+    delete process.env[key];
 }
 // 修复：所有 product imports/side effects 之前先切断真实用户配置和日志落点。
 process.env.HOME = isolated;
+process.env.SHELL = "/bin/bash";
 process.env.XDG_CONFIG_HOME = isolated;
 process.env.XDG_DATA_HOME = isolated;
 process.env.XDG_CACHE_HOME = isolated;
@@ -40,7 +47,9 @@ let selectedSecrets: string[] = [];
 let scanCompleted = false;
 let outputClean = true;
 let scanFiles = 0;
-let observation: ReturnType<typeof import("./native-private-observer.js").createPrivateObservation> | undefined;
+let observation:
+  | ReturnType<typeof import("./native-private-observer.js").createPrivateObservation>
+  | undefined;
 let stage: "configuration" | "bootstrap" | "runtime" = "configuration";
 try {
   if (!route || !approved[route]) throw new Error("route not approved");
@@ -50,22 +59,41 @@ try {
   const providerId = approved[route]!;
   const modelId = route.slice(providerId.length + 1);
   // 私有 loader 只在显式 --live 子进程运行；不把 key/url 放进 argv/env/overlay/IPC。
-  const config = (fake ? { providers: { fixture: { api: "anthropic-messages", apiKey: ["fixture-private", "key-sentinel"].join("-"), baseUrl: fixtureUrl!, models: [{ id: "fixture-model", contextWindow: 65536, maxTokens: 4096 }] } } } : JSON.parse(
-    await readFile(join(originalHome!, ".pi", "agent", "models.json"), "utf8"),
-  )) as {
+  const config = (
+    fake
+      ? {
+          providers: {
+            fixture: {
+              api: "anthropic-messages",
+              apiKey: ["fixture-private", "key-sentinel"].join("-"),
+              baseUrl: fixtureUrl!,
+              models: [{ id: "fixture-model", contextWindow: 65536, maxTokens: 4096 }],
+            },
+          },
+        }
+      : JSON.parse(await readFile(join(originalHome!, ".pi", "agent", "models.json"), "utf8"))
+  ) as {
     providers?: Record<
       string,
-      { api: string; baseUrl: string; apiKey: string; models: Array<{ id: string; contextWindow: number; maxTokens: number }> }
+      {
+        api: string;
+        baseUrl: string;
+        apiKey: string;
+        models: Array<{ id: string; contextWindow: number; maxTokens: number }>;
+      }
     >;
   };
   const selected = config.providers?.[providerId];
   const api = selected?.api;
   const configuredModel = selected?.models.find((model) => model.id === modelId);
   if (
-    !selected?.apiKey || !isOpaqueLiteralCredential(selected.apiKey) ||
+    !selected?.apiKey ||
+    !isOpaqueLiteralCredential(selected.apiKey) ||
     !selected.baseUrl ||
-    !configuredModel || !Number.isSafeInteger(configuredModel.contextWindow) ||
-    configuredModel.contextWindow < 8192 || !Number.isSafeInteger(configuredModel.maxTokens) ||
+    !configuredModel ||
+    !Number.isSafeInteger(configuredModel.contextWindow) ||
+    configuredModel.contextWindow < 8192 ||
+    !Number.isSafeInteger(configuredModel.maxTokens) ||
     configuredModel.maxTokens < 1 ||
     !isApprovedApi(api)
   )
@@ -171,10 +199,12 @@ try {
     baseUrl: selected.baseUrl,
     api,
     fetch: globalThis.fetch.bind(globalThis),
-    modelCallId: (context) => context ? modelContextCalls.get(context) ?? null : null,
+    modelCallId: (context) => (context ? (modelContextCalls.get(context) ?? null) : null),
     onProviderUsage: (fact) => notify({ kind: "provider-usage", ...fact }),
     notify,
-    allowedToolNames: exposeWebFetch ? ["Read", "Write", "Bash", "WebFetch"] : ["Read", "Write", "Bash"],
+    allowedToolNames: exposeWebFetch
+      ? ["Read", "Write", "Bash", "WebFetch"]
+      : ["Read", "Write", "Bash"],
   });
   const { createPrivateEffectPorts } = await import("./native-private-effects.js");
   const cwd = join(isolated, "worktree");
@@ -183,9 +213,13 @@ try {
     readPath: join(cwd, "input.txt"),
     writePath: join(cwd, "output.txt"),
     writeContent: await readFile(join(cwd, "approved-content.txt"), "utf8"),
-    bashCommand: "node verify.cjs",
+    bashCommand: privateShellCommand(process.execPath),
     processEnv: process.env,
-    fakeExecFault: execFault === "shell-profile" || execFault === "shell-override" || execFault === "inherited-path" ? execFault : undefined,
+    onShellObservation: (fact) => notify({ kind: "private-shell", ...fact }),
+    fakeExecFault:
+      typeof execFault === "string"
+        ? (execFault as Parameters<typeof createPrivateEffectPorts>[0]["fakeExecFault"])
+        : undefined,
   });
   process.on("message", (message: unknown) => {
     if (
@@ -210,31 +244,47 @@ try {
       if (phase === "start" && context) modelContextCalls.set(context, callId);
       // 修复：只发送既有 Model 执行上下文的身份/用途及规范化数字；不发请求、
       // 原始 usage 元数据、响应、URL 或密钥。aux 完成时保留启动时捕获的 trace。
-      const metrics = phase === "finish" ? {
-        inputTokens: usage?.inputTokens, outputTokens: usage?.outputTokens,
-        totalTokens: usage?.totalTokens, cacheReadTokens: usage?.cacheReadTokens,
-        cacheWriteTokens: usage?.cacheWriteTokens, reasoningTokens: usage?.reasoningTokens,
-      } : undefined;
-      notify({ kind: "model-observation", callId, operationKind: kind, phase,
+      const metrics =
+        phase === "finish"
+          ? {
+              inputTokens: usage?.inputTokens,
+              outputTokens: usage?.outputTokens,
+              totalTokens: usage?.totalTokens,
+              cacheReadTokens: usage?.cacheReadTokens,
+              cacheWriteTokens: usage?.cacheWriteTokens,
+              reasoningTokens: usage?.reasoningTokens,
+            }
+          : undefined;
+      notify({
+        kind: "model-observation",
+        callId,
+        operationKind: kind,
+        phase,
         purpose: context?.modelCall?.operation ?? null,
         operationId: context?.modelCall?.operationId ?? null,
         runtimeTurnId: context?.traceContext?.turnId ?? null,
         sessionId: context?.traceContext?.sessionId ?? null,
-        metrics });
+        metrics,
+      });
     },
-    transport: transportFault ? (request, init) => {
-      // 修复：同一个真实 Model/SDK 子进程的序列化请求在可信闸门前注入故障，
-      // 必须在 fetch 前拒绝；不是另造 executor 或仅测试隔离的 observer。
-      const url = new URL(request instanceof Request ? request.url : String(request));
-      const body = JSON.parse(String(init?.body));
-      if (transportFault === "wrong-model-body") body.model = "foreign-model";
-      if (transportFault === "missing-tokens") delete body.max_tokens;
-      if (transportFault === "oversized-tokens") body.max_tokens = 4097;
-      if (transportFault === "wrong-query") url.search = "?unexpected=1";
-      if (transportFault === "wrong-route") url.pathname += "/foreign";
-      return observation!.transport(url, { ...init, body: JSON.stringify(body),
-        ...(transportFault === "wrong-method" ? { method: "GET" } : {}) });
-    } : observation.transport,
+    transport: transportFault
+      ? (request, init) => {
+          // 修复：同一个真实 Model/SDK 子进程的序列化请求在可信闸门前注入故障，
+          // 必须在 fetch 前拒绝；不是另造 executor 或仅测试隔离的 observer。
+          const url = new URL(request instanceof Request ? request.url : String(request));
+          const body = JSON.parse(String(init?.body));
+          if (transportFault === "wrong-model-body") body.model = "foreign-model";
+          if (transportFault === "missing-tokens") delete body.max_tokens;
+          if (transportFault === "oversized-tokens") body.max_tokens = 4097;
+          if (transportFault === "wrong-query") url.search = "?unexpected=1";
+          if (transportFault === "wrong-route") url.pathname += "/foreign";
+          return observation!.transport(url, {
+            ...init,
+            body: JSON.stringify(body),
+            ...(transportFault === "wrong-method" ? { method: "GET" } : {}),
+          });
+        }
+      : observation.transport,
   });
 
   stage = "runtime";
@@ -252,10 +302,18 @@ try {
         fileSystemPort: effects.fileSystemPort,
         executionPort: effects.executionPort,
         // 修复：preapproved WebFetch 可跳过 permission；必须在真实 HTTP port 入口拒绝。
-        httpClientPort: { request: async () => { forbiddenToolRequests++; throw new Error("private nonfixture network denied"); } },
-        privateToolAllowlist: exposeWebFetch ? ["Read", "Write", "Bash", "WebFetch"] : ["Read", "Write", "Bash"],
+        httpClientPort: {
+          request: async () => {
+            forbiddenToolRequests++;
+            throw new Error("private nonfixture network denied");
+          },
+        },
+        privateToolAllowlist: exposeWebFetch
+          ? ["Read", "Write", "Bash", "WebFetch"]
+          : ["Read", "Write", "Bash"],
         privateNativeTurnObservation: (fact) => notify({ kind: "native-turn", ...fact }),
-        privateNativePermissionObservation: (fact) => notify({ kind: "native-permission", ...fact }),
+        privateNativePermissionObservation: (fact) =>
+          notify({ kind: "native-permission", ...fact }),
         startProviderRegistryRuntime: async () => ({
           runtime: { registryService: registry },
           snapshot,
@@ -273,27 +331,61 @@ try {
   }
   ({ httpAttempts: attempts, httpDispatches: dispatches, modelCalls } = observation.counts);
   if (hangScan) await new Promise<void>(() => setInterval(() => {}, 1000));
-  await scanDisposable(isolated, selectedSecrets, { files: 0, bytes: 0 }, (count) => { scanFiles = count; });
+  await scanDisposable(isolated, selectedSecrets, { files: 0, bytes: 0 }, (count) => {
+    scanFiles = count;
+  });
   scanCompleted = outputClean;
-  process.send?.({ kind: "exit", attempts, dispatches, modelCalls, scanCompleted, scanFiles, forbiddenToolRequests }, () => process.disconnect?.());
+  process.send?.(
+    {
+      kind: "exit",
+      attempts,
+      dispatches,
+      modelCalls,
+      scanCompleted,
+      scanFiles,
+      forbiddenToolRequests,
+    },
+    () => process.disconnect?.(),
+  );
 } catch {
   // SDK/provider error cause may echo endpoint, key, prompt or response. Never serialize it.
-  if (observation) ({ httpAttempts: attempts, httpDispatches: dispatches, modelCalls } = observation.counts);
+  if (observation)
+    ({ httpAttempts: attempts, httpDispatches: dispatches, modelCalls } = observation.counts);
   try {
     if (selectedSecrets.length === 2) {
-      await scanDisposable(isolated, selectedSecrets, { files: 0, bytes: 0 }, (count) => { scanFiles = count; });
+      await scanDisposable(isolated, selectedSecrets, { files: 0, bytes: 0 }, (count) => {
+        scanFiles = count;
+      });
       scanCompleted = outputClean;
     }
-  } catch { scanCompleted = false; }
-  process.send?.({ kind: "failure", stage, attempts, dispatches, modelCalls, scanCompleted, scanFiles, forbiddenToolRequests }, () => process.disconnect?.());
+  } catch {
+    scanCompleted = false;
+  }
+  process.send?.(
+    {
+      kind: "failure",
+      stage,
+      attempts,
+      dispatches,
+      modelCalls,
+      scanCompleted,
+      scanFiles,
+      forbiddenToolRequests,
+    },
+    () => process.disconnect?.(),
+  );
   process.exitCode = 1;
 }
 
 function isOpaqueLiteralCredential(value: string): boolean {
   // 修复：未知 env/command/keychain 引用不是已解析的凭据；绝不猜测或执行该引用。
-  return value.length >= 12 && !/\s/u.test(value) &&
+  return (
+    value.length >= 12 &&
+    !/\s/u.test(value) &&
     !/^(?:!|\$|\{\{|env:|file:|cmd:|exec:|keychain:)/iu.test(value) &&
-    !value.includes("${") && !/^[_A-Z][_A-Z0-9]*$/u.test(value);
+    !value.includes("${") &&
+    !/^[_A-Z][_A-Z0-9]*$/u.test(value)
+  );
 }
 
 function isApprovedApi(value: string | undefined): value is "anthropic-messages" {

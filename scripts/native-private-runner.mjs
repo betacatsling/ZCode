@@ -19,9 +19,33 @@ import {
 } from "../apps/zcode-cli/packages/bootstrap/src/native-private-evidence.ts";
 import { removeBounded } from "./native-private-cleanup.mjs";
 import { createPrivateUsage } from "./native-private-usage.mjs";
+import {
+  PRIVATE_SHELL_SCRIPT,
+  privateShellCommand,
+} from "../apps/zcode-cli/packages/bootstrap/src/native-private-shell-fixture.ts";
 
 const rootDir = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const routes = new Set(["stepfun/step-3.5-flash", "axonhub/deepseek-v4-flash"]);
+const shellFaults = new Set([
+  "shell-profile",
+  "shell-override",
+  "inherited-path",
+  "shell-dialect",
+  "shell-foreign-path",
+  "shell-source",
+  "foreign-home",
+  "prelude-command",
+  "prelude-args",
+  "prelude-env",
+  "prelude-binary",
+  "prelude-drop",
+  "prelude-extra-env",
+  "profile-startup",
+  "stdin",
+  "unsafe-sandbox",
+  "script-mismatch",
+  "cwd-mismatch",
+]);
 const args = process.argv.slice(2);
 if (args.length === 1 && args[0] === "--help") {
   console.log(
@@ -47,8 +71,8 @@ async function run(route) {
   const bashPath = join(cwd, "bash-effect.txt");
   const writeContent = `approved-${randomUUID()}`;
   let changedContent;
-  const bashCommand = "node verify.cjs";
   const trustedNode = process.execPath;
+  const bashCommand = privateShellCommand(trustedNode);
   if (!process.version.startsWith("v24."))
     throw new Error("private fixture requires pinned Node 24");
   const fake = route === "fake";
@@ -77,6 +101,7 @@ async function run(route) {
     forbiddenToolRequests: 0,
     cleanup: false,
     scenarioVerified: false,
+    shellObservation: null,
     failureStage: null,
   };
   let channel, upstream, softTimer, fault;
@@ -102,8 +127,12 @@ async function run(route) {
     await writeFile(join(cwd, "approved-content.txt"), writeContent);
     await writeFile(
       join(cwd, "verify.cjs"),
-      "require('node:fs').writeFileSync('bash-effect.txt', 'bash-verified|' + process.execPath); console.log('exit=0')\n",
+      process.env.ZCODE_NATIVE_FAKE_FAULT === "script-mismatch"
+        ? "process.exit(92)\n"
+        : PRIVATE_SHELL_SCRIPT,
     );
+    if (process.env.ZCODE_NATIVE_FAKE_FAULT === "profile-startup")
+      await writeFile(join(disposable, ".bash_profile"), "touch unapproved-shell-effect.txt\n");
     fault =
       fake &&
       [
@@ -142,6 +171,7 @@ async function run(route) {
         "shell-profile",
         "shell-override",
         "inherited-path",
+        ...shellFaults,
         "no-read",
         "wrong-read",
         "echo-500",
@@ -153,7 +183,9 @@ async function run(route) {
         ? process.env.ZCODE_NATIVE_FAKE_FAULT
         : undefined;
     if (fault === "inherited-path")
-      await writeFile(join(cwd, "node"), "#!/bin/sh\ntouch unapproved-shell-effect.txt\n", { mode: 0o755 });
+      await writeFile(join(cwd, "node"), "#!/bin/sh\ntouch unapproved-shell-effect.txt\n", {
+        mode: 0o755,
+      });
     if (fake)
       upstream = await startPrivateFake({
         cwd,
@@ -165,7 +197,8 @@ async function run(route) {
         fault,
       });
     const childEnv = {
-      PATH: [dirname(trustedNode), process.env.PATH ?? ""].join(delimiter),
+      PATH: [dirname(trustedNode), "/usr/bin", "/bin"].join(delimiter),
+      SHELL: "/bin/bash",
       HOME: fake ? disposable : process.env.HOME,
       TMPDIR: disposable,
       NODE_ENV: "production",
@@ -173,8 +206,7 @@ async function run(route) {
     if (fake) childEnv.ZCODE_NATIVE_FAKE_URL = upstream.baseUrl;
     if (fault === "webfetch-exposed") childEnv.ZCODE_NATIVE_FAKE_EXPOSE_WEBFETCH = "1";
     if (fault === "hang-scan") childEnv.ZCODE_NATIVE_FAKE_HANG_SCAN = "1";
-    if (["shell-profile", "shell-override", "inherited-path"].includes(fault))
-      childEnv.ZCODE_NATIVE_FAKE_EXEC_FAULT = fault;
+    if (shellFaults.has(fault)) childEnv.ZCODE_NATIVE_FAKE_EXEC_FAULT = fault;
     if (
       [
         "wrong-model-body",
@@ -196,7 +228,18 @@ async function run(route) {
       ],
       { cwd: disposable, env: childEnv, stdio: ["pipe", "pipe", "pipe", "ipc"] },
       (message) => {
-        if (message?.kind === "native-turn") {
+        if (message?.kind === "private-shell") {
+          report.shellObservation = {
+            selectionTrusted: message.selectionTrusted === true,
+            preludeTrusted: message.preludeTrusted === true,
+            envTrusted: message.envTrusted === true,
+            scriptTrusted: message.scriptTrusted === true,
+            forwarded: message.forwarded === true,
+            backendKind: message.backendKind,
+            findAndGrepEnabled: message.findAndGrepEnabled,
+            backendDefaults: message.backendDefaults,
+          };
+        } else if (message?.kind === "native-turn") {
           if (fault === "foreign-native-command")
             message.sourceCommandId = `foreign-${randomUUID()}`;
           if (fault === "foreign-native-session") message.sessionId = `foreign-${randomUUID()}`;
@@ -227,18 +270,30 @@ async function run(route) {
             !message.toolCallId ||
             typeof message.toolName !== "string" ||
             !/^[a-f0-9]{64}$/u.test(message.inputDigest) ||
-            Object.keys(message).some((key) => ![
-              "kind", "sessionId", "runtimeTurnId", "requestId", "toolCallId", "toolName", "inputDigest",
-            ].includes(key)) ||
+            Object.keys(message).some(
+              (key) =>
+                ![
+                  "kind",
+                  "sessionId",
+                  "runtimeTurnId",
+                  "requestId",
+                  "toolCallId",
+                  "toolName",
+                  "inputDigest",
+                ].includes(key),
+            ) ||
             seenNativeRequestIds.has(message.requestId) ||
             seenNativeRequestIds.size >= 12
           )
             throw new Error("native permission identity invalid");
           seenNativeRequestIds.add(message.requestId);
           nativePermissions.set(message.requestId, {
-            sessionId: message.sessionId, runtimeTurnId: message.runtimeTurnId,
-            requestId: message.requestId, toolCallId: message.toolCallId,
-            toolName: message.toolName, inputDigest: message.inputDigest,
+            sessionId: message.sessionId,
+            runtimeTurnId: message.runtimeTurnId,
+            requestId: message.requestId,
+            toolCallId: message.toolCallId,
+            toolName: message.toolName,
+            inputDigest: message.inputDigest,
             commandId: active.commandId,
           });
           permissionWake?.();
@@ -746,7 +801,7 @@ async function run(route) {
         failure = true;
       }
     }
-    if (["shell-profile", "shell-override", "inherited-path"].includes(fault)) {
+    if (shellFaults.has(fault)) {
       try {
         await assertAbsent(join(cwd, "unapproved-shell-effect.txt"));
         report.unapprovedSubprocessAbsent = true;

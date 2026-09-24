@@ -2,9 +2,18 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { createInterface } from "node:readline";
-import { mkdtemp, mkdir, rm, writeFile, readFile, realpath, access, readdir } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  rm,
+  writeFile,
+  readFile,
+  realpath,
+  access,
+  readdir,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import test from "node:test";
 import { V4_METHODS } from "@zcode/shared/zcode-protocol-v4";
 import {
@@ -16,6 +25,7 @@ import {
 import { createPrivateObservation } from "./native-private-observer.js";
 import { createPrivateNoopLoggerFactory } from "./native-private-logger.js";
 import { createPrivateEffectPorts } from "./native-private-effects.js";
+import { PRIVATE_SHELL_SCRIPT, privateShellCommand } from "./native-private-shell-fixture.js";
 
 const childMode = process.env.ZCODE_NATIVE_BOOT_FIXTURE_CHILD === "1";
 if (childMode) {
@@ -111,7 +121,7 @@ if (childMode) {
     readPath: join(cwd, "input.txt"),
     writePath: join(cwd, "output.txt"),
     writeContent: "allowed-write-content",
-    bashCommand: "node verify.cjs",
+    bashCommand: privateShellCommand(process.execPath),
     processEnv: process.env,
   });
   process.on("message", (message: unknown) => {
@@ -175,11 +185,8 @@ if (childMode) {
       await writeFile(fixturePath, "seed=violet\n");
       const writePath = join(cwd, "output.txt");
       const bashPath = join(cwd, "bash-effect.txt");
-      await writeFile(
-        join(cwd, "verify.cjs"),
-        "require('node:fs').writeFileSync('bash-effect.txt', 'bash-verified|' + process.execPath); console.log('exit=0')\n",
-      );
-      const bashCommand = "node verify.cjs";
+      await writeFile(join(cwd, "verify.cjs"), PRIVATE_SHELL_SCRIPT);
+      const bashCommand = privateShellCommand(process.execPath);
       const changedContent = "seed=amber-unknown-until-turn-three";
       let requests = 0;
       let sawCurrentRead = false;
@@ -225,13 +232,26 @@ if (childMode) {
                   : false;
           bashResultSeen = decoded.includes("exit=0") && containsExactCommand(JSON.parse(decoded));
         }
-        const tool = turn === 0 ? [
-          { name: "Read", input: { file_path: fixturePath } },
-          { name: "Write", input: { file_path: writePath, content: "allowed-write-content" } },
-        ][step] : turn === 1 ? [
-          { name: "Write", input: { file_path: writePath, content: "allowed-write-content" } },
-          { name: "Bash", input: { command: bashCommand } },
-        ][step] : step === 0 ? { name: "Read", input: { file_path: fixturePath } } : undefined;
+        const tool =
+          turn === 0
+            ? [
+                { name: "Read", input: { file_path: fixturePath } },
+                {
+                  name: "Write",
+                  input: { file_path: writePath, content: "allowed-write-content" },
+                },
+              ][step]
+            : turn === 1
+              ? [
+                  {
+                    name: "Write",
+                    input: { file_path: writePath, content: "allowed-write-content" },
+                  },
+                  { name: "Bash", input: { command: bashCommand } },
+                ][step]
+              : step === 0
+                ? { name: "Read", input: { file_path: fixturePath } }
+                : undefined;
         if (turn === 2 && !tool) finalAnswerSent = sawCurrentRead;
         const event = (type: string, data: object) =>
           `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`;
@@ -294,6 +314,8 @@ if (childMode) {
           env: {
             ...process.env,
             HOME: root,
+            SHELL: "/bin/bash",
+            PATH: [dirname(process.execPath), "/usr/bin", "/bin"].join(delimiter),
             ZCODE_DATA_BASE_DIR: root,
             ZCODE_SESSION_DB_PATH: "session.sqlite",
             ZCODE_NATIVE_BOOT_FIXTURE_CHILD: "1",
