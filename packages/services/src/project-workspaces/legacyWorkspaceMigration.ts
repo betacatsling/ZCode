@@ -39,6 +39,8 @@ function sameSource(a: LegacyBackup, b: LegacyExport): boolean {
 
 /** Metadata sidecar only: native index, transcript and model history remain owned by the reader. */
 export class LegacyWorkspaceMigration {
+  private queue: Promise<unknown> = Promise.resolve();
+  private closing = false;
   private constructor(
     private readonly owner: ProfileFileOwner,
     private readonly reader: LegacyPersistentSessionIndexReader,
@@ -60,7 +62,15 @@ export class LegacyWorkspaceMigration {
     }
   }
   async close() {
+    this.closing = true;
+    await this.queue;
     await this.owner.close();
+  }
+  private serialize<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.closing) return Promise.reject(new Error("migration-closed"));
+    const job = this.queue.then(operation);
+    this.queue = job.catch(() => undefined);
+    return job;
   }
   /** Public read-only references; the native owner remains the authority for every live fact. */
   async listMappings(): Promise<readonly LegacyMapping[]> {
@@ -129,7 +139,10 @@ export class LegacyWorkspaceMigration {
     }
     return { mapped, pending, source };
   }
-  async apply(): Promise<MigrationPreview> {
+  apply(): Promise<MigrationPreview> {
+    return this.serialize(() => this.applyInternal());
+  }
+  private async applyInternal(): Promise<MigrationPreview> {
     const preview = await this.dryRun();
     const raw = await this.owner.read();
     const existing = raw === undefined ? undefined : migrationSchema.parse(raw);
@@ -164,7 +177,10 @@ export class LegacyWorkspaceMigration {
     );
     return preview;
   }
-  async rollback(): Promise<void> {
+  rollback(): Promise<void> {
+    return this.serialize(() => this.rollbackInternal());
+  }
+  private async rollbackInternal(): Promise<void> {
     const raw = await this.owner.read();
     if (!raw) return;
     const existing = migrationSchema.parse(raw);

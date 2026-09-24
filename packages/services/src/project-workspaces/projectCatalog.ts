@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Profile owner serializes catalog mutations and durable recovery under one lease. */
 import { z } from "zod";
 import { Emitter } from "@zcode/rpc";
 import {
@@ -16,12 +17,42 @@ import type { IProjectCatalogService, ProjectCatalogTargetPort } from "./service
 import { sidebarIndex, type CatalogSessionIndex } from "./sidebarIndexService.js";
 import { ProfileFileOwner } from "./profilePersistence.js";
 
+const pendingSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("import"),
+    project: projectSchema,
+    binding: repositoryBindingSchema,
+    repositoryPath: z.string().min(1),
+  }),
+  z.strictObject({
+    kind: z.literal("adopt"),
+    bindingId: z.string().min(1),
+    workspaceId: z.string().min(1),
+    title: z.string(),
+    worktreePath: z.string().min(1),
+  }),
+  z.strictObject({
+    kind: z.literal("create"),
+    bindingId: z.string().min(1),
+    workspaceId: z.string().min(1),
+    title: z.string(),
+    worktreePath: z.string().min(1),
+    baseRef: z.string(),
+    branch: z.string(),
+  }),
+  z.strictObject({ kind: z.literal("remove"), workspace: worktreeWorkspaceSchema }),
+  z.strictObject({ kind: z.literal("archiveProject"), project: projectSchema }),
+  z.strictObject({ kind: z.literal("archiveWorkspace"), workspace: worktreeWorkspaceSchema }),
+]);
+type Pending = z.infer<typeof pendingSchema>;
+
 const catalogSchema = z.strictObject({
   schemaVersion: z.literal(1),
   revision: z.number().int().nonnegative(),
   projects: z.array(projectSchema),
   bindings: z.array(repositoryBindingSchema),
   workspaces: z.array(worktreeWorkspaceSchema),
+  pending: pendingSchema.optional(),
 });
 type State = z.infer<typeof catalogSchema>;
 const initial: State = {
@@ -72,8 +103,9 @@ export class ProjectCatalog implements IProjectCatalogService {
     path: string,
     target: ProjectCatalogTargetPort,
     index: CatalogSessionIndex,
+    options: { recoverStaleOwner?: boolean } = {},
   ): Promise<ProjectCatalog> {
-    const owner = await ProfileFileOwner.open(path);
+    const owner = await ProfileFileOwner.open(path, options.recoverStaleOwner);
     try {
       const raw = await owner.read();
       const state = raw === undefined ? initial : catalogSchema.parse(raw);
@@ -138,8 +170,13 @@ export class ProjectCatalog implements IProjectCatalogService {
   ): Promise<T> {
     if (this.closing) return Promise.reject(new Error("catalog-closed"));
     const job = this.queue.then(async () => {
+      if (this.state.pending) throw new Error("catalog-pending-target-operation");
       const { state, result, afterCommit } = await action(this.state);
-      const next = catalogSchema.parse({ ...state, revision: this.currentRevision + 1 });
+      const next = catalogSchema.parse({
+        ...state,
+        pending: undefined,
+        revision: this.currentRevision + 1,
+      });
       sidebarIndex({ ...next, sessions: [], freshness: new Map() });
       await this.owner.write(next);
       this.state = next;
@@ -151,6 +188,147 @@ export class ProjectCatalog implements IProjectCatalogService {
     this.queue = job.catch(() => undefined);
     return job;
   }
+  private async beginIntent(pending: Pending): Promise<void> {
+    // 中文：先持久化意图再请求目标；未知执行结果只能查目标的 ID，不能重放 Git。
+    const state = catalogSchema.parse({ ...this.state, pending });
+    await this.owner.write(state);
+    this.state = state;
+  }
+
+  async reconcilePending(): Promise<void> {
+    const job = this.queue.then(async () => {
+      const pending = this.state.pending;
+      if (!pending) return;
+      // 中文：rename 已成功但目录 fsync 报错时磁盘可能已有完整提交；重读以免重复追加。
+      const raw = await this.owner.read();
+      const persisted = catalogSchema.parse(raw);
+      if (!persisted.pending) {
+        if (persisted.revision <= this.state.revision) throw new Error("catalog-intent-lost");
+        this.state = persisted;
+        this.currentRevision = Math.max(this.currentRevision, persisted.revision - 1);
+        this.emitChange();
+        return;
+      }
+      if (JSON.stringify(persisted.pending) !== JSON.stringify(pending))
+        throw new Error("catalog-intent-mismatch");
+      let next: State;
+      if (pending.kind === "archiveProject") {
+        const old = this.state.projects.find((p) => p.id === pending.project.id);
+        if (!old || !pending.project.archived) throw new Error("catalog-archive-intent-mismatch");
+        for (const binding of this.state.bindings.filter((b) => b.projectId === old.id))
+          await this.target.setArchivePolicy("binding", binding.id, true);
+        next = {
+          ...this.state,
+          projects: this.state.projects.map((p) => (p.id === old.id ? pending.project : p)),
+        };
+      } else if (pending.kind === "archiveWorkspace") {
+        const old = this.state.workspaces.find((w) => w.id === pending.workspace.id);
+        if (
+          !old ||
+          !pending.workspace.archived ||
+          old.worktreeGeneration !== pending.workspace.worktreeGeneration ||
+          old.workspaceIdentity !== pending.workspace.workspaceIdentity
+        )
+          throw new Error("catalog-archive-intent-mismatch");
+        await this.target.setArchivePolicy("workspace", old.id, true);
+        next = {
+          ...this.state,
+          workspaces: this.state.workspaces.map((w) => (w.id === old.id ? pending.workspace : w)),
+        };
+      } else if (pending.kind === "import") {
+        const binding = await this.target.lookupBinding?.(pending.binding.id);
+        if (!binding) throw new Error("catalog-target-result-unknown");
+        if (
+          JSON.stringify(binding) !== JSON.stringify(pending.binding) ||
+          this.state.bindings.some((b) => b.id === binding.id) ||
+          this.state.projects.some((p) => p.id === pending.project.id)
+        )
+          throw new Error("catalog-target-binding-mismatch");
+        next = {
+          ...this.state,
+          projects: [...this.state.projects, pending.project],
+          bindings: [...this.state.bindings, pending.binding],
+        };
+      } else {
+        const expected = pending.kind === "remove" ? pending.workspace : undefined;
+        const workspaceId = pending.kind === "remove" ? pending.workspace.id : pending.workspaceId;
+        const bindingId =
+          pending.kind === "remove" ? pending.workspace.repositoryBindingId : pending.bindingId;
+        const workspace = await this.target.lookupWorkspace?.(workspaceId);
+        if (!workspace) throw new Error("catalog-target-result-unknown");
+        const binding = this.state.bindings.find((b) => b.id === bindingId);
+        if (
+          !binding ||
+          workspace.id !== workspaceId ||
+          workspace.repositoryBindingId !== binding.id ||
+          workspace.projectId !== binding.projectId ||
+          workspace.lifecycle !== (pending.kind === "remove" ? "removed" : "active") ||
+          (expected &&
+            (workspace.worktreeGeneration !== expected.worktreeGeneration ||
+              workspace.workspaceIdentity !== expected.workspaceIdentity ||
+              workspace.worktreePath !== expected.worktreePath)) ||
+          (pending.kind !== "remove" &&
+            (workspace.title !== pending.title ||
+              workspace.origin !== (pending.kind === "adopt" ? "adopted" : "created") ||
+              this.state.workspaces.some(
+                (old) =>
+                  old.id === workspace.id ||
+                  (old.repositoryBindingId === binding.id &&
+                    old.lifecycle !== "removed" &&
+                    old.workspaceIdentity === workspace.workspaceIdentity),
+              )))
+        )
+          throw new Error("catalog-target-workspace-mismatch");
+        next =
+          pending.kind === "remove"
+            ? {
+                ...this.state,
+                workspaces: this.state.workspaces.map((w) =>
+                  w.id === expected!.id ? workspace : w,
+                ),
+              }
+            : { ...this.state, workspaces: [...this.state.workspaces, workspace] };
+      }
+      const committed = catalogSchema.parse({
+        ...next,
+        pending: undefined,
+        revision: this.currentRevision + 1,
+      });
+      sidebarIndex({ ...committed, sessions: [], freshness: new Map() });
+      await this.owner.write(committed);
+      this.state = committed;
+      this.currentRevision = Math.max(this.currentRevision, committed.revision - 1);
+      this.emitChange();
+    });
+    this.queue = job.catch(() => undefined);
+    return job;
+  }
+
+  async reconcileArchivePolicies(): Promise<void> {
+    const job = this.queue.then(async () => {
+      if (this.state.pending) throw new Error("catalog-pending-target-operation");
+      // 中文：先写完全部拒绝策略，再恢复允许，防止部分归档期间开放 admission。
+      for (const binding of this.state.bindings) {
+        const project = this.state.projects.find((p) => p.id === binding.projectId);
+        if (!project) throw new Error("invalid-catalog-binding");
+        if (project.archived) await this.target.setArchivePolicy("binding", binding.id, true);
+      }
+      for (const workspace of this.state.workspaces) {
+        if (workspace.archived) await this.target.setArchivePolicy("workspace", workspace.id, true);
+      }
+      for (const binding of this.state.bindings) {
+        if (!this.state.projects.find((p) => p.id === binding.projectId)?.archived)
+          await this.target.setArchivePolicy("binding", binding.id, false);
+      }
+      for (const workspace of this.state.workspaces) {
+        if (!workspace.archived)
+          await this.target.setArchivePolicy("workspace", workspace.id, false);
+      }
+    });
+    this.queue = job.catch(() => undefined);
+    return job;
+  }
+
   importProject(input: {
     id: string;
     name: string;
@@ -187,6 +365,12 @@ export class ProjectCatalog implements IProjectCatalogService {
         id: input.bindingId,
         projectId: project.id,
         ...facts,
+      });
+      await this.beginIntent({
+        kind: "import",
+        project,
+        binding,
+        repositoryPath: input.repositoryPath,
       });
       await this.target.registerBinding(binding, input.repositoryPath);
       return {
@@ -230,6 +414,7 @@ export class ProjectCatalog implements IProjectCatalogService {
       )
         throw new Error("invalid-ownership");
       if (update.archived === true) {
+        await this.beginIntent({ kind: "archiveProject", project });
         // 中文：目标先拒绝新 admission；失败时不能将本地目录谎报为已归档。
         for (const binding of state.bindings.filter((b) => b.projectId === id))
           await this.target.setArchivePolicy("binding", binding.id, true);
@@ -256,7 +441,10 @@ export class ProjectCatalog implements IProjectCatalogService {
       if (!old) throw new Error("unknown-workspace");
       // 中文：归档不修改 Git 生命周期，但必须先让目标 admission 持久拒绝新命令。
       const workspace = worktreeWorkspaceSchema.parse({ ...old, ...update });
-      if (update.archived === true) await this.target.setArchivePolicy("workspace", id, true);
+      if (update.archived === true) {
+        await this.beginIntent({ kind: "archiveWorkspace", workspace });
+        await this.target.setArchivePolicy("workspace", id, true);
+      }
       return {
         state: { ...state, workspaces: state.workspaces.map((w) => (w.id === id ? workspace : w)) },
         result: workspace,
@@ -301,6 +489,14 @@ export class ProjectCatalog implements IProjectCatalogService {
         sortOrder: state.workspaces.length,
         worktreePath: input.worktreePath,
       };
+      await this.beginIntent({
+        kind,
+        bindingId: input.bindingId,
+        workspaceId: input.workspaceId,
+        title: input.title,
+        worktreePath: input.worktreePath,
+        ...(kind === "create" ? { baseRef: input.baseRef!, branch: input.branch! } : {}),
+      } as Pending);
       const facts =
         kind === "adopt"
           ? await this.target.adopt(args)
@@ -359,6 +555,10 @@ export class ProjectCatalog implements IProjectCatalogService {
         input.confirmation !== true
       )
         throw new Error("stale-workspace-or-confirmation");
+      // 中文：已知不安全的预检不产生目标副作用，不能留下执行未知的持久意图。
+      const preview = await this.target.previewRemoval(old.id, input.expectedGeneration);
+      if (!preview.safe) throw new Error("unsafe-removal-preview");
+      await this.beginIntent({ kind: "remove", workspace: old });
       const facts = worktreeWorkspaceSchema.parse(
         await this.target.remove({ ...input, workspace: old }),
       );
