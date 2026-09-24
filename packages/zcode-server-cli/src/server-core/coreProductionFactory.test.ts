@@ -23,8 +23,14 @@ test("public factory: default Core subprocess, duplicate writer, reconnect, disp
       schemaVersion: 1,
       revision: 0,
       config: {
-        providerConfigRules: { providerRules: [] },
-        modelConfigRules: { providerModelRules: [], manualProviderModelRules: [] },
+        providerConfigRules: { templateRules: [], providerRules: [] },
+        modelConfigRules: {
+          modelRules: [],
+          modelApiRules: [],
+          providerSiteRules: [],
+          templateModelRules: [],
+          builtinProviderModelRules: [],
+        },
       },
     }),
   );
@@ -84,9 +90,13 @@ test("public factory: default Core subprocess, duplicate writer, reconnect, disp
       port: number;
       revision?: number;
       activity?: unknown;
+      nativeBeforeFence?: { uncertain: number };
+      afterWorkerExit?: { uncertain: number };
+      staleReleaseRejected?: boolean;
+      sidebar?: { projects: unknown[]; workspaces: unknown[]; sessions: unknown[] };
       nativeSourceUnavailable?: boolean;
     };
-    return { child, ready, message };
+    return { child, ready, message, stderr: () => stderr };
   }
   try {
     const first = await boot();
@@ -115,7 +125,7 @@ test("public factory: default Core subprocess, duplicate writer, reconnect, disp
     const lease = (await frozen) as { leaseId?: string; nativeActivity?: unknown };
     assert.ok(
       lease.leaseId,
-      "real process census must issue an idle lease only after a verified fence",
+      `real process census must issue an idle lease only after a verified fence: ${first.stderr()}`,
     );
     assert.deepEqual(lease.nativeActivity, { running: 0, waiting: 0, uncertain: 0 });
     const staleId = randomUUID();
@@ -163,7 +173,23 @@ test("public factory: default Core subprocess, duplicate writer, reconnect, disp
     const direct = await boot("direct");
     assert.equal(direct.ready.revision, 0); // real Catalog writer after restart, not an empty-index fixture
     assert.ok(direct.ready.activity);
-    assert.equal(direct.ready.nativeSourceUnavailable, true); // missing DB cannot be a fake empty index
+    assert.ok(
+      (direct.ready.nativeBeforeFence?.uncertain ?? 0) > 0,
+      "an unfrozen resident CLI worker must never be reported as idle",
+    );
+    assert.ok(
+      (direct.ready.afterWorkerExit?.uncertain ?? 0) > 0,
+      "cached frozen CLI activity cannot survive worker exit",
+    );
+    assert.equal(direct.ready.staleReleaseRejected, true);
+    assert.deepEqual(direct.ready.sidebar?.projects, []);
+    assert.deepEqual(direct.ready.sidebar?.workspaces, []);
+    assert.deepEqual(direct.ready.sidebar?.sessions, []);
+    assert.equal(direct.ready.nativeSourceUnavailable, false); // both native writers initialized at boot
+    const partial = await direct.message(
+      (m) => !!m && typeof m === "object" && "type" in m && m.type === "partial-boot",
+    );
+    assert.deepEqual(partial, { type: "partial-boot", rejected: true });
     if (direct.child.exitCode === null)
       await new Promise<void>((resolve) => direct.child.once("close", () => resolve()));
     assert.equal(direct.child.exitCode, 0);
