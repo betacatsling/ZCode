@@ -31,6 +31,17 @@ export interface MountedHierarchyService {
     sessionId: string;
   }): Promise<MountedSessionOwner | undefined>;
   listHarnesses(workspaceId: string): Promise<readonly HarnessCatalogEntry[]>;
+  /** Target-scoped Model catalog + certified Harness capabilities; no UI-guessed fallback. */
+  listCreateOptions?(workspaceId: string): Promise<{
+    workspaceId: string;
+    worktreeGeneration: string;
+    options: readonly { harnessId: string; label: string; binding: ModelBindingRequest }[];
+  }>;
+  /** Trusted target preflight; the target still rechecks before remove. */
+  previewRemoval?(workspaceId: string, expectedGeneration: string): Promise<{
+    allowed: boolean;
+    risks: readonly string[];
+  }>;
   createAgent(input: {
     workspaceId: string;
     harnessId: string;
