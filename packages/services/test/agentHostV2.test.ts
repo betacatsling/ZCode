@@ -7,6 +7,7 @@ import type { SessionSpecV2 } from "@zcode/shared/agent-host";
 import { HarnessRegistry } from "../src/agent-host/harnessRegistry.js";
 import { MockHarness } from "../src/agent-host/mockHarness.js";
 import { AgentHostTargetService, type WorkspaceAdmissionPort } from "../src/agent-host/targetService.js";
+import { createRpcAgentHostService } from "../src/agent-host/rpcTargetService.js";
 import { CommandJournal } from "../src/agent-host/commandJournal.js";
 import { CreationJournal } from "../src/agent-host/creationJournal.js";
 import { manifestPath } from "../src/agent-host/sessionManifest.js";
@@ -104,6 +105,22 @@ test("desktop continuous events, mobile replay/rows, immutable turn route and sc
   assert.equal((await history.queryCommand(a, "turn-1"))?.status, "completed");
   await assert.rejects(history.attach(a), /removed generation/);
   await history.close();
+}));
+
+test("RPC creation uses one command-ID allocator while feature-off keeps durable queries and target activity", async () => fixture(async (_root, path, targetService) => {
+  let enabled = true;
+  const rpc = createRpcAgentHostService(targetService, () => enabled);
+  try {
+    const a = spec(path, "rpc");
+    await rpc.service.create(a, "rpc-create");
+    enabled = false;
+    assert.equal((await rpc.service.queryCreationCommand("rpc-create"))?.receipt.status, "completed");
+    assert.deepEqual(await rpc.service.getRuntimeActivity(), { running: 0, waiting: 0, uncertain: 0 });
+    assert.equal((await rpc.service.snapshot(a)).sessionId, "rpc");
+    assert.deepEqual(await rpc.service.create(a, "rpc-create"), await rpc.service.snapshot(a));
+    await assert.rejects(rpc.service.create(spec(path, "blocked"), "blocked-create"), /disabled/);
+    assert.equal(await rpc.service.queryCreationCommand("blocked-create"), undefined);
+  } finally { rpc.dispose(); }
 }));
 
 test("interrupted create reserves command and spec before backend effect; retry never allocates again", async () => {
