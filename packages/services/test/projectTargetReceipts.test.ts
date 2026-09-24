@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -179,6 +179,11 @@ test("uncertain real Git effect cannot be replayed or adopted from same path and
     await assert.rejects(bridge.lookupWorkspace("w"), /unknown/);
     await assert.rejects(bridge.create(request), /unknown/);
     assert.equal(git(f.main, "worktree", "list", "--porcelain").match(/worktree /g)?.length, 2);
+    await assert.rejects(target.recoverCreation("w"), /operator review/);
+    await assert.rejects(
+      target.recoverCreation("w", { reviewedAdminIdentity: { device: 0, inode: 0 } }),
+      /operator review/,
+    );
     await assert.rejects(
       bridge.adopt({
         binding,
@@ -189,6 +194,15 @@ test("uncertain real Git effect cannot be replayed or adopted from same path and
       }),
       /pending|reserved/,
     );
+    const canonicalPath = await realpath(request.worktreePath);
+    const candidate = (await target.inspectRepository(f.main)).candidates.find(
+      (item) => item.path === canonicalPath,
+    );
+    assert.ok(candidate?.adminIdentity);
+    const reviewed = await target.recoverCreation("w", {
+      reviewedAdminIdentity: candidate.adminIdentity,
+    });
+    assert.equal((await bridge.lookupWorkspace("w"))?.worktreeGeneration, reviewed.generation);
   } finally {
     await target.close().catch(() => undefined);
     await rm(f.root, { recursive: true, force: true });

@@ -265,7 +265,10 @@ export class TargetWorktreeService {
     return (this.state.pendingCreations ?? []).map((item) => ({ ...item }));
   }
   /** Explicitly claims the verifiable Git candidate without running Git create again. */
-  recoverCreation(workspaceId: string): Promise<TargetWorkspaceRecord> {
+  recoverCreation(
+    workspaceId: string,
+    review?: { reviewedAdminIdentity: FileIdentity },
+  ): Promise<TargetWorkspaceRecord> {
     return this.exclusive(async () => {
       const intent = this.state.pendingCreations?.find((item) => item.workspaceId === workspaceId);
       if (!intent) throw new Error("No pending creation intent");
@@ -280,7 +283,14 @@ export class TargetWorktreeService {
           item.adminPath !== null,
       );
       if (candidates.length !== 1) throw new Error("Creation candidate missing or ambiguous");
-      // 中文：不重放结果未知的 Git create；仅显式认领同仓库、同路径/分支的实例。
+      if (
+        this.receipt("create", workspaceId) &&
+        (!review || !sameFile(candidates[0]!.adminIdentity!, review.reviewedAdminIdentity))
+      )
+        throw new Error(
+          "Correlated orphan requires operator review of Git administrative identity",
+        );
+      // 中文：有 Catalog 回执的孤儿不能仅凭同路径/分支认领；操作员核对 Git 管理目录身份后才可显式恢复。
       return this.adoptCandidate(intent.bindingId, workspaceId, intent.worktreePath, true);
     });
   }
