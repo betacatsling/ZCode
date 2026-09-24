@@ -5,10 +5,12 @@ import {
   capabilityReportSchema,
   cwdRelativeToWorktreeSchema,
   deriveWritableSessionSpec,
+  frozenTurnModelRouteSchema,
   readableSessionSpecSchema,
   writableSessionSpecV2Schema,
   legacySessionSpecSchema,
   harnessManifestSchema,
+  harnessCatalogEntrySchema,
 } from "@zcode/shared/agent-host";
 import { parseSidebarSnapshot } from "@zcode/shared/project-workspaces";
 import { HarnessRegistry } from "../src/agent-host/harnessRegistry.js";
@@ -118,6 +120,83 @@ test("hierarchy fixture retains duplicate harness sessions but rejects duplicate
   );
 });
 
+test("hidden workspace still contributes stable project attention and offline freshness is independent", () => {
+  assert.equal(workspace.hidden, true);
+  assert.deepEqual(hierarchyFixture.projectSummaries[0]?.attentionSessionIds, ["s1"]);
+  assert.equal(hierarchyFixture.workspaceSummaries[0]?.totalAgents, 3);
+  assert.equal(hierarchyFixture.workspaceSummaries[2]?.freshness, "offline");
+  assert.deepEqual(
+    hierarchyFixture.sessions.map(({ session }) => session.sortOrder),
+    [0, 1, 2],
+  );
+  assert.throws(
+    () =>
+      parseSidebarSnapshot({
+        ...hierarchyFixture,
+        workspaceSummaries: hierarchyFixture.workspaceSummaries.map((s) =>
+          s.workspaceId === "w1" ? { ...s, totalAgents: 0 } : s,
+        ),
+      }),
+    /invalid-summary-count/,
+  );
+  assert.throws(
+    () =>
+      parseSidebarSnapshot({
+        ...hierarchyFixture,
+        projectSummaries: hierarchyFixture.projectSummaries.map((s) =>
+          s.projectId === "p1" ? { ...s, attentionSessionIds: [] } : s,
+        ),
+      }),
+    /invalid-summary-count/,
+  );
+  assert.throws(
+    () =>
+      parseSidebarSnapshot({
+        ...hierarchyFixture,
+        workspaceSummaries: hierarchyFixture.workspaceSummaries.slice(1),
+      }),
+    /invalid-summary-identity/,
+  );
+});
+
+test("per-turn binding retains selected route and rejects silent native fallback", () => {
+  const route = {
+    schemaVersion: 1,
+    hostSessionId: "s1",
+    turnId: "turn-1",
+    runtimeEpoch: "epoch-1",
+    targetId: "local",
+    workspaceId: "w1",
+    harnessId: "pi",
+    adapterVersion: "1.0.0",
+    catalogFingerprint: "catalog-1",
+    requested: input.modelBinding,
+    effective: input.modelBinding.selection,
+    route: "pi-sdk",
+  } as const;
+  assert.deepEqual(frozenTurnModelRouteSchema.parse(JSON.parse(JSON.stringify(route))), route);
+  assert.equal(
+    frozenTurnModelRouteSchema.safeParse({ ...route, effective: undefined }).success,
+    false,
+  );
+  assert.equal(
+    frozenTurnModelRouteSchema.safeParse({
+      ...route,
+      effective: { providerId: "provider-b", modelId: "model-b" },
+    }).success,
+    false,
+  );
+  assert.equal(
+    frozenTurnModelRouteSchema.safeParse({ ...route, route: "harness-managed" }).success,
+    false,
+  );
+  assert.equal(
+    frozenTurnModelRouteSchema.safeParse({ ...route, credentialRef: "ref", token: "secret" })
+      .success,
+    false,
+  );
+});
+
 test("trusted factory, unknown harness and unsafe icon IDs", () => {
   const registry = new HarnessRegistry();
   const manifest = {
@@ -128,6 +207,18 @@ test("trusted factory, unknown harness and unsafe icon IDs", () => {
     icon: { light: "builtin:mock" },
   };
   registry.registerTrusted(manifest, () => new MockHarness());
+  assert.equal(
+    harnessCatalogEntrySchema.safeParse({ manifest, availability: "unknown" }).success,
+    false,
+  );
+  assert.equal(
+    harnessCatalogEntrySchema.safeParse({
+      manifest,
+      availability: "unknown",
+      reason: "target not probed",
+    }).success,
+    true,
+  );
   assert.deepEqual(registry.manifest("mock"), manifest);
   assert.throws(() => registry.require("missing"), /unknown harness/);
   assert.throws(() => registry.registerTrusted(manifest, () => new MockHarness()), /duplicate-id/);

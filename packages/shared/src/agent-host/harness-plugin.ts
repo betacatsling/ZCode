@@ -17,9 +17,18 @@ export const harnessManifestSchema = z.strictObject({
 });
 export type HarnessManifest = z.infer<typeof harnessManifestSchema>;
 /** Inspection/session capabilities, not this metadata, decide target availability. */
-export const harnessCatalogEntrySchema = z.strictObject({
-  manifest: harnessManifestSchema,
-  availability: z.enum(["supported", "unsupported", "experimental", "unknown"]),
-  reason: z.string().min(1).optional(),
-});
+export const harnessCatalogEntrySchema = z
+  .strictObject({
+    manifest: harnessManifestSchema,
+    availability: z.enum(["supported", "unsupported", "experimental", "unknown"]),
+    reason: z.string().trim().min(1).optional(),
+  })
+  .superRefine((entry, context) => {
+    if (entry.availability !== "supported" && !entry.reason)
+      context.addIssue({
+        code: "custom",
+        path: ["reason"],
+        message: "unavailable or unverified harness needs a reason",
+      });
+  });
 export type HarnessCatalogEntry = z.infer<typeof harnessCatalogEntrySchema>;
