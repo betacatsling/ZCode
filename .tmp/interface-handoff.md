@@ -9,3 +9,9 @@ Typed joins inherited from base: `createLazyWorkspaceComposition({root,target,re
 Owner/order: CLI CommandInbox owns native accepted mutations; CLI lease and real activity must be verified before Core's automatic maintenance admission. Target owns Git correlated receipts → Catalog reconciles before NEW admission → Host owns accepted external turns; desktop continuous/mobile replayable read one Host owner. No second queue or path-only binding. No schema/profile gate was relaxed. Negative Claude native beta result and experimental ACP guard remain unchanged.
 
 Pending picks: target receipts; service/native facts/lease/core; controls/hierarchy/desktop/SSH/UI; canonical Pi/question/projection; ACP and Responses; bounded load candidate. Protocol-terminal writer owns Codex/Claude terminal fixes; do not substitute old unsafe Claude or early Codex ACK behavior. No root aggregate gate run at this checkpoint; next stage will run via global heavy slot with workers=1 and report failures as failures.
+
+---
+
+# protocol-v2-closure early public API handoff
+
+Base 6456283 already supplies Host V2 and shared `SessionSpecV2`/`BackendBindingV2`. This lane owns `@zcode/services/agent-host/codex` and `/claude` public trusted factories, not a replacement Host. Codex V2 adapter will reject V1 writes, bind target/workspace/generation, use verified relative cwd and fence all native events by turn ID. Claude final assistant is authoritative over partial text. No paid calls; native fake plus Host replay tests required before certification. No production enablement implied.

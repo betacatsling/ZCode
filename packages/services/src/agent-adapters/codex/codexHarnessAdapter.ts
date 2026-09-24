@@ -1,49 +1,48 @@
+/* eslint-disable max-lines -- Codex 单一 turn owner 保留 native ID、lease、审批与关闭顺序的同文件审计边界。 */
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, realpath, rename, writeFile } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import type { ModelSelection } from "@zcode/shared/model-selection";
 import {
   agentEventSchema,
+  backendBindingV2Schema,
+  writableSessionSpecV2Schema,
   type AgentCommand,
   type AgentEvent,
-  type BackendBinding,
+  type BackendBindingV2,
   type BindingPlan,
   type ExecutionTarget,
   type HarnessCapabilities,
-  type SessionSpec,
+  type SessionSpecV2,
 } from "@zcode/shared/agent-host";
 import type { HarnessAdapter } from "../../agent-host/harnessRegistry.js";
-import {
-  createCodexTransport,
-  type CodexNativeEvent,
-  type CodexTransport,
-} from "./codexTransport.js";
+import { createCodexTransport, type CodexNativeEvent } from "./codexTransport.js";
+import { createRunningCodexTurn, type RunningCodexTurn } from "./codexTurnRuntime.js";
 import { probeCodexVersion } from "./codexLaunch.js";
 import type { CodexTurnLeaseIssuer } from "./codexAdapterContract.js";
 import { projectCodexNotification } from "./codexCanonicalProjection.js";
 import { assertCodexBinding, codexSessionProfile } from "./codexBinding.js";
 
-interface Running {
-  turnId: string;
-  nativeTurnId?: string;
-  token: string;
-  transport: CodexTransport;
-  callbacks: Map<string, { interactionId: string; nativeItemId: string }>;
-  finish?: Promise<void>;
-  earlyCompletion?: "success" | "cancelled" | "failed";
-}
 interface Session {
-  spec: SessionSpec;
+  spec: SessionSpecV2;
+  cwd: string;
   plan: BindingPlan;
-  binding: BackendBinding;
+  binding: BackendBindingV2;
   profile: string;
   threadId?: string;
   sequence: number;
-  running?: Running;
+  running?: RunningCodexTurn;
   busy: boolean;
   finishing?: Promise<void>;
   failed?: boolean;
+  prepared?: {
+    turnId: string;
+    runtimeEpoch: string;
+    plan: BindingPlan;
+    token: string;
+    modelAlias: string;
+  };
 }
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
@@ -61,12 +60,6 @@ export class CodexHarnessAdapter implements HarnessAdapter {
     private readonly options: {
       root: string;
       lease: CodexTurnLeaseIssuer;
-      /** Host-authoritative per-turn replan; absence pins the initial selection. */
-      resolveTurnPlan?: (
-        spec: SessionSpec,
-        previous: BindingPlan,
-        turnId: string,
-      ) => Promise<BindingPlan>;
       executable?: string;
       spawnProcess?: typeof spawn;
     },
@@ -122,19 +115,29 @@ export class CodexHarnessAdapter implements HarnessAdapter {
       modelSwitch: no,
     };
   }
-  async create(spec: SessionSpec, plan: BindingPlan): Promise<BackendBinding> {
+  async create(spec: SessionSpecV2, plan: BindingPlan): Promise<BackendBindingV2> {
+    writableSessionSpecV2Schema.parse(spec);
+    if (JSON.stringify(plan.requested) !== JSON.stringify(spec.modelBinding))
+      throw new Error("Codex initial binding mismatch");
     assertCodexBinding(spec, plan);
     if (this.#sessions.has(spec.hostSessionId)) throw new Error("duplicate Codex session");
+    const cwd = await this.#verifiedCwd(spec);
     const profile = codexSessionProfile(this.options.root, spec);
     await mkdir(profile, { recursive: true, mode: 0o700 });
-    const binding = {
+    const binding = backendBindingV2Schema.parse({
+      schemaVersion: 2,
+      targetId: spec.execution.targetId,
+      workspaceId: spec.workspaceId,
+      worktreeGeneration: spec.execution.worktreeGeneration,
+      harnessId: this.id,
       hostSessionId: spec.hostSessionId,
       backendSessionId: randomUUID(),
       backendVersion: this.version,
       runtimeEpoch: randomUUID(),
-    };
+    });
     this.#sessions.set(spec.hostSessionId, {
       spec,
+      cwd,
       plan,
       binding,
       profile,
@@ -144,21 +147,36 @@ export class CodexHarnessAdapter implements HarnessAdapter {
     return binding;
   }
   async attach(
-    spec: SessionSpec,
-    binding: BackendBinding,
+    spec: SessionSpecV2,
+    raw: BackendBindingV2,
     sequence: number,
     plan: BindingPlan,
   ): Promise<void> {
+    writableSessionSpecV2Schema.parse(spec);
     assertCodexBinding(spec, plan);
+    const binding = backendBindingV2Schema.parse(raw);
+    if (
+      binding.hostSessionId !== spec.hostSessionId ||
+      binding.targetId !== spec.execution.targetId ||
+      binding.workspaceId !== spec.workspaceId ||
+      binding.worktreeGeneration !== spec.execution.worktreeGeneration ||
+      binding.harnessId !== this.id ||
+      binding.backendVersion !== this.version ||
+      !Number.isSafeInteger(sequence) ||
+      sequence < 0
+    )
+      throw new Error("stale Codex binding");
     const existing = this.#sessions.get(spec.hostSessionId);
     if (existing) {
       if (
+        JSON.stringify(existing.spec) !== JSON.stringify(spec) ||
         existing.binding.backendSessionId !== binding.backendSessionId ||
         existing.binding.runtimeEpoch !== binding.runtimeEpoch
       )
         throw new Error("stale Codex binding");
       return;
     }
+    const cwd = await this.#verifiedCwd(spec);
     const profile = codexSessionProfile(this.options.root, spec);
     let threadId: string | undefined;
     try {
@@ -170,6 +188,7 @@ export class CodexHarnessAdapter implements HarnessAdapter {
     }
     this.#sessions.set(spec.hostSessionId, {
       spec,
+      cwd,
       binding,
       plan,
       profile,
@@ -178,46 +197,79 @@ export class CodexHarnessAdapter implements HarnessAdapter {
       busy: false,
     });
   }
+  async prepareTurn(
+    spec: SessionSpecV2,
+    input: { turnId: string; runtimeEpoch: string; plan: BindingPlan },
+  ): Promise<void> {
+    const session = this.#require(spec.hostSessionId);
+    if (
+      JSON.stringify(session.spec) !== JSON.stringify(spec) ||
+      session.binding.runtimeEpoch !== input.runtimeEpoch ||
+      session.busy ||
+      session.running ||
+      session.prepared ||
+      session.failed ||
+      !input.turnId
+    )
+      throw new Error("stale or busy Codex turn");
+    assertCodexBinding(spec, input.plan);
+    const issued = await this.options.lease.issue({
+      plan: input.plan,
+      hostSessionId: spec.hostSessionId,
+      runtimeEpoch: input.runtimeEpoch,
+      turnId: input.turnId,
+    });
+    if (
+      !issued.token ||
+      !issued.modelAlias ||
+      this.#tokens.has(issued.token) ||
+      this.#aliases.has(issued.modelAlias) ||
+      session.prepared ||
+      session.busy ||
+      session.running ||
+      session.failed ||
+      this.#sessions.get(spec.hostSessionId) !== session
+    ) {
+      if (issued.token && !this.#tokens.has(issued.token))
+        this.options.lease.gateway.revokeToken(issued.token);
+      throw new Error("Codex turn lease missing, reused or stale");
+    }
+    this.#tokens.add(issued.token);
+    this.#aliases.add(issued.modelAlias);
+    session.prepared = {
+      turnId: input.turnId,
+      runtimeEpoch: input.runtimeEpoch,
+      plan: input.plan,
+      ...issued,
+    };
+  }
   async send(command: Extract<AgentCommand, { type: "send" }>): Promise<void> {
     const session = this.#require(command.hostSessionId);
     if (session.finishing) await session.finishing;
     if (session.failed)
       throw new Error("Codex execution unknown; inspect history before explicit recovery");
     if (session.busy || session.running) throw new Error("Codex session busy");
+    const prepared = session.prepared;
+    if (
+      !prepared ||
+      prepared.turnId !== command.turnId ||
+      prepared.runtimeEpoch !== session.binding.runtimeEpoch
+    )
+      throw new Error("Codex turn not prepared");
     session.busy = true;
-    let token: string | undefined;
-    let transport: CodexTransport | undefined;
+    session.prepared = undefined;
+    const token = prepared.token;
+    let transport: Awaited<ReturnType<typeof createCodexTransport>> | undefined;
     try {
-      const nextPlan = this.options.resolveTurnPlan
-        ? await this.options.resolveTurnPlan(session.spec, session.plan, command.turnId)
-        : session.plan;
-      assertCodexBinding(session.spec, nextPlan);
-      const issued = await this.options.lease.issue({
-        plan: nextPlan,
-        hostSessionId: command.hostSessionId,
-        runtimeEpoch: session.binding.runtimeEpoch,
-        turnId: command.turnId,
-      });
-      session.plan = nextPlan;
-      token = issued.token;
-      if (
-        !token ||
-        !issued.modelAlias ||
-        this.#tokens.has(token) ||
-        this.#aliases.has(issued.modelAlias)
-      ) {
-        // 修复原因：碰撞 token 仍属于上一 turn，不能由新 turn 撤销它。
-        token = undefined;
-        throw new Error("Codex turn lease is missing or reused");
-      }
-      this.#tokens.add(token);
-      this.#aliases.add(issued.modelAlias);
+      session.plan = prepared.plan;
+      // 修复：原生 cwd 只能来自该 worktree 的当前 realpath，避免创建后目录指向外部。
+      session.cwd = await this.#verifiedCwd(session.spec);
       transport = await createCodexTransport({
-        cwd: session.spec.execution.worktreePath,
+        cwd: session.cwd,
         sessionHome: session.profile,
         gatewayUrl: this.options.lease.gatewayUrl,
         gatewayToken: token,
-        model: issued.modelAlias,
+        model: prepared.modelAlias,
         executable: this.options.executable,
         spawnProcess: this.options.spawnProcess,
         onEvent: (event) => this.#native(session, command.turnId, event),
@@ -226,7 +278,7 @@ export class CodexHarnessAdapter implements HarnessAdapter {
             void this.#finish(session, session.running, "unknown");
         },
       });
-      const running: Running = { turnId: command.turnId, token, transport, callbacks: new Map() };
+      const running = createRunningCodexTurn(command.turnId, token, transport);
       session.running = running;
       if (session.threadId) {
         const resumed = await transport.resumeThread(session.threadId);
@@ -240,13 +292,30 @@ export class CodexHarnessAdapter implements HarnessAdapter {
         await rename(temp, path);
       }
       this.#emit(session, { kind: "turn.started", turnId: command.turnId });
+      this.#emit(session, {
+        kind: "message.finished",
+        turnId: command.turnId,
+        messageId: `user-${command.turnId}`,
+        role: "user",
+        text: command.text,
+      });
       running.nativeTurnId = await transport.startTurn(session.threadId, command.text);
-      if (running.earlyCompletion) await this.#finish(session, running, running.earlyCompletion);
+      // 修复原因：同线程旧 turn 的早到 completion 不能冒充 start 返回的原生 turn ID。
+      const early = running.earlyCompletions.get(running.nativeTurnId);
+      running.earlyCompletions.clear();
+      for (const pending of running.earlyEvents.splice(0))
+        if (isRecord(pending.params) && pending.params.turnId === running.nativeTurnId)
+          this.#native(session, command.turnId, pending);
+      if (early) await this.#finish(session, running, early);
+      // 修复原因：Host 的 send 收据只在 adapter.send 完成后定案；若启动后立刻返回，
+      // Host 会把仍在运行且等待审批的 prompt 记为 execution-unknown，阻断后续 turn。
+      if ((await running.terminal) === "unknown")
+        throw new Error("Codex execution unknown; inspect history before explicit recovery");
     } catch (error) {
       session.failed = true;
       if (session.running) await this.#finish(session, session.running, "unknown");
       else {
-        if (token) this.options.lease.gateway.revokeToken(token);
+        this.options.lease.gateway.revokeToken(token);
         await transport?.close();
       }
       throw error;
@@ -265,9 +334,11 @@ export class CodexHarnessAdapter implements HarnessAdapter {
     )
       throw new Error("stale Codex turn");
     try {
+      // 修复依据：interrupt RPC 只确认请求已收到；必须等匹配的原生终态才可释放租约。
       await running.transport.interruptTurn(session.threadId!, running.nativeTurnId);
-    } finally {
-      await this.#finish(session, running, "cancelled");
+    } catch (error) {
+      await this.#finish(session, running, "unknown");
+      throw error;
     }
   }
   async resolveInteraction(
@@ -298,11 +369,14 @@ export class CodexHarnessAdapter implements HarnessAdapter {
   async terminate(hostSessionId: string): Promise<void> {
     const session = this.#require(hostSessionId);
     if (session.running) await this.#finish(session, session.running, "unknown");
+    if (session.prepared) this.options.lease.gateway.revokeToken(session.prepared.token);
     this.#sessions.delete(hostSessionId);
   }
   async shutdown(): Promise<void> {
     for (const session of this.#sessions.values())
       if (session.running) await this.#finish(session, session.running, "unknown");
+    for (const session of this.#sessions.values())
+      if (session.prepared) this.options.lease.gateway.revokeToken(session.prepared.token);
     this.#sessions.clear();
   }
   subscribe(id: string, listener: (event: AgentEvent) => void): () => void {
@@ -353,17 +427,31 @@ export class CodexHarnessAdapter implements HarnessAdapter {
           : params.turn.status === "interrupted"
             ? "cancelled"
             : "failed";
-      if (!running.nativeTurnId) running.earlyCompletion = outcome;
-      else if (params.turn.id === running.nativeTurnId)
+      if (!running.nativeTurnId) {
+        if (running.earlyCompletions.size >= 128) void this.#finish(session, running, "unknown");
+        else running.earlyCompletions.set(params.turn.id, outcome);
+      } else if (params.turn.id === running.nativeTurnId)
         void this.#finish(session, running, outcome);
-    } else
+    } else {
+      // 修复：threadId 不能证明通知属于本 turn；无 turnId 的 usage/item/delta 一律丢弃。
+      if (typeof params.turnId !== "string") return;
+      if (!running.nativeTurnId) {
+        if (running.earlyEvents.length >= 128) {
+          void this.#finish(session, running, "unknown");
+          return;
+        }
+        running.earlyEvents.push(event);
+        return;
+      }
+      if (params.turnId !== running.nativeTurnId) return;
       projectCodexNotification(event, session.threadId!, turnId, (detail) =>
         this.#emit(session, detail),
       );
+    }
   }
   async #finish(
     session: Session,
-    running: Running,
+    running: RunningCodexTurn,
     outcome: "success" | "cancelled" | "failed" | "unknown",
   ): Promise<void> {
     if (running.finish) return running.finish;
@@ -374,6 +462,7 @@ export class CodexHarnessAdapter implements HarnessAdapter {
       this.#emit(session, { kind: "turn.finished", turnId: running.turnId, outcome });
     }
     this.options.lease.gateway.revokeToken(running.token);
+    running.settle(outcome);
     running.finish = running.transport.close();
     session.finishing = running.finish;
     try {
@@ -392,6 +481,19 @@ export class CodexHarnessAdapter implements HarnessAdapter {
       at: Date.now(),
     });
     for (const listener of this.#listeners.get(session.spec.hostSessionId) ?? []) listener(event);
+  }
+  async #verifiedCwd(spec: SessionSpecV2): Promise<string> {
+    // 修复：相对 cwd 由 Host 验证后传入；再次 realpath 防止符号链接逃出工作树。
+    const root = await realpath(spec.execution.worktreePath);
+    const cwd = await realpath(resolve(root, spec.execution.cwdRelativeToWorktree));
+    const within = relative(root, cwd);
+    if (
+      within === ".." ||
+      within.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) ||
+      isAbsolute(within)
+    )
+      throw new Error("Codex cwd outside verified worktree");
+    return cwd;
   }
   #require(id: string): Session {
     const session = this.#sessions.get(id);

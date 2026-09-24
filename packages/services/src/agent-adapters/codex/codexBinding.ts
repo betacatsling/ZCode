@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import type { BindingPlan, SessionSpec } from "@zcode/shared/agent-host";
+import type { BindingPlan, SessionSpecV2 } from "@zcode/shared/agent-host";
 
 /** Private directory is keyed by target + workspace identity + Host ID, never a path-only alias. */
-export function codexSessionProfile(root: string, spec: SessionSpec): string {
+export function codexSessionProfile(root: string, spec: SessionSpecV2): string {
   return join(
     root,
     createHash("sha256")
@@ -11,6 +11,8 @@ export function codexSessionProfile(root: string, spec: SessionSpec): string {
         JSON.stringify([
           spec.execution.targetId,
           spec.execution.workspaceIdentity,
+          spec.workspaceId,
+          spec.execution.worktreeGeneration,
           spec.hostSessionId,
         ]),
       )
@@ -18,8 +20,9 @@ export function codexSessionProfile(root: string, spec: SessionSpec): string {
   );
 }
 
-export function assertCodexBinding(spec: SessionSpec, plan: BindingPlan): void {
+export function assertCodexBinding(spec: SessionSpecV2, plan: BindingPlan): void {
   if (
+    spec.schemaVersion !== 2 ||
     spec.harness.id !== "codex" ||
     spec.harness.adapterVersion !== "0.156.1" ||
     plan.adapterVersion !== "0.156.1" ||

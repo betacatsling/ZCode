@@ -58,6 +58,7 @@ export class CodexTransport {
   private readonly approvals = new Map<string, Approval>();
   private readonly seenApprovalRpcIds = new Set<RpcId>();
   private readonly activeTurns = new Map<string, string>();
+  private readonly interruptingTurns = new Set<string>();
   private readonly startingTurns = new Set<string>();
   private readonly earlyCompleted = new Map<string, string>();
   private readonly decoder = new StringDecoder("utf8");
@@ -140,7 +141,8 @@ export class CodexTransport {
 
   async interruptTurn(threadId: string, turnId: string): Promise<void> {
     if (this.activeTurns.get(threadId) !== turnId) throw new Error("Stale Codex turn");
-    this.activeTurns.delete(threadId);
+    // 修复原因：RPC ACK 不等于 turn/completed；保留活动标识直到原生终态，停止后续审批。
+    this.interruptingTurns.add(turnId);
     this.denyTurn(threadId, turnId);
     await this.request("turn/interrupt", { threadId, turnId });
   }
@@ -269,9 +271,15 @@ export class CodexTransport {
         ) {
           if (this.activeTurns.get(value.params.threadId) === value.params.turn.id) {
             this.activeTurns.delete(value.params.threadId);
+            this.interruptingTurns.delete(value.params.turn.id);
             this.denyTurn(value.params.threadId, value.params.turn.id);
-          } else if (this.startingTurns.has(value.params.threadId))
+          } else if (this.startingTurns.has(value.params.threadId)) {
+            if (this.earlyCompleted.size >= MAX_PENDING) {
+              this.fail(new Error("Codex pending completion limit exceeded"));
+              return;
+            }
             this.earlyCompleted.set(value.params.threadId, value.params.turn.id);
+          }
         }
         this.onEvent({ kind: "notification", method: value.method, params: value.params });
       } else if (typeof id === "number" || typeof id === "string")
@@ -306,7 +314,8 @@ export class CodexTransport {
     this.seenApprovalRpcIds.add(id);
     if (
       this.approvals.size >= MAX_PENDING ||
-      this.activeTurns.get(params.threadId) !== params.turnId
+      this.activeTurns.get(params.threadId) !== params.turnId ||
+      this.interruptingTurns.has(params.turnId)
     ) {
       void this.send({ id, result: { decision: "decline" } });
       return;
