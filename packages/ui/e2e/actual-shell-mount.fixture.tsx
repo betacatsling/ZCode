@@ -7,6 +7,7 @@ import { InternalChannels } from "@zcode/shared";
 import { registerBaseWorkspaceServices } from "@zcode/ui";
 import { createDesktopPlatform } from "../../desktop/src/renderer/src/desktopPlatform.js";
 import { WorkspaceShellLayout } from "../src/app-shell/WorkspaceShellLayout.js";
+import { usePaneLayoutStore } from "../src/v4/paneLayoutStore.js";
 import { ServiceProvider } from "../src/hooks/useServices.js";
 import { PlatformProvider } from "../src/hooks/usePlatform.js";
 import { StoreProvider } from "../src/store/StoreProvider.js";
@@ -57,6 +58,7 @@ function MountedShell({ services }: { services: IServiceAccessor }) {
     identity: string;
     name: string;
   } | null>(null);
+  const [splitSessionId, setSplitSessionId] = React.useState("");
   React.useEffect(() => {
     let active = true;
     void services.projectCatalogService.sidebarSnapshot().then((snapshot) => {
@@ -142,8 +144,46 @@ function MountedShell({ services }: { services: IServiceAccessor }) {
     onConversationFindMatchStateChange: noop,
     onFileChangeFindMatchCountChange: noop,
   } as unknown as WorkspaceShellLayoutProps;
+  const splitFirstVerifiedAgent = async () => {
+    // View-only test command: facts and owner proof still come from the real Core;
+    // the product pane store performs the split. It neither creates nor sends.
+    const catalog = await services.projectCatalogService.sidebarSnapshot();
+    const first = catalog.sessions.find(
+      (row) =>
+        row.session.workspaceId === "main" &&
+        row.session.harnessId === "pi" &&
+        row.session.id === splitSessionId,
+    );
+    if (!first) throw new Error("No Core Pi session to split");
+    const owner = await services.workspaceHierarchyService.resolveOwner({
+      targetId: catalog.bindings[0]!.executionTargetId,
+      workspaceId: "main",
+      sessionId: first.session.id,
+    });
+    if (!owner || owner.kind !== "external" || owner.historyOnly)
+      throw new Error("First agent not proven writable by Core");
+    usePaneLayoutStore.getState().openSessionInNewPane(
+      {
+        workspacePath: owner.scope.workspacePath,
+        workspaceIdentity: owner.scope.workspaceIdentity,
+      },
+      owner.spec.hostSessionId,
+    );
+  };
   return (
     <main className="h-screen w-screen bg-background text-foreground text-ui-base">
+      <input
+        aria-label="Split session ID"
+        value={splitSessionId}
+        onChange={(event) => setSplitSessionId(event.target.value)}
+      />
+      <button
+        type="button"
+        onClick={() => void splitFirstVerifiedAgent().catch((cause) => setError(String(cause)))}
+        data-testid="split-verified-agent"
+      >
+        Split verified agent view
+      </button>
       <WorkspaceShellLayout {...props} />
     </main>
   );

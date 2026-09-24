@@ -10,6 +10,22 @@ import { promisify } from "node:util";
 const desktop = resolve(import.meta.dirname, "..");
 const root = resolve(desktop, "../..");
 
+async function stopOwnedCore(child: ReturnType<typeof fork>): Promise<void> {
+  const closed = once(child, "close");
+  child.send?.({ command: "shutdown" });
+  try {
+    await Promise.race([
+      closed,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Core did not close")), 8_000)),
+    ]);
+  } catch (error) {
+    // Only reap this test's own isolated Core, never a shared/user process.
+    child.kill("SIGKILL");
+    await closed;
+    throw error;
+  }
+}
+
 // Default Core → production Electron window/utility Host/preload/MessagePort → real Shell.
 // The first RED run launched the renderer without a Host mount and failed on onboarding.
 test("actual Core → utility Host → preload → Shell Pi create/input/final/usage", async () => {
@@ -20,6 +36,14 @@ test("actual Core → utility Host → preload → Shell Pi create/input/final/u
   const runGit = promisify(execFile);
   let core: ReturnType<typeof fork> | undefined;
   const requests: Array<{ url: string; body: string }> = [];
+  let releaseSecond!: () => void;
+  const secondModelBarrier = new Promise<void>((resolve) => {
+    releaseSecond = resolve;
+  });
+  let signalSecondRequest!: () => void;
+  const secondRequestReceived = new Promise<void>((resolve) => {
+    signalSecondRequest = resolve;
+  });
   const model = createServer(async (req, res) => {
     const chunks: Buffer[] = [];
     for await (const chunk of req) chunks.push(Buffer.from(chunk));
@@ -32,15 +56,24 @@ test("actual Core → utility Host → preload → Shell Pi create/input/final/u
     }
     res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
     const message = (value: unknown) => res.write(`data: ${JSON.stringify(value)}\n\n`);
+    const held = requests.length === 2;
     message({
       id: "chatcmpl-fixture",
       object: "chat.completion.chunk",
       created: 1,
       model: "fixture-model",
       choices: [
-        { index: 0, delta: { role: "assistant", content: "Actual Pi final" }, finish_reason: null },
+        {
+          index: 0,
+          delta: { role: "assistant", content: held ? "Actual Pi reconnect" : "Actual Pi final" },
+          finish_reason: null,
+        },
       ],
     });
+    if (held) {
+      signalSecondRequest();
+      await secondModelBarrier;
+    }
     message({
       id: "chatcmpl-fixture",
       object: "chat.completion.chunk",
@@ -147,9 +180,14 @@ test("actual Core → utility Host → preload → Shell Pi create/input/final/u
       }),
     );
     const env = {
-      PATH: process.env.PATH,
-      NODE_OPTIONS: process.env.NODE_OPTIONS,
-      TMPDIR: process.env.TMPDIR,
+      PATH: process.env.PATH ?? "/usr/bin:/bin",
+      NODE_OPTIONS: [
+        process.env.NODE_OPTIONS ?? "",
+        `--import=${resolve(desktop, "e2e/actualShellMount.networkGuard.mjs")}`,
+      ]
+        .filter(Boolean)
+        .join(" "),
+      TMPDIR: process.env.TMPDIR ?? tmpdir(),
       HOME: isolated,
       ZCODE_ENV: "test",
       ZCODE_MULTI_HARNESS_ENABLED: "1",
@@ -236,14 +274,35 @@ test("actual Core → utility Host → preload → Shell Pi create/input/final/u
       timeout: 25_000,
     });
     const window = await app.firstWindow();
+    const rendererErrors: string[] = [];
+    window.on("pageerror", (cause) => rendererErrors.push(cause.stack ?? String(cause)));
+    let electronDiagnostics = "";
+    let observeNativePane = false;
+    const nativePaneRpcs: string[] = [];
     app.process().stderr?.on("data", (data: Buffer) => {
+      electronDiagnostics = (electronDiagnostics + data.toString()).slice(-12_000);
       const message = data.toString();
-      if (/actual-shell:failed|window Host attached|createAgent FAIL|disposing host resources/.test(message))
-        console.log(`[electron-boundary] ${message.slice(0, 1600)}`);
+      if (observeNativePane && /\[rpc:call\] zcode-(?:session|agent|task)\./.test(message))
+        nativePaneRpcs.push(message);
+      for (const line of message.split("\n")) {
+        if (
+          /actual-shell:failed|window Host attached|createAgent FAIL|disposing host resources/.test(
+            line,
+          )
+        )
+          console.log(`[electron-boundary] ${line.slice(0, 1600)}`);
+      }
     });
-    await expect(window.getByRole("heading", { name: /Fixture Git/ })).toBeVisible({
-      timeout: 12_000,
-    });
+    try {
+      await expect(window.getByRole("heading", { name: /Fixture Git/ })).toBeVisible({
+        timeout: 18_000,
+      });
+    } catch (cause) {
+      console.log(
+        `[shell-startup-failure] ${JSON.stringify({ url: window.url(), body: await window.locator("body").innerText(), rendererErrors, electronDiagnostics })}`,
+      );
+      throw cause;
+    }
     // Shell's own mounted hierarchy must expose Core-certified choices, not a fixture picker.
     await window.getByRole("button", { name: /New agent in Main checkout/ }).click();
     await expect(window.getByRole("dialog")).toContainText("Pi");
@@ -275,7 +334,7 @@ test("actual Core → utility Host → preload → Shell Pi create/input/final/u
     }, sessionId)) as {
       spec: {
         hostSessionId: string;
-        execution: { worktreePath: string; workspaceIdentity: string };
+        execution: { worktreePath: string; workspaceIdentity: string; worktreeGeneration: string };
       };
       snapshot: {
         rows: { window: Array<{ kind: string; text?: string }> };
@@ -303,22 +362,171 @@ test("actual Core → utility Host → preload → Shell Pi create/input/final/u
     expect(requests[0]!.url).toBe("/v1/chat/completions");
     expect(JSON.parse(requests[0]!.body)).toMatchObject({ model: "fixture-model" });
     expect(requests[0]!.body).toContain("Say actual Pi final");
-  } finally {
-    await app?.close();
-    if (core && core.exitCode === null && core.signalCode === null) {
-      const closed = once(core, "close");
-      core.send?.({ command: "shutdown" });
-      await Promise.race([
-        closed,
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("Core did not close")), 8_000),
-        ),
-      ]);
-    }
-    model.closeAllConnections();
-    await new Promise<void>((resolve, reject) =>
-      model.close((error) => (error ? reject(error) : resolve())),
+
+    // B: a second actual Host create in the *same* checked-out worktree. Neither shell
+    // switching nor a view split may allocate a second Git worktree or restart an owner.
+    const beforeWorktrees = (await runGit("git", ["-C", repo, "worktree", "list", "--porcelain"]))
+      .stdout;
+    observeNativePane = true;
+    const hostPid = await app.evaluate(() =>
+      (
+        globalThis as typeof globalThis & { __actualShellHostPid?: () => number | undefined }
+      ).__actualShellHostPid?.(),
     );
-    await rm(isolated, { recursive: true, force: true });
+    expect(hostPid).toBeGreaterThan(0);
+    await window.getByRole("button", { name: /New agent in Main checkout/ }).click();
+    await window.getByRole("dialog").getByRole("button", { name: "Create agent" }).click();
+    await expect(window.getByRole("dialog")).toHaveCount(0);
+    const secondId = await window.locator("[data-session-id]").getAttribute("data-session-id");
+    expect(secondId).toBeTruthy();
+    expect(secondId).not.toBe(sessionId);
+    const secondFacts = (await app.evaluate(async (_electron, id) => {
+      const read = (
+        globalThis as typeof globalThis & { __actualShellRead?: (id: string) => Promise<unknown> }
+      ).__actualShellRead;
+      if (!read || !id) throw new Error("Core read observer unavailable");
+      return read(id);
+    }, secondId)) as typeof facts;
+    expect(secondFacts.spec.hostSessionId).toBe(secondId);
+    expect(secondFacts.spec.execution.workspaceIdentity).toBe(
+      facts.spec.execution.workspaceIdentity,
+    );
+    expect(secondFacts.spec.execution.worktreePath).toBe(facts.spec.execution.worktreePath);
+    expect(secondFacts.spec.execution.worktreeGeneration).toBe(
+      facts.spec.execution.worktreeGeneration,
+    );
+    expect((await runGit("git", ["-C", repo, "worktree", "list", "--porcelain"])).stdout).toBe(
+      beforeWorktrees,
+    );
+    await window.getByTestId(`session-${sessionId}`).click();
+    await expect(window.locator("[data-session-id]")).toHaveAttribute(
+      "data-session-id",
+      sessionId!,
+    );
+    await window.getByTestId(`session-${secondId}`).click();
+    await expect(window.locator("[data-session-id]")).toHaveAttribute("data-session-id", secondId!);
+    await window.getByRole("textbox", { name: "Split session ID" }).fill(sessionId!);
+    await window.getByTestId("split-verified-agent").click();
+    await expect(window.locator(`[data-session-id="${sessionId}"]`)).toHaveCount(1);
+    await expect(window.locator(`[data-session-id="${secondId}"]`)).toHaveCount(1);
+    expect(
+      await app.evaluate(() =>
+        (
+          globalThis as typeof globalThis & { __actualShellHostPid?: () => number | undefined }
+        ).__actualShellHostPid?.(),
+      ),
+    ).toBe(hostPid);
+    expect((await runGit("git", ["-C", repo, "worktree", "list", "--porcelain"])).stdout).toBe(
+      beforeWorktrees,
+    );
+    const firstAfterSplit = (await app.evaluate(async (_electron, id) => {
+      const read = (
+        globalThis as typeof globalThis & { __actualShellRead?: (id: string) => Promise<unknown> }
+      ).__actualShellRead;
+      if (!read || !id) throw new Error("Core read observer unavailable");
+      return read(id);
+    }, sessionId)) as typeof facts;
+    expect(firstAfterSplit.snapshot.rows.window.some((r) => r.text === "Actual Pi final")).toBe(
+      true,
+    );
+
+    // C: the Model producer is mid-stream when only the renderer detaches; no re-dispatch.
+    const secondPane = window.locator(`[data-session-id="${secondId}"]`);
+    await secondPane.getByTestId("external-draft-workspace-main").fill("Survive renderer detach");
+    await secondPane.getByRole("button", { name: "Send", exact: true }).click();
+    await Promise.race([
+      secondRequestReceived,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("Second Model request absent")), 12_000),
+      ),
+    ]);
+    expect(requests).toHaveLength(2);
+    const duringStream = (await app.evaluate(async (_electron, id) => {
+      const read = (
+        globalThis as typeof globalThis & { __actualShellRead?: (id: string) => Promise<unknown> }
+      ).__actualShellRead;
+      if (!read || !id) throw new Error("Core read observer unavailable");
+      return read(id);
+    }, secondId)) as typeof facts;
+    expect(duringStream.events.some((event) => event.kind === "turn.finished")).toBe(false);
+    const shellUrl = window.url();
+    await window.goto("data:text/html,<body>Detached renderer</body>", { waitUntil: "load" });
+    await expect(window.getByText("Detached renderer")).toBeVisible();
+    expect(
+      await app.evaluate(() =>
+        (
+          globalThis as typeof globalThis & { __actualShellHostPid?: () => number | undefined }
+        ).__actualShellHostPid?.(),
+      ),
+    ).toBe(hostPid);
+    releaseSecond();
+    await expect
+      .poll(
+        async () => {
+          const result = (await app!.evaluate(async (_electron, id) => {
+            const read = (
+              globalThis as typeof globalThis & {
+                __actualShellRead?: (id: string) => Promise<unknown>;
+              }
+            ).__actualShellRead;
+            if (!read || !id) throw new Error("Core read observer unavailable");
+            return read(id);
+          }, secondId)) as typeof facts;
+          return (
+            result.snapshot.rows.window.some((r) => r.text === "Actual Pi reconnect") &&
+            result.events.some((event) => event.kind === "turn.finished") &&
+            result.snapshot.usage.cumulative.inputTokens === 12
+          );
+        },
+        { timeout: 15_000 },
+      )
+      .toBe(true);
+    await expect(window.getByText("Detached renderer")).toBeVisible();
+    await window.goto(shellUrl, { waitUntil: "load" });
+    expect(
+      await app.evaluate(() =>
+        (
+          globalThis as typeof globalThis & { __actualShellHostPid?: () => number | undefined }
+        ).__actualShellHostPid?.(),
+      ),
+    ).toBe(hostPid);
+    await expect(window.getByTestId(`session-${secondId}`)).toBeVisible({ timeout: 15_000 });
+    await window.getByTestId(`session-${secondId}`).click();
+    await expect(window.locator(`[data-session-id="${secondId}"]`)).toContainText(
+      "Actual Pi reconnect",
+      { timeout: 15_000 },
+    );
+    await expect(
+      window.locator(`[data-session-id="${secondId}"]`).getByTestId("usage-inputTokens"),
+    ).toHaveText("Input: 12");
+    expect(requests).toHaveLength(2);
+    const census = (await app.evaluate(() =>
+      (
+        globalThis as typeof globalThis & { __actualShellCensus?: () => Promise<unknown> }
+      ).__actualShellCensus?.(),
+    )) as Array<{ id: string; harnessId: string }>;
+    expect(census.map((item) => item.id).sort()).toEqual([sessionId!, secondId!].sort());
+    expect(census.map((item) => item.harnessId)).toEqual(["pi", "pi"]);
+    expect(nativePaneRpcs).toEqual([]);
+  } finally {
+    releaseSecond();
+    try {
+      await app?.close();
+    } finally {
+      try {
+        if (core && core.exitCode === null && core.signalCode === null) {
+          await stopOwnedCore(core);
+        }
+      } finally {
+        model.closeAllConnections();
+        try {
+          await new Promise<void>((resolve, reject) =>
+            model.close((error) => (error ? reject(error) : resolve())),
+          );
+        } finally {
+          await rm(isolated, { recursive: true, force: true });
+        }
+      }
+    }
   }
 });

@@ -94,6 +94,23 @@ void (async () => {
       process.stderr.write(`[actual-shell:warn] ${messages.map(String).join(" ")}\n`),
   };
   const children = new Map<number, UtilityProcess>();
+  (
+    globalThis as typeof globalThis & { __actualShellHostPid?: () => number | undefined }
+  ).__actualShellHostPid = () => [...children.values()][0]?.pid;
+  (
+    globalThis as typeof globalThis & { __actualShellCensus?: () => Promise<unknown> }
+  ).__actualShellCensus = async () => {
+    const read = await core.mountLocalCore(location);
+    try {
+      return (
+        await read.services.get(services.IProjectCatalogRpcService).sidebarSnapshot()
+      ).sessions
+        .filter((row) => row.session.workspaceId === "main")
+        .map((row) => ({ id: row.session.id, harnessId: row.session.harnessId }));
+    } finally {
+      read.attachment.dispose();
+    }
+  };
   const timers = new WeakMap<UtilityProcess, ReturnType<typeof setTimeout>>();
   const hub = new broadcast.BroadcastHub();
   const forceQuitRef = { current: true };
