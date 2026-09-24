@@ -405,8 +405,12 @@ test("actual Core → utility Host → preload → Shell Pi create/input/final/u
     );
     await window.getByTestId(`session-${secondId}`).click();
     await expect(window.locator("[data-session-id]")).toHaveAttribute("data-session-id", secondId!);
+    await window.getByRole("textbox", { name: "Split session ID" }).fill("nonexistent-session");
+    await window.getByTestId("split-verified-agent").click();
+    await expect(window.getByRole("alert")).toContainText("No Core Pi session to split");
     await window.getByRole("textbox", { name: "Split session ID" }).fill(sessionId!);
     await window.getByTestId("split-verified-agent").click();
+    await expect(window.getByRole("alert")).toHaveCount(0);
     await expect(window.locator(`[data-session-id="${sessionId}"]`)).toHaveCount(1);
     await expect(window.locator(`[data-session-id="${secondId}"]`)).toHaveCount(1);
     expect(

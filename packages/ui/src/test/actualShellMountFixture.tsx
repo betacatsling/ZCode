@@ -2,35 +2,24 @@
  * are supplied by this fixture: Core's Catalog/Host/hierarchy own every business row and event. */
 import * as React from "react";
 import { createRoot } from "react-dom/client";
-import { connectViaMessagePort } from "../../client/src/index.js";
-import { InternalChannels } from "@zcode/shared";
 import { registerBaseWorkspaceServices } from "@zcode/ui";
-import { createDesktopPlatform } from "../../desktop/src/renderer/src/desktopPlatform.js";
-import { WorkspaceShellLayout } from "../src/app-shell/WorkspaceShellLayout.js";
-import { usePaneLayoutStore } from "../src/v4/paneLayoutStore.js";
-import { ServiceProvider } from "../src/hooks/useServices.js";
-import { PlatformProvider } from "../src/hooks/usePlatform.js";
-import { StoreProvider } from "../src/store/StoreProvider.js";
-import { TabStoreProvider, useTabStoreApi } from "../src/store/TabStoreProvider.js";
-import { ZCodeIntlProvider } from "../src/i18n/IntlProvider.js";
-import { TooltipProvider } from "../src/components/ui/tooltip.js";
-import { CodingPlanUpgradeDialogProvider } from "../src/settings/CodingPlanUpgradeDialogProvider.js";
-import type { WorkspaceShellLayoutProps } from "../src/app-shell/types.js";
+import { WorkspaceShellLayout } from "../app-shell/WorkspaceShellLayout.js";
+import { usePaneLayoutStore } from "../v4/paneLayoutStore.js";
+import { ServiceProvider } from "../hooks/useServices.js";
+import { PlatformProvider } from "../hooks/usePlatform.js";
+import { StoreProvider } from "../store/StoreProvider.js";
+import { TabStoreProvider, useTabStoreApi } from "../store/TabStoreProvider.js";
+import { ZCodeIntlProvider } from "../i18n/IntlProvider.js";
+import { TooltipProvider } from "../components/ui/tooltip.js";
+import { CodingPlanUpgradeDialogProvider } from "../settings/CodingPlanUpgradeDialogProvider.js";
+import type { WorkspaceShellLayoutProps } from "../app-shell/types.js";
 import type { IServiceAccessor } from "@zcode/services";
+import type { IPlatformService } from "@zcode/shared";
 import "@zcode/ui/styles.css";
 
-const platform = createDesktopPlatform({ isLocalDevelopmentRuntime: true });
-let attached = false;
-window.addEventListener("message", (event) => {
-  if (
-    attached ||
-    event.source !== window ||
-    event.data?.type !== InternalChannels.ServicePort ||
-    !event.ports[0]
-  )
-    return;
-  attached = true;
-  const services = connectViaMessagePort(event.ports[0]);
+export function mountActualShellFixture(services: IServiceAccessor, platform: IPlatformService) {
+  if (!services.projectCatalogService || !services.workspaceHierarchyService)
+    throw new Error("Core Catalog and hierarchy are required for the mounted Shell");
   registerBaseWorkspaceServices(services);
   createRoot(document.getElementById("root")!).render(
     <ZCodeIntlProvider initialLocale="en-US">
@@ -40,7 +29,7 @@ window.addEventListener("message", (event) => {
             <TabStoreProvider>
               <TooltipProvider>
                 <CodingPlanUpgradeDialogProvider>
-                  <MountedShell services={services} />
+                  <MountedShell services={services} platform={platform} />
                 </CodingPlanUpgradeDialogProvider>
               </TooltipProvider>
             </TabStoreProvider>
@@ -49,9 +38,15 @@ window.addEventListener("message", (event) => {
       </PlatformProvider>
     </ZCodeIntlProvider>,
   );
-});
+}
 
-function MountedShell({ services }: { services: IServiceAccessor }) {
+function MountedShell({
+  services,
+  platform,
+}: {
+  services: IServiceAccessor;
+  platform: IPlatformService;
+}) {
   const tabs = useTabStoreApi();
   const [workspace, setWorkspace] = React.useState<{
     path: string;
@@ -59,9 +54,10 @@ function MountedShell({ services }: { services: IServiceAccessor }) {
     name: string;
   } | null>(null);
   const [splitSessionId, setSplitSessionId] = React.useState("");
+  const [splitError, setSplitError] = React.useState<string | null>(null);
   React.useEffect(() => {
     let active = true;
-    void services.projectCatalogService.sidebarSnapshot().then((snapshot) => {
+    void services.projectCatalogService!.sidebarSnapshot().then((snapshot) => {
       const row = snapshot.workspaces[0];
       if (!active || !row) return;
       const name = snapshot.projects.find((project) => project.id === row.projectId)?.name ?? "";
@@ -145,8 +141,11 @@ function MountedShell({ services }: { services: IServiceAccessor }) {
     onFileChangeFindMatchCountChange: noop,
   } as unknown as WorkspaceShellLayoutProps;
   const splitFirstVerifiedAgent = async () => {
+    setSplitError(null);
     // View-only test command: facts and owner proof still come from the real Core;
     // the product pane store performs the split. It neither creates nor sends.
+    if (!services.projectCatalogService || !services.workspaceHierarchyService)
+      throw new Error("Core Catalog and hierarchy unavailable");
     const catalog = await services.projectCatalogService.sidebarSnapshot();
     const first = catalog.sessions.find(
       (row) =>
@@ -179,11 +178,14 @@ function MountedShell({ services }: { services: IServiceAccessor }) {
       />
       <button
         type="button"
-        onClick={() => void splitFirstVerifiedAgent().catch((cause) => setError(String(cause)))}
+        onClick={() =>
+          void splitFirstVerifiedAgent().catch((cause) => setSplitError(String(cause)))
+        }
         data-testid="split-verified-agent"
       >
         Split verified agent view
       </button>
+      {splitError && <div role="alert">{splitError}</div>}
       <WorkspaceShellLayout {...props} />
     </main>
   );
