@@ -35,7 +35,8 @@ test("real Pi SDK worker enforces a write approval before executing the tool", {
   const worktree = join(root, "worktree");
   await mkdir(worktree);
   const registry = new HarnessRegistry();
-  registry.register(new PiHarnessAdapter({ root: join(root, "workers"), modelFactory: () => fakeModel }));
+  const adapter = new PiHarnessAdapter({ root: join(root, "workers"), modelFactory: () => fakeModel });
+  registry.register(adapter);
   const spec = {
     schemaVersion: 2 as const, projectId: "fixture-project", workspaceId: "fixture-workspace", hostSessionId: "pi-test", execution: { targetId: "local", workspaceIdentity: "fixture", worktreePath: worktree, worktreeGeneration: "fixture-generation", cwdRelativeToWorktree: "." },
     harness: { id: "pi", adapterVersion: "0.87.1" },
@@ -73,6 +74,9 @@ test("real Pi SDK worker enforces a write approval before executing the tool", {
       // Test failure is still not permission to kill an unrelated worker or delete user data.
       try { await host.dispatch({ type: "terminateSession", commandId: "cleanup", hostSessionId: "pi-test" }); await host.close(); } catch { /* isolated test directory */ }
     }
+    // 修复：Host 的终止命令可因能力门禁拒绝；测试自身必须关闭隔离的 Pi worker，
+    // 否则断言已通过但 Node 测试进程仍持有 worker，掩盖资源泄漏。
+    await adapter.shutdown();
     await rm(root, { recursive: true, force: true });
   }
 });
