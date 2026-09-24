@@ -14,12 +14,21 @@ import type {
 import type { ConversationSnapshot, V4ConversationRowsRangeParams, V4ConversationRowsRangeResult } from "@zcode/shared/zcode-protocol-v4";
 import { createServiceDescriptor } from "../descriptors.js";
 
+export interface HostSessionReadModel {
+  runtimeEpoch: string | null;
+  seq: number;
+  activity: "idle" | "running" | "waiting" | "uncertain";
+  lastOutcome?: "success" | "failed" | "cancelled" | "unknown";
+}
+
 /** Separate target-authoritative channel; native IZCodeAgentService remains unchanged. */
 export interface IAgentHostService {
   readonly onEvent: Event<{ spec: SessionSpecV2; event: AgentEvent }>; 
   catalogForTarget(targetId: string): Promise<readonly HarnessCatalogEntry[]>;
   getSessionCapabilities(spec: SessionSpecV2 | LegacySessionSpec): Promise<HarnessCapabilitiesV2>;
   getRuntimeActivity(workspaceId?: string): Promise<{ running: number; waiting: number; uncertain: number }>;
+  getSessionReadModel(spec: SessionSpecV2 | LegacySessionSpec): Promise<HostSessionReadModel>;
+
   getSessionSpec(scope: { targetId: string; workspaceId: string; hostSessionId: string }): Promise<SessionSpecV2 | undefined>;
   listWorkspaceSessions(workspaceId: string): Promise<StoredAgentSessionSummary[]>;
   rowsRange(spec: SessionSpecV2 | LegacySessionSpec, request: V4ConversationRowsRangeParams): Promise<V4ConversationRowsRangeResult>;
