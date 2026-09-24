@@ -1,5 +1,9 @@
 import { querySessionDebug } from "./session-debug.js";
 import {
+  nativeMaintenanceLeaseSchema, zcodeProtocolEmptyResultSchema,
+  type NativeMaintenanceLease, type NativeMaintenanceActivity,
+} from "@zcode/shared";
+import {
   zcodePluginsCancelOperationParamsSchema,
   zcodeProtocolMethods,
   zcodeWorkspaceCancelGenerateTextParamsSchema,
@@ -203,6 +207,22 @@ interface PendingClientRequest<T> {
 export class ZCodeProtocolAgentServer {
   private readonly runtimeResources: ProtocolRuntimeResources;
   private shutdownPromise?: Promise<void>;
+  private legacyMutationInFlight = 0;
+  private nativeLease: NativeMaintenanceLease | null = null;
+
+  private nativeActivity(): NativeMaintenanceActivity {
+    const v4 = this.requireV4Gateway().getNativeActivity();
+    let active = v4.active, tools = v4.tools;
+    let unknown = v4.unknown;
+    for (const record of this.context.sessions.values()) {
+      if (record.activeAbortController || record.residencyFinalizationCount) active++;
+      if (record.protocolToolInputTransmissions.size) tools += record.protocolToolInputTransmissions.size;
+      if (!this.context.v4Gateway?.hasNativeSnapshot(record.app.sessionId)) unknown = true;
+    }
+    return { ...v4, frozen: this.nativeLease !== null,
+      active, tools, pending: v4.pending + this.legacyMutationInFlight, unknown };
+  }
+
   readonly browserControlPort: BrowserControlPort;
   /**
    * 官方 MCP 身份头端口所需的最小上下文。
@@ -357,6 +377,7 @@ export class ZCodeProtocolAgentServer {
   /** 进程资源关闭，不使用会删除产品会话/发布 session.removed 的 session/close。 */
   shutdown(): Promise<void> {
     if (this.shutdownPromise) return this.shutdownPromise;
+    // 中文：关闭路径不能把 lease 当成可重用的“空闲”事实；进程退出使 epoch 失效。
     this.shutdownPromise = this.runtimeResources.close();
     const error = new Error("ZCode Protocol runtime stopping");
     this.disconnectClient(error);
@@ -437,13 +458,44 @@ export class ZCodeProtocolAgentServer {
     // request id 可在前一请求完成后复用；新请求不能继承未消费的旧 outbox。
     this.postResponseOutbox.delete(request.id);
     let releaseResidencyOperation: (() => void) | undefined;
+    const legacyMutation = [
+      zcodeProtocolMethods.sessionCreate, zcodeProtocolMethods.sessionResume,
+      zcodeProtocolMethods.sessionSend, zcodeProtocolMethods.sessionFork,
+      zcodeProtocolMethods.sessionCompact, zcodeProtocolMethods.sessionGoal,
+    ].includes(request.method as typeof zcodeProtocolMethods.sessionCreate);
+    if (legacyMutation) this.legacyMutationInFlight++;
     try {
+      if (request.method === zcodeProtocolMethods.nativeMaintenanceFreeze) {
+        zcodeProtocolEmptyResultSchema.parse(request.params);
+        if (this.nativeLease) throw new Error("native maintenance already frozen");
+        // No await before either fence; this request bypasses residency/acquire and installs both synchronously.
+        const lease = this.requireV4Gateway().freezeNativeAdmission();
+        this.nativeLease = lease;
+        return this.ok(request.id, { lease: this.nativeLease, activity: this.nativeActivity() });
+      }
+      if (request.method === zcodeProtocolMethods.nativeMaintenanceGetActivity) {
+        const lease = nativeMaintenanceLeaseSchema.parse(request.params);
+        if (!this.nativeLease || lease.epoch !== this.nativeLease.epoch || lease.leaseId !== this.nativeLease.leaseId)
+          throw new Error("native maintenance lease mismatch");
+        return this.ok(request.id, this.nativeActivity());
+      }
+      if (request.method === zcodeProtocolMethods.nativeMaintenanceRelease) {
+        const lease = nativeMaintenanceLeaseSchema.parse(request.params);
+        if (!this.nativeLease || lease.epoch !== this.nativeLease.epoch || lease.leaseId !== this.nativeLease.leaseId ||
+            !this.requireV4Gateway().releaseNativeAdmission(lease))
+          throw new Error("native maintenance lease mismatch");
+        this.nativeLease = null;
+        return this.ok(request.id, { released: true });
+      }
+      if (legacyMutation && this.nativeLease) throw new Error("guard.nativeMaintenanceFrozen");
       // subscribe hydration、workspace 配置与 resume 都可能跨 await。若只看
       // session 当前状态，sampler 会在 handler 持有旧 record 时把它关闭。进程级 lease
       // 覆盖整个 request；能识别的 sessionIds 额外用于冷恢复闸门与 LRU touch。
       releaseResidencyOperation = await this.context.sessionResidentPool?.acquireOperation(
         collectResidencySessionIds(request.params),
       );
+      // 中文：旧命令在 acquireOperation 等待期间也可能刚被冻结，必须在实际派发前重查。
+      if (legacyMutation && this.nativeLease) throw new Error("guard.nativeMaintenanceFrozen");
       const result = await this.dispatchRequest(request);
       return this.ok(request.id, result);
     } catch (error) {
@@ -452,6 +504,7 @@ export class ZCodeProtocolAgentServer {
       return this.fail(request.id, protocolError.code, protocolError.message, protocolError.data);
     } finally {
       releaseResidencyOperation?.();
+      if (legacyMutation) this.legacyMutationInFlight--;
     }
   }
 

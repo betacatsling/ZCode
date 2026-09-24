@@ -29,6 +29,8 @@ import {
   ZCODE_MODEL_REASONING_SEPARATOR,
   isRemoteWorkspaceIdentity,
   ZCODE_PROTOCOL_NAME,
+  nativeMaintenanceLeaseSchema, nativeMaintenanceActivitySchema,
+  nativeMaintenanceFreezeResultSchema, nativeMaintenanceReleaseResultSchema,
   ZCODE_PROTOCOL_VERSION,
   zcodeMcpListResultSchema,
   zcodePermissionRequestParamsSchema,
@@ -1054,6 +1056,19 @@ function resolveOffPeakToolSelection(
     ? selection
     : { ...selection, options: { reasoningLevel: thoughtLevel } };
 }
+/** Node-local only: not registered as an RPC service or exposed to renderer. */
+export interface NativeMaintenanceControlPort {
+  freeze(target: ZCodeAgentWorkspaceTarget): Promise<import("@zcode/shared").NativeMaintenanceFreezeResult>;
+  getActivity(target: ZCodeAgentWorkspaceTarget, lease: import("@zcode/shared").NativeMaintenanceLease): Promise<import("@zcode/shared").NativeMaintenanceActivity>;
+  release(target: ZCodeAgentWorkspaceTarget, lease: import("@zcode/shared").NativeMaintenanceLease): Promise<boolean>;
+}
+const nativeMaintenancePorts = new WeakMap<IZCodeAgentService, NativeMaintenanceControlPort>();
+export function getNativeMaintenanceControlPort(service: IZCodeAgentService): NativeMaintenanceControlPort {
+  const port = nativeMaintenancePorts.get(service);
+  if (!port) throw new Error("native maintenance control unavailable for this service");
+  return port;
+}
+
 export function createZCodeAgentService(
   options?: CreateZCodeAgentServiceOptions,
 ): IZCodeAgentService & { disposeAllAndWait(): Promise<void> } {
@@ -3330,7 +3345,7 @@ export function createZCodeAgentService(
     return envelope;
   }
 
-  return {
+  const service: IZCodeAgentService & { disposeAllAndWait(): Promise<void> } = {
     async prepareStorage(params) {
       const client = await processManager.getClient(params);
       wireClient(client, params, "chat");
@@ -5661,4 +5676,48 @@ export function createZCodeAgentService(
       disposeLocalState();
     },
   };
+  // 中文：控制请求只能发给当前已经存在的 chat worker；绝不在观察时拉起替身。
+  // await 前后验证对象身份，掉线或新 worker 替换旧 epoch 时返回未知而不是假装已冻结。
+  async function currentClient(target: ZCodeAgentWorkspaceTarget) {
+    const key = resolveWorkspaceKey(target);
+    const client = await getReadOnlyClient(target, "existing-only");
+    if (client.isDisposed || activeClientsByWorkspaceKey.get(key)?.client !== client)
+      throw new Error("native worker changed during maintenance control");
+    return { key, client };
+  }
+  function assertCurrent(key: string, client: ZCodeProtocolClient): void {
+    if (client.isDisposed || activeClientsByWorkspaceKey.get(key)?.client !== client)
+      throw new Error("native worker changed during maintenance control");
+  }
+  nativeMaintenancePorts.set(service, {
+    async freeze(target) {
+      const { key, client } = await currentClient(target);
+      const result = await client.request(
+        zcodeProtocolMethods.nativeMaintenanceFreeze, {}, nativeMaintenanceFreezeResultSchema,
+      );
+      assertCurrent(key, client);
+      return result;
+    },
+    async getActivity(target, lease) {
+      const { key, client } = await currentClient(target);
+      const result = await client.request(
+        zcodeProtocolMethods.nativeMaintenanceGetActivity, nativeMaintenanceLeaseSchema.parse(lease),
+        nativeMaintenanceActivitySchema, { lifecycle: "observation" },
+      );
+      assertCurrent(key, client);
+      if (result.epoch !== lease.epoch || !result.frozen)
+        throw new Error("native worker maintenance epoch changed");
+      return result;
+    },
+    async release(target, lease) {
+      const { key, client } = await currentClient(target);
+      const result = await client.request(
+        zcodeProtocolMethods.nativeMaintenanceRelease, nativeMaintenanceLeaseSchema.parse(lease),
+        nativeMaintenanceReleaseResultSchema,
+      );
+      assertCurrent(key, client);
+      return result.released;
+    },
+  });
+  return service;
 }
