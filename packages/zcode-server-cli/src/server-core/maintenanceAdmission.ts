@@ -11,16 +11,28 @@ export interface CoreMaintenanceAdmissionPort {
 export class CoreMaintenanceAdmission {
   private lease: { id: string; release(): Promise<void> } | undefined;
   private pending = false;
+  private closed = false;
+  private pendingSettled: Promise<void> | undefined;
+  private finishPending: (() => void) | undefined;
 
   constructor(private readonly port: CoreMaintenanceAdmissionPort | undefined) {}
 
   /** Missing wiring or read errors are unsafe; never substitute an idle snapshot. */
   async begin(): Promise<{ leaseId: string; native: RuntimeActivity; external: RuntimeActivity }> {
     if (!this.port) throw new Error("Runtime maintenance admission coordinator unavailable");
-    if (this.pending || this.lease) throw new Error("Runtime maintenance lease already held");
+    if (this.pending || this.lease || this.closed)
+      throw new Error("Runtime maintenance lease already held or Core closing");
     this.pending = true;
+    this.pendingSettled = new Promise<void>((resolve) => {
+      this.finishPending = resolve;
+    });
     try {
       const lease = await this.port.freezeAdmissions();
+      if (this.closed) {
+        // 中文：shutdown 可在 CLI fence 等待期间发生；不能在关闭后返回未被拥有的租约。
+        await lease.release();
+        throw new Error("Core closed during maintenance freeze");
+      }
       const id = randomUUID();
       this.lease = { id, release: lease.release };
       try {
@@ -40,7 +52,18 @@ export class CoreMaintenanceAdmission {
       }
     } finally {
       this.pending = false;
+      this.finishPending?.();
+      this.finishPending = undefined;
+      this.pendingSettled = undefined;
     }
+  }
+
+  /** Core termination may occur during an automatic maintenance operation. */
+  async releaseHeld(): Promise<void> {
+    this.closed = true;
+    await this.pendingSettled;
+    const id = this.lease?.id;
+    if (id) await this.release(id);
   }
 
   async release(id: string): Promise<void> {
