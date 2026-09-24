@@ -14,10 +14,11 @@ import type {
 /** Read-only durable target facts used after an execution-unknown profile commit.
  * Undefined means an authoritative absence; transport/offline errors MUST reject instead.
  * Only the target owner can implement this; no Git retry from Catalog.
+ * Optional until the target bridge supplies it: missing lookup blocks recovery closed.
  */
 export interface CatalogTargetRecoveryPort {
-  lookupBinding(id: string): Promise<RepositoryBinding | undefined>;
-  lookupWorkspace(id: string): Promise<WorktreeWorkspace | undefined>;
+  lookupBinding?(id: string): Promise<RepositoryBinding | undefined>;
+  lookupWorkspace?(id: string): Promise<WorktreeWorkspace | undefined>;
 }
 
 /** The execution target, not the profile, verifies Git and worktree facts. */
