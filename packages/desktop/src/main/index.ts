@@ -144,6 +144,7 @@ import {
   handleDesktopWindowCloseRequest,
 } from "./desktopWindowLifecycle.js";
 import { resolveZCodeBuiltinProviderConfigFilePath } from "./desktopProviderConfig.js";
+import { packagedLocalCoreServer, prepareLocalCoreAttachment } from "./localCoreAttachment.js";
 import {
   getCredentialsDir,
   isDockerDaemonAvailable,
@@ -1694,9 +1695,18 @@ function createWindowInstance(startupBootstrap: StartupWindowBootstrap = {}) {
         hideWindow: () => win.hide(),
       }),
     windowHostProcessMap,
+    // Explicit rollout until the standalone CLI closure is included in packaged resources.
+    // Once selected, failure cannot fall back to the independent desktop-local executor.
+    prepareLocalCore:
+      process.env.ZCODE_DESKTOP_CORE_ATTACHMENT === "1"
+        ? () =>
+            prepareLocalCoreAttachment(
+              packagedLocalCoreServer(process.resourcesPath, join(getZCodeDataRootDir(), "server")),
+            )
+        : undefined,
     onHostProcessReady: (windowKey) => cuaPipFocusRouter.refreshWindow(windowKey),
     awaitFirstHostSpawnDecision,
-    spawnHostProcess: (win, label, initMessage) =>
+    spawnHostProcess: (win, label, initMessage, localCoreEndpoint) =>
       spawnHostProcess(
         win,
         label,
@@ -1708,6 +1718,7 @@ function createWindowInstance(startupBootstrap: StartupWindowBootstrap = {}) {
         },
         {
           hostProcessLocalEnv,
+          localCoreEndpoint,
           desktopContextPromptEnabled: resolveDesktopContextPromptEnabledForHost,
           logger,
           broadcastHub,

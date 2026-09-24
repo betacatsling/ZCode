@@ -16,6 +16,8 @@ export function createHostDatabaseStartup(options: {
   env?: Record<string, string>;
   publish: (state: DatabaseStartupState) => void;
   initializeServices: () => Promise<void>;
+  /** Core owns native DB migrations. A window attachment must never prepare the same DB. */
+  skipStoragePreparation?: boolean;
   onFailure: (error: unknown) => void;
 }) {
   const abort = new AbortController();
@@ -43,6 +45,11 @@ export function createHostDatabaseStartup(options: {
         coordinator.updateDisk(currentSampler.snapshot());
       };
       try {
+        if (options.skipStoragePreparation) {
+          report("starting_services");
+          await options.initializeServices();
+          return;
+        }
         report("preparing_host_storage", "checking");
         const tasksPath = getTasksIndexDatabasePath();
         await observePath(tasksPath);

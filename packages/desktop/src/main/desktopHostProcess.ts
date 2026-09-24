@@ -1,4 +1,5 @@
 import { ingestToolExecResource } from "./desktopResourceTelemetry.js";
+import type { LocalCoreEndpoint } from "./localCoreAttachment.js";
 import { ingestMcpResourceSamples } from "./processResourceMcpTelemetrySource.js";
 /* eslint-disable max-lines -- host process 统一处理 main↔host 生命周期、日志、ZCode Agent，拆分前先保持跨进程消息收口。 */
 import { bindDatabaseStartupRelay } from "./databaseStartupRelay.js";
@@ -154,6 +155,7 @@ export function spawnHostProcess(
   initMessage: HostInitMessage,
   dependencies: {
     hostProcessLocalEnv: Record<string, string>;
+    localCoreEndpoint?: LocalCoreEndpoint;
     /** Main 进程已完成服务端灰度裁决；Host 只消费这个快照，不自行请求或分桶。 */
     desktopContextPromptEnabled?: () => boolean;
     logger: {
@@ -261,6 +263,9 @@ export function spawnHostProcess(
       ...buildHostProcessEnv(dependencies.hostProcessLocalEnv),
       ...buildHostE2ECoverageEnv(),
       ZCODE_PROCESS_LABEL: label,
+      ZCODE_DESKTOP_LOCAL_CORE_ATTACHMENT: dependencies.localCoreEndpoint
+        ? JSON.stringify(dependencies.localCoreEndpoint)
+        : "",
       // macOS-only: the Computer Use Helper launcher runs inside this forked host utilityProcess, whose
       // code-signing identity is a nested Electron helper (NOT dev.zcode.app). Publish THIS (main
       // Electron) process's pid — which IS dev.zcode.app — so helperLauncher passes it as
@@ -565,7 +570,6 @@ export function spawnHostProcess(
       });
       return;
     }
-
 
     if (result.data.type === HostResponseTypes.BotRemoteWorkspaceReconnectRequest) {
       const request = result.data;

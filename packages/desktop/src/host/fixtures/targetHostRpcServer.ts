@@ -8,11 +8,40 @@ import {
   type ISocket,
 } from "@zcode/rpc";
 import { IAgentHostService } from "@zcode/services";
+import { SERVER_REMOTE_PROTOCOL_VERSION, ZCODE_VERSION } from "@zcode/shared";
 import { WebSocketServer, type WebSocket } from "ws";
 
 const http = createServer();
 const wss = new WebSocketServer({ noServer: true });
 const tickets = new Set(["child-1", "child-2"]);
+let issuedTicket = 0;
+http.on("request", (request, response) => {
+  if (request.url === "/api/server-info") {
+    response.setHeader("content-type", "application/json");
+    response.end(
+      JSON.stringify({
+        serverId: "child-target",
+        version: ZCODE_VERSION,
+        protocolVersion: SERVER_REMOTE_PROTOCOL_VERSION,
+        authRequired: false,
+        workspaces: [],
+        capabilities: {
+          desktopContinuous: true,
+          websocketRpc: true,
+          processResourceTelemetry: true,
+          agentHost: true,
+        },
+      }),
+    );
+  } else if (request.url === "/api/rpc-host-capability" && request.method === "POST") {
+    const ticket = `issued-${++issuedTicket}`;
+    tickets.add(ticket);
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify({ capability: ticket, expiresAt: Date.now() + 10_000 }));
+  } else {
+    response.writeHead(404).end();
+  }
+});
 http.on("upgrade", (request, socket, head) => {
   const ticket = request.headers["x-zcode-rpc-host-capability"];
   if (typeof ticket !== "string" || !tickets.delete(ticket)) {
