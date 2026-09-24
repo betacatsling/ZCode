@@ -25,3 +25,17 @@ Crucial source finding: in 0.16.2 `createSession` constructs `SettingsManager(pa
 Event sequence: Host durable admission -> target verifies worktree generation/cwd -> digest probe -> native process initialize/new -> prompt -> ACP request_permission (if reached) -> Host durable decision -> one ACP reply -> prompt completion. Cancel invalidates the pending decision; native prompt settlement is required before the next turn; reconnect uses native ID and negotiated load only. No synthetic receipt is counted as native execution.
 
 Native opt-in regression (`ACP_REAL_BIN` to an isolated 0.16.2 install) now proves actual binary -> SDK -> loopback fake Messages SSE: new, Read then Edit permission request denied, unchanged marker, follow-up answer, closed subprocess, load original native ID, second prompt, cancel of a later held upstream response. The second manifest is still synthetic. Local cancel rejection alone does not prove SDK remote settlement; production restart/reattach and untrusted project settings are still blockers. Probe hashes all seven published `dist/*.js` bytes plus validates package identity/version (not the npm tarball itself); lock/package-owner must additionally pin upstream tarball integrity and immutable installation.
+
+## Cancellation and uncertain execution fence
+
+Only the target-local ACP adapter owns the live native connection, native session, pending prompt and permission callback. Host owns durable receipts. A prompt with an unrecognized stop reason or JSON-RPC error is **execution-unknown**: the adapter throws (Host records an uncertain send receipt), retains a per-connection failure fence, and never starts another prompt on that native connection. Cancel notification is not an acknowledgement: the original prompt remains pending until a native terminal `stopReason: cancelled` response. Even then this implementation fences the connection against further sends because ACP updates carry a session ID but no prompt ID, so delayed old callbacks cannot be assigned to a subsequent turn. Explicit independently verified recovery requires a new binding/connection and is not implemented here. Native exit is unknown. No automatic retry or `turn.finished` success for an uncertain prompt.
+
+```text
+Host durable send → adapter turn + native prompt → native response
+                       ├─ terminal end_turn → finished/idle (unless cancelled)
+                       ├─ cancelled terminal after cancel → finished/cancelled, connection fenced
+                       └─ error/unknown/exit → execution-unknown + throw → uncertain receipt
+cancel → deny pending permissions + notify native → wait original response (not cancel ACK)
+```
+
+Client filesystem/terminal callbacks are **not** safely scoped by ACP session/prompt ID across async cancellation. Until a separate identity-bound, abortable operation port is certified, reject injected client callbacks/capabilities at connection creation rather than advertising a misleading execution gate. The pinned Claude 0.16.2 profile remains unsupported: its project/local settings manager can allow tool effects before a host permission callback. No clean-worktree fake upstream test promotes it.
