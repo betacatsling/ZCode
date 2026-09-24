@@ -231,7 +231,17 @@ export interface V4CommandCoreHost {
    */
   /** Atomic CLI-owned original ID + intent receipt, before config/firstInput/ACK. */
   commitNativeCreateReceipt?(envelope: CommandEnvelope, sessionId: string): Promise<string>;
-  completeNativeCreateReceipt?(commandId: string, sessionId: string): Promise<void>;
+  completeNativeCreateReceipt?(
+    commandId: string,
+    sessionId: string,
+    actual: {
+      modelSelection?: ReturnType<
+        V4SessionRecordView["app"]["runtime"]["getSessionModelSelection"]
+      >;
+      mode: ReturnType<V4SessionRecordView["app"]["getMode"]>;
+      planEnabled: boolean;
+    },
+  ): Promise<void>;
   createSessionRecord?(params: {
     workspaceId: string;
     mcpServers?: CommandPayloadMap["createSession"]["mcpServers"];

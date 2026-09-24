@@ -1,0 +1,19 @@
+# Core → native create join (new agents; default OFF)
+
+Core Catalog and Target own the project/binding/workspace/generation; CLI CommandInbox and SQLite own original native IDs, actual runtime configuration, receipt and accepted commands. Core owns only a **new** verified mapping (not `native-migration/mapping.json`, which is backup-verified legacy evidence). Desktop continuous and mobile replayable are distinct deliveries of one CLI owner.
+
+```
+Catalog immutable intent + Target verified scope/generation
+  → hold Target admission → CLI capability + configured DB identity check
+  → CommandInbox createSession(commandId, workspaceId=identity||path, config, NO firstInput)
+  → CLI persists actual selection/execution facts and completes receipt
+  → Core read-only verified completed receipt + persisted facts
+  → Core fsync new mapping + Catalog reference → return original native ID
+retry/lost ACK → read-only receipt + exact intent/scope/generation check → same mapping/ID
+```
+
+No receipt, pending receipt, unsupported schema, unknown/old CLI capability, incorrect actual selection, unknown DB path or failed fsync is **uncertain**, not success. Never replay a pending create or synthesize input to complete it. Query of an already completed command is read-only even when new admission is disabled; new creation remains disabled by default until all join proofs pass. Never infer runtime configuration from the receipt's intent fingerprint or from current workspace defaults. `workspaceIdentity?.trim() || workspacePath` is the identity key; path is for filesystem operations only; remoteSessionId is attachment authority, not a path alias. Real configured DB is resolved against each native worker's actual cwd/env, including relative override. Core lock does not purport to lock independent external CLI processes or every configured DB globally. Crash lock recovery requires ownership proof stronger than PID alone and is not automatically enabled.
+
+Acceptance: real isolated Git/Target/Catalog/Core factory/native CLI/SQLite, two agents in one worktree without more Git worktrees, actual Model fake HTTP only; normal and matching-default config survive CLI+Core restart and changed defaults, actual next Model request; lost ACK after completed receipt, failed mapping commit, pending receipt, wrong scope/model/generation/lease, old capability and malformed schema fail closed with unchanged session/HTTP counts. Read-only reconciliation works while new admission disabled. Native first input/queue/legacy empty draft and side-session behavior must not change. Freeze includes three worker lanes, automatic ingress and timers; cancellation/query still lawful. Supervisor replacement-generation fence remains separately owned and does not become certified here.
+
+Current status: Node `createCoreAuthority` still supplies `certifiedCreate=false`; `capabilities()` and `create()` throw. The real CLI stdio/SQLite test reproduced the matching-default selection gap before implementation. CLI now commits immutable actual selection/execution snapshot, stable runtime entries, and completed receipt in one transaction after the handler's best-effort config application. A new `runtime/capabilities.nativeCoreCreateV1` reports true only for a worker with the receipt write port; the read-only `readCertifiedCreateReceipt` requires completed draft + matching immutable per-command actual config. Legacy best-effort config errors can still complete but the immutable **actual** config will differ from the request; Core must compare before mapping. A pending receipt is never certified. This is a CLI prerequisite only: no Core production create, mapping or list option is yet implemented; all new native Core admission remains disabled. First-activation shell/default persistence, changed-default Model execution, and remote DB/owner identity remain unverified.

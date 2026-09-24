@@ -1109,7 +1109,12 @@ export interface SessionStorePort {
   /** Single transaction: session row and original create receipt. Must not overwrite a conflicting fact. */
   commitNativeCreateReceipt?(input: NativeCreateReceiptCommit): Promise<NativeCreateReceipt>;
   getNativeCreateReceipt?(commandId: string): Promise<NativeCreateReceipt | null>;
-  completeNativeCreateReceipt?(commandId: string, originalSessionId: SessionId): Promise<void>;
+  /** CLI runtime's actual draft selection/execution, atomically persisted before completed receipt. */
+  completeNativeCreateReceipt?(
+    commandId: string,
+    originalSessionId: SessionId,
+    actual?: { modelSelection?: ModelSelection; mode: CollaborationMode; planEnabled: boolean },
+  ): Promise<void>;
   /** legacy 兼容原语；V4 stable/compact-edit fork 禁止调用，统一走 commitForkBundle。 */
   createForkedSessionWithMetadata?(
     input: CreateSessionInput,

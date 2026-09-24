@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { isAbsolute } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { executionStateSchema, modelSelectionSchema } from "@zcode/shared";
 import {
   SESSION_ENTRY_MODEL_SELECTION,
   type NativeCreateReceipt,
@@ -145,6 +146,59 @@ export class ReadonlyNativeSessionMetadataView {
       );
       if (required.some((column) => !names.has(column)))
         throw new Error("unknown-native-session-schema");
+    }
+  }
+
+  /** Certified draft facts are CLI SQLite facts, not the best-effort completed receipt alone. */
+  async readCertifiedCreateReceipt(
+    commandId: string,
+    workspaceScope: string,
+  ): Promise<
+    | {
+        receipt: NativeCreateReceipt & { nativeDatabasePath: string };
+        selection: unknown;
+        execution: unknown;
+        directory: string;
+      }
+    | undefined
+  > {
+    const receipt = await this.readCreateReceipt(commandId, workspaceScope);
+    if (!receipt || receipt.hasFirstInput) return undefined;
+    let db: DatabaseSync | undefined;
+    try {
+      db = new DatabaseSync(this.resolvedDbPath, { readOnly: true });
+      this.assertSupportedSchema(db);
+      const session = db
+        .prepare("select * from session where id = ?")
+        .get(receipt.originalSessionId) as SessionRow | undefined;
+      if (!session || (session.workspace_id ?? session.directory) !== workspaceScope)
+        return undefined;
+      // 中文：普通 runtime entry 后续可被切模覆盖；只有同命令、同原会话的创建时
+      // 不可变 CLI 快照才证明 completed 那一刻实际生效的配置。
+      const immutable = db
+        .prepare(
+          "select * from session_entry where id = ? and session_id = ? and type = 'native/create_config'",
+        )
+        .get(`native-create-config:${commandId}`, receipt.originalSessionId) as
+        | SessionEntryRow
+        | undefined;
+      if (!immutable) return undefined;
+      const fact = decodeSessionEntryRow(immutable)?.data as
+        | { selection?: unknown; execution?: unknown }
+        | undefined;
+      const selection = modelSelectionSchema.safeParse(fact?.selection);
+      const execution = executionStateSchema.safeParse(fact?.execution);
+      if (!selection.success || !execution.success) return undefined;
+      return {
+        receipt,
+        selection: selection.data,
+        execution: execution.data,
+        directory: session.directory,
+      };
+    } catch {
+      return undefined;
+    } finally {
+      db?.close();
     }
   }
 

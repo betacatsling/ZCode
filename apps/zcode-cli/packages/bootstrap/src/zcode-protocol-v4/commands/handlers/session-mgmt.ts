@@ -142,7 +142,16 @@ async function createSession(
   }
   if (!host.completeNativeCreateReceipt)
     throw new Error("fault.command.nativeCreateReceiptUnavailable");
-  await host.completeNativeCreateReceipt(envelope.commandId, sessionId);
+  const actual = requireRecord(host, sessionId).app;
+  // 中文：匹配 workspace 缺省值时 setModel 不发变更事件；不能让 completed 收据
+  // 掩盖未落盘的模型/权限，冷启动后再次读取全局缺省会改变原会话行为。
+  await host.completeNativeCreateReceipt(envelope.commandId, sessionId, {
+    ...(actual.runtime.getSessionModelSelection()
+      ? { modelSelection: actual.runtime.getSessionModelSelection()! }
+      : {}),
+    mode: actual.getMode(),
+    planEnabled: actual.runtime.getPlanEnabled(),
+  });
   return { type: "createSession", sessionId, ...(firstInput ? { input: firstInput } : {}) };
 }
 

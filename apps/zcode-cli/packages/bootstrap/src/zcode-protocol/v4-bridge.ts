@@ -1105,12 +1105,13 @@ export function createConversationV4Gateway(
     // createSession 的执行面：record 建立/事件接线/catalog 同步/失败自清理全在旧
     // createSession op 内（半初始化 record 的回收顺序修过 bug，不重复实现）。
     // 语义决策（draft persistence / firstInput 走原生 prompt turn）在原生 handler。
-    completeNativeCreateReceipt: async (commandId, sessionId) => {
+    completeNativeCreateReceipt: async (commandId, sessionId, actual) => {
       if (!context.deps.sessionStore?.completeNativeCreateReceipt)
         throw new Error("fault.command.nativeCreateReceiptUnavailable");
       await context.deps.sessionStore.completeNativeCreateReceipt(
         commandId,
         sessionId as SessionId,
+        actual,
       );
     },
     commitNativeCreateReceipt: async (envelope, sessionId) => {

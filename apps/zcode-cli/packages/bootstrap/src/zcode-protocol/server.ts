@@ -773,7 +773,14 @@ export class ZCodeProtocolAgentServer {
       case zcodeProtocolMethods.processChildProcesses:
         return listChildProcesses(this.context.deps.mcpTelemetry?.listProcesses() ?? []);
       case zcodeProtocolMethods.runtimeCapabilities:
-        return { independentPlanState: true };
+        // 中文：旧 worker 不能被 Core 当成可认证 create owner；只有本 worker 真正
+        // 挂载 receipt 写端与实际配置持久化端时才声明增量能力。
+        return {
+          independentPlanState: true,
+          nativeCoreCreateV1:
+            !!this.context.deps.sessionStore?.commitNativeCreateReceipt &&
+            !!this.context.deps.sessionStore?.completeNativeCreateReceipt,
+        };
       case zcodeProtocolMethods.pluginsMarketplaceAdd:
         return await this.withPluginOperationSignal(request, (signal) =>
           addPluginMarketplace(this.context, request.params, signal),

@@ -421,13 +421,66 @@ export class SqliteSessionStore
   async completeNativeCreateReceipt(
     commandId: string,
     originalSessionId: SessionId,
+    actual?: {
+      modelSelection?: import("@zcode/shared").ModelSelection;
+      mode: CollaborationMode;
+      planEnabled: boolean;
+    },
   ): Promise<void> {
     this.throwBeforeWrite();
-    const changed = this.db
-      .prepare(`update native_create_receipt set status = 'completed'
-      where command_id = ? and session_id = ?`)
-      .run(commandId, originalSessionId).changes;
-    if (changed !== 1) throw new Error("fault.command.nativeCreateReceiptMissing");
+    // 中文：原先先完成 receipt，匹配缺省模型的空草稿无 selection entry；重启后
+    // 又取新的 workspace 缺省。实际配置与完成事实必须由同一 CLI SQLite owner 提交。
+    this.db.exec("begin immediate");
+    try {
+      const receipt = await this.getNativeCreateReceipt(commandId);
+      if (!receipt || receipt.originalSessionId !== originalSessionId)
+        throw new Error("fault.command.nativeCreateReceiptMissing");
+      if (actual) {
+        const timestamp = Date.now();
+        // 中文：后续显式切模会覆盖 runtime-model-selection；创建认证只能读取
+        // 与原 command ID 绑定的不可变配置快照，不能从日后的当前值反推创建结果。
+        const immutableId = `native-create-config:${commandId}`;
+        if (this.db.prepare("select id from session_entry where id = ?").get(immutableId))
+          throw new Error("guard.nativeCreateConfigAlreadyCommitted");
+        sessionEntryRepository.saveSessionEntry(this.db, {
+          id: immutableId,
+          sessionID: originalSessionId,
+          type: "native/create_config",
+          touchSession: false,
+          time: { created: timestamp, updated: timestamp },
+          data: {
+            selection: actual.modelSelection ?? null,
+            execution: { mode: actual.mode, planEnabled: actual.planEnabled },
+          },
+        });
+        if (actual.modelSelection)
+          sessionEntryRepository.saveSessionEntry(this.db, {
+            id: `${originalSessionId}:runtime-model-selection`,
+            sessionID: originalSessionId,
+            type: "runtime/model_selection",
+            touchSession: false,
+            time: { created: timestamp, updated: timestamp },
+            data: actual.modelSelection,
+          });
+        sessionEntryRepository.saveSessionEntry(this.db, {
+          id: `${originalSessionId}:runtime-execution-state`,
+          sessionID: originalSessionId,
+          type: "runtime/execution_state",
+          touchSession: false,
+          time: { created: timestamp, updated: timestamp },
+          data: { mode: actual.mode, planEnabled: actual.planEnabled },
+        });
+      }
+      const changed = this.db
+        .prepare(`update native_create_receipt set status = 'completed'
+        where command_id = ? and session_id = ?`)
+        .run(commandId, originalSessionId).changes;
+      if (changed !== 1) throw new Error("fault.command.nativeCreateReceiptMissing");
+      this.db.exec("commit");
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
   }
 
   async createSession(input: CreateSessionInput): Promise<SessionInfo> {
