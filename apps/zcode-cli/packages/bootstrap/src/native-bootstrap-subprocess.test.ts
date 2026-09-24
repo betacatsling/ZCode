@@ -2,15 +2,25 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { createInterface } from "node:readline";
-import { mkdtemp, mkdir, rm, writeFile, readFile, access } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile, readFile, access, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { V4_METHODS } from "@zcode/shared/zcode-protocol-v4";
+import {
+  matchingFinalAnswer,
+  matchingTerminal,
+  nativeEvidenceRows,
+  permittedFixtureAction,
+} from "./native-private-evidence.js";
+import { createPrivateObservation } from "./native-private-observer.js";
+import { createPrivateNoopLoggerFactory } from "./native-private-logger.js";
+import { createPrivateEffectPorts } from "./native-private-effects.js";
 
 const childMode = process.env.ZCODE_NATIVE_BOOT_FIXTURE_CHILD === "1";
 if (childMode) {
   const { runZCodeProtocolAgent } = await import("./zcode-protocol-entrypoint.js");
+  const { AiSdkModelAdapter } = await import("@zcode/adapters/model");
   const {
     ApiKeyAccessConfig,
     ModelConfig,
@@ -35,7 +45,7 @@ if (childMode) {
             "fixture",
             new ProviderConfig({
               group: "standard-personal",
-              access: new ApiKeyAccessConfig({ apiKey: "fixture-not-secret" }),
+              access: new ApiKeyAccessConfig({ apiKey: "fixture-private-key-sentinel" }),
               api: new ProviderApiConfig({
                 type: "anthropic-messages",
                 baseUrl: process.env.ZCODE_BOOT_FIXTURE_URL!,
@@ -86,24 +96,70 @@ if (childMode) {
   });
   await registry.start();
   const snapshot = registry.getSnapshot()!;
-  await runZCodeProtocolAgent(
-    {
-      cwd: process.env.ZCODE_BOOT_FIXTURE_CWD!,
-      env: process.env,
-      input: process.stdin,
-      output: process.stdout,
-    },
-    {
-      startProviderRegistryRuntime: async () => ({
-        runtime: { registryService: registry },
-        snapshot,
-        configuredDefaultModelSelection: { providerId: "fixture", modelId: "fixture-model" },
-        syncAccountProviderConfig: async () => {
-          throw new Error("fixture account overlay disabled");
-        },
-        dispose: () => registry.dispose(),
-      }),
-    },
+  const observation = createPrivateObservation({
+    providerId: "fixture",
+    modelId: "fixture-model",
+    api: "anthropic-messages",
+    baseUrl: process.env.ZCODE_BOOT_FIXTURE_URL!,
+    fetch: globalThis.fetch.bind(globalThis),
+    notify: () => {},
+  });
+  const cwd = process.env.ZCODE_BOOT_FIXTURE_CWD!;
+  const effects = createPrivateEffectPorts({
+    cwd,
+    readPath: join(cwd, "input.txt"),
+    writePath: join(cwd, "output.txt"),
+    writeContent: "allowed-write-content",
+    bashCommand: "node verify.cjs",
+    processEnv: process.env,
+  });
+  process.on("message", (message: unknown) => {
+    if (
+      message &&
+      typeof message === "object" &&
+      "kind" in message &&
+      "phase" in message &&
+      message.kind === "private-phase" &&
+      [1, 2, 3].includes(Number(message.phase))
+    ) {
+      effects.setPhase(Number(message.phase) as 1 | 2 | 3);
+      process.send?.({ kind: "private-phase-ready", phase: message.phase });
+    }
+  });
+  try {
+    await runZCodeProtocolAgent(
+      {
+        cwd,
+        env: process.env,
+        input: process.stdin,
+        output: process.stdout,
+      },
+      {
+        loggerFactory: createPrivateNoopLoggerFactory(),
+        fileSystemPort: effects.fileSystemPort,
+        executionPort: effects.executionPort,
+        modelAdapter: new AiSdkModelAdapter({
+          env: {},
+          retry: { maxAttempts: 1 },
+          onModelCall: observation.onModelCall,
+          transport: observation.transport,
+        }),
+        startProviderRegistryRuntime: async () => ({
+          runtime: { registryService: registry },
+          snapshot,
+          configuredDefaultModelSelection: { providerId: "fixture", modelId: "fixture-model" },
+          syncAccountProviderConfig: async () => {
+            throw new Error("fixture account overlay disabled");
+          },
+          dispose: () => registry.dispose(),
+        }),
+      },
+    );
+  } finally {
+    await effects.dispose();
+  }
+  process.stderr.write(
+    `native-observation:${observation.counts.httpAttempts}:${observation.counts.modelCalls}\n`,
   );
 } else {
   test(
@@ -117,13 +173,27 @@ if (childMode) {
       await writeFile(fixturePath, "seed=violet\n");
       const writePath = join(cwd, "output.txt");
       const bashPath = join(cwd, "bash-effect.txt");
-      const bashCommand = `printf bash-verified | tee '${bashPath.replaceAll("'", "'\\''")}' ; code=$?; printf '\\nexit=%s\\n' "$code"; test "$code" -eq 0`;
+      await writeFile(
+        join(cwd, "verify.cjs"),
+        "require('node:fs').writeFileSync('bash-effect.txt', 'bash-verified'); console.log('exit=0')\n",
+      );
+      const bashCommand = "node verify.cjs";
       const changedContent = "seed=amber-unknown-until-turn-three";
       let requests = 0;
       let sawCurrentRead = false;
       let finalAnswerSent = false;
       let bashResultSeen = false;
       let finalAnswerObserved = false;
+      let terminalCommandId = "";
+      let currentTurn = 0;
+      let activeSessionId = "";
+      const observedRows: Array<{
+        kind?: string;
+        turnId?: string;
+        state?: string;
+        text?: string;
+        sourceCommandId?: string;
+      }> = [];
       let deniedWrites = 0;
       let allowedWrites = 0;
       let bashApprovals = 0;
@@ -226,12 +296,14 @@ if (childMode) {
             ZCODE_SESSION_DB_PATH: "session.sqlite",
             ZCODE_NATIVE_BOOT_FIXTURE_CHILD: "1",
             ZCODE_BOOT_FIXTURE_CWD: cwd,
-            ZCODE_BOOT_FIXTURE_URL: `http://127.0.0.1:${address.port}`,
+            ZCODE_BOOT_FIXTURE_URL: `http://127.0.0.1:${address.port}/fixture-private-endpoint-sentinel`,
             ZCODE_TELEMETRY_ENABLED: "false",
           },
-          stdio: ["pipe", "pipe", "pipe"],
+          stdio: ["pipe", "pipe", "pipe", "ipc"],
         },
       );
+      assert.ok(child.stdin && child.stdout && child.stderr, "native fixture stdio unavailable");
+      const stdin = child.stdin;
       const stderr: Buffer[] = [];
       child.stderr.on("data", (chunk: Buffer) => {
         if (stderr.length < 8) stderr.push(chunk);
@@ -244,29 +316,48 @@ if (childMode) {
             throw new Error(
               `child closed before V4 frame; stderr bytes=${Buffer.concat(stderr).length}`,
             );
+          assert.ok(
+            !value.value.includes("fixture-private-key-sentinel") &&
+              !value.value.includes("fixture-private-endpoint-sentinel"),
+            "V4 launch output leaked fixture credential",
+          );
           const frame = JSON.parse(value.value);
           if (frame.method === "interaction/requestPermission" && frame.id !== undefined) {
             const toolName = frame.params?.toolName;
             assert.ok(["Read", "Write", "Bash"].includes(toolName), `unexpected tool=${toolName}`);
-            let decision = "allow";
+            const decision = permittedFixtureAction({
+              toolName,
+              params: frame.params?.input,
+              cwd,
+              readPath: fixturePath,
+              writePath,
+              writeContent: "allowed-write-content",
+              bashCommand,
+              phase: currentTurn,
+              deniedWrites,
+            });
+            if (decision === "deny" && toolName !== "Write")
+              throw new Error("unapproved tool input");
             if (toolName === "Write") {
               if (deniedWrites === 0) {
                 await assert.rejects(access(writePath));
                 deniedWrites++;
-                decision = "deny";
+                assert.equal(decision, "deny");
               } else {
                 await assert.rejects(access(writePath));
+                assert.equal(decision, "allow");
                 allowedWrites++;
               }
             } else if (toolName === "Bash") {
               assert.equal(await readFile(writePath, "utf8"), "allowed-write-content");
+              assert.equal(decision, "allow");
               bashApprovals++;
-            }
-            child.stdin.write(JSON.stringify({ id: frame.id, result: { decision } }) + "\n");
+            } else assert.equal(decision, "allow");
+            stdin.write(JSON.stringify({ id: frame.id, result: { decision } }) + "\n");
             continue;
           }
           if (frame.method === "session/requestRuntimePreferences" && frame.id !== undefined) {
-            child.stdin.write(
+            stdin.write(
               JSON.stringify({
                 id: frame.id,
                 result: {
@@ -278,9 +369,11 @@ if (childMode) {
             );
             continue;
           }
-          if (frame.method === "v4/conversation/frame") {
-            const projection = JSON.stringify(frame);
-            if (projection.includes(changedContent)) finalAnswerObserved = true;
+          observedRows.push(...nativeEvidenceRows(frame, activeSessionId));
+          if (terminalCommandId) {
+            const turnId = matchingTerminal(observedRows, terminalCommandId);
+            if (turnId)
+              finalAnswerObserved = matchingFinalAnswer(observedRows, turnId, changedContent);
           }
           if (predicate(frame)) return frame;
         }
@@ -288,7 +381,7 @@ if (childMode) {
       let seq = 0;
       const command = async (type: string, sessionId: string | null, payload: object) => {
         const id = ++seq;
-        child.stdin.write(
+        stdin.write(
           JSON.stringify({
             id,
             method: V4_METHODS.command,
@@ -315,7 +408,8 @@ if (childMode) {
           `reason=${created.result?.reasonCode ?? "none"}; stderrBytes=${Buffer.concat(stderr).length}`,
         );
         const sessionId = created.result.result.sessionId as string;
-        child.stdin.write(
+        activeSessionId = sessionId;
+        stdin.write(
           JSON.stringify({
             id: ++seq,
             method: V4_METHODS.conversationSubscribe,
@@ -328,20 +422,30 @@ if (childMode) {
         );
         const subscribed = await next((frame) => frame.id === seq);
         assert.ok(subscribed.result?.ack?.subscriptionId);
-        const observedPhases: string[] = [];
-        const completedFrame = (frame: any) => {
-          if (frame.method !== "v4/conversation/frame") return false;
-          const payload = frame.params?.frame?.payload;
-          const phases =
-            payload?.kind === "snapshot"
-              ? [payload.snapshot.control?.phase]
-              : payload?.deltas
-                  ?.filter((delta: any) => delta.op === "state.updated")
-                  .map((delta: any) => delta.patch?.control?.phase);
-          for (const phase of phases ?? []) if (phase) observedPhases.push(phase);
-          return phases?.includes("completedSuccess") ?? false;
-        };
+        const completedFrame = (_frame: unknown) =>
+          matchingTerminal(observedRows, terminalCommandId) !== undefined;
         for (let turn = 1; turn <= 3; turn++) {
+          await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(() => reject(new Error("fixture phase fence missing")), 3000);
+            const onPhase = (message: unknown) => {
+              if (
+                !message ||
+                typeof message !== "object" ||
+                !("kind" in message) ||
+                !("phase" in message) ||
+                message.kind !== "private-phase-ready" ||
+                message.phase !== turn
+              )
+                return;
+              clearTimeout(timer);
+              child.off("message", onPhase);
+              resolve();
+            };
+            child.on("message", onPhase);
+            child.send({ kind: "private-phase", phase: turn });
+          });
+          currentTurn = turn;
+          terminalCommandId = `fixture-${seq + 1}`;
           const ack = await command("sendText", sessionId, { text: `fixture instruction ${turn}` });
           assert.equal(ack.result?.status, "accepted");
           // The subprocess may send notifications while the model executes; each turn must reach the real upstream.
@@ -359,7 +463,7 @@ if (childMode) {
                   () =>
                     reject(
                       new Error(
-                        `terminal V4 projection missing: turn=${turn}; phases=${observedPhases.join(",")}; requests=${requests}`,
+                        `terminal V4 projection missing: turn=${turn}; requests=${requests}`,
                       ),
                     ),
                   9000,
@@ -402,10 +506,22 @@ if (childMode) {
         assert.deepEqual(routeCounts.slice(1), [2, 2]);
         assert.ok(requests <= 12, `fake native route exceeded request budget: ${requests}`);
         console.log(
-          `native-fake-proof: upstreamHttpRequests=${requests} modelCallCounter=not-instrumented readTools=3 deniedWrites=${deniedWrites} allowedWrites=${allowedWrites} bashApprovals=${bashApprovals} terminalTurns=3 currentRead=true finalAnswer=true paidUsage=none`,
+          `native-fake-proof: upstreamHttpRequests=${requests} modelCallCounter=observed readTools=3 deniedWrites=${deniedWrites} allowedWrites=${allowedWrites} bashApprovals=${bashApprovals} terminalTurns=3 currentRead=true finalAnswer=true paidUsage=none`,
+        );
+      } catch (error) {
+        const failureLine =
+          error instanceof Error
+            ? error.stack?.split("\n")[1]?.replace(process.cwd(), "[repo]")
+            : "unknown";
+        console.log(
+          `native-fake-stage: requests=${requests} turn=${currentTurn} ackSeq=${seq} stderrBytes=${Buffer.concat(stderr).length} at=${failureLine}`,
+        );
+        throw new Error(
+          "native fake scenario failed before terminal/effects; private child output withheld",
         );
       } finally {
-        child.stdin.end();
+        stdin.end();
+        child.disconnect();
         const exitCode = await new Promise<number | null>((resolve) => {
           let exitTimeout: ReturnType<typeof setTimeout>;
           child.once("exit", (code) => {
@@ -415,7 +531,43 @@ if (childMode) {
           exitTimeout = setTimeout(() => child.kill(), 3000);
         });
         await new Promise<void>((resolve) => upstream.close(() => resolve()));
-        await rm(root, { recursive: true, force: true });
+        try {
+          const stderrText = Buffer.concat(stderr).toString();
+          const observation = /native-observation:(\d+):(\d+)/.exec(stderrText);
+          if (requests > 0) {
+            assert.equal(
+              Number(observation?.[1]),
+              requests,
+              "transport attempts must match fake upstream",
+            );
+            assert.ok(Number(observation?.[2]) > 0, "Model calls are measured independently");
+          }
+          const secrets = ["fixture-private-key-sentinel", "fixture-private-endpoint-sentinel"];
+          const scan = async (directory: string): Promise<number> => {
+            let files = 0;
+            for (const item of await readdir(directory, { withFileTypes: true })) {
+              const path = join(directory, item.name);
+              if (item.isDirectory()) files += await scan(path);
+              else if (item.isFile()) {
+                const data = await readFile(path);
+                assert.ok(
+                  secrets.every((secret) => !data.includes(Buffer.from(secret))),
+                  `private artifact scan failed in ${item.name}: ${data.includes(Buffer.from(secrets[0]!)) ? "credential" : "endpoint"}`,
+                );
+                files++;
+              }
+            }
+            return files;
+          };
+          const scanned = await scan(root);
+          assert.ok(
+            secrets.every((secret) => !stderrText.includes(secret)),
+            "child output scan failed",
+          );
+          console.log(`native-fake-private-scan: passed files=${scanned}`);
+        } finally {
+          await rm(root, { recursive: true, force: true });
+        }
         assert.equal(exitCode, 0, "native V4 owner must dispose and exit after stdio detach");
       }
     },
