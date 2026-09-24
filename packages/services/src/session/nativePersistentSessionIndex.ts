@@ -1,14 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, open, readFile, rename, unlink } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, sep } from "node:path";
+import { dirname, join } from "node:path";
 import { backup, DatabaseSync } from "node:sqlite";
 import { isRemoteWorkspaceIdentity } from "@zcode/shared";
-import {
-  parseModelSelectionValue,
-  SESSION_ENTRY_MODEL_SELECTION,
-  type SessionId,
-  type SessionStorePort,
-} from "@zcode/contracts";
 import { modelBindingRequestSchema, type ModelBindingRequest } from "@zcode/shared/agent-host";
 import {
   legacyExportSchema,
@@ -18,65 +12,12 @@ import {
   type LegacyRecord,
 } from "../project-workspaces/migrationContract.js";
 import { areTasksDatabaseMigrationsApplied } from "./tasksDatabase/migrations.js";
-
-/** Native CLI session-store metadata, obtained through a public native-owner read API (no transcript copy). */
-export interface NativeSessionMetadataReader {
-  read(scope: { workspaceKey: string; workspacePath: string; nativeSessionId: string }): Promise<
-    | {
-        cwd: string;
-        targetId: string;
-        modelBinding?: ModelBindingRequest;
-        /** A malformed explicit native selection must never fall back to the stale task-index model. */
-        suppressIndexModelFallback?: boolean;
-      }
-    | undefined
-  >;
-}
-
-/** Binds an already-open native session owner to the index, without opening/migrating its DB. */
-export class NativeSessionStoreMetadataReader implements NativeSessionMetadataReader {
-  constructor(
-    private readonly store: Pick<SessionStorePort, "getSession" | "sessionEntries">,
-    private readonly targetForScope: (scope: {
-      workspaceKey: string;
-      workspacePath: string;
-      nativeSessionId: string;
-    }) => Promise<string | undefined>,
-  ) {}
-
-  async read(scope: { workspaceKey: string; workspacePath: string; nativeSessionId: string }) {
-    const sessionId = scope.nativeSessionId as SessionId;
-    const session = await this.store.getSession(sessionId);
-    if (!session || !isAbsolute(session.directory) || !isAbsolute(scope.workspacePath))
-      return undefined;
-    const child = relative(scope.workspacePath, session.directory);
-    // 中文：SessionStore 的 id 是全库主键；同名 task 在另一个原生 scope 下不能被误认领。
-    if (child === ".." || child.startsWith(`..${sep}`) || isAbsolute(child)) return undefined;
-    if (isRemoteWorkspaceIdentity(scope.workspaceKey) && session.workspaceID !== scope.workspaceKey)
-      return undefined;
-    const targetId = await this.targetForScope(scope);
-    if (!targetId) return undefined;
-    const entries = await this.store.sessionEntries?.({
-      sessionID: sessionId,
-      type: SESSION_ENTRY_MODEL_SELECTION,
-    });
-    const lastSelection = entries?.at(-1);
-    const parsed = lastSelection ? parseModelSelectionValue(lastSelection.data) : undefined;
-    return {
-      cwd: session.directory,
-      targetId,
-      ...(parsed
-        ? {
-            modelBinding: modelBindingRequestSchema.parse({
-              kind: "host-managed",
-              selection: parsed,
-            }),
-          }
-        : {}),
-      ...(lastSelection && !parsed ? { suppressIndexModelFallback: true } : {}),
-    };
-  }
-}
+import type { NativeSessionMetadataReader } from "./nativeSessionMetadata.js";
+export {
+  NativeSessionStoreMetadataReader,
+  NativeSqliteMetadataReader,
+} from "./nativeSessionMetadata.js";
+export type { NativeSessionMetadataReader } from "./nativeSessionMetadata.js";
 
 const expectedColumns = [
   "workspace_key",
@@ -112,7 +53,6 @@ export interface NativeIndexFact {
   archived: boolean;
   deleted: boolean;
   unread: boolean;
-  waiting: boolean;
   nativeModel: string | null;
   /** Only unambiguous last-observed selection; native session store owns actual active selection. */
   lastObservedModelBinding?: ModelBindingRequest;
@@ -130,36 +70,42 @@ interface RawRow {
 const hash = (value: Buffer | string) => createHash("sha256").update(value).digest("hex");
 
 /** No schema upgrade is performed on this read-only migration path. */
+function assertNativeTasksSchema(db: DatabaseSync): {
+  ledger: Array<{ id: string }>;
+  columns: string[];
+} {
+  if (
+    Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version) !== 0
+  )
+    throw new Error("unknown-native-schema");
+  if (!areTasksDatabaseMigrationsApplied(db)) throw new Error("unmigrated-native-schema");
+  const ledger = db.prepare("SELECT id FROM tasks_schema_migration ORDER BY id").all() as Array<{
+    id: string;
+  }>;
+  if (
+    ledger.map(({ id }) => id).join(",") !==
+    "0001_adopt_task_schema,0002_provider_selection,0003_official_glm_selection"
+  )
+    throw new Error("unknown-native-schema");
+  const columns = (db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>).map(
+    ({ name }) => name,
+  );
+  if (
+    columns.length !== expectedColumns.length ||
+    expectedColumns.some((name) => !columns.includes(name))
+  )
+    throw new Error("unknown-native-schema");
+  return { ledger, columns };
+}
+
 function readRaw(path: string): { revision: string; rows: RawRow[] } {
   const db = new DatabaseSync(path, { readOnly: true });
   try {
-    if (
-      Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version) !==
-      0
-    )
-      throw new Error("unknown-native-schema");
-    if (!areTasksDatabaseMigrationsApplied(db)) throw new Error("unmigrated-native-schema");
-    const ledger = db.prepare("SELECT id FROM tasks_schema_migration ORDER BY id").all() as Array<{
-      id: string;
-    }>;
-    if (
-      ledger.map(({ id }) => id).join(",") !==
-      "0001_adopt_task_schema,0002_provider_selection,0003_official_glm_selection"
-    )
-      throw new Error("unknown-native-schema");
-    const columns = (db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>).map(
-      ({ name }) => name,
-    );
-    if (
-      columns.length !== expectedColumns.length ||
-      expectedColumns.some((name) => !columns.includes(name))
-    )
-      throw new Error("unknown-native-schema");
+    const { ledger, columns } = assertNativeTasksSchema(db);
     const rows = db
       .prepare("SELECT * FROM tasks ORDER BY workspace_key, task_id")
       .all() as unknown as RawRow[];
-    const revision = hash(JSON.stringify({ ledger, columns, rows }));
-    return { revision, rows };
+    return { revision: hash(JSON.stringify({ ledger, columns, rows })), rows };
   } finally {
     db.close();
   }
@@ -186,6 +132,17 @@ function indexModel(model: string | null, thoughtLevel: unknown): ModelBindingRe
 }
 
 export class NativePersistentSessionIndex implements LegacyPersistentSessionIndexReader {
+  private lastFactsDigest?: string;
+  private readonly listeners = new Set<() => void>();
+
+  /** The native owner can trigger a read; committed summary changes invalidate the catalog on that read. */
+  onChange(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
   constructor(
     private readonly databasePath: string,
     private readonly backupDirectory: string,
@@ -215,24 +172,37 @@ export class NativePersistentSessionIndex implements LegacyPersistentSessionInde
   }
 
   /** Current native-owner facts for catalog read projection; never use migrated metadata as runtime truth. */
-  readFacts(): Promise<NativeIndexFact[]> {
-    return this.snapshot(async (path) => {
-      const { rows } = readRaw(path);
-      return rows.map((row) => {
-        let pendingInteraction: unknown;
-        let thoughtLevel: unknown;
-        try {
-          const metadata = JSON.parse(row.meta_json) as {
-            pendingInteraction?: unknown;
-            thoughtLevel?: unknown;
-          };
-          pendingInteraction = metadata.pendingInteraction;
-          thoughtLevel = metadata.thoughtLevel;
-        } catch {
-          // 中文：损坏的原生 meta 不能被当作缺省选项，也不能凭旧索引猜测执行状态。
-          thoughtLevel = null;
-        }
-        const lastObservedModelBinding = indexModel(row.model, thoughtLevel);
+  async readFacts(): Promise<NativeIndexFact[]> {
+    const db = new DatabaseSync(this.databasePath, { readOnly: true });
+    let facts: NativeIndexFact[];
+    try {
+      assertNativeTasksSchema(db);
+      // 中文：侧边栏不能为每次读取备份整个 WAL 库或拉取 searchable_text 正文；只读当前摘要。
+      const rows = db
+        .prepare(`SELECT workspace_key, task_id, title, updated_at, task_status,
+        archived, deleted, unread_at, model,
+        CASE WHEN json_valid(meta_json) THEN json_extract(meta_json, '$.thoughtLevel') ELSE NULL END AS thought_level,
+        CASE WHEN json_valid(meta_json) THEN json_type(meta_json, '$.thoughtLevel') ELSE 'invalid' END AS thought_type
+        FROM tasks ORDER BY workspace_key, task_id`)
+        .all() as Array<{
+        workspace_key: string;
+        task_id: string;
+        title: string;
+        updated_at: number;
+        task_status: string | null;
+        archived: number;
+        deleted: number;
+        unread_at: number | null;
+        model: string | null;
+        thought_level: unknown;
+        thought_type: string | null;
+      }>;
+      facts = rows.map((row) => {
+        // 中文：损坏的 meta 或非字符串推理等级不能被当作缺省选项；SQL 不返回 pending 正文。
+        const lastObservedModelBinding = indexModel(
+          row.model,
+          row.thought_type === null ? undefined : row.thought_level,
+        );
         return {
           workspaceKey: row.workspace_key,
           nativeSessionId: row.task_id,
@@ -242,12 +212,26 @@ export class NativePersistentSessionIndex implements LegacyPersistentSessionInde
           archived: row.archived === 1,
           deleted: row.deleted === 1,
           unread: row.unread_at !== null,
-          waiting: pendingInteraction !== undefined,
           nativeModel: row.model,
           ...(lastObservedModelBinding ? { lastObservedModelBinding } : {}),
         };
       });
-    });
+    } finally {
+      db.close();
+    }
+    const digest = hash(JSON.stringify(facts));
+    const changed = this.lastFactsDigest !== undefined && this.lastFactsDigest !== digest;
+    this.lastFactsDigest = digest;
+    if (changed) {
+      for (const listener of this.listeners) {
+        try {
+          listener();
+        } catch {
+          /* A subscriber cannot break the read-only projection. */
+        }
+      }
+    }
+    return facts;
   }
 
   private async exportSnapshot(path: string): Promise<LegacyExport> {

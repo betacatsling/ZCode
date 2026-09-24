@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -149,6 +149,47 @@ test("public native session-store metadata supplies actual cwd and exact model w
   }
 });
 
+test("ordinary native summary reads committed WAL changes without backup or stored waiting claim", async () => {
+  const f = await fixture();
+  try {
+    await f.write("/repo", undefined, "p/m");
+    let invalidations = 0;
+    const unsubscribe = f.reader.onChange(() => {
+      invalidations++;
+    });
+    assert.equal((await f.reader.readFacts())[0]?.title, "/repo");
+    assert.equal(invalidations, 0);
+    await assert.rejects(() => stat(join(f.dir, "backups")), /ENOENT/);
+    await f.repo.syncTaskMeta({
+      meta: {
+        taskId: "same-id",
+        traceId: "trace-test",
+        title: "changed",
+        workspacePath: "/repo",
+        createdAt: 1,
+        updatedAt: 7,
+        mode: "build",
+        model: "p/m",
+        provider: "glm",
+        status: "running",
+        pendingInteraction: { type: "question", prompt: "not-live" },
+      },
+    });
+    const changed = (await f.reader.readFacts())[0]!;
+    assert.equal(changed.title, "changed");
+    assert.equal(changed.updatedAt, 7);
+    assert.equal(invalidations, 1);
+    assert.equal("waiting" in changed, false);
+    assert.equal((await f.reader.readFacts())[0]?.title, "changed");
+    assert.equal(invalidations, 1);
+    unsubscribe();
+    await assert.rejects(() => stat(join(f.dir, "backups")), /ENOENT/);
+  } finally {
+    f.repo.close();
+    await rm(f.dir, { recursive: true, force: true });
+  }
+});
+
 test("native SQLite WAL export includes closed scopes, stays isolated and backup survives restart", async () => {
   const f = await fixture();
   try {
@@ -275,20 +316,25 @@ test("native directory joins identical task IDs only within their original works
       },
       readFacts: () => f.reader.readFacts(),
     });
-    assert.equal((await directory.allSessions()).length, 2);
+    const treeRows = await directory.allSessions();
+    assert.equal(treeRows.length, 2);
+    assert.notEqual(treeRows[0]?.session.id, treeRows[1]?.session.id);
+    assert.ok(
+      treeRows.every(({ session }) => session.id.startsWith("native:") && session.id.length < 256),
+    );
     assert.equal(
       (
-        await directory.resolve({
+        await directory.resolveOwner({
           targetId: "target-1",
           workspaceId: "worktree-1",
           sourceWorkspaceKey: "/repo/b",
           nativeSessionId: "same-id",
         })
-      )?.sourceWorkspacePath,
+      )?.owner.sourceWorkspacePath,
       "/repo/b",
     );
     assert.equal(
-      await directory.resolve({
+      await directory.resolveOwner({
         targetId: "target-1",
         workspaceId: "worktree-1",
         sourceWorkspaceKey: "/repo/a",
@@ -382,15 +428,15 @@ test("actual Git subdirectory maps with native scope retained and target-isolate
         listMappings: () => migration.listMappings(),
         readFacts: () => f.reader.readFacts(),
       });
-      const ref = await directory.resolve({
+      const ref = await directory.resolveOwner({
         targetId: "local",
         workspaceId: workspace.id,
         sourceWorkspaceKey: subdir,
         nativeSessionId: "same-id",
       });
-      assert.equal(ref?.cwdRelativeToWorktree, "src");
+      assert.equal(ref?.owner.cwdRelativeToWorktree, "src");
       assert.equal(
-        await directory.resolve({
+        await directory.resolveOwner({
           targetId: "other",
           workspaceId: workspace.id,
           sourceWorkspaceKey: subdir,
