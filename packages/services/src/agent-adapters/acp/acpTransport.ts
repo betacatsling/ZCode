@@ -1,24 +1,13 @@
-import { spawn, execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { isAbsolute } from "node:path";
-import { promisify } from "node:util";
+import { probeAcpDescriptor, record, rpcId, type ObjectValue } from "./acpWire.js";
+export { probeAcpDescriptor } from "./acpWire.js";
 import type { Readable, Writable } from "node:stream";
 import type { EventEmitter } from "node:events";
 
 const PROTOCOL_VERSION = 1;
 const MAX_FRAME = 1024 * 1024;
 const MAX_PENDING = 128;
-const execFileAsync = promisify(execFile);
-
-type ObjectValue = Record<string, unknown>;
-function record(value: unknown): value is ObjectValue {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-function rpcId(value: unknown): value is string | number {
-  return (
-    (typeof value === "string" && value.length > 0) ||
-    (typeof value === "number" && Number.isSafeInteger(value))
-  );
-}
 export interface AcpProcess extends Pick<EventEmitter, "on"> {
   stdin: Writable;
   stdout: Readable;
@@ -63,6 +52,7 @@ export class AcpTransport {
   >();
   private readonly seenInbound = new Set<string | number>();
   private readonly listeners = new Set<(update: ObjectValue) => void>();
+  private readonly exitListeners = new Set<(error: Error) => void>();
   private nextId = 1;
   private buffer = Buffer.alloc(0);
   private closed = false;
@@ -70,6 +60,11 @@ export class AcpTransport {
   private inPrompt = false;
   private promptId?: number;
   private cancelledPromptId?: number;
+  private cancelSettlement?: {
+    promise: Promise<void>;
+    resolve(): void;
+    reject(error: Error): void;
+  };
   private caps: ObjectValue = {};
 
   private constructor(
@@ -77,6 +72,7 @@ export class AcpTransport {
     private readonly descriptor: AcpDescriptor,
     private readonly options: AcpTransportOptions,
   ) {
+    process.stdin.on("error", () => this.shutdown(new Error("ACP stdin failed")));
     process.stdout.on("data", (chunk: Buffer | string) => this.readChunk(chunk));
     process.stdout.on("error", () => this.shutdown(new Error("ACP stdout failed")));
     process.stdout.on("end", () => this.shutdown(new Error("ACP stdout ended")));
@@ -98,17 +94,7 @@ export class AcpTransport {
       !descriptor.env.HOME
     )
       throw new Error("ACP requires absolute executable/cwd and isolated HOME with exact version");
-    const probe =
-      options.probeVersion ??
-      (async (d: AcpDescriptor) => {
-        const { stdout } = await execFileAsync(d.executable, [...d.version.argv], {
-          cwd: d.cwd,
-          env: d.env,
-          timeout: 5000,
-          maxBuffer: 4096,
-        });
-        return stdout.trim();
-      });
+    const probe = options.probeVersion ?? probeAcpDescriptor;
     if ((await probe(descriptor)) !== descriptor.version.exact)
       throw new Error("ACP executable version mismatch");
     const advertised = options.clientCapabilities ?? {};
@@ -164,6 +150,14 @@ export class AcpTransport {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
+  onExit(listener: (error: Error) => void): () => void {
+    if (this.closed) {
+      listener(new Error("ACP connection already closed"));
+      return () => {};
+    }
+    this.exitListeners.add(listener);
+    return () => this.exitListeners.delete(listener);
+  }
   async newSession(): Promise<string> {
     if (this.sessionId) throw new Error("ACP session already bound");
     const result = await this.call("session/new", { cwd: this.descriptor.cwd, mcpServers: [] });
@@ -204,6 +198,9 @@ export class AcpTransport {
       this.promptId = undefined;
     }
   }
+  waitForCancelSettlement(): Promise<void> {
+    return this.cancelSettlement?.promise ?? Promise.resolve();
+  }
   async cancel(): Promise<void> {
     if (!this.sessionId || !this.inPrompt) return;
     this.inPrompt = false;
@@ -211,6 +208,14 @@ export class AcpTransport {
     this.cancelPermissions();
     if (this.promptId !== undefined) {
       this.cancelledPromptId = this.promptId;
+      let resolve!: () => void;
+      let reject!: (error: Error) => void;
+      const promise = new Promise<void>((yes, no) => {
+        resolve = yes;
+        reject = no;
+      });
+      void promise.catch(() => {});
+      this.cancelSettlement = { promise, resolve, reject };
       this.pending.get(this.promptId)?.reject(new Error("ACP prompt cancelled"));
       this.pending.delete(this.promptId);
     }
@@ -246,9 +251,9 @@ export class AcpTransport {
   private readChunk(chunk: Buffer | string): void {
     if (this.closed) return;
     this.buffer = Buffer.concat([this.buffer, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)]);
-    if (this.buffer.length > MAX_FRAME) return this.protocolError("ACP oversized frame");
     let index: number;
     while ((index = this.buffer.indexOf(10)) !== -1 && !this.closed) {
+      if (index > MAX_FRAME) return this.protocolError("ACP oversized frame");
       const raw = this.buffer.subarray(0, index);
       this.buffer = this.buffer.subarray(index + 1);
       if (!raw.length) return this.protocolError("ACP empty frame");
@@ -260,6 +265,7 @@ export class AcpTransport {
       }
       this.handle(frame);
     }
+    if (this.buffer.length > MAX_FRAME) this.protocolError("ACP oversized frame");
   }
   private handle(frame: unknown): void {
     if (!record(frame) || frame.jsonrpc !== "2.0" || ("id" in frame && !rpcId(frame.id)))
@@ -285,6 +291,8 @@ export class AcpTransport {
       return this.protocolError("ACP invalid response");
     if (frame.id === this.cancelledPromptId) {
       this.cancelledPromptId = undefined;
+      this.cancelSettlement?.resolve();
+      this.cancelSettlement = undefined;
       return; // Cancellation is cleared only after the old backend turn actually settles.
     }
     const pending = typeof frame.id === "number" ? this.pending.get(frame.id) : undefined;
@@ -382,12 +390,16 @@ export class AcpTransport {
     for (const request of this.pending.values()) request.reject(error);
     this.pending.clear();
     this.cancelledPromptId = undefined;
+    this.cancelSettlement?.reject(error);
+    this.cancelSettlement = undefined;
     this.inbound.clear();
     this.listeners.clear();
     this.process.stdin.end();
     this.process.stdout.destroy();
     this.process.stderr.destroy();
     this.process.kill();
+    for (const listener of this.exitListeners) listener(error);
+    this.exitListeners.clear();
   }
 }
 export const createAcpTransport = AcpTransport.connect;
