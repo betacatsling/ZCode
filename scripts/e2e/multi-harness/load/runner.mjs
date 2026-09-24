@@ -8,6 +8,7 @@ import { pathToFileURL } from 'node:url';
 
 const HOUR8 = 8 * 60 * 60 * 1000;
 const LATENCY_BUDGET = 1.10;
+const CLEANUP_DEADLINE_MS = 750;
 const defaults = { delivery: 'desktop-continuous', mode: 'acceptance', durationMs: HOUR8, eventCount: 100_000, worktreeCount: 50, sessionCount: 10, expandedCount: 5, sampleEveryMs: 60_000, reconnectEveryMs: 300_000, idleMs: 60_000, maxBacklog: 10_000, maxOwnedChildren: 32 };
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const inside = (root, child) => { const r = relative(root, child); return r === '' || (r !== '..' && !r.startsWith('../') && !isAbsolute(r)); };
@@ -15,12 +16,13 @@ const machine = createHash('sha256').update(JSON.stringify({ platform: platform(
 
 export function validateOptions(input = {}) {
   const options = { ...defaults, ...input };
-  if (!['smoke', 'acceptance'].includes(options.mode)) throw new Error('invalid mode');
+  if (!['smoke', 'benchmark', 'acceptance'].includes(options.mode)) throw new Error('invalid mode');
   if (!['desktop-continuous','web-remote-replayable'].includes(options.delivery)) throw new Error('invalid delivery');
   for (const key of ['durationMs','eventCount','worktreeCount','sessionCount','expandedCount','sampleEveryMs','reconnectEveryMs','idleMs','maxBacklog','maxOwnedChildren']) {
     if (!Number.isSafeInteger(options[key]) || options[key] < (key === 'idleMs' ? 0 : 1)) throw new Error(`invalid ${key}`);
   }
   if (options.expandedCount > options.worktreeCount || options.sessionCount < options.expandedCount) throw new Error('invalid workspace/session distribution');
+  if (options.mode === 'benchmark' && (typeof options.benchmarkDatasetId !== 'string' || !/^[a-zA-Z0-9._-]{1,128}$/.test(options.benchmarkDatasetId))) throw new Error('invalid benchmarkDatasetId');
   if (options.mode === 'acceptance') {
     if (options.durationMs < HOUR8) throw new Error('acceptance requires 8 hours elapsed');
     if (options.eventCount < 100_000) throw new Error('acceptance requires 100000 events');
@@ -96,7 +98,7 @@ function metadataCheck(meta, paths, mode) {
   if (!meta || typeof meta.productionCommit !== 'string' || !/^[a-f0-9]{40}$/.test(meta.productionCommit) && !(mode === 'smoke' && meta.productionCommit === 'test-only') || !/^[a-zA-Z0-9._-]{1,64}$/.test(meta.driverVersion ?? '') || !meta.paths) throw new Error('missing driver provenance/isolation attestation');
   for (const [key, value] of Object.entries(paths)) if (meta.paths[key] !== value) throw new Error(`unverified effective ${key}`);
 }
-function configOf(o) { return { delivery:o.delivery,durationMs:o.durationMs,eventCount:o.eventCount,worktreeCount:o.worktreeCount,sessionCount:o.sessionCount,expandedCount:o.expandedCount,sampleEveryMs:o.sampleEveryMs,reconnectEveryMs:o.reconnectEveryMs,maxBacklog:o.maxBacklog,maxOwnedChildren:o.maxOwnedChildren,idleMs:o.idleMs }; }
+function configOf(o) { return { delivery:o.delivery,benchmarkDatasetId:o.mode === 'benchmark' ? o.benchmarkDatasetId : null,durationMs:o.durationMs,eventCount:o.eventCount,worktreeCount:o.worktreeCount,sessionCount:o.sessionCount,expandedCount:o.expandedCount,sampleEveryMs:o.sampleEveryMs,reconnectEveryMs:o.reconnectEveryMs,maxBacklog:o.maxBacklog,maxOwnedChildren:o.maxOwnedChildren,idleMs:o.idleMs }; }
 async function preservedSource(checkout, expectedCommit) {
   if (typeof checkout !== 'string' || !isAbsolute(checkout) || !/^[a-f0-9]{40}$/.test(expectedCommit ?? '')) throw new Error('missing preserved source');
   const root = await realpath(checkout);
@@ -116,22 +118,35 @@ async function verifiedProvenance(checkout, buildArtifactPath, commit, artifactR
   if (inside(artifactRoot,sourceCheckout) || inside(artifactRoot,build)) throw new Error('provenance cannot be disposable fixture');
   return {sourceCheckout,buildArtifactPath:build,buildSha256:await buildHash(build)};
 }
+// 中文：只比较有明确窗口、数据集和逐次采样时间的实际测量，不能将快测冒充基准。
+function validMeasurement(run) {
+  const m = run.measurement, samples = run.samples;
+  return m && m.datasetId === run.config?.benchmarkDatasetId && m.windowMs === run.config?.durationMs &&
+    m.startedAtElapsedMs === 0 && Number.isFinite(m.endedAtElapsedMs) &&
+    m.endedAtElapsedMs === run.elapsedMs && run.elapsedMs >= m.windowMs &&
+    Array.isArray(samples?.elapsedMs) && samples.elapsedMs.length > 0 &&
+    samples.elapsedMs.length === samples.typedInputMs?.length &&
+    samples.elapsedMs.at(-1) >= m.windowMs &&
+    samples.elapsedMs.every((t,i) => Number.isFinite(t) && t >= 0 && t <= m.endedAtElapsedMs && (i === 0 || t >= samples.elapsedMs[i-1]));
+}
 async function comparison(path, result) {
   if (!path) return {status:'missing-baseline'};
+  if (result.mode !== 'benchmark') return {status:'incomparable-baseline'};
   const base = JSON.parse(await readFile(path,'utf8'));
   const a = base.metadata, b = result.metadata;
-  if (!a || !b || !['smoke-only','load-measured-baseline-pending','load-measured'].includes(base.status) ||
-    base.mode !== result.mode || base.machine !== result.machine || JSON.stringify(base.config) !== JSON.stringify(result.config) ||
+  if (!a || !b || !['latency-baseline-pending','latency-measured'].includes(base.status) ||
+    base.mode !== 'benchmark' || base.machine !== result.machine || JSON.stringify(base.config) !== JSON.stringify(result.config) ||
     a.driverVersion !== b.driverVersion || a.delivery !== b.delivery || a.productionCommit === b.productionCommit ||
-    !Number.isFinite(base.elapsedMs) || base.elapsedMs < base.config.durationMs ||
+    !validMeasurement(base) || !validMeasurement(result) ||
     !Number.isFinite(result.elapsedMs) || result.elapsedMs < result.config.durationMs ||
     !Array.isArray(base.samples?.typedInputMs) || !Array.isArray(base.samples?.sessionSwitchMs) ||
     !base.samples.typedInputMs.length || base.samples.typedInputMs.length !== base.samples.sessionSwitchMs.length ||
-    !result.samples.typedInputMs.length || !base.p95?.typedInputMs || !base.p95?.sessionSwitchMs ||
+    !result.samples.typedInputMs.length || result.samples.typedInputMs.length !== result.samples.sessionSwitchMs.length || !base.p95?.typedInputMs || !base.p95?.sessionSwitchMs ||
     base.p95.typedInputMs !== p95(base.samples.typedInputMs) || base.p95.sessionSwitchMs !== p95(base.samples.sessionSwitchMs) ||
     !base.samples.typedInputMs.every(x => Number.isFinite(x) && x >= 0) ||
     !base.samples.sessionSwitchMs.every(x => Number.isFinite(x) && x >= 0) ||
-    !Number.isFinite(result.p95.typedInputMs) || !Number.isFinite(result.p95.sessionSwitchMs)) return {status:'incomparable-baseline'};
+    !Number.isFinite(result.p95.typedInputMs) || !Number.isFinite(result.p95.sessionSwitchMs) ||
+    result.p95.typedInputMs !== p95(result.samples.typedInputMs) || result.p95.sessionSwitchMs !== p95(result.samples.sessionSwitchMs)) return {status:'incomparable-baseline'};
   try {
     if (inside(resolve(base.artifacts),a.sourceCheckout) || inside(resolve(base.artifacts),a.buildArtifactPath) || inside(result.artifacts,b.sourceCheckout) || inside(result.artifacts,b.buildArtifactPath) ||
       await preservedSource(a.sourceCheckout,a.productionCommit) !== a.sourceCheckout ||
@@ -160,27 +175,39 @@ function cleanupRegistry(driver) {
       children.push({child,closed});
     },
     async dispose() {
-      if (disposed) return {registeredChildrenExited:children.length};
+      if (disposed) return {registeredChildrenExited:children.length,failed:true};
       disposed = true;
-      let failed = false;
-      for (const fn of callbacks.reverse()) try { await fn(); } catch { failed = true; }
-      try { await driver.dispose(); } catch { failed = true; }
+      let failed = false, exitedCount = 0;
+      const deadline = performance.now() + CLEANUP_DEADLINE_MS;
+      // 中文：不可信的清理回调有失败截止期；超时只记录失败，不能充当子进程退出证明。
+      const bounded = async fn => {
+        let timer;
+        try {
+          const operation = Promise.resolve().then(fn).then(() => true, () => false);
+          const remaining = Math.max(0, deadline - performance.now());
+          if (!remaining) { failed = true; return; }
+          const done = await Promise.race([operation,
+            new Promise(resolve => { timer = setTimeout(() => resolve(false), remaining); })]);
+          if (!done) failed = true;
+        } finally { clearTimeout(timer); }
+      };
+      for (const fn of callbacks.reverse()) await bounded(fn);
+      await bounded(() => driver.dispose());
       for (const {child,closed} of children) {
-        if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
-        // Cleanup escalation is not used as a runtime synchronization success signal.
+        try { if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM'); } catch { failed = true; }
         let timer;
         let exited = await Promise.race([closed.then(() => true),new Promise(resolve => { timer = setTimeout(() => resolve(false),5000); })]);
         clearTimeout(timer);
         if (!exited) {
           failed = true;
-          child.kill('SIGKILL');
+          try { child.kill('SIGKILL'); } catch { failed = true; }
           exited = await Promise.race([closed.then(() => true),new Promise(resolve => { timer = setTimeout(() => resolve(false),5000); })]);
           clearTimeout(timer);
         }
-        if (!exited || (child.exitCode === null && child.signalCode === null)) failed = true;
+        if (exited && (child.exitCode !== null || child.signalCode !== null)) exitedCount++;
+        else failed = true;
       }
-      if (failed) throw new Error('owned resource cleanup unproven');
-      return {registeredChildrenExited:children.length};
+      return {registeredChildrenExited:exitedCount,failed};
     },
   };
 }
@@ -233,7 +260,7 @@ export async function runLoad(input = {}) {
   const root = await mkdtemp(join(baseReal, 'load-'));
   const paths = await isolation(root);
   if (input.isolateProcessEnv) applyIsolation(paths);
-  const result = { mode:o.mode, status:'failed', artifacts:root, machine, config:configOf(o), metadata:null, discovered:0, expanded:0, sessions:0, committedEvents:0, reconnects:0, elapsedMs:0, samples:{typedInputMs:[],sessionSwitchMs:[],sessionIds:[]}, p95:{typedInputMs:null,sessionSwitchMs:null}, backlog:[], backlogSummary:null, memory:[], cleanup:null, comparison:{status:'missing-baseline'}, gateway:{status:'unsupported'}, unsupported:['live-provider-latency-not-measured','paid-provider-not-used','ssh-not-used','desktop-and-web-require-separate-runs'], failures:[] };
+  const result = { mode:o.mode, status:'failed', artifacts:root, machine, config:configOf(o), metadata:null, discovered:0, expanded:0, sessions:0, committedEvents:0, reconnects:0, elapsedMs:0, samples:{typedInputMs:[],sessionSwitchMs:[],sessionIds:[],elapsedMs:[]}, measurement:null, p95:{typedInputMs:null,sessionSwitchMs:null}, backlog:[], backlogSummary:null, memory:[], cleanup:null, comparison:{status:'missing-baseline'}, gateway:{status:'unsupported'}, unsupported:['live-provider-latency-not-measured','paid-provider-not-used','ssh-not-used','desktop-and-web-require-separate-runs'], failures:[] };
   let mount, start, startingEvents = 0, phase = 'fixture';
   const cleanup = cleanupRegistry(input.driver);
   const takeFacts = async phase => {
@@ -283,7 +310,7 @@ export async function runLoad(input = {}) {
         phase = 'mounted-sample';
         const sampledId = sessions[result.samples.sessionIds.length % sessions.length].id;
         const sample = await mount.sample({sessionId:sampledId}); checkSample(sample);
-        result.samples.sessionIds.push(sampledId);
+        result.samples.sessionIds.push(sampledId); result.samples.elapsedMs.push(performance.now()-start);
         result.samples.typedInputMs.push(sample.typedInputMs); result.samples.sessionSwitchMs.push(sample.sessionSwitchMs);
         await takeFacts('sample'); nextSample = elapsed + o.sampleEveryMs;
       }
@@ -297,6 +324,15 @@ export async function runLoad(input = {}) {
       }
     }
     while (performance.now()-start < o.durationMs) await sleep(Math.min(1000,o.durationMs-(performance.now()-start)));
+    if (o.mode === 'benchmark') {
+      // 中文：基准窗口终点必须有实际挂载交互样本，不能用等待计时器填充延迟证据。
+      phase = 'mounted-sample';
+      const sampledId = sessions[result.samples.sessionIds.length % sessions.length].id;
+      const sample = await mount.sample({sessionId:sampledId}); checkSample(sample);
+      result.samples.sessionIds.push(sampledId); result.samples.elapsedMs.push(performance.now()-start);
+      result.samples.typedInputMs.push(sample.typedInputMs); result.samples.sessionSwitchMs.push(sample.sessionSwitchMs);
+      await takeFacts('sample');
+    }
     result.elapsedMs = performance.now()-start;
     phase = 'final-owner-facts';
     const facts = await takeFacts('end');
@@ -313,11 +349,19 @@ export async function runLoad(input = {}) {
   } catch { result.failures.push(`gate-failed:${phase}`); }
   finally {
     if (start && !result.elapsedMs) result.elapsedMs = performance.now()-start;
-    if (mount) try { await mount.close(); } catch { result.failures.push('gate-failed:cleanup-or-idle'); }
+    if (mount) {
+      // 中文：close 卡住时仍必须推进注册子进程的紧急回收，不能把计时器当清理成功。
+      let timer;
+      const closed = await Promise.race([Promise.resolve().then(() => mount.close()).then(() => true, () => false),
+        new Promise(resolve => { timer = setTimeout(() => resolve(false), CLEANUP_DEADLINE_MS); })]);
+      clearTimeout(timer);
+      if (!closed) result.failures.push('gate-failed:cleanup-or-idle');
+    }
     try {
       const exits = await cleanup.dispose();
-      result.cleanup = {...exits};
-      if (mount) {
+      result.cleanup = {registeredChildrenExited:exits.registeredChildrenExited};
+      if (exits.failed) throw new Error('owned resource cleanup unproven');
+      if (mount && !result.failures.includes('gate-failed:cleanup-or-idle')) {
         const after = await takeFacts('post-cleanup');
         if (after.childProcesses !== 0) throw new Error('owned child processes remained after cleanup');
         if (o.idleMs) await sleep(o.idleMs);
@@ -327,10 +371,11 @@ export async function runLoad(input = {}) {
       }
     } catch { result.failures.push('gate-failed:cleanup-or-idle'); }
     result.p95 = {typedInputMs:p95(result.samples.typedInputMs),sessionSwitchMs:p95(result.samples.sessionSwitchMs)};
+    if (o.mode === 'benchmark') result.measurement = {datasetId:o.benchmarkDatasetId,windowMs:o.durationMs,startedAtElapsedMs:0,endedAtElapsedMs:result.elapsedMs};
     if (result.backlog.length) result.backlogSummary = {max:Math.max(...result.backlog.map(b=>b.highWater)),final:result.backlog.findLast(b=>b.phase==='end')?.count ?? null};
     try { result.comparison = await comparison(input.baselinePath,result); } catch { result.failures.push('gate-failed:baseline-unreadable'); }
     if (result.comparison.status === 'over-budget') result.failures.push('gate-failed:latency-regression');
-    if (!result.failures.length) result.status = o.mode === 'smoke' ? 'smoke-only' : result.comparison.status === 'within-budget' ? 'load-measured' : 'load-measured-baseline-pending';
+    if (!result.failures.length) result.status = o.mode === 'smoke' ? 'smoke-only' : o.mode === 'benchmark' ? result.comparison.status === 'within-budget' ? 'latency-measured' : 'latency-baseline-pending' : 'load-measured-baseline-pending';
     const file = join(root,'result.json'); await writeFile(file+'.partial',JSON.stringify(result,null,2)+'\n'); await rename(file+'.partial',file);
   }
   return result;
@@ -344,10 +389,10 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(new URL(import.meta.
   // Fail-fast before importing the driver: isolate launch environment, never inherit account credentials.
   const mode = val('--mode') ?? 'acceptance';
   const delivery = val('--delivery') ?? 'desktop-continuous';
-  if (mode === 'smoke' && (val('--duration-ms') === undefined || val('--events') === undefined)) throw new Error('smoke requires explicit --duration-ms and --events');
+  if (['smoke','benchmark'].includes(mode) && (val('--duration-ms') === undefined || val('--events') === undefined)) throw new Error(`${mode} requires explicit --duration-ms and --events`);
   const numbers = { '--duration-ms':'durationMs', '--events':'eventCount', '--worktrees':'worktreeCount', '--sessions':'sessionCount', '--expanded':'expandedCount', '--sample-every-ms':'sampleEveryMs', '--reconnect-every-ms':'reconnectEveryMs', '--idle-ms':'idleMs', '--max-backlog':'maxBacklog', '--max-owned-children':'maxOwnedChildren' };
   const numeric = Object.fromEntries(Object.entries(numbers).filter(([flag]) => val(flag) !== undefined).map(([flag,key])=>[key,Number(val(flag))]));
-  const options = validateOptions({mode,delivery,...numeric});
+  const options = validateOptions({mode,delivery,benchmarkDatasetId:val('--benchmark-dataset-id'),...numeric});
   const base = resolve(val('--artifact-base') ?? tmpdir());
   const safeBase = await prepareArtifactBase(base);
   const launch = await mkdtemp(join(safeBase,'load-launch-'));
