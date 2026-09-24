@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { cpus, platform, arch, totalmem, tmpdir, hostname } from 'node:os';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, realpath, rename, writeFile } from 'node:fs/promises';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { pathToFileURL } from 'node:url';
 
@@ -104,6 +104,35 @@ async function comparison(path, result) {
   return { status: 'comparable', baselineCommit: base.metadata.productionCommit, typedInputRatio: result.p95.typedInputMs / base.p95.typedInputMs, sessionSwitchRatio: result.p95.sessionSwitchMs / base.p95.sessionSwitchMs };
 }
 
+async function existingAncestor(path) {
+  let cursor = path;
+  while (true) {
+    try { return await realpath(cursor); }
+    catch (error) { if (error?.code !== 'ENOENT') throw error; }
+    const parent = dirname(cursor);
+    if (parent === cursor) throw new Error('cannot resolve artifact ancestor');
+    cursor = parent;
+  }
+}
+async function rejectGitArtifactLocation(path) {
+  const enclosingGit = await git(path, 'rev-parse', '--show-toplevel').then(() => true, () => false);
+  const enclosingBare = await git(path, 'rev-parse', '--is-inside-git-dir').then(value => value.trim() === 'true', () => false);
+  if (enclosingGit || enclosingBare) throw new Error('artifact base must be outside all Git checkouts');
+}
+
+async function prepareArtifactBase(base) {
+  const cwd = await realpath(process.cwd());
+  if (inside(cwd, base) || inside(base, cwd)) throw new Error('artifact base must be outside the project checkout');
+  const ancestor = await existingAncestor(base);
+  if (inside(cwd, ancestor)) throw new Error('artifact base must be outside the project checkout');
+  await rejectGitArtifactLocation(ancestor);
+  await mkdir(base, { recursive:true });
+  const baseReal = await realpath(base);
+  if (inside(baseReal, cwd) || inside(cwd, baseReal)) throw new Error('artifact base must be outside the project checkout');
+  await rejectGitArtifactLocation(baseReal);
+  return baseReal;
+}
+
 export function isolatedEnvironment(current, paths) {
   const allowed = Object.fromEntries(['PATH','LANG','LC_ALL','TZ'].filter(key => current[key] !== undefined).map(key => [key,current[key]]));
   return {...allowed,HOME:paths.home,XDG_CONFIG_HOME:paths.xdgConfig,XDG_DATA_HOME:paths.xdgData,ZCODE_DATA_BASE_DIR:paths.desktopUserData,TMPDIR:paths.temporary ?? paths.home};
@@ -119,15 +148,7 @@ export async function runLoad(input = {}) {
   if (!input.driver || typeof input.driver.open !== 'function') throw new Error('production driver required; no mounted driver is bundled');
   if (o.mode === 'acceptance' && input.isolateProcessEnv !== true) throw new Error('acceptance requires isolated launch environment');
   const base = resolve(input.artifactBase ?? tmpdir());
-  // A disposable artifact directory must not be the project checkout or any ancestor of it.
-  const cwd = await realpath(process.cwd());
-  await mkdir(base, { recursive:true });
-  const baseReal = await realpath(base);
-  if (inside(baseReal, cwd) || inside(cwd, baseReal)) throw new Error('artifact base must be outside the project checkout');
-  // Even a different repository is not a disposable fixture location.
-  const enclosingGit = await git(baseReal, 'rev-parse', '--show-toplevel').then(() => true, () => false);
-  const enclosingBare = await git(baseReal, 'rev-parse', '--is-inside-git-dir').then(value => value.trim() === 'true', () => false);
-  if (enclosingGit || enclosingBare) throw new Error('artifact base must be outside all Git checkouts');
+  const baseReal = await prepareArtifactBase(base);
   const root = await mkdtemp(join(baseReal, 'load-'));
   const paths = await isolation(root);
   if (input.isolateProcessEnv) applyIsolation(paths);
@@ -238,8 +259,8 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(new URL(import.meta.
   const numeric = Object.fromEntries(Object.entries(numbers).filter(([flag]) => val(flag) !== undefined).map(([flag,key])=>[key,Number(val(flag))]));
   const options = validateOptions({mode,delivery,...numeric});
   const base = resolve(val('--artifact-base') ?? tmpdir());
-  await mkdir(base,{recursive:true});
-  const launch = await mkdtemp(join(base,'load-launch-'));
+  const safeBase = await prepareArtifactBase(base);
+  const launch = await mkdtemp(join(safeBase,'load-launch-'));
   const launchPaths = await isolation(launch);
   applyIsolation(launchPaths);
   const driver = (await import(pathToFileURL(driverPath).href)).default;
