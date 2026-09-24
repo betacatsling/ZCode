@@ -10,6 +10,8 @@ import {
   authorize,
   GatewayError,
   newToken,
+  reserveGeneration,
+  routeForRawUrl,
   validateBinding,
   validateProtocols,
   type TokenState,
@@ -68,6 +70,31 @@ function serialize(frame: GatewaySseFrame, maxBytes: number): Buffer {
     throw new GatewayError(429, "output_budget_exceeded");
   return Buffer.from(`${frame.event ? `event: ${frame.event}\n` : ""}data: ${json}\n\n`);
 }
+async function nextFrame(
+  iterator: AsyncIterator<GatewaySseFrame>,
+  signal: AbortSignal,
+): Promise<IteratorResult<GatewaySseFrame>> {
+  if (signal.aborted) throw new GatewayError(401, "unauthorized");
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      signal.removeEventListener("abort", abort);
+      reject(new GatewayError(401, "unauthorized"));
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    void Promise.resolve()
+      .then(() => iterator.next())
+      .then(
+        (result) => {
+          signal.removeEventListener("abort", abort);
+          resolve(result);
+        },
+        (error: unknown) => {
+          signal.removeEventListener("abort", abort);
+          reject(error);
+        },
+      );
+  });
+}
 async function waitForDrain(res: ServerResponse, signal: AbortSignal): Promise<void> {
   if (signal.aborted || res.destroyed) return;
   await new Promise<void>((resolve) => {
@@ -123,30 +150,32 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
   const server = createServer(async (req, res) => {
     let controller: AbortController | undefined;
     let state: TokenState | undefined;
+    let terminalFailure = false;
     const disconnected = () => controller?.abort();
     const cancelled = () => {
-      if (!res.destroyed) res.destroy();
+      if (!terminalFailure && !res.destroyed) res.destroy();
     };
     res.on("close", disconnected);
     req.on("aborted", disconnected);
     try {
       if (closing) throw new GatewayError(503, "gateway_closed");
-      // Do not accept path normalization, query credentials, alternate URLs, cookies or ambiguous proxy hosts.
+      // 不规范化原始路径：URL 解析可能把 ../ 归一成已授权路由，查询参数仅接受协议显式声明的原始键值。
       if (
         !address ||
         req.headers.host !== `127.0.0.1:${address.port}` ||
         req.headers.cookie ||
-        req.url?.includes("?") ||
-        req.url?.includes("#") ||
         req.headers["x-upstream-url"]
       )
         throw new GatewayError(400, "invalid_transport");
-      const protocol = routes.get(req.url ?? "");
-      if (!protocol) throw new GatewayError(404, "unsupported_endpoint");
+      const protocol = routeForRawUrl(req.url ?? "", routes);
       if (req.method !== "POST") throw new GatewayError(405, "unsupported_method");
       state = authorize(req, tokens, protocol.id);
       if (active >= limits.maxConcurrentRequests)
         throw new GatewayError(429, "concurrency_exceeded");
+      // 中文修复依据：读取分块请求体会让出事件循环，必须在首次 await 前原子占用请求次数。
+      if (state.requests >= state.binding.maxRequests)
+        throw new GatewayError(429, "request_budget_exceeded");
+      state.requests++;
       active++;
       controller = new AbortController();
       controller.signal.addEventListener("abort", cancelled, { once: true });
@@ -165,14 +194,14 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
       );
       if (decoded.stream !== true || decoded.modelId !== state.binding.requestedModelAlias)
         throw new GatewayError(422, "model_or_stream_mismatch");
-      state.requests++;
-      const model = await resolveModel(state.binding);
       if (controller.signal.aborted) throw new GatewayError(401, "unauthorized");
       if (
-        model.providerId !== state.binding.effectiveSelection.providerId ||
-        model.modelId !== state.binding.effectiveSelection.modelId
+        state.model.providerId !== state.binding.effectiveSelection.providerId ||
+        state.model.modelId !== state.binding.effectiveSelection.modelId ||
+        state.model.options?.reasoningLevel !== state.modelOptions.reasoningLevel
       )
         throw new GatewayError(403, "model_identity_mismatch");
+      const modelOptions = reserveGeneration(state, decoded.request.options);
       const context = {
         requestId: randomUUID(),
         modelId: decoded.modelId,
@@ -180,7 +209,11 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
         signal: controller.signal,
       };
       const frames = protocol.encode(
-        model.streamText({ ...decoded.request, abortSignal: controller.signal }),
+        state.streamText({
+          ...decoded.request,
+          options: modelOptions,
+          abortSignal: controller.signal,
+        }),
         context,
       );
       res.writeHead(200, {
@@ -189,13 +222,32 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
         connection: "keep-alive",
         "x-accel-buffering": "no",
       });
-      for await (const frame of frames) {
-        if (controller.signal.aborted) break;
-        const data = serialize(frame, state.binding.maxOutputBytes - state.outputBytes);
-        if (data.length > state.binding.maxOutputBytes - state.outputBytes)
-          throw new GatewayError(429, "output_budget_exceeded");
-        state.outputBytes += data.length;
-        if (!res.write(data)) await waitForDrain(res, controller.signal);
+      const iterator = frames[Symbol.asyncIterator]();
+      let streamFailed = true;
+      try {
+        for (;;) {
+          if (controller.signal.aborted) break;
+          const result = await nextFrame(iterator, controller.signal);
+          if (result.done || controller.signal.aborted) break;
+          const frame = result.value;
+          const data = serialize(frame, state.binding.maxOutputBytes - state.outputBytes);
+          if (data.length > state.binding.maxOutputBytes - state.outputBytes)
+            throw new GatewayError(429, "output_budget_exceeded");
+          state.outputBytes += data.length;
+          if (!res.write(data)) await waitForDrain(res, controller.signal);
+        }
+        streamFailed = false;
+      } finally {
+        // 中文修复依据：编码器或写入异常时，先取消模型再执行 iterator.return，避免等待不响应的上游 next。
+        if (streamFailed && !controller.signal.aborted) {
+          terminalFailure = true;
+          controller.abort();
+        }
+        if (iterator.return) {
+          const teardown = iterator.return();
+          if (!controller.signal.aborted) await teardown;
+          else void teardown.catch(() => {});
+        }
       }
       if (!controller.signal.aborted) res.end();
     } catch (error) {
@@ -205,7 +257,10 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
       } catch {
         /* observation cannot change routing */
       }
-      if (!controller?.signal.aborted) {
+      if ((!controller?.signal.aborted || terminalFailure) && !res.destroyed) {
+        // 编码/写出失败也必须取消上游；保留连接只用于发送脱敏终止帧。
+        terminalFailure = true;
+        controller?.abort();
         if (res.headersSent && state) {
           const terminal = serialize(
             { event: "error", data: { error: { code: failure.code } } },
@@ -247,17 +302,38 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
       })();
       return starting;
     },
-    issueToken(binding: GatewayTokenBinding) {
+    async issueToken(binding: GatewayTokenBinding) {
       if (!address || closing) throw new GatewayError(503, "gateway_closed");
       validateBinding(binding);
       if (!options.protocols.some((protocol) => protocol.id === binding.protocol))
         throw new GatewayError(400, "invalid_protocol");
-      const token = newToken();
       const copy = structuredClone(binding);
       if (copy.effectiveSelection.options) Object.freeze(copy.effectiveSelection.options);
       Object.freeze(copy.effectiveSelection);
       Object.freeze(copy);
-      const state: TokenState = { binding: copy, requests: 0, outputBytes: 0, active: new Set() };
+      const model = await resolveModel(copy);
+      if (closing || !address) throw new GatewayError(503, "gateway_closed");
+      if (copy.expiresAt <= Date.now()) throw new GatewayError(400, "invalid_binding");
+      if (
+        model.providerId !== copy.effectiveSelection.providerId ||
+        model.modelId !== copy.effectiveSelection.modelId ||
+        model.options?.reasoningLevel !== copy.effectiveSelection.options?.reasoningLevel
+      )
+        throw new GatewayError(403, "model_identity_mismatch");
+      const modelOptions = Object.freeze({ ...model.options });
+      // 调用方法也在发令牌时捕获，避免后续注册表替换同名模型的执行入口。
+      const streamText = model.streamText.bind(model);
+      const token = newToken();
+      const state: TokenState = {
+        binding: copy,
+        model,
+        streamText,
+        modelOptions,
+        requests: 0,
+        outputBytes: 0,
+        reservedGenerationTokens: 0,
+        active: new Set(),
+      };
       tokens.set(token, state);
       const expire = () => {
         const remaining = copy.expiresAt - Date.now();
