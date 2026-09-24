@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { Emitter } from "@zcode/rpc";
 import type { ProviderRegistryService } from "@zcode/provider";
-import type { ExecutionTarget, HarnessManifest } from "@zcode/shared/agent-host";
+import { writableSessionSpecV2Schema, type ExecutionTarget, type HarnessManifest } from "@zcode/shared/agent-host";
 import { HarnessRegistry } from "./harnessRegistry.js";
 import { createRegistryModelCatalog } from "./registryCatalog.js";
 import { createRpcAgentHostService } from "./rpcTargetService.js";
@@ -67,7 +67,12 @@ export function createLazyTargetAgentHostService(input: {
       return (target ?? historyOnly).listSessions(workspaceIdentity, worktreePath);
     },
     async create(spec, commandId) {
-      if (!input.allowNewSessions()) throw new Error("new external sessions disabled; existing history remains readable");
+      if (!input.allowNewSessions()) {
+        const prior = await (target ?? historyOnly).queryCreationCommand(commandId);
+        if (prior && JSON.stringify(prior.spec) === JSON.stringify(writableSessionSpecV2Schema.parse(spec)) && prior.receipt.status === "completed")
+          return (target ?? historyOnly).snapshot(prior.spec);
+        throw new Error("new external sessions disabled; existing history remains readable");
+      }
       return (await getTarget()).create(spec, commandId);
     },
     queryCreationCommand: (commandId) => (target ?? historyOnly).queryCreationCommand(commandId),
