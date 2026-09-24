@@ -446,3 +446,17 @@ test("create uses stable command ID, lost ACK queries durable Host, unsupported 
   );
   transport.dispose();
 });
+
+test("scoped external question maps only a real answer, never permission approval", async () => {
+  const { transport, history, calls } = harness([spec]);
+  history.get(spec.hostSessionId)!.events.push(
+    turn(spec.hostSessionId, 1),
+    { ...turn(spec.hostSessionId, 2), turnId: "turn-1", kind: "question.requested", interactionId: "question", prompt: "Which?", freeText: true,
+      options: [{ optionId: "first", label: "First option" }] },
+  );
+  await assert.rejects(transport.sendCommand({ ...envelope("host-one", "resolveInteraction", { interactionId: "question", answer: { optionId: "allow" } }, "fake-allow"), baseLogEpoch: "epoch" }), /question answer/);
+  await assert.rejects(transport.sendCommand({ ...envelope("host-one", "resolveInteraction", { interactionId: "question", answer: { freeText: "yes" } }, "old"), baseLogEpoch: "stale" }), /question answer/);
+  await transport.sendCommand({ ...envelope("host-one", "resolveInteraction", { interactionId: "question", answer: { optionId: "first" } }, "selected"), baseLogEpoch: "epoch" });
+  assert.deepEqual(calls.filter((call) => call.startsWith("dispatch:")), ["dispatch:host-one:answerInteraction:selected"]);
+  transport.dispose();
+});

@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Pi worker maps SDK events at the native worker boundary; split requires event state extraction. */
 import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, join } from "node:path";
@@ -22,6 +23,8 @@ let activeTurn: string | undefined;
 let preparedTurn: string | undefined;
 let cwd: string;
 let activeMessageId: string | undefined;
+const visibleReasoning = new Map<number, string>();
+const emittedReasoning = new Set<number>();
 let lastAssistantOutcome: "success" | "failed" | "cancelled" = "success";
 const approvals = new Map<
   string,
@@ -215,7 +218,11 @@ async function main(): Promise<void> {
   session.setThinkingLevel("off");
   session.subscribe((event: AgentSessionEvent) => {
     if (!activeTurn) return;
-    if (event.type === "message_start") activeMessageId = randomUUID();
+    if (event.type === "message_start") {
+      activeMessageId = randomUUID();
+      visibleReasoning.clear();
+      emittedReasoning.clear();
+    }
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
       activeMessageId ??= randomUUID();
       emit("text.delta", {
@@ -224,11 +231,37 @@ async function main(): Promise<void> {
         text: event.assistantMessageEvent.delta,
       });
     }
+    if (event.type === "message_update" && event.assistantMessageEvent.type === "thinking_delta") {
+      const update = event.assistantMessageEvent;
+      visibleReasoning.set(update.contentIndex, (visibleReasoning.get(update.contentIndex) ?? "") + update.delta);
+    }
+    if (event.type === "message_update" && event.assistantMessageEvent.type === "thinking_end") {
+      const update = event.assistantMessageEvent;
+      const part = update.partial.content[update.contentIndex];
+      // 修复模型的 opaque 签名和 redactedData 可能直到终帧才可辨识：仅在终帧确认
+      // 为公开 thinking 后，才向可持久化的 canonical journal 发送文本。
+      if (part?.type === "thinking" && !part.redacted && part.thinking) {
+        const messageId = `${activeMessageId ??= randomUUID()}:reasoning:${update.contentIndex}`;
+        emit("reasoning.started", { turnId: activeTurn, messageId });
+        emit("reasoning.delta", { turnId: activeTurn, messageId, text: visibleReasoning.get(update.contentIndex) ?? part.thinking });
+        emit("reasoning.finished", { turnId: activeTurn, messageId, text: part.thinking });
+        emittedReasoning.add(update.contentIndex);
+      }
+    }
     if (event.type === "message_end") {
       const message = event.message;
       if (message.role !== "user" && message.role !== "assistant") {
         activeMessageId = undefined;
         return;
+      }
+      if (message.role === "assistant" && Array.isArray(message.content)) {
+        message.content.forEach((part, index) => {
+          if (part.type !== "thinking" || part.redacted || !part.thinking || emittedReasoning.has(index)) return;
+          const messageId = `${activeMessageId ??= randomUUID()}:reasoning:${index}`;
+          emit("reasoning.started", { turnId: activeTurn, messageId });
+          emit("reasoning.delta", { turnId: activeTurn, messageId, text: part.thinking });
+          emit("reasoning.finished", { turnId: activeTurn, messageId, text: part.thinking });
+        });
       }
       const text =
         typeof message.content === "string"
@@ -246,10 +279,13 @@ async function main(): Promise<void> {
         });
       }
       if (message.role === "assistant") {
-        emit("usage.reported", {
-          turnId: activeTurn,
-          inputTokens: message.usage.input,
-          outputTokens: message.usage.output,
+        // Pi Usage.input excludes cacheRead/cacheWrite; reasoning is a subset of output.
+        // Per assistant message (Model call), not a cumulative session snapshot.
+        emit("usage.accounted", {
+          turnId: activeTurn, accounting: "delta", sourceId: activeMessageId ??= randomUUID(),
+          inputTokens: message.usage.input, outputTokens: message.usage.output,
+          cacheReadTokens: message.usage.cacheRead, cacheWriteTokens: message.usage.cacheWrite,
+          ...(message.usage.reasoning === undefined ? {} : { reasoningTokens: message.usage.reasoning }),
         });
         // 修复：取消后 SDK 可能再发 error 终帧；已取消的轮次不能被迟到的失败覆盖。
         if (message.stopReason === "error" && lastAssistantOutcome !== "cancelled") {

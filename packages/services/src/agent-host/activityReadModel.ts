@@ -51,8 +51,8 @@ export async function readActivitySummary(root: string, identity: JournalIdentit
       if (event.kind === "turn.finished") { active = false; tools.clear(); approvals.clear(); lastOutcome = event.outcome; if (event.outcome === "unknown") unknown = true; }
       if (event.kind === "tool.started") tools.add(event.toolCallId);
       if (event.kind === "tool.finished") tools.delete(event.toolCallId);
-      if (event.kind === "interaction.requested") approvals.add(event.interactionId);
-      if (event.kind === "interaction.resolved") approvals.delete(event.interactionId);
+      if (event.kind === "interaction.requested" || event.kind === "question.requested") approvals.add(event.interactionId);
+      if (event.kind === "interaction.resolved" || event.kind === "question.answered") approvals.delete(event.interactionId);
       if (event.kind === "session.status" && (event.state === "execution-unknown" || event.state === "interrupted")) unknown = true;
       if (event.kind === "session.status" && event.state === "idle") unknown = false;
     }

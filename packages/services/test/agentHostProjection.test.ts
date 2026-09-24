@@ -60,3 +60,45 @@ test("projection refuses gaps, foreign events or duplicated sequence", () => {
   assert.throws(() => projectHostConversation({ spec, runtimeEpoch: epoch, events: [event(2, "turn.started", { turnId: "t" })] }), /sequence/);
   assert.throws(() => projectHostConversation({ spec, runtimeEpoch: epoch, events: [event(1, "turn.started", { turnId: "t" }), event(1, "turn.started", { turnId: "t" })] }), /sequence/);
 });
+
+test("mixed transcript projects visible reasoning, structured plan, child, question and source-accounted cache without duplicate totals", () => {
+  const turnId = "mixed";
+  const common = { turnId };
+  const events: AgentEvent[] = [
+    event(1, "turn.started", common),
+    event(2, "message.finished", { ...common, messageId: "user", role: "user", text: "inspect" }),
+    event(3, "reasoning.started", { ...common, messageId: "thinking" }),
+    event(4, "reasoning.delta", { ...common, messageId: "thinking", text: "partial PRIVATE?" }),
+    event(5, "reasoning.finished", { ...common, messageId: "thinking", text: "visible final" }),
+    event(6, "text.delta", { ...common, messageId: "answer", text: "draft" }),
+    event(7, "message.finished", { ...common, messageId: "answer", role: "assistant", text: "final" }),
+    event(8, "tool.started", { ...common, toolCallId: "tool", name: "read" }),
+    event(9, "tool.finished", { ...common, toolCallId: "tool", name: "read", outcome: "success" }),
+    event(10, "plan.updated", { ...common, text: "legacy unstructured note" }),
+    event(11, "plan.itemsUpdated", { ...common, items: [{ id: "step", content: "Review", status: "inProgress" }] }),
+    event(12, "subagent.updated", { ...common, childSessionId: "child", childHarnessId: "pi", parentToolCallId: "tool", status: "started" }),
+    event(13, "subagent.updated", { ...common, childSessionId: "child", childHarnessId: "pi", status: "finished", summary: "done" }),
+    event(14, "usage.accounted", { ...common, sourceId: "call-1", accounting: "absolute", inputTokens: 10, outputTokens: 5, cacheReadTokens: 7, cacheWriteTokens: 2, reasoningTokens: 3 }),
+    event(15, "usage.accounted", { ...common, sourceId: "call-1", accounting: "absolute", inputTokens: 12, outputTokens: 6, cacheReadTokens: 7, cacheWriteTokens: 2, reasoningTokens: 3 }),
+    event(16, "usage.accounted", { ...common, sourceId: "call-2", accounting: "delta", inputTokens: 4, outputTokens: 1 }),
+    event(17, "question.requested", { ...common, interactionId: "question", prompt: "Which?", freeText: false, options: [{ optionId: "a", label: "First" }] }),
+  ];
+  const pending = projectHostConversation({ spec, runtimeEpoch: epoch, events, windowSize: 2 });
+  assert.deepEqual(pending.usage.cumulative, { inputTokens: 16, outputTokens: 7, cacheReadTokens: 7, cacheWriteTokens: 2 });
+  assert.equal(pending.pendingInteractions[0]?.kind, "userInput");
+  assert.equal(pending.plan?.items[0]?.id, "step");
+  assert.equal(pending.subagents.endedTotal, 1);
+  assert.equal(pending.rows.totalCount, 6);
+  assert.deepEqual(pending.rows.window.map((row) => row.rowId), [5, 6]);
+  const done = projectHostConversation({ spec, runtimeEpoch: epoch, events: [
+    ...events, event(18, "question.answered", { ...common, interactionId: "question" }),
+    event(19, "turn.finished", { ...common, outcome: "success" }),
+  ] });
+  assert.equal(done.pendingInteractions.length, 0);
+  assert.equal(done.rows.window.find((row) => row.kind === "reasoning")?.text, "visible final");
+  assert.equal(done.rows.window.find((row) => row.kind === "assistantText")?.text, "final");
+  assert.equal(done.rows.window.find((row) => row.kind === "subagent")?.status, "success");
+  assert.throws(() => projectHostConversation({ spec, runtimeEpoch: epoch, events: [...events, event(18, "usage.accounted", { ...common, sourceId: "call-2", accounting: "delta", inputTokens: 4 })] }), /duplicate usage/);
+  assert.throws(() => projectHostConversation({ spec, runtimeEpoch: epoch, events: [...events, event(18, "interaction.resolved", { ...common, interactionId: "question", decision: "allow" })] }), /stale approval/);
+  assert.throws(() => projectHostConversation({ spec, runtimeEpoch: epoch, events: [...events, event(18, "question.answered", { ...common, interactionId: "stale" })] }), /stale question/);
+});

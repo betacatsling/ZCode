@@ -141,12 +141,20 @@ export function createHostSendCommand(
       const payload = commandPayloadSchemas.resolveInteraction.parse(envelope.payload);
       const snapshot = await snapshotFor(spec);
       const interaction = snapshot.pendingInteractions.find(
-        (item) => item.interactionId === payload.interactionId && item.kind === "permission",
+        (item) => item.interactionId === payload.interactionId,
       );
       const turn = snapshot.control.activeWorks.find(
         (work) => work.kind === "primaryTurn",
       )?.foregroundExecutionId;
-      if (
+      if (interaction?.kind === "userInput" && interaction.payload.kind === "userInput") {
+        const selected = interaction.payload.options?.find((option) => option.optionId === payload.answer.optionId);
+        const answer = selected?.optionId ?? (interaction.payload.freeText ? payload.answer.freeText : undefined);
+        if (!turn || snapshot.logEpoch !== envelope.baseLogEpoch || !answer?.trim() || payload.answer.action || payload.answer.content || (payload.answer.optionId && !selected) || (payload.answer.freeText && (!interaction.payload.freeText || !!selected)))
+          return unsupported("stale or unsupported question answer");
+        command = { type: "answerInteraction", hostSessionId: spec.hostSessionId, commandId: envelope.commandId,
+          runtimeEpoch: snapshot.logEpoch, turnId: turn, interactionId: interaction.interactionId, answer };
+      } else {
+        if (
         !interaction ||
         !turn ||
         snapshot.logEpoch !== envelope.baseLogEpoch ||
@@ -163,8 +171,9 @@ export function createHostSendCommand(
         runtimeEpoch: snapshot.logEpoch,
         turnId: turn,
         interactionId: interaction.interactionId,
-        decision: payload.answer.optionId,
-      };
+          decision: payload.answer.optionId,
+        };
+      }
     } else return unsupported(envelope.type);
     const receipt = await service.dispatch(spec, command);
     return ack(receipt, envelope.baseRevision ?? 0);

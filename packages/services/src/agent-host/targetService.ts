@@ -62,7 +62,7 @@ export class AgentHostTargetService {
       text: unsupported, tools: unsupported, approvals: unsupported, cancelTurn: unsupported,
       resumeExecution: unsupported, history, images: unsupported, modelSwitch: unsupported,
       detach: unsupported, terminateSession: unsupported, viewHistory: history,
-      hostManagedModel: unsupported, fork: unsupported, subagents: unsupported,
+      hostManagedModel: unsupported, fork: unsupported, subagents: unsupported, questions: unsupported,
     };
     if (!stored || stored.state !== "running" || spec.schemaVersion !== 2 || !this.#target.available) return historyOnly;
     try { await this.#verify(spec); } catch { return historyOnly; }
@@ -86,6 +86,7 @@ export class AgentHostTargetService {
       images: notImplemented, modelSwitch: notImplemented, resumeExecution: notImplemented,
       terminateSession: "terminateSession" in report ? report.terminateSession : unverified,
       hostManagedModel, fork: notImplemented, subagents: notImplemented,
+      questions: "questions" in report && report.questions?.support === "supported" && adapter.answerInteraction ? report.questions : notImplemented,
     });
   }
   async getSessionReadModel(raw: SessionSpecV2 | LegacySessionSpec): Promise<HostSessionReadModel> {
