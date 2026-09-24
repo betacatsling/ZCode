@@ -16,6 +16,9 @@ export interface TargetSnapshot {
   executionTargetId: string;
   bindings: TargetBindingRecord[];
   workspaces: TargetWorkspaceRecord[];
+  /** Deny sets are target-owned; older snapshots without these fields default to empty. */
+  archivedBindings?: string[];
+  archivedWorkspaces?: string[];
 }
 
 /** One target namespace has one writer; stale locks fail closed until explicitly recovered. */
@@ -97,6 +100,7 @@ export class TargetAuthorityStore {
           (binding) =>
             binding &&
             typeof binding.id === "string" &&
+            (binding.projectId === undefined || typeof binding.projectId === "string") &&
             binding.executionTargetId === targetId &&
             typeof binding.repositoryPath === "string" &&
             validIdentity(binding.commonIdentity) &&

@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Target registry keeps admission, archive policy and removal under one serialized authority gate. */
 import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import path from "node:path";
@@ -6,6 +7,7 @@ import {
   preflightRemoveGitWorktree,
   removeGitWorktree,
   resolveGitWorktreeCwd,
+  type GitRemovePreflight,
 } from "./adapters/gitWorktreeBackend.js";
 import {
   assertSameRepository,
@@ -21,6 +23,7 @@ import { reconcileWorkspace, type TargetWorkspaceRecord } from "./worktreeReconc
 
 export interface TargetBindingRecord {
   id: string;
+  projectId?: string;
   executionTargetId: string;
   repositoryPath: string;
   commonIdentity: FileIdentity;
@@ -50,9 +53,19 @@ export interface CreateTargetWorktreeRequest {
   baseRef?: string;
 }
 
+export interface RemovalPreview {
+  workspaceId: string;
+  generation: string;
+  git: GitRemovePreflight | null;
+  activity: TargetRuntimeActivity | null;
+  unknown: boolean;
+  safe: boolean;
+}
+
 export class TargetWorktreeService {
   private serial: Promise<unknown> = Promise.resolve();
   private readonly frozen = new Set<string>();
+  private readonly previews = new Set<string>();
   private closed = false;
   private readonly marker: TargetInstanceMarker;
 
@@ -122,6 +135,7 @@ export class TargetWorktreeService {
   private async current(
     record: TargetWorkspaceRecord,
     expectedGeneration: string,
+    markStale = true,
   ): Promise<TargetWorkspaceRecord> {
     if (record.generation !== expectedGeneration || record.lifecycle !== "active")
       throw new Error("Workspace generation is not admitted");
@@ -137,13 +151,14 @@ export class TargetWorktreeService {
       match.path !== record.path ||
       match.kind !== record.kind
     ) {
-      // Git 扫描成功但实例证据不符时冻结旧历史；扫描失败则不覆盖已有事实。
-      await this.save({
-        ...this.state,
-        workspaces: this.state.workspaces.map((item) =>
-          item.id === record.id ? { ...item, lifecycle: "needsVerification" } : item,
-        ),
-      });
+      // Git 扫描成功但实例证据不符时冻结旧历史；只读预览与扫描失败不覆盖缓存事实。
+      if (markStale)
+        await this.save({
+          ...this.state,
+          workspaces: this.state.workspaces.map((item) =>
+            item.id === record.id ? { ...item, lifecycle: "needsVerification" } : item,
+          ),
+        });
       throw new Error("Workspace instance or path requires reconciliation");
     }
     return record;
@@ -165,6 +180,7 @@ export class TargetWorktreeService {
 
   registerBinding(request: {
     id: string;
+    projectId?: string;
     executionTargetId: string;
     repositoryPath: string;
   }): Promise<TargetBindingRecord> {
@@ -176,6 +192,13 @@ export class TargetWorktreeService {
       )
         throw new Error("Invalid/duplicate target binding");
       const inspected = await inspectRepository(request.repositoryPath);
+      if (
+        this.state.bindings.some((entry) =>
+          sameFile(entry.commonIdentity, inspected.commonIdentity),
+        )
+      ) {
+        throw new Error("Repository instance already registered on target");
+      }
       const binding = {
         ...request,
         repositoryPath:
@@ -195,6 +218,8 @@ export class TargetWorktreeService {
   ): Promise<TargetWorkspaceRecord> {
     if (!workspaceId || this.state.workspaces.some((item) => item.id === workspaceId))
       throw new Error("Workspace ID already registered");
+    if ((this.state.archivedBindings ?? []).includes(bindingId))
+      throw new Error("Repository binding archived");
     const inspected = await this.inspectBinding(this.binding(bindingId));
     const candidate = findCandidate(inspected, await realpath(requestedPath));
     if (
@@ -243,6 +268,8 @@ export class TargetWorktreeService {
   create(request: CreateTargetWorktreeRequest): Promise<TargetWorkspaceRecord> {
     return this.exclusive(async () => {
       const binding = this.binding(request.bindingId);
+      if ((this.state.archivedBindings ?? []).includes(binding.id))
+        throw new Error("Repository binding archived");
       await this.inspectBinding(binding);
       if (
         !request.workspaceId ||
@@ -261,13 +288,44 @@ export class TargetWorktreeService {
     });
   }
 
+  /** A path match is never evidence of the same repository instance. */
+  matchesBinding(bindingId: string, repositoryPath: string): Promise<boolean> {
+    return this.exclusive(async () => {
+      try {
+        await this.inspectBinding(this.binding(bindingId), repositoryPath);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+  }
+
+  /** Persist target admission denial before archive metadata, allowance only after metadata commit. */
+  setArchivePolicy(kind: "binding" | "workspace", id: string, archived: boolean): Promise<void> {
+    return this.exclusive(async () => {
+      if (kind === "binding") this.binding(id);
+      else this.workspace(id);
+      const key = kind === "binding" ? "archivedBindings" : "archivedWorkspaces";
+      const values = new Set(this.state[key] ?? []);
+      if (archived) values.add(id);
+      else values.delete(id);
+      await this.save({ ...this.state, [key]: [...values] });
+    });
+  }
+
   private async verifiedCwd(
     workspaceId: string,
     expectedGeneration: string,
     cwdRelative: string,
   ): Promise<string> {
     if (this.frozen.has(workspaceId)) throw new Error("Workspace admission frozen");
-    const record = await this.current(this.workspace(workspaceId), expectedGeneration);
+    const record = this.workspace(workspaceId);
+    if (
+      (this.state.archivedWorkspaces ?? []).includes(workspaceId) ||
+      (this.state.archivedBindings ?? []).includes(record.bindingId)
+    )
+      throw new Error("Workspace admission archived");
+    await this.current(record, expectedGeneration);
     if (path.isAbsolute(cwdRelative) || cwdRelative.split(/[\\/]/).includes(".."))
       throw new Error("Cwd must be relative to worktree");
     return resolveGitWorktreeCwd(record.path, path.resolve(record.path, cwdRelative));
@@ -284,6 +342,65 @@ export class TargetWorktreeService {
     return this.exclusive(async () =>
       action(await this.verifiedCwd(workspaceId, expectedGeneration, cwdRelative)),
     );
+  }
+
+  previewRemoval(workspaceId: string, expectedGeneration: string): Promise<RemovalPreview> {
+    return this.exclusive(async () => {
+      let record: TargetWorkspaceRecord;
+      try {
+        record = await this.current(this.workspace(workspaceId), expectedGeneration, false);
+      } catch {
+        this.previews.delete(`${workspaceId}\0${expectedGeneration}`);
+        return {
+          workspaceId,
+          generation: expectedGeneration,
+          git: null,
+          activity: null,
+          unknown: true,
+          safe: false,
+        };
+      }
+      let git: GitRemovePreflight | null = null;
+      let activity: TargetRuntimeActivity | null = null;
+      let unknown = false;
+      try {
+        git = await preflightRemoveGitWorktree(
+          this.binding(record.bindingId).repositoryPath,
+          record.path,
+        );
+        activity = await this.options.activity(workspaceId);
+        if (
+          !activity ||
+          activity.offline ||
+          ![activity.running, activity.waiting, activity.tools, activity.uncertain].every(
+            (n) => Number.isSafeInteger(n) && n >= 0,
+          )
+        )
+          unknown = true;
+      } catch {
+        unknown = true;
+      }
+      const safe =
+        !unknown &&
+        record.kind === "linked" &&
+        !!git &&
+        !!activity &&
+        !git.isMain &&
+        !git.dirty &&
+        !git.untracked &&
+        !git.submodules &&
+        !git.locked &&
+        !git.prunable &&
+        !git.gitLocks &&
+        activity.running === 0 &&
+        activity.waiting === 0 &&
+        activity.tools === 0 &&
+        activity.uncertain === 0;
+      const key = `${workspaceId}\0${expectedGeneration}`;
+      if (safe) this.previews.add(key);
+      else this.previews.delete(key);
+      return { workspaceId, generation: expectedGeneration, git, activity, unknown, safe };
+    });
   }
 
   private async safeActivity(workspaceId: string): Promise<void> {
@@ -303,6 +420,8 @@ export class TargetWorktreeService {
     confirmed: boolean,
   ): Promise<TargetWorkspaceRecord> {
     if (!confirmed) return Promise.reject(new Error("Explicit removal confirmation required"));
+    const key = `${workspaceId}\0${expectedGeneration}`;
+    if (!this.previews.delete(key)) return Promise.reject(new Error("Removal preview required"));
     this.frozen.add(workspaceId);
     return this.exclusive(async () => {
       try {
@@ -321,6 +440,19 @@ export class TargetWorktreeService {
           preflight.gitLocks
         )
           throw new Error("Worktree removal has Git risks");
+        await this.safeActivity(workspaceId);
+        // 中文：预览后文件可改变；冻结 admission 后仍须重新检查，绝不以旧预览执行删除。
+        const again = await preflightRemoveGitWorktree(binding.repositoryPath, record.path);
+        if (
+          again.isMain ||
+          again.dirty ||
+          again.untracked ||
+          again.submodules ||
+          again.locked ||
+          again.prunable ||
+          again.gitLocks
+        )
+          throw new Error("Worktree removal changed after preview");
         const pending: TargetWorkspaceRecord = { ...record, lifecycle: "pendingRemoval" };
         await this.save({
           ...this.state,
@@ -328,7 +460,6 @@ export class TargetWorktreeService {
             item.id === workspaceId ? pending : item,
           ),
         });
-        await this.safeActivity(workspaceId);
         await removeGitWorktree(binding.repositoryPath, record.path);
         const removed: TargetWorkspaceRecord = { ...pending, lifecycle: "removed" };
         await this.save({
@@ -341,6 +472,23 @@ export class TargetWorktreeService {
       } finally {
         this.frozen.delete(workspaceId);
       }
+    });
+  }
+
+  /** Read-only scan; a failed scan cannot erase or revise cached registration facts. */
+  discover(bindingId: string): Promise<readonly RepositoryInspection["candidates"][number][]> {
+    return this.exclusive(async () => {
+      const inspected = await this.inspectBinding(this.binding(bindingId));
+      return inspected.candidates.filter(
+        (candidate) =>
+          !this.state.workspaces.some(
+            (item) =>
+              item.bindingId === bindingId &&
+              item.lifecycle !== "removed" &&
+              candidate.adminIdentity &&
+              sameFile(item.adminIdentity, candidate.adminIdentity),
+          ),
+      );
     });
   }
 

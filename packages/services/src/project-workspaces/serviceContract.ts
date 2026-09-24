@@ -1,3 +1,7 @@
+import type { Event } from "@zcode/rpc";
+import type { SessionSpecV2 } from "@zcode/shared/agent-host";
+import { createServiceDescriptor } from "../descriptors.js";
+import type { RemovalPreview } from "./worktreeService.js";
 import type {
   Project,
   RepositoryBinding,
@@ -13,6 +17,11 @@ export interface ProjectCatalogTargetPort {
     targetId: string;
     path: string;
   }): Promise<{ executionTargetId: string; gitCommonDir: string }>;
+  /** Verifies common-directory instance evidence, not a coincidentally reused path. */
+  sameRepository(binding: RepositoryBinding, path: string): Promise<boolean>;
+  registerBinding(binding: RepositoryBinding, path: string): Promise<void>;
+  setArchivePolicy(kind: "binding" | "workspace", id: string, archived: boolean): Promise<void>;
+  previewRemoval(workspaceId: string, generation: string): Promise<RemovalPreview>;
   discover(binding: RepositoryBinding): Promise<readonly UnadoptedWorktreeCandidate[]>;
   adopt(input: {
     binding: RepositoryBinding;
@@ -34,6 +43,8 @@ export interface ProjectCatalogTargetPort {
     workspaceId: string;
     expectedGeneration: string;
     confirmation: true;
+    /** Catalog-owned metadata sent by value; target verifies binding/generation/path. */
+    workspace: WorktreeWorkspace;
   }): Promise<WorktreeWorkspace>;
 }
 
@@ -42,6 +53,7 @@ export interface IProjectCatalogService {
   sidebarSnapshot(): Promise<SidebarSnapshot>;
   project(id: string): Promise<Project | undefined>;
   binding(id: string): Promise<RepositoryBinding | undefined>;
+  workspace(id: string): Promise<WorktreeWorkspace | undefined>;
   importProject(input: {
     id: string;
     name: string;
@@ -86,10 +98,28 @@ export interface IProjectCatalogService {
     expectedGeneration: string;
     confirmation: true;
   }): Promise<WorktreeWorkspace>;
+  previewRemoval(workspaceId: string, expectedGeneration: string): Promise<RemovalPreview>;
   /** Compatibility dispatch for existing callers; mutations use the same explicit target port. */
   apply(
     operation: WorktreeOperation,
   ): Promise<WorktreeWorkspace | readonly UnadoptedWorktreeCandidate[]>;
+  /** RPC-friendly async read and Event; sync revision/onChange remain local conveniences only. */
+  getRevision(): Promise<number>;
+  readonly onDidChange: Event<number>;
   readonly revision: number;
   onChange(listener: (revision: number) => void): () => void;
+}
+
+/** Descriptor-ready RPC surface; no callback or local revision getter crosses the wire. */
+export type ProjectCatalogRpcService = Omit<IProjectCatalogService, "revision" | "onChange">;
+export const IProjectCatalogRpcService =
+  createServiceDescriptor<ProjectCatalogRpcService>("projectCatalog");
+/** Target methods carry plain DTOs; Host callbacks remain local. Channel registration is a later composition step. */
+export const IProjectCatalogTargetRpcService =
+  createServiceDescriptor<ProjectCatalogTargetPort>("projectCatalogTarget");
+
+/** Host-local callback is never serialized through the catalog/target RPC channel. */
+export interface WorkspaceAdmissionPort {
+  verify(spec: SessionSpecV2): Promise<{ canonicalCwd: string }>;
+  withAdmission<T>(spec: SessionSpecV2, action: (canonicalCwd: string) => Promise<T>): Promise<T>;
 }
