@@ -1,0 +1,39 @@
+import type { HarnessCatalogEntry, HarnessCapabilitiesV2, ModelBindingRequest, SessionSpecV2 } from "@zcode/shared/agent-host";
+import type { ConversationSnapshot } from "@zcode/shared/zcode-protocol-v4";
+import type { TrustedPngDescriptor } from "../harness-assets/index.js";
+import { createServiceDescriptor } from "../descriptors.js";
+
+/** Target-scoped navigation. No path-only or unknown-ID inference is permitted. */
+export interface WorkspaceNavigationScope {
+  workspaceId: string;
+  targetId: string;
+  workspaceIdentity: string;
+  workspacePath: string;
+  remoteSessionId?: string;
+}
+export type SessionOwner =
+  | { kind: "native"; scope: WorkspaceNavigationScope; originalSessionId: string }
+  | { kind: "external"; scope: WorkspaceNavigationScope; spec: SessionSpecV2; historyOnly: boolean };
+
+export interface IWorkspaceHierarchyService {
+  resolveWorkspace(input: {
+    workspacePath: string;
+    workspaceIdentity?: string;
+    remoteSessionId?: string;
+    targetId: string;
+  }): Promise<WorkspaceNavigationScope | undefined>;
+  resolveOwner(input: { targetId: string; workspaceId: string; sessionId: string }): Promise<SessionOwner | undefined>;
+  listHarnesses(workspaceId: string): Promise<readonly HarnessCatalogEntry[]>;
+  createAgent(input: {
+    workspaceId: string;
+    harnessId: string;
+    modelBinding: ModelBindingRequest;
+    cwdRelativeToWorktree?: string;
+    commandId: string;
+  }): Promise<{ owner: SessionOwner; snapshot?: ConversationSnapshot }>;
+  capabilities(owner: SessionOwner): Promise<HarnessCapabilitiesV2>;
+  /** Opaque packaged resource only; never accepts client-supplied URL or SVG. */
+  asset(assetId: string): Promise<TrustedPngDescriptor | undefined>;
+}
+
+export const IWorkspaceHierarchyService = createServiceDescriptor<IWorkspaceHierarchyService>("workspace-hierarchy");
