@@ -18,6 +18,11 @@ export interface MaintenanceLeasePort {
   /** Only the exact held lease may reopen admissions; failed native release keeps them closed. */
   releaseAdmissions(lease: MaintenanceLease): Promise<void>;
 }
+export interface NativeAdmissionFence {
+  release(): Promise<void>;
+  /** The original worker must still hold its native CLI fence after workspace admissions drain. */
+  verify(): Promise<boolean>;
+}
 export interface MaintenanceCoordination extends MaintenanceLeasePort {
   /** Local-only convenience; do not serialize callbacks across RPC. */
   withMaintenance<T>(action: () => Promise<T>): Promise<T>;
@@ -27,25 +32,25 @@ export interface MaintenanceCoordination extends MaintenanceLeasePort {
 
 /** The runtime must inject its real CLI fence; there is no substitute local CLI queue. */
 export function createMaintenanceCoordination(input: {
-  nativeFence: () => Promise<() => Promise<void>>;
+  nativeFence: () => Promise<NativeAdmissionFence | (() => Promise<void>)>;
   activity: () => Promise<MaintenanceActivity>;
 }): MaintenanceCoordination {
   let phase: "open" | "acquiring" | "held" | "releasing" | "poisoned" = "open";
   let epoch = 0;
   let held: MaintenanceLease | undefined;
-  let unfreezeNative: (() => Promise<void>) | undefined;
+  let native: NativeAdmissionFence | undefined;
   let inflight = 0;
   const drain = new Set<() => void>();
   const releaseOwnedFence = async (): Promise<void> => {
     // 中文：原生 fence 解除失败意味着 CLI admission 不确定；不能把 workspace 错误标成开放。
     phase = "releasing";
     try {
-      await unfreezeNative?.();
+      await native?.release();
     } catch (error) {
       phase = "poisoned";
       throw error;
     }
-    unfreezeNative = undefined;
+    native = undefined;
     held = undefined;
     phase = "open";
   };
@@ -67,14 +72,20 @@ export function createMaintenanceCoordination(input: {
       phase = "acquiring";
       const nextEpoch = ++epoch;
       try {
-        unfreezeNative = await input.nativeFence();
-        if (typeof unfreezeNative !== "function")
-          throw new Error("Native CLI fence did not provide a release capability");
+        const acquired = await input.nativeFence();
+        native = typeof acquired === "function" ? {
+          release: acquired,
+          // 中文：旧回调只有解除能力，无法确认 CLI epoch；拒绝发放可停机的 lease。
+          verify: async () => { throw new Error("Unverifiable native maintenance fence"); },
+        } : acquired;
+        if (!native || typeof native.release !== "function" || typeof native.verify !== "function")
+          throw new Error("Native CLI fence did not provide a verifiable release capability");
       } catch (error) {
         // 中文：CLI fence 调用失败可能已经生效，不能猜测原生 admission 已重新开放。
         phase = "poisoned";
         throw error;
       }
+      let nativeUncertain = false;
       try {
         if (inflight) {
           await new Promise<void>((resolve) => {
@@ -82,6 +93,17 @@ export function createMaintenanceCoordination(input: {
           });
           drain.clear();
         }
+        // 中文：先排空已接收 workspace admission，再核对同一 CLI worker 的 lease；
+        // 身份变化/控制 RPC 失败不是 idle，不能解除可能仍有效的原生 fence。
+        let nativeIdle: boolean;
+        try {
+          nativeIdle = await native.verify();
+        } catch (error) {
+          nativeUncertain = true;
+          phase = "poisoned";
+          throw error;
+        }
+        if (!nativeIdle) throw new Error("Runtime busy or uncertain; maintenance refused");
         const current = await input.activity();
         if (
           current.offline !== false ||
@@ -94,7 +116,7 @@ export function createMaintenanceCoordination(input: {
         phase = "held";
         return { ...held };
       } catch (error) {
-        await releaseOwnedFence();
+        if (!nativeUncertain) await releaseOwnedFence();
         throw error;
       }
     },

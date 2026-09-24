@@ -19,9 +19,9 @@ test("maintenance freezes admission before fresh native+external activity and ho
   const coordination = createMaintenanceCoordination({
     nativeFence: async () => {
       sequence.push("native:frozen");
-      return async () => {
+      return { verify: async () => true, release: async () => {
         sequence.push("native:unfrozen");
-      };
+      } };
     },
     activity: async () => {
       sequence.push("fresh:activity");
@@ -62,9 +62,9 @@ test("unknown/offline activity rejects automatic maintenance and unfreezes nativ
   let released = false;
   let performed = false;
   const coordination = createMaintenanceCoordination({
-    nativeFence: async () => async () => {
+    nativeFence: async () => ({ verify: async () => true, release: async () => {
       released = true;
-    },
+    } }),
     activity: async () => ({ running: 0, waiting: 0, tools: 1, uncertain: 1, offline: true }),
   });
   await assert.rejects(
@@ -83,9 +83,9 @@ test("RPC lease survives separate messages, rejects stale epochs/duplicates with
   const port = createMaintenanceCoordination({
     nativeFence: async () => {
       sequence.push("native:frozen");
-      return async () => {
+      return { verify: async () => true, release: async () => {
         sequence.push("native:released");
-      };
+      } };
     },
     activity: async () => {
       sequence.push("activity");
@@ -125,9 +125,9 @@ test("native acquire ambiguity fails closed; release failure does not reopen wor
   await assert.rejects(acquire.freezeAdmissions(), /unknown CLI fence state/);
   assert.equal(acquire.admissionEnabled(), false);
   const release = createMaintenanceCoordination({
-    nativeFence: async () => async () => {
+    nativeFence: async () => ({ verify: async () => true, release: async () => {
       throw new Error("CLI release uncertain");
-    },
+    } }),
     activity: async () => ({ running: 0, waiting: 0, tools: 0, uncertain: 0, offline: false }),
   });
   const lease = await release.freezeAdmissions();
@@ -139,9 +139,9 @@ test("native acquire ambiguity fails closed; release failure does not reopen wor
 test("failed fresh check releases only acquired fence and leaves admissions open", async () => {
   let releases = 0;
   const port = createMaintenanceCoordination({
-    nativeFence: async () => async () => {
+    nativeFence: async () => ({ verify: async () => true, release: async () => {
       releases++;
-    },
+    } }),
     activity: async () => {
       throw new Error("activity offline");
     },
@@ -198,4 +198,81 @@ test("child Core retains lease across IPC while Supervisor messages race with ac
     child.kill();
     for (const item of pending.values()) item.reject(new Error("child closed"));
   }
+});
+
+test("real native control lease is verified after workspace drain; positive activity releases its own lease", async () => {
+  const { createNativeAdmissionFence } = await import("../src/maintenance-lease.js");
+  let finish!: () => void;
+  let entered!: () => void;
+  const started = new Promise<void>((resolve) => { entered = resolve; });
+  let checks = 0;
+  const released: unknown[] = [];
+  const nativeLease = { epoch: 19, leaseId: "worker-19" };
+  const activity = { epoch: 19, frozen: true, active: 0, accepted: 0, pending: 0, tools: 0, approvals: 0, unknown: false };
+  const nativeFence = createNativeAdmissionFence({
+    freeze: async () => ({ lease: nativeLease, activity }),
+    getActivity: async (_target, lease) => {
+      assert.equal(lease, nativeLease);
+      checks++;
+      return { ...activity, pending: 1 };
+    },
+    release: async (_target, lease) => { released.push(lease); return true; },
+  }, { workspacePath: "/fixture" });
+  const port = createMaintenanceCoordination({ nativeFence,
+    activity: async () => ({ running: 0, waiting: 0, tools: 0, uncertain: 0, offline: false }) });
+  const inflight = port.withAdmission(async () => {
+    entered();
+    await new Promise<void>((resolve) => { finish = resolve; });
+  });
+  await started;
+  const freezing = port.freezeAdmissions();
+  assert.equal(checks, 0);
+  finish();
+  await inflight;
+  await assert.rejects(freezing, /busy or uncertain/);
+  assert.equal(checks, 1);
+  assert.deepEqual(released, [nativeLease]);
+  assert.equal(port.admissionEnabled(), true);
+});
+
+test("changed native epoch, unknown worker, or denied release cannot certify maintenance idle", async () => {
+  const { createNativeAdmissionFence } = await import("../src/maintenance-lease.js");
+  const lease = { epoch: 7, leaseId: "old-worker" };
+  const activity = { epoch: 7, frozen: true, active: 0, accepted: 0, pending: 0, tools: 0, approvals: 0, unknown: false };
+  for (const later of [{ ...activity, epoch: 8 }, { ...activity, unknown: true }]) {
+    let releaseCount = 0;
+    const port = createMaintenanceCoordination({
+      nativeFence: createNativeAdmissionFence({
+        freeze: async () => ({ lease, activity }),
+        getActivity: async () => later,
+        release: async () => { releaseCount++; return true; },
+      }, { workspacePath: "/fixture" }),
+      activity: async () => ({ running: 0, waiting: 0, tools: 0, uncertain: 0, offline: false }),
+    });
+    await assert.rejects(port.freezeAdmissions(), /native maintenance/);
+    assert.equal(releaseCount, 0);
+    assert.equal(port.admissionEnabled(), false);
+  }
+  const port = createMaintenanceCoordination({
+    nativeFence: createNativeAdmissionFence({
+      freeze: async () => ({ lease, activity }),
+      getActivity: async () => activity,
+      release: async () => false,
+    }, { workspacePath: "/fixture" }),
+    activity: async () => ({ running: 0, waiting: 0, tools: 0, uncertain: 0, offline: false }),
+  });
+  const owned = await port.freezeAdmissions();
+  await assert.rejects(port.releaseAdmissions(owned), /native maintenance/);
+  assert.equal(port.admissionEnabled(), false);
+});
+
+test("legacy release-only callback cannot mint an automatic shutdown lease", async () => {
+  let releaseCount = 0;
+  const port = createMaintenanceCoordination({
+    nativeFence: async () => async () => { releaseCount++; },
+    activity: async () => ({ running: 0, waiting: 0, tools: 0, uncertain: 0, offline: false }),
+  });
+  await assert.rejects(port.freezeAdmissions(), /Unverifiable native maintenance fence/);
+  assert.equal(releaseCount, 0);
+  assert.equal(port.admissionEnabled(), false);
 });

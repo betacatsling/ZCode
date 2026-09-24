@@ -5,7 +5,7 @@ import {
 
 let finish!: () => void;
 const port = createMaintenanceCoordination({
-  nativeFence: async () => async () => {},
+  nativeFence: async () => ({ verify: async () => true, release: async () => {} }),
   activity: async () => ({ running: 0, waiting: 0, tools: 0, uncertain: 0, offline: false }),
 });
 const handle = createNodeMaintenanceLeaseHandler(port);
