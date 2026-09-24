@@ -2,6 +2,8 @@
 export { type ServiceDescriptor, createServiceDescriptor } from "./descriptors.js";
 export { ServiceCollection } from "./collection.js";
 export { IAgentHostService } from "./agent-host/serviceContract.js";
+export { IWorkspaceHierarchyService } from "./workspace-hierarchy/serviceContract.js";
+export type { WorkspaceNavigationScope, SessionOwner } from "./workspace-hierarchy/serviceContract.js";
 export type {
   IProjectCatalogService,
   ProjectCatalogTargetPort,
