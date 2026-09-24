@@ -1,0 +1,448 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { projectHostConversation } from "../../services/src/agent-ui-projection/projector.js";
+import type { AgentEvent, SessionSpec, SessionSpecV2 } from "@zcode/shared/agent-host";
+import {
+  createAgentHostConversationTransport,
+  type AgentHostConversationPort,
+} from "../src/v4/agentHostConversationTransport.js";
+import type { ConversationSnapshot, ConversationTopicFrame } from "@zcode/shared/zcode-protocol-v4";
+
+const spec: SessionSpecV2 = {
+  schemaVersion: 2,
+  hostSessionId: "host-one",
+  projectId: "project",
+  workspaceId: "tree",
+  execution: {
+    targetId: "local",
+    workspaceIdentity: "tree-identity",
+    worktreePath: "/missing/tree",
+    worktreeGeneration: "gen",
+    cwdRelativeToWorktree: ".",
+  },
+  harness: { id: "pi", adapterVersion: "0.1" },
+  modelBinding: { kind: "harness-managed" },
+};
+const second = { ...spec, hostSessionId: "host-two" };
+const legacy: SessionSpec = {
+  schemaVersion: 1,
+  hostSessionId: "legacy",
+  execution: {
+    targetId: "local",
+    workspaceIdentity: "tree-identity",
+    worktreePath: "/missing/tree",
+  },
+  harness: spec.harness,
+  modelBinding: spec.modelBinding,
+};
+const scope = {
+  targetId: "local",
+  workspaceId: "tree",
+  workspaceIdentity: "tree-identity",
+  worktreePath: "/missing/tree",
+};
+const turn = (id: string, sequence: number, epoch = "epoch"): AgentEvent => ({
+  kind: "turn.started",
+  hostSessionId: id,
+  turnId: `turn-${sequence}`,
+  sequence,
+  eventId: `${id}-${sequence}`,
+  runtimeEpoch: epoch,
+  at: sequence * 1000,
+});
+
+function harness(records: readonly (SessionSpecV2 | SessionSpec)[] = [spec, second, legacy]) {
+  const history = new Map(
+    records.map((record) => [
+      record.hostSessionId,
+      { spec: record, epoch: "epoch", events: [] as AgentEvent[] },
+    ]),
+  );
+  const listeners = new Set<
+    (value: { spec: SessionSpecV2 | SessionSpec; event: AgentEvent }) => void
+  >();
+  const calls: string[] = [];
+  const service: AgentHostConversationPort = {
+    onEvent(listener) {
+      listeners.add(listener);
+      return {
+        dispose: () => {
+          listeners.delete(listener);
+        },
+      };
+    },
+    async create(created, commandId) {
+      calls.push(`create:${created.hostSessionId}:${commandId}`);
+      return snapshot(created);
+    },
+    async dispatch(owner, command) {
+      calls.push(`dispatch:${owner.hostSessionId}:${command.type}:${command.commandId}`);
+      return { commandId: command.commandId, status: "accepted" };
+    },
+    async snapshot(owner) {
+      calls.push(`snapshot:${owner.hostSessionId}`);
+      return snapshot(owner);
+    },
+    async eventsSince(owner, seq) {
+      calls.push(`eventsSince:${owner.hostSessionId}:${seq}`);
+      return history.get(owner.hostSessionId)?.events.filter((event) => event.sequence > seq) ?? [];
+    },
+    async queryCommand(_owner, id) {
+      return { commandId: id, status: "execution-unknown" };
+    },
+    async queryCreationCommand(id) {
+      return id === "lost-ack"
+        ? { spec, receipt: { commandId: id, status: "accepted" } }
+        : undefined;
+    },
+    async getSessionSpec({ hostSessionId }) {
+      calls.push(`owner:${hostSessionId}`);
+      const value = history.get(hostSessionId)?.spec;
+      return value?.schemaVersion === 2 ? value : undefined;
+    },
+    async rowsRange(owner, request) {
+      calls.push(`rows:${owner.hostSessionId}:${request.beforeRowId ?? "tail"}`);
+      const state = snapshot(owner);
+      return {
+        rows: state.rows.window,
+        atSeq: state.seq,
+        atRevision: state.revision,
+        atLogEpoch: state.logEpoch,
+        hasMore: false,
+      };
+    },
+  };
+  function snapshot(owner: SessionSpecV2 | SessionSpec): ConversationSnapshot {
+    const state = history.get(owner.hostSessionId)!;
+    return projectHostConversation({
+      spec: owner,
+      runtimeEpoch: state.epoch,
+      events: state.events,
+    });
+  }
+  function publish(owner: SessionSpecV2 | SessionSpec, event: AgentEvent, persist = true) {
+    if (persist) history.get(owner.hostSessionId)!.events.push(event);
+    for (const listener of listeners) listener({ spec: owner, event });
+  }
+  const transport = createAgentHostConversationTransport(service, {
+    ...scope,
+    locateExternal: async (id) => {
+      const record = history.get(id)?.spec;
+      return record
+        ? { spec: record, ...(record.schemaVersion === 1 ? { historyOnly: true } : {}) }
+        : undefined;
+    },
+  });
+  return { transport, service, calls, publish, history, listeners };
+}
+const envelope = (
+  sessionId: string | null,
+  type: "sendText" | "stop" | "createSession" | "resolveInteraction",
+  payload: unknown,
+  id: string,
+) => ({
+  sessionId,
+  type,
+  payload,
+  commandId: id,
+  clientId: "client",
+  issuedAt: 1,
+});
+
+// Snapshot is generated by Host's projector in the test only; renderer transport never imports projector.
+test("external subscription holds initial frame until activation, isolates sessions and ignores duplicates", async () => {
+  const { transport, publish } = harness();
+  const frames: ConversationTopicFrame[] = [];
+  transport.onFrame((frame) => frames.push(frame));
+  const a = await transport.subscribe({ topic: "conversation/host-one" });
+  const b = await transport.subscribe({ topic: "conversation/host-two" });
+  assert.equal(frames.length, 0);
+  transport.activate(b.ack.subscriptionId);
+  assert.equal(frames.length, 1);
+  assert.equal(frames[0]?.topic, "conversation/host-two");
+  transport.activate(a.ack.subscriptionId);
+  assert.equal(frames.length, 2);
+  publish(spec, turn("host-one", 1));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(frames.at(-1)?.toSeq, 1);
+  publish(spec, turn("host-one", 1), false);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(frames.length, 3);
+  await transport.unsubscribe(a.ack.subscriptionId);
+  publish(spec, turn("host-one", 2), false);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(frames.length, 3);
+  transport.dispose();
+});
+
+test("pre-activation event burst is coalesced and final text replaces streaming text", async () => {
+  const { transport, publish, calls } = harness([spec]);
+  const frames: ConversationTopicFrame[] = [];
+  transport.onFrame((frame) => frames.push(frame));
+  const id = (await transport.subscribe({ topic: "conversation/host-one" })).ack.subscriptionId;
+  publish(spec, turn(spec.hostSessionId, 1));
+  for (let sequence = 2; sequence < 102; sequence++)
+    publish(spec, {
+      ...turn(spec.hostSessionId, sequence),
+      turnId: "turn-1",
+      kind: "text.delta",
+      messageId: "assistant",
+      text: "partial",
+    });
+  publish(spec, {
+    ...turn(spec.hostSessionId, 102),
+    turnId: "turn-1",
+    kind: "message.finished",
+    messageId: "assistant",
+    role: "assistant",
+    text: "final",
+  });
+  publish(spec, {
+    ...turn(spec.hostSessionId, 103),
+    turnId: "turn-1",
+    kind: "turn.finished",
+    outcome: "success",
+  });
+  assert.equal(frames.length, 0);
+  assert.equal(calls.filter((call) => call === "snapshot:host-one").length, 1);
+  transport.activate(id);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(frames.at(-1)?.toSeq, 103);
+  const latest = frames.at(-1)?.payload;
+  assert.equal(latest?.kind, "snapshot");
+  if (latest?.kind === "snapshot") {
+    assert.deepEqual(
+      latest.snapshot.rows.window
+        .filter((row) => row.kind === "assistantText")
+        .map((row) => row.text),
+      ["final"],
+    );
+  }
+  assert.ok(calls.filter((call) => call === "snapshot:host-one").length <= 2);
+  transport.dispose();
+});
+
+test("events racing an in-flight snapshot trigger one follow-up without resending input", async () => {
+  const { service, publish, calls } = harness([spec]);
+  const original = service.snapshot.bind(service);
+  let release: (() => void) | undefined;
+  let started: (() => void) | undefined;
+  const reading = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  service.snapshot = async (owner) => {
+    const result = await original(owner);
+    if (result.seq === 1) {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+        started?.();
+      });
+    }
+    return result;
+  };
+  const transport = createAgentHostConversationTransport(service, {
+    ...scope,
+    locateExternal: async () => ({ spec }),
+  });
+  const frames: ConversationTopicFrame[] = [];
+  transport.onFrame((frame) => frames.push(frame));
+  const id = (await transport.subscribe({ topic: "conversation/host-one" })).ack.subscriptionId;
+  transport.activate(id);
+  publish(spec, turn(spec.hostSessionId, 1));
+  await reading;
+  publish(spec, {
+    ...turn(spec.hostSessionId, 2),
+    turnId: "turn-1",
+    kind: "message.finished",
+    messageId: "final",
+    role: "assistant",
+    text: "complete",
+  });
+  publish(spec, {
+    ...turn(spec.hostSessionId, 3),
+    turnId: "turn-1",
+    kind: "turn.finished",
+    outcome: "success",
+  });
+  release?.();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(frames.at(-1)?.toSeq, 3);
+  assert.equal(calls.filter((call) => call === "snapshot:host-one").length, 3);
+  assert.ok(!calls.some((call) => call.startsWith("dispatch:")));
+  transport.dispose();
+});
+
+test("event gap queries Host, forces authoritative snapshot and runtime epoch replacement without dispatch", async () => {
+  const { transport, publish, history, calls } = harness([spec]);
+  const frames: ConversationTopicFrame[] = [];
+  transport.onFrame((frame) => frames.push(frame));
+  const id = (await transport.subscribe({ topic: "conversation/host-one" })).ack.subscriptionId;
+  transport.activate(id);
+  const state = history.get(spec.hostSessionId)!;
+  state.events.push(turn(spec.hostSessionId, 1));
+  publish(spec, { ...turn(spec.hostSessionId, 2), kind: "session.status", state: "idle" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(calls.includes("eventsSince:host-one:0"));
+  assert.equal(frames.at(-1)?.toSeq, 2);
+  state.epoch = "epoch-2";
+  state.events = [turn(spec.hostSessionId, 1, "epoch-2")];
+  publish(spec, turn(spec.hostSessionId, 1, "epoch-2"), false);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(frames.at(-1)?.payload.kind, "snapshot");
+  assert.equal(
+    frames.at(-1)?.payload.kind === "snapshot" && frames.at(-1)?.payload.snapshot.logEpoch,
+    "epoch-2",
+  );
+  assert.ok(!calls.some((call) => call.startsWith("dispatch:")));
+  transport.dispose();
+});
+
+test("stop and approval require the current epoch, turn, and pending permission", async () => {
+  const { transport, history, calls } = harness([spec]);
+  history.get(spec.hostSessionId)!.events.push(
+    turn(spec.hostSessionId, 1),
+    {
+      ...turn(spec.hostSessionId, 2),
+      turnId: "turn-1",
+      kind: "tool.started",
+      name: "Edit",
+      toolCallId: "tool",
+    },
+    {
+      ...turn(spec.hostSessionId, 3),
+      turnId: "turn-1",
+      kind: "interaction.requested",
+      interactionId: "permission",
+      toolCallId: "tool",
+      summary: "Edit file",
+    },
+  );
+  await assert.rejects(
+    transport.sendCommand({
+      ...envelope("host-one", "stop", { expectedForegroundExecutionId: "turn-1" }, "old"),
+      baseLogEpoch: "old-epoch",
+    }),
+    /stale stop target/,
+  );
+  await assert.rejects(
+    transport.sendCommand({
+      ...envelope("host-one", "stop", { expectedForegroundExecutionId: "another" }, "wrong-turn"),
+      baseLogEpoch: "epoch",
+    }),
+    /stale stop target/,
+  );
+  await assert.rejects(
+    transport.sendCommand({
+      ...envelope(
+        "host-one",
+        "resolveInteraction",
+        { interactionId: "missing", answer: { optionId: "allow" } },
+        "missing",
+      ),
+      baseLogEpoch: "epoch",
+    }),
+    /stale or unsupported interaction/,
+  );
+  await transport.sendCommand({
+    ...envelope(
+      "host-one",
+      "resolveInteraction",
+      { interactionId: "permission", answer: { optionId: "deny" } },
+      "deny",
+    ),
+    baseLogEpoch: "epoch",
+  });
+  await transport.sendCommand({
+    ...envelope("host-one", "stop", { expectedForegroundExecutionId: "turn-1" }, "cancel"),
+    baseLogEpoch: "epoch",
+  });
+  assert.deepEqual(
+    calls.filter((call) => call.startsWith("dispatch:")),
+    ["dispatch:host-one:resolveInteraction:deny", "dispatch:host-one:cancelTurn:cancel"],
+  );
+  transport.dispose();
+});
+
+test("legacy missing tree stays read-only: history and rows load without worker, command or native fallback", async () => {
+  const { transport, calls, listeners } = harness([legacy]);
+  const sub = await transport.subscribe({ topic: "conversation/legacy" });
+  transport.activate(sub.ack.subscriptionId);
+  assert.deepEqual((await transport.rowsRange({ sessionId: "legacy", limit: 10 })).rows, []);
+  await assert.rejects(
+    transport.sendCommand(envelope("legacy", "sendText", { text: "write" }, "id")),
+    /history is read-only/,
+  );
+  await assert.rejects(
+    transport.rowsRange({ sessionId: "unknown", limit: 10 }),
+    /unknown external session owner/,
+  );
+  assert.deepEqual(calls, ["snapshot:legacy", "rows:legacy:tail"]);
+  await transport.unsubscribe(sub.ack.subscriptionId);
+  transport.dispose();
+  assert.equal(listeners.size, 0);
+});
+
+test("execution-unknown receipt is surfaced as uncertain failure, never definite rejection", async () => {
+  const { transport } = harness([spec]);
+  const result = await transport.queryCommands({
+    commands: [{ sessionId: "host-one", commandId: "uncertain" }],
+  });
+  assert.deepEqual(result.results[0]?.result, {
+    commandId: "uncertain",
+    status: "failed",
+    reasonCode: "execution-unknown",
+    revisionAtDecision: 0,
+  });
+  transport.dispose();
+});
+
+test("global creation query rejects claims for another target or workspace", async () => {
+  const { service } = harness([spec]);
+  service.queryCreationCommand = async (commandId) => ({
+    spec: { ...spec, workspaceId: "other-tree" },
+    receipt: { commandId, status: "accepted" },
+  });
+  const transport = createAgentHostConversationTransport(service, {
+    ...scope,
+    locateExternal: async () => ({ spec }),
+  });
+  await assert.rejects(
+    transport.queryCommands({ commands: [{ sessionId: null, commandId: "foreign" }] }),
+    /external create owner mismatch/,
+  );
+  transport.dispose();
+});
+
+test("create uses stable command ID, lost ACK queries durable Host, unsupported payload never dispatches", async () => {
+  const { transport, calls } = harness([spec]);
+  const createPayload = { workspaceId: "legacy-workspace-identity", agentHost: { spec } };
+  const receipt = await transport.sendCommand(
+    envelope(null, "createSession", createPayload, "stable-id"),
+  );
+  assert.equal(receipt.result?.type, "createSession");
+  assert.deepEqual(
+    (await transport.queryCommands({ commands: [{ sessionId: null, commandId: "lost-ack" }] }))
+      .results[0]?.result,
+    {
+      commandId: "lost-ack",
+      status: "accepted",
+      revisionAtDecision: 0,
+      result: { type: "createSession", sessionId: "host-one" },
+    },
+  );
+  assert.deepEqual(
+    calls.filter((call) => call.startsWith("create:")),
+    ["create:host-one:stable-id"],
+  );
+  await assert.rejects(
+    transport.sendCommand(
+      envelope("host-one", "sendText", { text: "no", attachments: [{ ref: "x" }] }, "unsupported"),
+    ),
+    /externalHarnessUnsupported|Invalid/,
+  );
+  assert.deepEqual(
+    calls.filter((call) => call.startsWith("dispatch:")),
+    [],
+  );
+  transport.dispose();
+});
