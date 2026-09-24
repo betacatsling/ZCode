@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Isolated public-factory Git/CLI/SQLite subprocess fixture shares one lifetime and one profile. */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdir, writeFile, access } from "node:fs/promises";
@@ -53,7 +54,7 @@ try {
                     type: "anthropic-messages",
                     baseUrl: process.env.CORE_NATIVE_FIXTURE_URL!,
                   },
-                  personalModelIds: ["fixture-model"],
+                  personalModelIds: ["fixture-model", "fixture-other"],
                 },
               },
             ],
@@ -88,6 +89,7 @@ try {
                 },
               },
             ],
+            // A second valid, non-default model on the same provider exercises immutable selection.
             manualProviderModelRules: [],
           },
           defaultModelSelection: {
@@ -98,6 +100,15 @@ try {
         },
       }),
     );
+  if (process.argv[2] !== "restart") {
+    const path = join(settings, "provider_config.json");
+    const data = JSON.parse(await (await import("node:fs/promises")).readFile(path, "utf8"));
+    data.config.modelConfigRules.providerModelRules.push({
+      ...data.config.modelConfigRules.providerModelRules[0],
+      modelId: "fixture-other",
+    });
+    await writeFile(path, JSON.stringify(data));
+  }
   authority = await createCoreAuthority({
     installationId: "native-mount-fixture",
     profileRoot: root,
@@ -139,11 +150,18 @@ try {
     throw new Error("real native model options unavailable");
   const ids: string[] = [];
   for (const commandId of ["native-create-1", "native-create-2"]) {
+    const requested =
+      commandId === "native-create-1"
+        ? binding
+        : {
+            kind: "host-managed" as const,
+            selection: { ...binding.selection, modelId: "fixture-other" },
+          };
     const created = await hierarchy.createAgent({
       workspaceId: "workspace",
       harnessId: "zcode",
       commandId,
-      modelBinding: binding,
+      modelBinding: requested,
     });
     if (created.owner.kind !== "native" || !created.owner.originalSessionId)
       throw new Error("not an original native ID");
@@ -160,6 +178,29 @@ try {
     )
       throw new Error("new mapping not joined as writable original owner");
   }
+  // Real public factory must durably reference each certified original ID in the Catalog,
+  // not merely expose the standalone native-create mapping.
+  const catalogState = JSON.parse(
+    await (
+      await import("node:fs/promises")
+    ).readFile(
+      join(root, ".zcode", "v2", "workspace-hierarchy", "profile", "catalog.json"),
+      "utf8",
+    ),
+  ) as {
+    nativeReferences?: Array<{ commandId: string; originalSessionId: string; workspaceId: string }>;
+  };
+  for (const [index, commandId] of ["native-create-1", "native-create-2"].entries()) {
+    if (
+      !catalogState.nativeReferences?.some(
+        (row) =>
+          row.commandId === commandId &&
+          row.originalSessionId === ids[index] &&
+          row.workspaceId === "workspace",
+      )
+    )
+      throw new Error(`missing durable Catalog reference: ${commandId}`);
+  }
   if (ids[0] === ids[1]) throw new Error("two commands allocated one session");
   const nativeDb = process.env.ZCODE_SESSION_DB_PATH!.startsWith("/")
     ? process.env.ZCODE_SESSION_DB_PATH!
@@ -174,6 +215,7 @@ try {
     }
   };
   let fsyncFailed = false;
+  let catalogFailed = process.argv[2] === "restart";
   if (process.argv[2] !== "restart") {
     try {
       await hierarchy.createAgent({
@@ -200,8 +242,52 @@ try {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
+    try {
+      await hierarchy.createAgent({
+        workspaceId: "workspace",
+        harnessId: "zcode",
+        commandId: "native-create-catalog-fault",
+        modelBinding: binding,
+      });
+    } catch (error) {
+      if (String(error).includes("native-catalog-commit-fault-test-only")) catalogFailed = true;
+      else throw error;
+    }
+    if (!catalogFailed) throw new Error("Catalog failure incorrectly returned success");
+    const catalogState = JSON.parse(
+      await (
+        await import("node:fs/promises")
+      ).readFile(
+        join(root, ".zcode", "v2", "workspace-hierarchy", "profile", "catalog.json"),
+        "utf8",
+      ),
+    );
+    if (
+      catalogState.nativeReferences?.some(
+        (row: { commandId: string }) => row.commandId === "native-create-catalog-fault",
+      )
+    )
+      throw new Error("failed Catalog reference visible");
+    const missing = await hierarchy.resolveOwner({
+      targetId: "native-mount-fixture",
+      workspaceId: "workspace",
+      sessionId: await (async () => {
+        const { DatabaseSync } = await import("node:sqlite");
+        const db = new DatabaseSync(nativeDb, { readOnly: true });
+        try {
+          return (
+            db
+              .prepare("select session_id as id from native_create_receipt where command_id = ?")
+              .get("native-create-catalog-fault") as { id: string }
+          ).id;
+        } finally {
+          db.close();
+        }
+      })(),
+    });
+    if (missing) throw new Error("unreferenced mapping visible in directory");
     const allocated = await sessionCount();
-    if (allocated !== 3) throw new Error(`unexpected native allocations: ${allocated}`);
+    if (allocated !== 4) throw new Error(`unexpected native allocations: ${allocated}`);
     try {
       await hierarchy.createAgent({
         workspaceId: "workspace",
@@ -228,6 +314,14 @@ try {
       throw new Error("opaque identity collapsed to shared filesystem path");
   }
   if (process.argv[2] === "restart") {
+    const repaired = await hierarchy.createAgent({
+      workspaceId: "workspace",
+      harnessId: "zcode",
+      commandId: "native-create-catalog-fault",
+      modelBinding: binding,
+    });
+    if (repaired.owner.kind !== "native" || !repaired.owner.originalSessionId)
+      throw new Error("completed Catalog repair unavailable under disabled admission");
     const before = await sessionCount();
     try {
       await hierarchy.createAgent({
@@ -243,66 +337,69 @@ try {
     }
     if ((await sessionCount()) !== before) throw new Error("disabled admission wrote CLI DB");
     const service = authority.services.get(IZCodeAgentService);
-    const subscription = await service.subscribeConversationV4({
-      workspacePath: repo,
-      workspaceIdentity: repo,
-      sessionId: ids[0]!,
-      visibility: "foreground",
-    });
-    if (!subscription.ack.subscriptionId) throw new Error("native cold attachment unavailable");
-    const ack = await service.sendConversationCommandV4({
-      workspacePath: repo,
-      workspaceIdentity: repo,
-      envelope: {
-        commandId: "real-first-input",
-        clientId: "native-mount-fixture",
-        sessionId: ids[0]!,
-        type: "sendText",
-        issuedAt: Date.now(),
-        payload: { text: "fixture input after restart" },
-      },
-    });
-    if (ack.status !== "accepted") throw new Error(`real input rejected: ${JSON.stringify(ack)}`);
-    let terminal = false;
-    let last: unknown;
-    for (let i = 0; i < 80; i++) {
-      const snapshot = await service.readSession({
+    for (const [index, id] of ids.entries()) {
+      const subscription = await service.subscribeConversationV4({
         workspacePath: repo,
         workspaceIdentity: repo,
-        sessionId: ids[0]!,
+        sessionId: id,
+        visibility: "foreground",
       });
-      last = {
-        status: snapshot.session.status,
-        model: snapshot.session.model,
-        messages: snapshot.messages.length,
-        active: snapshot.runtime.activeTurnId,
-        pending: snapshot.runtime.pendingRequestIds,
-      };
-      if (
-        snapshot.session.status === "completed" ||
-        (snapshot.session.status === "idle" &&
-          snapshot.messages.some(
-            (row) => row.info.role === "assistant" && row.info.time.completed !== undefined,
-          ))
-      ) {
-        terminal = true;
-        break;
+      if (!subscription.ack.subscriptionId) throw new Error("native cold attachment unavailable");
+      const ack = await service.sendConversationCommandV4({
+        workspacePath: repo,
+        workspaceIdentity: repo,
+        envelope: {
+          commandId: `real-first-input-${index}`,
+          clientId: "native-mount-fixture",
+          sessionId: id,
+          type: "sendText",
+          issuedAt: Date.now(),
+          payload: { text: "fixture input after restart" },
+        },
+      });
+      if (ack.status !== "accepted") throw new Error(`real input rejected: ${JSON.stringify(ack)}`);
+      let terminal = false;
+      let last: unknown;
+      for (let i = 0; i < 80; i++) {
+        const snapshot = await service.readSession({
+          workspacePath: repo,
+          workspaceIdentity: repo,
+          sessionId: id,
+        });
+        last = {
+          status: snapshot.session.status,
+          model: snapshot.session.model,
+          messages: snapshot.messages.length,
+          active: snapshot.runtime.activeTurnId,
+          pending: snapshot.runtime.pendingRequestIds,
+        };
+        if (
+          snapshot.session.status === "completed" ||
+          (snapshot.session.status === "idle" &&
+            snapshot.messages.some(
+              (row) => row.info.role === "assistant" && row.info.time.completed !== undefined,
+            ))
+        ) {
+          terminal = true;
+          break;
+        }
+        if (snapshot.session.status === "error") throw new Error("native turn failed");
+        await new Promise<void>((resolve) => setTimeout(resolve, 100));
       }
-      if (snapshot.session.status === "error") throw new Error("native turn failed");
-      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+      if (!terminal) throw new Error(`native turn did not reach terminal: ${JSON.stringify(last)}`);
+      await service.unsubscribeConversationV4({
+        workspacePath: repo,
+        workspaceIdentity: repo,
+        subscriptionId: subscription.ack.subscriptionId,
+      });
     }
-    if (!terminal) throw new Error(`native turn did not reach terminal: ${JSON.stringify(last)}`);
-    await service.unsubscribeConversationV4({
-      workspacePath: repo,
-      workspaceIdentity: repo,
-      subscriptionId: subscription.ack.subscriptionId,
-    });
   }
   const worktrees = await git("git", ["-C", repo, "worktree", "list", "--porcelain"]);
   process.send?.({
     type: "native-created",
     ids,
     fsyncFailed,
+    catalogFailed,
     worktreeCount: worktrees.stdout.split("\n").filter((line) => line.startsWith("worktree "))
       .length,
   });

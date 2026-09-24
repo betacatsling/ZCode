@@ -109,7 +109,9 @@ export class NativeCreateJournal {
       fact.receipt.intentFingerprint !== intent.intentFingerprint ||
       fact.receipt.nativeDatabasePath !== intent.nativeDatabasePath ||
       fact.directory !== intent.workspacePath ||
-      JSON.stringify(fact.selection) !== JSON.stringify(intent.modelBinding.selection)
+      JSON.stringify(fact.selection) !== JSON.stringify(intent.modelBinding.selection) ||
+      // 中文：完成回执不能替代实际权限态；CLI 的不可变配置必须与 Core 唯一的 build 请求相符。
+      JSON.stringify(fact.execution) !== JSON.stringify({ mode: "build", planEnabled: false })
     )
       return undefined;
     return {

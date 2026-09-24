@@ -19,6 +19,7 @@ import {
   getNativeProcessControlPort,
   getNativeCreationControlPort,
 } from "./zcode-agent/zcodeAgentService.js";
+import { readNativeCatalogReferences } from "./project-workspaces/projectCatalog.js";
 import { NativeCreateJournal } from "./workspace-hierarchy/nativeCreateJournal.js";
 import { nativeCreatePayloadFingerprint } from "@zcode/shared/zcode-protocol-v4/native-create-fingerprint-node";
 import { commandPayloadSchemas } from "@zcode/shared/zcode-protocol-v4";
@@ -110,22 +111,41 @@ export async function createCoreAuthority(
       backupDirectory: backups,
       profileId: options.installationId,
       listMappings,
-      listNewMappings: async () =>
-        (await journal.listCompleted()).map(({ intent, originalSessionId }) => ({
-          commandId: intent.commandId,
-          nativeDatabasePath: intent.nativeDatabasePath,
-          databaseId: intent.databaseId,
-          nativeSessionId: originalSessionId,
-          sourceWorkspaceKey: intent.workspaceIdentity,
-          sourceWorkspacePath: intent.workspacePath,
-          targetId: intent.targetId,
-          projectId: intent.projectId,
-          workspaceId: intent.workspaceId,
-          repositoryBindingId: intent.repositoryBindingId,
-          worktreeGeneration: intent.worktreeGeneration,
-          cwdRelativeToWorktree: intent.cwdRelativeToWorktree,
-          modelBinding: intent.modelBinding,
-        })),
+      listNewMappings: async () => {
+        const references = await readNativeCatalogReferences(
+          join(configRoot, "workspace-hierarchy", "profile", "catalog.json"),
+        );
+        return (await journal.listCompleted())
+          .filter(({ intent, originalSessionId }) =>
+            references.some(
+              (ref) =>
+                ref.commandId === intent.commandId &&
+                ref.originalSessionId === originalSessionId &&
+                ref.targetId === intent.targetId &&
+                ref.projectId === intent.projectId &&
+                ref.workspaceId === intent.workspaceId &&
+                ref.repositoryBindingId === intent.repositoryBindingId &&
+                ref.worktreeGeneration === intent.worktreeGeneration &&
+                ref.workspaceIdentity === intent.workspaceIdentity &&
+                ref.workspacePath === intent.workspacePath,
+            ),
+          )
+          .map(({ intent, originalSessionId }) => ({
+            commandId: intent.commandId,
+            nativeDatabasePath: intent.nativeDatabasePath,
+            databaseId: intent.databaseId,
+            nativeSessionId: originalSessionId,
+            sourceWorkspaceKey: intent.workspaceIdentity,
+            sourceWorkspacePath: intent.workspacePath,
+            targetId: intent.targetId,
+            projectId: intent.projectId,
+            workspaceId: intent.workspaceId,
+            repositoryBindingId: intent.repositoryBindingId,
+            worktreeGeneration: intent.worktreeGeneration,
+            cwdRelativeToWorktree: intent.cwdRelativeToWorktree,
+            modelBinding: intent.modelBinding,
+          }));
+      },
     });
     // The live native process port binds to the real service after collection construction.
     let live: ReturnType<typeof getNativeProcessControlPort> | undefined;

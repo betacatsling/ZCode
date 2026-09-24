@@ -275,6 +275,8 @@ export function createLazyWorkspaceComposition(options: CompositionOptions): {
       return { status: "unresolved" as const, reason: "target-receipts-unavailable" as const };
     },
     native: options.native,
+    commitNativeReference: async (reference) =>
+      (await get()).catalog.commitNativeReference(reference),
     newAdmissionsEnabled,
     withNativeAdmission: (workspaceId, generation, cwd, action) =>
       maintenance.withAdmission(async () => {

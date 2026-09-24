@@ -35,8 +35,27 @@ for (const dbOverride of ["absolute", "relative"] as const)
       const server = createServer(async (request, response) => {
         const chunks: Buffer[] = [];
         for await (const chunk of request) chunks.push(Buffer.from(chunk));
-        const body = JSON.parse(Buffer.concat(chunks).toString()) as { model?: string };
+        const body = JSON.parse(Buffer.concat(chunks).toString()) as {
+          model?: string;
+          stream?: boolean;
+        };
         models.push(body.model ?? "missing");
+        if (body.stream === false) {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(
+            JSON.stringify({
+              id: "msg_fixture",
+              type: "message",
+              role: "assistant",
+              model: body.model,
+              content: [{ type: "text", text: "fixture completed" }],
+              stop_reason: "end_turn",
+              stop_sequence: null,
+              usage: { input_tokens: 4, output_tokens: 4 },
+            }),
+          );
+          return;
+        }
         const event = (type: string, data: object) =>
           `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`;
         response.writeHead(200, { "content-type": "text/event-stream" });
@@ -90,6 +109,9 @@ for (const dbOverride of ["absolute", "relative"] as const)
               ZCODE_CORE_NATIVE_CREATE_TEST_ONLY: restart ? "0" : "1",
               ZCODE_AGENT_SERVER_REQUIRES_STORAGE_STARTUP: "1",
               ZCODE_TELEMETRY_ENABLED: "false",
+              ZCODE_CORE_NATIVE_CATALOG_FAULT_TEST_ONLY: restart
+                ? ""
+                : "native-create-catalog-fault",
               ZCODE_CORE_NATIVE_DROP_ACK_TEST_ONLY: restart ? "" : "native-create-1",
               ZCODE_CORE_NATIVE_MAPPING_FSYNC_FAULT_TEST_ONLY: restart
                 ? ""
@@ -114,11 +136,36 @@ for (const dbOverride of ["absolute", "relative"] as const)
           stderr += data.toString();
         });
         const message = await new Promise<unknown>((resolve, reject) => {
-          child.once("message", resolve);
-          child.once("exit", (code) => reject(new Error(`Core exited ${code}: ${stderr}`)));
+          const timer = setTimeout(() => {
+            child.kill("SIGKILL");
+            settle(new Error(`Core startup exceeded 40s: ${stderr}`));
+          }, 40000);
+          const onMessage = (value: unknown) => settle(undefined, value);
+          const onClose = (code: number | null, signal: NodeJS.Signals | null) =>
+            settle(new Error(`Core closed ${code}/${signal}: ${stderr}`));
+          function settle(error?: Error, value?: unknown) {
+            clearTimeout(timer);
+            child.off("message", onMessage);
+            child.off("close", onClose);
+            if (error) reject(error);
+            else resolve(value);
+          }
+          child.once("message", onMessage);
+          child.once("close", onClose);
         });
-        if (child.exitCode === null)
-          await new Promise<void>((resolve) => child.once("close", () => resolve()));
+        if (child.exitCode === null && child.signalCode === null)
+          await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(() => {
+              child.off("close", onClose);
+              child.kill("SIGKILL");
+              reject(new Error(`Core failed to close after response: ${stderr}`));
+            }, 5000);
+            const onClose = () => {
+              clearTimeout(timer);
+              resolve();
+            };
+            child.once("close", onClose);
+          });
         assert.ok(
           message &&
             typeof message === "object" &&
@@ -131,6 +178,7 @@ for (const dbOverride of ["absolute", "relative"] as const)
           ids: string[];
           worktreeCount: number;
           fsyncFailed: boolean;
+          catalogFailed: boolean;
         };
       };
       try {
@@ -138,6 +186,7 @@ for (const dbOverride of ["absolute", "relative"] as const)
         assert.equal(first.worktreeCount, 1);
         assert.equal(first.ids.length, 2);
         assert.equal(first.fsyncFailed, true);
+        assert.equal(first.catalogFailed, true);
         assert.deepEqual(models, [], "draft creation must not call the model");
         const personal = join(root, ".zcode", "v2", "provider_config.json");
         const settings = JSON.parse(await readFile(personal, "utf8"));
@@ -152,22 +201,25 @@ for (const dbOverride of ["absolute", "relative"] as const)
         await writeFile(personal, JSON.stringify(settings));
         const restarted = await boot(true);
         assert.deepEqual(restarted.ids, first.ids);
+        assert.equal(restarted.catalogFailed, true);
         assert.equal(restarted.worktreeCount, 1);
         assert.ok(
           models.length > 0,
           "existing native transport must make a real fake-HTTP model call",
         );
         assert.ok(
-          models.every((model) => model === "fixture-model"),
+          models.some((model: string) => model === "fixture-model") &&
+            models.some((model: string) => model === "fixture-other"),
           `selection drifted after defaults changed: ${models}`,
         );
       } finally {
         for (const child of children)
-          if (child.exitCode === null) {
+          if (child.exitCode === null && child.signalCode === null) {
             const close = new Promise<void>((resolve) => child.once("close", () => resolve()));
             child.kill("SIGKILL");
-            await close;
+            await Promise.race([close, new Promise<void>((resolve) => setTimeout(resolve, 5000))]);
           }
+        server.closeAllConnections();
         await new Promise<void>((resolve) => server.close(() => resolve()));
         await rm(root, { recursive: true, force: true });
       }

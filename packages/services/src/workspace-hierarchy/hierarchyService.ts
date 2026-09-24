@@ -57,6 +57,10 @@ export function createWorkspaceHierarchyService(input: {
   registry?: ProviderRegistryService;
   native?: NativeHierarchyPort;
   newAdmissionsEnabled: () => boolean;
+  /** Core-local Catalog reference writer; never renderer RPC or CLI SQL. */
+  commitNativeReference?: (
+    reference: import("../project-workspaces/projectCatalog.js").NativeCatalogReference,
+  ) => Promise<void>;
   /** Real Target receipt reader; absent legacy compositions do not invent a receipt. */
   recoveryFacts?: (
     workspaceId: string,
@@ -151,9 +155,24 @@ export function createWorkspaceHierarchyService(input: {
         modelBinding: request.modelBinding,
         cwdRelativeToWorktree: request.cwdRelativeToWorktree ?? ".",
       };
+      const commitReference = async (originalSessionId: string) => {
+        if (!input.commitNativeReference) return;
+        await input.commitNativeReference({
+          commandId: request.commandId,
+          originalSessionId,
+          targetId: scope.targetId,
+          projectId: project.id,
+          workspaceId: workspace.id,
+          repositoryBindingId: binding.id,
+          worktreeGeneration: workspace.worktreeGeneration,
+          workspaceIdentity: scope.workspaceIdentity,
+          workspacePath: scope.workspacePath,
+        });
+      };
       // 中文：已提交的完成收据重连是只读行为，不能因为新创建门禁关闭而重新分配 ID。
       const recovered = await input.native?.recover?.(nativeRequest);
       if (recovered) {
+        await commitReference(recovered.originalSessionId);
         // 中文：Core 原始 ID 的只读恢复无需重开创建 admission；可执行性仍须
         // Target 当下确认同代实例，Catalog 路径相等不能签发 writable owner。
         const target = await input.recoveryFacts?.(workspace.id);
@@ -194,7 +213,10 @@ export function createWorkspaceHierarchyService(input: {
         request.cwdRelativeToWorktree ?? ".",
         async () => {
           if (!input.newAdmissionsEnabled()) throw new Error("New native admission frozen");
-          return input.native!.create(nativeRequest);
+          const created = await input.native!.create(nativeRequest);
+          // 中文：映射已同步但 Catalog 写失败时不得向调用者报告创建成功；重试只读修复。
+          await commitReference(created.originalSessionId);
+          return created;
         },
       );
       return {
