@@ -18,7 +18,7 @@ import {
 } from "@zcode/provider";
 import type { AgentEvent, BindingPlan, SessionSpecV2 } from "@zcode/shared/agent-host";
 import { PiHarnessAdapter } from "../../src/agent-adapters/pi/piHarnessAdapter.js";
-import { bindHostModel } from "../../src/agent-host/modelBinding.js";
+import { captureHostModel } from "../../src/agent-host/modelBinding.js";
 
 const enabled = process.env.ZCODE_LIVE_STEPFUN === "1";
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -152,31 +152,34 @@ test(
       adapter = new PiHarnessAdapter({
         root: join(root, "workers"),
         modelFactory: () => {
-          const bound = bindHostModel({ plan, registry: registry!, adapter: executor });
-          return new Proxy(bound, {
-            get(target, property, receiver) {
-              if (property !== "streamText") return Reflect.get(target, property, receiver);
-              return async function* (request: Parameters<Model["streamText"]>[0]) {
-                modelCalls++;
-                for await (const event of target.streamText(request)) {
-                  eventCounts.set(event.type, (eventCounts.get(event.type) ?? 0) + 1);
-                  if (
-                    "providerMetadata" in event &&
-                    event.providerMetadata &&
-                    typeof event.providerMetadata === "object"
-                  ) {
-                    metadataShapes.add(
-                      `${event.type}:${Object.entries(event.providerMetadata)
-                        .map(([key, value]) => `${key}:${typeof value}`)
-                        .sort()
-                        .join(",")}`,
-                    );
+          const captured = captureHostModel({ plan, registry: registry!, adapter: executor });
+          return {
+            ...captured,
+            model: new Proxy(captured.model, {
+              get(target, property, receiver) {
+                if (property !== "streamText") return Reflect.get(target, property, receiver);
+                return async function* (request: Parameters<Model["streamText"]>[0]) {
+                  modelCalls++;
+                  for await (const event of target.streamText(request)) {
+                    eventCounts.set(event.type, (eventCounts.get(event.type) ?? 0) + 1);
+                    if (
+                      "providerMetadata" in event &&
+                      event.providerMetadata &&
+                      typeof event.providerMetadata === "object"
+                    ) {
+                      metadataShapes.add(
+                        `${event.type}:${Object.entries(event.providerMetadata)
+                          .map(([key, value]) => `${key}:${typeof value}`)
+                          .sort()
+                          .join(",")}`,
+                      );
+                    }
+                    yield event;
                   }
-                  yield event;
-                }
-              };
-            },
-          });
+                };
+              },
+            }),
+          };
         },
       });
       const binding = await adapter.create(spec, plan);
@@ -225,7 +228,7 @@ test(
       stage = "denied-write";
       const denied = send(
         "denied",
-        "Read input.txt, then use the write tool to create denied.txt containing forbidden. Do not use bash to write. Wait for tool approval.",
+        "Use the write tool now to create denied.txt containing forbidden. Do not use read or bash first; wait for the write approval.",
       );
       const denial = await wait("interaction.requested", 0);
       assert.equal(denial.kind, "interaction.requested");

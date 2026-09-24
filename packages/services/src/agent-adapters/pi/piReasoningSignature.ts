@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { Model } from "@zcode/contracts";
+import type { CapturedHostModel } from "../../agent-host/modelBinding.js";
 
 export type ReasoningMetadata = { anthropic: { signature?: string; redactedData?: string } };
 export const SIGNATURE_KIND = "zcode-reasoning";
@@ -29,24 +30,83 @@ export function reasoningMetadata(value: Record<string, unknown>): ReasoningMeta
   return { anthropic: anthropic as ReasoningMetadata["anthropic"] };
 }
 
-export function readSignature(signature: string, message: AssistantMessage, model: Model): ReasoningMetadata {
+export function appendReasoningMetadata(
+  signatures: Map<number, ReasoningMetadata>,
+  index: number,
+  value?: Record<string, unknown>,
+): void {
+  if (!value) return;
+  const incoming = reasoningMetadata(value);
+  if (!incoming) return;
+  const previous = signatures.get(index)?.anthropic;
+  const next = incoming.anthropic;
+  if (!Object.keys(next).length) return;
+  if (
+    previous &&
+    ("redactedData" in previous ||
+      "redactedData" in next ||
+      ("signature" in previous && !("signature" in next)))
+  )
+    metadataFailure("anthropic.signatureSequence", next);
+  signatures.set(index, {
+    anthropic: {
+      ...(previous?.signature !== undefined ? { signature: previous.signature } : {}),
+      ...(next.signature !== undefined
+        ? { signature: (previous?.signature ?? "") + next.signature }
+        : {}),
+      ...(next.redactedData !== undefined ? { redactedData: next.redactedData } : {}),
+    },
+  });
+}
+
+export function readSignature(
+  signature: string,
+  message: AssistantMessage,
+  model: Model,
+  route?: CapturedHostModel["identity"],
+): ReasoningMetadata {
   let envelope: unknown;
-  try { envelope = JSON.parse(signature); } catch { metadataFailure("thinkingSignature.version", signature); }
+  try {
+    envelope = JSON.parse(signature);
+  } catch {
+    metadataFailure("thinkingSignature.version", signature);
+  }
   if (!envelope || typeof envelope !== "object" || Array.isArray(envelope))
     metadataFailure("thinkingSignature.version", envelope);
   const record = envelope as Record<string, unknown>;
   for (const [key, value] of Object.entries(record))
-    if (!["v", "kind", "providerId", "modelId", "providerMetadata"].includes(key))
+    if (
+      ![
+        "v",
+        "kind",
+        "providerId",
+        "modelId",
+        "apiType",
+        "endpointFingerprint",
+        "providerMetadata",
+      ].includes(key)
+    )
       metadataFailure(`thinkingSignature.${key}`, value);
   if (record.v !== 1 || record.kind !== SIGNATURE_KIND)
     metadataFailure("thinkingSignature.version", record.v);
-  // 修复：签名只对产生它的 Provider、模型和 Pi API 有效；换路由后不得借历史块重放。
-  if (message.provider !== HOST_PROVIDER_ID || message.api !== HOST_API ||
-      message.model !== `${model.providerId}/${model.modelId}` ||
-      record.providerId !== model.providerId || record.modelId !== model.modelId)
+  // 修复：Pi 的 API 是合成标识，必须另核对实际冻结的上游 API 类型和端点摘要。
+  if (!route) throw new Error("reasoning signature route identity unavailable");
+  if (
+    message.provider !== HOST_PROVIDER_ID ||
+    message.api !== HOST_API ||
+    message.model !== `${model.providerId}/${model.modelId}` ||
+    record.providerId !== route.providerId ||
+    record.modelId !== route.modelId ||
+    record.apiType !== route.apiType ||
+    record.endpointFingerprint !== route.endpointFingerprint
+  )
     throw new Error("reasoning signature route mismatch");
-  if (!record.providerMetadata || typeof record.providerMetadata !== "object" ||
-      Array.isArray(record.providerMetadata)) metadataFailure("providerMetadata", record.providerMetadata);
+  if (
+    !record.providerMetadata ||
+    typeof record.providerMetadata !== "object" ||
+    Array.isArray(record.providerMetadata)
+  )
+    metadataFailure("providerMetadata", record.providerMetadata);
   const metadata = reasoningMetadata(record.providerMetadata as Record<string, unknown>);
   if (!metadata || !Object.keys(metadata.anthropic).length)
     metadataFailure("providerMetadata.anthropic", record.providerMetadata);

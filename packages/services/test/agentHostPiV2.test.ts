@@ -7,6 +7,13 @@ import type { Model } from "@zcode/contracts";
 import type { AgentEvent, BindingPlan, SessionSpecV2 } from "@zcode/shared/agent-host";
 import { PiHarnessAdapter } from "../src/agent-adapters/pi/piHarnessAdapter.js";
 
+const signedRoute = {
+  providerId: "fixture",
+  modelId: "test",
+  apiType: "anthropic-messages",
+  endpointFingerprint: "a".repeat(64),
+};
+
 function spec(id: string, worktree: string): SessionSpecV2 {
   return {
     schemaVersion: 2,
@@ -226,68 +233,152 @@ test(
   },
 );
 
-test("Pi SDK signed reasoning persists across approved tool and native-session restore", { timeout: 30000 }, async () => {
-  const root = await mkdtemp(join(tmpdir(), "pi-signed-"));
-  const tree = join(root, "tree");
-  await mkdir(join(tree, "src"), { recursive: true });
-  await writeFile(join(tree, "src", "input.txt"), "safe");
-  const s = spec("signed", tree), p = plan(s);
-  const requests: Array<Parameters<Model["streamText"]>[0]> = [];
-  const signed = {
-    ...model("signed", []),
-    async *streamText(request: Parameters<Model["streamText"]>[0]) {
-      requests.push(request);
-      yield { type: "start" } as const;
-      if (requests.length === 1) {
-        yield { type: "reasoning_start", id: "r" } as const;
-        yield { type: "reasoning_delta", id: "r", text: "consider" } as const;
-        yield { type: "reasoning_delta", id: "r", text: "", providerMetadata: { anthropic: { signature: "signed-fixture" } } } as const;
-        yield { type: "reasoning_end", id: "r" } as const;
-        yield { type: "tool_input_start", id: "read-1", toolName: "read" } as const;
-        yield { type: "tool_input_delta", id: "read-1", delta: '{"path":"input.txt"}' } as const;
-        yield { type: "tool_input_end", id: "read-1" } as const;
-        yield { type: "tool_call", toolCall: { id: "read-1", name: "read", input: { path: "input.txt" } } } as const;
-        yield { type: "finish", finishReason: "tool-calls", usage: { inputTokens: 2, outputTokens: 2 } } as const;
-      } else {
-        yield { type: "text_start", id: "answer" } as const;
-        yield { type: "text_delta", id: "answer", text: "done" } as const;
-        yield { type: "text_end", id: "answer" } as const;
-        yield { type: "finish", finishReason: "stop", usage: { inputTokens: 2, outputTokens: 2 } } as const;
+test(
+  "Pi SDK signed reasoning persists across approved tool and native-session restore",
+  { timeout: 30000 },
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-signed-"));
+    const tree = join(root, "tree");
+    await mkdir(join(tree, "src"), { recursive: true });
+    await writeFile(join(tree, "src", "input.txt"), "safe");
+    const s = spec("signed", tree),
+      p = plan(s);
+    const requests: Array<Parameters<Model["streamText"]>[0]> = [];
+    const signed = {
+      ...model("signed", []),
+      async *streamText(request: Parameters<Model["streamText"]>[0]) {
+        requests.push(request);
+        yield { type: "start" } as const;
+        if (requests.length === 1) {
+          yield { type: "reasoning_start", id: "r" } as const;
+          yield { type: "reasoning_delta", id: "r", text: "consider" } as const;
+          yield {
+            type: "reasoning_delta",
+            id: "r",
+            text: "",
+            providerMetadata: { anthropic: { signature: "signed-fixture" } },
+          } as const;
+          yield { type: "reasoning_end", id: "r" } as const;
+          yield { type: "tool_input_start", id: "read-1", toolName: "read" } as const;
+          yield { type: "tool_input_delta", id: "read-1", delta: '{"path":"input.txt"}' } as const;
+          yield { type: "tool_input_end", id: "read-1" } as const;
+          yield {
+            type: "tool_call",
+            toolCall: { id: "read-1", name: "read", input: { path: "input.txt" } },
+          } as const;
+          yield {
+            type: "finish",
+            finishReason: "tool-calls",
+            usage: { inputTokens: 2, outputTokens: 2 },
+          } as const;
+        } else {
+          yield { type: "text_start", id: "answer" } as const;
+          yield { type: "text_delta", id: "answer", text: "done" } as const;
+          yield { type: "text_end", id: "answer" } as const;
+          yield {
+            type: "finish",
+            finishReason: "stop",
+            usage: { inputTokens: 2, outputTokens: 2 },
+          } as const;
+        }
+      },
+    } as Model;
+    const adapter = new PiHarnessAdapter({
+      root: join(root, "pi"),
+      modelFactory: () => ({ model: signed, identity: signedRoute }),
+    });
+    let restored: PiHarnessAdapter | undefined;
+    try {
+      const binding = await adapter.create(s, p);
+      const events: AgentEvent[] = [];
+      adapter.subscribe(s.hostSessionId, (event) => events.push(event));
+      await adapter.prepareTurn(s, {
+        turnId: "first",
+        runtimeEpoch: binding.runtimeEpoch,
+        plan: p,
+      });
+      await adapter.send({
+        type: "send",
+        hostSessionId: s.hostSessionId,
+        commandId: "first",
+        turnId: "first",
+        text: "read",
+      });
+      assert.equal(
+        events.some((event) => event.kind === "session.error"),
+        false,
+      );
+      assert.equal(requests.length, 2);
+      const assistant = requests[1]!.messages.find((message) => message.role === "assistant");
+      assert.equal(assistant?.providerId, "fixture");
+      assert.equal(assistant?.modelId, "test");
+      assert.deepEqual(typeof assistant?.content === "string" ? undefined : assistant?.content[0], {
+        type: "reasoning",
+        text: "consider",
+        providerOptions: { anthropic: { signature: "signed-fixture" } },
+      });
+      const sequence = events.at(-1)?.sequence ?? 0;
+      await adapter.shutdown();
+      restored = new PiHarnessAdapter({
+        root: join(root, "pi"),
+        modelFactory: () => ({ model: signed, identity: signedRoute }),
+      });
+      await restored.attach(s, binding, sequence, p);
+      await restored.prepareTurn(s, {
+        turnId: "after",
+        runtimeEpoch: binding.runtimeEpoch,
+        plan: p,
+      });
+      await restored.send({
+        type: "send",
+        hostSessionId: s.hostSessionId,
+        commandId: "after",
+        turnId: "after",
+        text: "follow-up",
+      });
+      assert.equal(requests.length, 3);
+      const persisted = requests[2]!.messages.find((message) => message.role === "assistant");
+      assert.deepEqual(typeof persisted?.content === "string" ? undefined : persisted?.content[0], {
+        type: "reasoning",
+        text: "consider",
+        providerOptions: { anthropic: { signature: "signed-fixture" } },
+      });
+      for (const [index, changed] of [
+        { apiType: "openai-responses" },
+        { endpointFingerprint: "b".repeat(64) },
+      ].entries()) {
+        await restored.shutdown();
+        restored = new PiHarnessAdapter({
+          root: join(root, "pi"),
+          modelFactory: () => ({
+            model: signed,
+            identity: { ...signedRoute, ...changed },
+          }),
+        });
+        await restored.attach(s, binding, sequence, p);
+        const rejected: AgentEvent[] = [];
+        restored.subscribe(s.hostSessionId, (event) => rejected.push(event));
+        const turnId = `foreign-${index}`;
+        await restored.prepareTurn(s, { turnId, runtimeEpoch: binding.runtimeEpoch, plan: p });
+        await restored.send({
+          type: "send",
+          hostSessionId: s.hostSessionId,
+          commandId: turnId,
+          turnId,
+          text: "continue",
+        });
+        assert.equal(
+          rejected.some((event) => event.kind === "session.error"),
+          true,
+        );
+        assert.equal(requests.length, 3);
       }
-    },
-  } as Model;
-  const adapter = new PiHarnessAdapter({ root: join(root, "pi"), modelFactory: () => signed });
-  let restored: PiHarnessAdapter | undefined;
-  try {
-    const binding = await adapter.create(s, p);
-    const events: AgentEvent[] = [];
-    adapter.subscribe(s.hostSessionId, (event) => events.push(event));
-    await adapter.prepareTurn(s, { turnId: "first", runtimeEpoch: binding.runtimeEpoch, plan: p });
-    await adapter.send({ type: "send", hostSessionId: s.hostSessionId, commandId: "first", turnId: "first", text: "read" });
-    assert.equal(events.some((event) => event.kind === "session.error"), false);
-    assert.equal(requests.length, 2);
-    const assistant = requests[1]!.messages.find((message) => message.role === "assistant");
-    assert.equal(assistant?.providerId, "fixture");
-    assert.equal(assistant?.modelId, "test");
-    assert.deepEqual(typeof assistant?.content === "string" ? undefined : assistant?.content[0], {
-      type: "reasoning", text: "consider", providerOptions: { anthropic: { signature: "signed-fixture" } },
-    });
-    const sequence = events.at(-1)?.sequence ?? 0;
-    await adapter.shutdown();
-    restored = new PiHarnessAdapter({ root: join(root, "pi"), modelFactory: () => signed });
-    await restored.attach(s, binding, sequence, p);
-    await restored.prepareTurn(s, { turnId: "after", runtimeEpoch: binding.runtimeEpoch, plan: p });
-    await restored.send({ type: "send", hostSessionId: s.hostSessionId, commandId: "after", turnId: "after", text: "follow-up" });
-    assert.equal(requests.length, 3);
-    const persisted = requests[2]!.messages.find((message) => message.role === "assistant");
-    assert.deepEqual(typeof persisted?.content === "string" ? undefined : persisted?.content[0], {
-      type: "reasoning", text: "consider", providerOptions: { anthropic: { signature: "signed-fixture" } },
-    });
-  } finally {
-    await Promise.all([adapter.shutdown(), restored?.shutdown()]);
-    await rm(root, { recursive: true, force: true });
-  }
-});
+    } finally {
+      await Promise.all([adapter.shutdown(), restored?.shutdown()]);
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
 
 test(
   "Pi v2 cancellation denies a pending write, rejects late approval and restores native history",

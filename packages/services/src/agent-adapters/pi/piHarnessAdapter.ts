@@ -10,12 +10,17 @@ import type {
   BackendBindingV2,
   BindingPlan,
   ExecutionTarget,
-  HarnessCapabilities,
   SessionSpecV2,
 } from "@zcode/shared/agent-host";
 import type { HarnessAdapter } from "../../agent-host/harnessRegistry.js";
 import type { FromPiWorker, PiWorkerBoot, ToPiWorker } from "./piProtocol.js";
-import { forwardPiModelRequest, piModelInfo } from "./piModelTransport.js";
+import { piCapabilities } from "./piCapabilities.js";
+import {
+  forwardPiModelRequest,
+  piModelInfo,
+  resolvedCapture,
+  type ModelCapture,
+} from "./piModelTransport.js";
 
 interface Pending {
   resolve(): void;
@@ -38,13 +43,16 @@ export class PiHarnessAdapter implements HarnessAdapter {
   readonly version = "0.87.1";
   readonly hostManagedRoute = "pi-sdk" as const;
   readonly #root: string;
-  readonly #modelFactory: (spec: SessionSpecV2, plan: BindingPlan) => Promise<Model> | Model;
+  readonly #modelFactory: (
+    spec: SessionSpecV2,
+    plan: BindingPlan,
+  ) => Promise<ModelCapture> | ModelCapture;
   readonly #sessions = new Map<string, Runtime>();
   readonly #subscriptions = new Map<string, Set<(event: AgentEvent) => void>>();
 
   constructor(options: {
     root: string;
-    modelFactory: (spec: SessionSpecV2, plan: BindingPlan) => Promise<Model> | Model;
+    modelFactory: (spec: SessionSpecV2, plan: BindingPlan) => Promise<ModelCapture> | ModelCapture;
   }) {
     this.#root = options.root;
     this.#modelFactory = options.modelFactory;
@@ -75,19 +83,8 @@ export class PiHarnessAdapter implements HarnessAdapter {
       };
     return report;
   }
-  async capabilities(_target: ExecutionTarget): Promise<HarnessCapabilities> {
-    const yes = { support: "supported" as const };
-    const no = { support: "unsupported" as const, reason: "not certified by the Pi host bridge" };
-    return {
-      text: yes,
-      tools: yes,
-      approvals: yes,
-      cancelTurn: yes,
-      history: yes,
-      resumeExecution: no,
-      images: no,
-      modelSwitch: no,
-    };
+  async capabilities(_target: ExecutionTarget) {
+    return piCapabilities();
   }
   async create(spec: SessionSpecV2, plan: BindingPlan): Promise<BackendBindingV2> {
     if (this.#sessions.has(spec.hostSessionId)) throw new Error("duplicate Pi session");
@@ -121,7 +118,8 @@ export class PiHarnessAdapter implements HarnessAdapter {
       throw new Error("stale Pi target binding");
     const existing = this.#sessions.get(spec.hostSessionId);
     if (existing) {
-      if (JSON.stringify(existing.spec) !== JSON.stringify(spec)) throw new Error("stale Pi session spec");
+      if (JSON.stringify(existing.spec) !== JSON.stringify(spec))
+        throw new Error("stale Pi session spec");
       if (
         existing.binding.backendSessionId !== binding.backendSessionId ||
         existing.binding.runtimeEpoch !== binding.runtimeEpoch
@@ -156,7 +154,7 @@ export class PiHarnessAdapter implements HarnessAdapter {
     ) {
       throw new Error("stale or mismatched Pi turn preparation");
     }
-    const model = await this.#modelFactory(spec, input.plan);
+    const { model, identity } = resolvedCapture(await this.#modelFactory(spec, input.plan));
     if (
       model.providerId !== input.plan.effective.providerId ||
       model.modelId !== input.plan.effective.modelId ||
@@ -169,7 +167,7 @@ export class PiHarnessAdapter implements HarnessAdapter {
       commandId,
       turnId: input.turnId,
       runtimeEpoch: input.runtimeEpoch,
-      model: piModelInfo(model),
+      model: piModelInfo(model, identity),
     });
     runtime.prepared = { turnId: input.turnId, epoch: input.runtimeEpoch, model };
   }
@@ -267,7 +265,7 @@ export class PiHarnessAdapter implements HarnessAdapter {
     // 修复：子目录必须以目标真实路径校验，词法路径会放行逃出 worktree 的符号链接。
     if (within === ".." || within.startsWith("../") || isAbsolute(within))
       throw new Error("Pi cwd escapes target worktree");
-    const model = await this.#modelFactory(spec, plan);
+    const { model, identity } = resolvedCapture(await this.#modelFactory(spec, plan));
     if (model.providerId !== plan.effective.providerId || model.modelId !== plan.effective.modelId)
       throw new Error("Pi model executor changed the requested route");
     const reasoningLevel = model.options.reasoningLevel;
@@ -299,7 +297,7 @@ export class PiHarnessAdapter implements HarnessAdapter {
       isolatedAgentDir,
       attach,
       sequence,
-      model: piModelInfo(model),
+      model: piModelInfo(model, identity),
     };
     const sourceMode = import.meta.url.endsWith(".ts");
     const worker = new Worker(
