@@ -26,6 +26,7 @@ export type CodexNativeEvent =
 export interface CodexTransportOptions extends CodexLaunchOptions {
   model: string;
   onEvent: (event: CodexNativeEvent) => void;
+  onFailure?: () => void;
 }
 
 type Pending = {
@@ -40,7 +41,7 @@ export async function createCodexTransport(
 ): Promise<CodexTransport> {
   if (!options.model.trim()) throw new Error("Codex model is required");
   const child = await launchCodex(options);
-  const transport = new CodexTransport(child, options.onEvent, options.model);
+  const transport = new CodexTransport(child, options.onEvent, options.model, options.onFailure);
   try {
     await transport.initialize();
     return transport;
@@ -71,6 +72,7 @@ export class CodexTransport {
     private readonly child: ChildProcessWithoutNullStreams,
     private readonly onEvent: (event: CodexNativeEvent) => void,
     private readonly model: string,
+    private readonly onFailure?: () => void,
   ) {
     child.stdout.on("data", (chunk: Buffer) => this.read(chunk));
     child.stdout.on("end", () => {
@@ -356,5 +358,6 @@ export class CodexTransport {
     }
     this.pending.clear();
     if (this.child.exitCode === null && !this.child.killed) this.child.kill("SIGTERM");
+    this.onFailure?.();
   }
 }
