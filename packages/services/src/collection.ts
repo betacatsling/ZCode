@@ -30,8 +30,10 @@ export class ServiceCollection {
   exposeOnChannelServer(
     server: IChannelServer,
     overrides: ReadonlyMap<string, unknown> = new Map(),
+    excludedChannels: ReadonlySet<string> = new Set(),
   ): void {
     for (const [channelName, instance] of this._services) {
+      if (excludedChannels.has(channelName)) continue;
       const exposed = overrides.get(channelName) ?? instance;
       server.registerChannel(
         channelName,

@@ -85,6 +85,20 @@ export {
 export { createCredentialService } from "./credential/credentialService.js";
 export { createBroadcastService } from "./broadcast/broadcastService.js";
 export { createZCodeAgentService } from "./zcode-agent/zcodeAgentService.js";
+// External agent host is node-only; never import process/journal code into the renderer barrel.
+export { HarnessRegistry } from "./agent-host/harnessRegistry.js";
+export type { HarnessAdapter } from "./agent-host/harnessRegistry.js";
+export { planModelBinding } from "./agent-host/modelBindingPlanner.js";
+export { createRegistryModelCatalog } from "./agent-host/registryCatalog.js";
+export { bindHostModel } from "./agent-host/modelBinding.js";
+export { PiHarnessAdapter } from "./agent-adapters/pi/piHarnessAdapter.js";
+export { projectHostConversation } from "./agent-ui-projection/projector.js";
+export { MockHarness } from "./agent-host/mockHarness.js";
+export { CommandJournal } from "./agent-host/commandJournal.js";
+export { EventJournal } from "./agent-host/eventJournal.js";
+export { SessionHost } from "./agent-host/sessionHost.js";
+export { AgentHostTargetService } from "./agent-host/targetService.js";
+export { SessionRouter } from "./agent-host/sessionRouter.js";
 export { createZCodeTaskServiceAdapter } from "./zcode-agent/zcodeTaskServiceAdapter.js";
 export { createZCodeSessionService } from "./zcode-session/zcodeSessionService.js";
 export {
@@ -284,6 +298,8 @@ export {
 } from "./session/automationCron.js";
 
 import { ServiceCollection } from "./collection.js";
+import { IAgentHostService } from "./agent-host/serviceContract.js";
+import { createLazyTargetAgentHostService } from "./agent-host/lazyTargetService.js";
 import { IFileService } from "./file/file.js";
 import { IMediaPreviewService } from "./media-preview/mediaPreview.js";
 import { IGitService } from "./git/git.js";
@@ -678,6 +694,7 @@ export function getOffPeakRequestAuthBuilder(
   return offPeakRequestAuthBuilders.get(services);
 }
 const managedHostApiNetworkTransports = new WeakMap<ServiceCollection, HostApiNetworkTransport>();
+const managedAgentHostServices = new WeakMap<ServiceCollection, { dispose(): Promise<void> }>();
 
 export function registerManagedCuaHelperHostForDispose(
   services: ServiceCollection,
@@ -1332,6 +1349,8 @@ export function createLocalServices(options: {
     trigger: Exclude<ProviderProvisioningTrigger, "environment-online">,
   ) => void;
   serviceAuthorityMode?: ServiceAuthorityMode;
+  /** Stable target identity supplied by the standalone supervisor; absent disables this channel. */
+  agentHostTargetId?: string;
   cuaProductMcpServerResolver?: CuaProductMcpServerResolver;
   agentRuntimeContext?: {
     getDeviceMid?: () => string | undefined;
@@ -2620,6 +2639,22 @@ export function createLocalServices(options: {
   services
     .register(IProviderSettingsService, providerRuntime.providerSettings)
     .register(IModelSelectionService, providerRuntime.modelSelection);
+  if (options.agentHostTargetId &&
+      (options.serviceAuthorityMode === "standalone-server" || options.serviceAuthorityMode === "desktop-local")) {
+    const agentHost = createLazyTargetAgentHostService({
+      root: join(resolveAppConfigDir(), "agent-host", "v1"),
+      target: {
+        id: options.agentHostTargetId,
+        kind: options.serviceAuthorityMode === "desktop-local" ? "local" : process.platform === "linux" ? "ssh" : "local",
+        platform: process.platform as "darwin" | "linux" | "win32",
+        available: process.platform === "linux" || process.platform === "darwin",
+      },
+      registry: providerRuntime.registryService,
+      allowNewSessions: () => process.env.ZCODE_MULTI_HARNESS_ENABLED === "1",
+    });
+    services.register(IAgentHostService, agentHost.service);
+    managedAgentHostServices.set(services, agentHost);
+  }
   if (isDesktopAttachedRemote || options.providerProvisioningTargetEnabled === true) {
     services.register(
       IProviderProvisioningTargetService,
@@ -2767,6 +2802,8 @@ export function disposeServiceResources(services: ServiceCollection): void {
   providerProvisioningTriggerDisposers.delete(services);
   providerProvisioningSources.delete(services);
   managedHostApiNetworkTransports.get(services)?.dispose();
+  void managedAgentHostServices.get(services)?.dispose().catch(() => {});
+  managedAgentHostServices.delete(services);
 }
 
 export async function disposeServiceResourcesAndWait(services: ServiceCollection): Promise<void> {
@@ -2807,4 +2844,6 @@ export async function disposeServiceResourcesAndWait(services: ServiceCollection
     .get(services)
     ?.disposeAndWait()
     .catch(() => {});
+  await managedAgentHostServices.get(services)?.dispose().catch(() => {});
+  managedAgentHostServices.delete(services);
 }

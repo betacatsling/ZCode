@@ -1,5 +1,6 @@
 // sessions-index topic：列表活性数据源；conflated 最新态，永不溢出。
 import { z } from "zod";
+import { agentHostSessionMetadataSchema } from "../agent-host/metadata.js";
 import { timestampSchema } from "./core.js";
 import { sessionWorkflowActivitySchema } from "./sessions-index-workflow-activity.js";
 import {
@@ -28,6 +29,8 @@ export type PendingInteractionSummary = z.infer<typeof pendingInteractionSummary
 
 export const sessionSummarySchema = z.object({
   sessionId: z.string(),
+  // 原生历史没有该字段；外部 session 必须携带完整 host 身份，不修改 glm 枚举。
+  agentHost: agentHostSessionMetadataSchema.optional(),
   workspaceId: z.string(),
   // fork 树。
   parentSessionId: z.string().optional(),

@@ -2,6 +2,7 @@
 // ConversationSnapshot A 区。
 // A 区更新语义 = 字段级整体替换（state.updated），绝不深合并——深合并是错乱之母。
 import { z } from "zod";
+import { agentHostSessionMetadataSchema } from "../agent-host/metadata.js";
 import { sharedContextImportStateSchema } from "./shared-context-import.js";
 export { sharedContextImportStateSchema } from "./shared-context-import.js";
 import { conversationInputDispatchSchema, conversationInputIntentSchema } from "./input-intent.js";
@@ -470,6 +471,8 @@ export type WorkspaceHookAdmissionSnapshotState = z.infer<typeof workspaceHookAd
 export const conversationSnapshotSchema = z.object({
   protocolVersion: z.literal(1),
   sessionId: z.string(),
+  // 原生旧帧不带；外部会话由独立 host 提供，不能写回 native CLI projection。
+  agentHost: agentHostSessionMetadataSchema.optional(),
   logEpoch: z.string(),
   // 快照对齐水位（= 所在帧 toSeq；从内存投影原子取值）。
   seq: z.number(),

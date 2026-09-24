@@ -208,14 +208,20 @@ export default defineConfig([
     entry: {
       "host/index": "src/host/index.ts",
       "host/tasksStorageWorker": "src/host/tasksStorageWorker.ts",
+      // Pi SDK runs in a dedicated target worker; it cannot resolve source TS in a packaged app.
+      "host/piWorker": "../services/src/agent-adapters/pi/piWorker.ts",
     },
     outDir: "out",
     format: "esm",
     platform: "node",
     target: "node22",
-    // host 与 main 共用同一套 services 图，继续内联 undici 会在 Electron ESM runtime 里触发同样的 dynamic require 崩溃。
-    // 这里同样保留为外部依赖，避免 desktop 开发态和打包态 host 进程启动失败。
-    external: desktopNodeRuntimeExternals,
+    // host 和 Pi worker 均为 ESM；CJS-backed Pi SDK 必须从 node_modules 原生加载，
+    // 否则 esbuild 内联后会执行不支持的 dynamic require(child_process)。
+    external: [
+      ...desktopNodeRuntimeExternals,
+      "@earendil-works/pi-coding-agent",
+      "@earendil-works/pi-ai",
+    ],
     noExternal: [
       "@zcode/server",
       "@zcode/shared",

@@ -1,0 +1,15 @@
+# Goal acceptance ledger — authoritative until verified
+
+Source: `../../ZCode_Multi_Harness_Refactor_Plan.md` §§6, 9–10. A contract or fake response is **not** a live Harness certification. Update each row only with a reproducible command, version, target, isolated-data path and actual outcome. Avoid logging personal SSH aliases, credentials or token-bearing URLs.
+
+| Gate | Current evidence | Remaining |
+|---|---|---|
+| P0 pinned commit/toolchain and isolated data | baseline commit 328c1a0; Node 24.14.0/pnpm 10.33.2 via npm exec; baseline log | `pnpm prepare:desktop-runtime` and `pnpm build:bootstrap` now pass; native GUI create/send/tool/stop/approval/restore, SSH actual ZCode run, installable desktop package and baseline trace fixture still need evidence |
+| P1 versioned contracts/mock/compatibility | shared schemas, MockHarness, journals, deterministic tests | fault/slow/duplicate/gap coverage audit; explain each capability; unknown/future schema write rejection |
+| P2 native facade and rollback | sidecar metadata, SessionRouter, new facade module (not mounted); opt-in target-local RPC channel now registered on local Desktop Host and supervised server Core with web-client exclusion | host/UI composition, selector, dual transport, server-side capability guards, native end-to-end and on/off regression |
+| P3 Pi worker/SDK/model/UI | SDK 0.87.1 fixed; real isolated worker + real Pi agent loop with **fake** ZCode model executor passes read→write→bash test→follow-up and denied-write tests; pure V4 projector exists | live Registry/CLI model execution route, UI mounting, four local ZCode/Pi × two real Provider workflows, Pi SSH minimum |
+| P4 target host & remote persistence | isolated journals, initial crash-unknown semantics; target service read-only history and manifest index, server Core registration; desktop/server Pi worker bundles initialize in isolated no-credential smoke; Linux release staged; copied isolated runtime subset over SSH to Linux x86_64 and launched bundled Node v22.16.0 Pi worker; SDK initialized without credentials (not a real SSH task/model call) | supervised standalone host, SSH install/attach/resume, owner fencing, process crash test, 8 live combinations, GUI-exit reconnect/approval |
+| P5 Codex + Claude Code | observed CLI versions, Codex generated protocol types; pinned CLI 0.156.1 isolated app-server exchanged initialize/thread/turn and fake Responses SSE produced structured turn/completed + usage (no real Provider or adapter yet) | Gateway core/Responses/Messages, real structured adapters, aux endpoint and version matrix, live control and route certification |
+| Release/fault | 24 focused tests, root typecheck, lint exit 0, architecture check 0 violations (Node 24.14.0/pnpm 10.33.2); desktop and standalone Pi worker bundles smoke-tested; Linux x86_64 staged worker launched over SSH with packaged Node v22.16.0 | repeat all gates after final changes; packaged target binaries, security/upgrade rollback, load/latency fault tests |
+
+No gate in this ledger currently proves the objective complete.

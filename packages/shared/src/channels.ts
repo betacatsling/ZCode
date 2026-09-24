@@ -96,6 +96,8 @@ export const ServiceChannels = {
   WindowController: "window-controller",
   /** ZCode Protocol agent 服务 */
   ZCodeAgent: "zcode-agent",
+  /** Target-local external agent sessions; never aliases the native V4 channel. */
+  AgentHost: "agent-host",
   /** ZCode session 应用服务 */
   ZCodeSession: "zcode-session",
   /** 会话分享发布、预览与 continuation API 编排 */

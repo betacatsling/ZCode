@@ -18,6 +18,7 @@ import {
 import {
   ServiceCollection,
   IZCodeAgentService,
+  IAgentHostService,
   createZCodeAgentConnectionScope,
   IFileService,
   IGitService,
@@ -117,7 +118,11 @@ function setupChannelServer(
       },
     });
   }
-  services.exposeOnChannelServer(server, overrides);
+  services.exposeOnChannelServer(
+    server,
+    overrides,
+    clientMode === "desktop-continuous" ? new Set() : new Set([IAgentHostService.channelName]),
+  );
   socket.onClose(() => {
     void connectionScope?.dispose();
     rawServer.dispose();

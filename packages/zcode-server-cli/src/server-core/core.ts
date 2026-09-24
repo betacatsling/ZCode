@@ -37,12 +37,14 @@ export async function runServerCore(generation: number): Promise<void> {
       `当前构建未嵌入 ZCode Built-in Provider Config，且未设置 ${ZCODE_BUILTIN_PROVIDER_CONFIG_FILE_ENV}`,
     );
   }
+  const serverId = await resolveCoreServerId();
   const services = createLocalServices({
     zcodeBuiltinProviderConfigFilePath,
     serviceAuthorityMode: "standalone-server",
+    agentHostTargetId: serverId,
   });
   const taskActivityTracker = createTaskActivityTracker(services.getOptional(IZCodeAgentService));
-  const http = await createCoreHttpServer(services, { serverId: await resolveCoreServerId() });
+  const http = await createCoreHttpServer(services, { serverId });
   const send = (message: unknown): Promise<void> => {
     if (typeof process.send !== "function" || process.connected === false) return Promise.resolve();
     return new Promise((resolve) => {

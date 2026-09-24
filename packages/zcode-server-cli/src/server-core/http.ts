@@ -16,6 +16,7 @@ import {
 import {
   createZCodeAgentConnectionScope,
   IZCodeAgentService,
+  IAgentHostService,
   ServiceCollection,
 } from "@zcode/services";
 import { createServiceLogger } from "@zcode/services/node";
@@ -105,6 +106,9 @@ function exposeWebSocket(
   services.exposeOnChannelServer(
     server,
     scope ? new Map([[IZCodeAgentService.channelName, scope.service]]) : new Map(),
+    // Generic /ws lacks host-relay authorization. Never expose external-session
+    // commands, journal history or event subscriptions on that connection.
+    clientMode === "desktop-continuous" ? new Set() : new Set([IAgentHostService.channelName]),
   );
   socket.onClose(() => {
     void scope?.dispose();
@@ -140,6 +144,7 @@ export async function createCoreHttpServer(
       desktopContinuous: true,
       websocketRpc: true,
       processResourceTelemetry: true,
+      agentHost: services.getOptional(IAgentHostService) !== undefined,
     },
   };
   // 裸 Set 无法落实 expiresAt，未消费的 capability 会一直有效并持续累积。
