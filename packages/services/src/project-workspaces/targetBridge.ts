@@ -47,6 +47,7 @@ export class ProjectCatalogTargetBridge implements ProjectCatalogTargetPort {
   async registerBinding(binding: RepositoryBinding, path: string) {
     if (binding.executionTargetId !== this.targetId) throw new Error("Wrong execution target");
     const registered = await this.target.registerBinding({
+      receipt: { binding, requestKey: JSON.stringify([binding, path]) },
       id: binding.id,
       projectId: binding.projectId,
       executionTargetId: this.targetId,
@@ -58,6 +59,23 @@ export class ProjectCatalogTargetBridge implements ProjectCatalogTargetPort {
       registered.repositoryPath !== (facts.discovery.worktreeRoot ?? registered.repositoryPath)
     )
       throw new Error("Repository changed during registration");
+  }
+  lookupBinding(id: string) {
+    return this.target.lookupBinding(id);
+  }
+  async lookupWorkspace(id: string): Promise<WorktreeWorkspace | undefined> {
+    const proof = await this.target.lookupWorkspace(id);
+    if (!proof) return undefined;
+    const binding = await this.target.lookupBinding(proof.record.bindingId);
+    if (!binding || !proof.receipt.presentation)
+      throw new Error("Target workspace receipt lacks original binding/presentation");
+    return this.dto(
+      binding,
+      proof.record,
+      proof.receipt.presentation.title,
+      proof.receipt.presentation.sortOrder,
+      proof.receipt.presentation.origin,
+    );
   }
   setArchivePolicy(kind: "binding" | "workspace", id: string, archived: boolean) {
     return this.target.setArchivePolicy(kind, id, archived);
@@ -84,7 +102,10 @@ export class ProjectCatalogTargetBridge implements ProjectCatalogTargetPort {
     sortOrder: number,
     origin: WorktreeWorkspace["origin"],
   ): Promise<WorktreeWorkspace> {
-    if (record.bindingId !== this.checkedBinding(binding).id || record.lifecycle !== "active")
+    if (
+      record.bindingId !== this.checkedBinding(binding).id ||
+      !["active", "removed"].includes(record.lifecycle)
+    )
       throw new Error("Invalid target record");
     const identity = this.identity(this.targetId, record.path);
     if (!identity?.trim()) throw new Error("No trusted target identity");
@@ -102,7 +123,7 @@ export class ProjectCatalogTargetBridge implements ProjectCatalogTargetPort {
       isMainWorktree: record.kind === "main",
       head: head(record),
       origin,
-      lifecycle: "active",
+      lifecycle: record.lifecycle as "active" | "removed",
     };
   }
   async discover(binding: RepositoryBinding): Promise<readonly UnadoptedWorktreeCandidate[]> {
@@ -137,6 +158,17 @@ export class ProjectCatalogTargetBridge implements ProjectCatalogTargetPort {
       bindingId: input.binding.id,
       workspaceId: input.workspaceId,
       worktreePath: input.worktreePath,
+      receipt: {
+        title: input.title,
+        sortOrder: input.sortOrder,
+        requestKey: JSON.stringify([
+          input.binding.id,
+          input.workspaceId,
+          input.title,
+          input.sortOrder,
+          input.worktreePath,
+        ]),
+      },
     });
     return this.dto(input.binding, record, input.title, input.sortOrder, "adopted");
   }
@@ -157,6 +189,19 @@ export class ProjectCatalogTargetBridge implements ProjectCatalogTargetPort {
       branch: input.branch,
       baseRef: input.baseRef,
       mode: "new",
+      receipt: {
+        title: input.title,
+        sortOrder: input.sortOrder,
+        requestKey: JSON.stringify([
+          input.binding.id,
+          input.workspaceId,
+          input.title,
+          input.sortOrder,
+          input.worktreePath,
+          input.branch,
+          input.baseRef,
+        ]),
+      },
     });
     return this.dto(input.binding, record, input.title, input.sortOrder, "created");
   }
@@ -185,6 +230,17 @@ export class ProjectCatalogTargetBridge implements ProjectCatalogTargetPort {
       input.workspaceId,
       input.expectedGeneration,
       input.confirmation,
+      {
+        title: old.title,
+        sortOrder: old.sortOrder,
+        origin: old.origin,
+        requestKey: JSON.stringify([
+          old.id,
+          old.worktreeGeneration,
+          old.workspaceIdentity,
+          old.worktreePath,
+        ]),
+      },
     );
     if (record.lifecycle !== "removed") throw new Error("Target removal did not complete");
     return { ...old, lifecycle: "removed" as const };

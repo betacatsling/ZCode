@@ -1,7 +1,18 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import path from "node:path";
+import type { RepositoryBinding } from "@zcode/shared/project-workspaces";
 import type { PendingTargetCreation, TargetBindingRecord } from "./worktreeService.js";
+
+/** Target-local operation proof. Metadata is written before effects; success is atomic with registry result. */
+export interface TargetOperationReceipt {
+  kind: "import" | "adopt" | "create" | "remove";
+  id: string;
+  requestKey: string;
+  status: "pending" | "succeeded";
+  binding?: RepositoryBinding;
+  presentation?: { title: string; sortOrder: number; origin: "adopted" | "created" };
+}
 import type { TargetWorkspaceRecord } from "./worktreeReconciler.js";
 
 function validIdentity(value: unknown): boolean {
@@ -18,6 +29,7 @@ export interface TargetSnapshot {
   workspaces: TargetWorkspaceRecord[];
   /** Durable intent written before Git mutation; never replay an uncertain create automatically. */
   pendingCreations?: PendingTargetCreation[];
+  operationReceipts?: TargetOperationReceipt[];
   /** Deny sets are target-owned; older snapshots without these fields default to empty. */
   archivedBindings?: string[];
   archivedWorkspaces?: string[];
@@ -119,6 +131,29 @@ export class TargetAuthorityStore {
               state.pendingCreations.length ||
             new Set(state.pendingCreations.map((item) => `${item.bindingId}\0${item.worktreePath}`))
               .size !== state.pendingCreations.length)) ||
+        (state.operationReceipts !== undefined &&
+          (!Array.isArray(state.operationReceipts) ||
+            !state.operationReceipts.every(
+              (receipt) =>
+                receipt &&
+                ["import", "adopt", "create", "remove"].includes(receipt.kind) &&
+                typeof receipt.id === "string" &&
+                receipt.id.length > 0 &&
+                typeof receipt.requestKey === "string" &&
+                receipt.requestKey.length > 0 &&
+                ["pending", "succeeded"].includes(receipt.status) &&
+                (receipt.kind !== "import" ||
+                  (receipt.binding?.id === receipt.id &&
+                    receipt.binding.executionTargetId === targetId)) &&
+                (receipt.kind === "import" ||
+                  (receipt.presentation &&
+                    typeof receipt.presentation.title === "string" &&
+                    Number.isSafeInteger(receipt.presentation.sortOrder) &&
+                    receipt.presentation.sortOrder >= 0 &&
+                    ["adopted", "created"].includes(receipt.presentation.origin))),
+            ) ||
+            new Set(state.operationReceipts.map((r) => `${r.kind}\0${r.id}`)).size !==
+              state.operationReceipts.length)) ||
         ![state.archivedBindings, state.archivedWorkspaces].every(
           (ids) =>
             ids === undefined ||

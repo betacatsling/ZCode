@@ -17,7 +17,12 @@ import {
   type FileIdentity,
   type RepositoryInspection,
 } from "./repositoryBindingResolver.js";
-import { TargetAuthorityStore, type TargetSnapshot } from "./targetAuthorityStore.js";
+import {
+  TargetAuthorityStore,
+  type TargetSnapshot,
+  type TargetOperationReceipt,
+} from "./targetAuthorityStore.js";
+import type { RepositoryBinding } from "@zcode/shared/project-workspaces";
 import { TargetInstanceMarker } from "./targetInstanceMarker.js";
 import { reconcileWorkspace, type TargetWorkspaceRecord } from "./worktreeReconciler.js";
 
@@ -54,6 +59,7 @@ export interface CreateTargetWorktreeRequest {
   branch: string;
   mode: "new" | "existing";
   baseRef?: string;
+  receipt?: { title: string; sortOrder: number; requestKey: string };
 }
 
 export interface PendingTargetCreation {
@@ -128,6 +134,74 @@ export class TargetWorktreeService {
     const found = this.state.workspaces.find((entry) => entry.id === id);
     if (!found) throw new Error("Unknown target workspace");
     return found;
+  }
+  /** Receipt identity is the original stable Catalog ID, never a path or branch match. */
+  private receipt(
+    kind: TargetOperationReceipt["kind"],
+    id: string,
+  ): TargetOperationReceipt | undefined {
+    return this.state.operationReceipts?.find((row) => row.kind === kind && row.id === id);
+  }
+  private async reserve(receipt: TargetOperationReceipt): Promise<boolean> {
+    const old = this.receipt(receipt.kind, receipt.id);
+    if (old) {
+      if (old.requestKey !== receipt.requestKey)
+        throw new Error("Target operation ID reused with conflicting request");
+      if (old.status !== "succeeded")
+        throw new Error("Target operation outcome unknown; never retry effects");
+      return false;
+    }
+    await this.save({
+      ...this.state,
+      operationReceipts: [...(this.state.operationReceipts ?? []), receipt],
+    });
+    return true;
+  }
+  private async finish(kind: TargetOperationReceipt["kind"], id: string, next: TargetSnapshot) {
+    await this.save({
+      ...next,
+      operationReceipts: this.state.operationReceipts?.map((row) =>
+        row.kind === kind && row.id === id ? { ...row, status: "succeeded" as const } : row,
+      ),
+    });
+  }
+  /** No Git probe can manufacture a receipt. A pending result is not an authoritative absence. */
+  async lookupBinding(id: string): Promise<RepositoryBinding | undefined> {
+    return this.exclusive(async () => {
+      const receipt = this.receipt("import", id);
+      if (!receipt) return undefined;
+      if (receipt.status !== "succeeded" || !receipt.binding)
+        throw new Error("Target binding result unknown");
+      const record = this.binding(id);
+      const inspected = await this.inspectBinding(record);
+      if (
+        record.projectId !== receipt.binding.projectId ||
+        record.executionTargetId !== receipt.binding.executionTargetId ||
+        (await realpath(receipt.binding.gitCommonDir)) !==
+          (await realpath(inspected.discovery.gitCommonDir))
+      )
+        throw new Error("Target binding receipt mismatch");
+      return { ...receipt.binding };
+    });
+  }
+  async lookupWorkspace(
+    id: string,
+  ): Promise<{ record: TargetWorkspaceRecord; receipt: TargetOperationReceipt } | undefined> {
+    return this.exclusive(async () => {
+      const receipt =
+        this.receipt("remove", id) ?? this.receipt("create", id) ?? this.receipt("adopt", id);
+      if (!receipt) return undefined;
+      if (receipt.status !== "succeeded") throw new Error("Target workspace result unknown");
+      const record = this.workspace(id);
+      if (receipt.kind === "remove") {
+        if (record.lifecycle !== "removed") throw new Error("Target removal result unknown");
+        await this.inspectBinding(this.binding(record.bindingId));
+      } else {
+        if (record.lifecycle !== "active") throw new Error("Target workspace result unknown");
+        await this.current(record, record.generation, false);
+      }
+      return { record: { ...record }, receipt: { ...receipt } };
+    });
   }
   private async inspectBinding(
     binding: TargetBindingRecord,
@@ -220,8 +294,19 @@ export class TargetWorktreeService {
     projectId?: string;
     executionTargetId: string;
     repositoryPath: string;
+    receipt?: { binding: RepositoryBinding; requestKey: string };
   }): Promise<TargetBindingRecord> {
     return this.exclusive(async () => {
+      if (request.receipt) {
+        const prior = this.receipt("import", request.id);
+        if (prior) {
+          if (prior.requestKey !== request.receipt.requestKey || prior.status !== "succeeded")
+            throw new Error("Target binding operation conflicting or unknown");
+          const registered = this.binding(request.id);
+          await this.inspectBinding(registered);
+          return registered;
+        }
+      }
       if (
         !request.id ||
         request.executionTargetId !== this.options.executionTargetId ||
@@ -236,14 +321,26 @@ export class TargetWorktreeService {
       ) {
         throw new Error("Repository instance already registered on target");
       }
+      if (request.receipt)
+        await this.reserve({
+          kind: "import",
+          id: request.id,
+          requestKey: request.receipt.requestKey,
+          binding: request.receipt.binding,
+          status: "pending",
+        });
       const binding = {
-        ...request,
+        id: request.id,
+        projectId: request.projectId,
+        executionTargetId: request.executionTargetId,
         repositoryPath:
           inspected.discovery.worktreeRoot ?? (await realpath(request.repositoryPath)),
         commonIdentity: inspected.commonIdentity,
         instanceMarker: await this.marker.assign(inspected.discovery.gitCommonDir, "binding"),
       };
-      await this.save({ ...this.state, bindings: [...this.state.bindings, binding] });
+      const next = { ...this.state, bindings: [...this.state.bindings, binding] };
+      if (request.receipt) await this.finish("import", request.id, next);
+      else await this.save(next);
       return binding;
     });
   }
@@ -253,6 +350,7 @@ export class TargetWorktreeService {
     workspaceId: string,
     requestedPath: string,
     recoverPending = false,
+    receipt?: { kind: "adopt" | "create"; title: string; sortOrder: number; requestKey: string },
   ): Promise<TargetWorkspaceRecord> {
     if (!workspaceId || this.state.workspaces.some((item) => item.id === workspaceId))
       throw new Error("Workspace ID already registered");
@@ -294,6 +392,20 @@ export class TargetWorktreeService {
       )
     )
       throw new Error("Worktree instance already registered");
+    if (receipt?.kind === "adopt") {
+      // 中文：先验证候选，再为会修改实例标记的认领写意图；无效输入不会占用原操作 ID。
+      await this.reserve({
+        kind: "adopt",
+        id: workspaceId,
+        requestKey: receipt.requestKey,
+        status: "pending",
+        presentation: {
+          title: receipt.title,
+          sortOrder: receipt.sortOrder,
+          origin: "adopted",
+        },
+      });
+    }
     const record: TargetWorkspaceRecord = {
       id: workspaceId,
       bindingId,
@@ -306,13 +418,16 @@ export class TargetWorktreeService {
       head: candidate.head,
       lifecycle: "active",
     };
-    await this.save({
+    const next = {
       ...this.state,
       workspaces: [...this.state.workspaces, record],
       pendingCreations: recoverPending
         ? (this.state.pendingCreations ?? []).filter((item) => item.workspaceId !== workspaceId)
         : this.state.pendingCreations,
-    });
+    };
+    if (receipt) await this.finish(receipt.kind, workspaceId, next);
+    else if (this.receipt("create", workspaceId)) await this.finish("create", workspaceId, next);
+    else await this.save(next);
     return record;
   }
 
@@ -320,14 +435,41 @@ export class TargetWorktreeService {
     bindingId: string;
     workspaceId: string;
     worktreePath: string;
+    receipt?: { title: string; sortOrder: number; requestKey: string };
   }): Promise<TargetWorkspaceRecord> {
-    return this.exclusive(() =>
-      this.adoptCandidate(request.bindingId, request.workspaceId, request.worktreePath),
-    );
+    return this.exclusive(async () => {
+      if (request.receipt) {
+        const old = this.receipt("adopt", request.workspaceId);
+        if (old) {
+          if (old.requestKey !== request.receipt.requestKey || old.status !== "succeeded")
+            throw new Error("Target adoption conflicting or unknown");
+          const record = this.workspace(request.workspaceId);
+          await this.current(record, record.generation, false);
+          return record;
+        }
+      }
+      return this.adoptCandidate(
+        request.bindingId,
+        request.workspaceId,
+        request.worktreePath,
+        false,
+        request.receipt && { ...request.receipt, kind: "adopt" },
+      );
+    });
   }
   create(request: CreateTargetWorktreeRequest): Promise<TargetWorkspaceRecord> {
     return this.exclusive(async () => {
       const binding = this.binding(request.bindingId);
+      if (request.receipt) {
+        const old = this.receipt("create", request.workspaceId);
+        if (old) {
+          if (old.requestKey !== request.receipt.requestKey || old.status !== "succeeded")
+            throw new Error("Target creation conflicting or unknown; never replay Git");
+          const record = this.workspace(request.workspaceId);
+          await this.current(record, record.generation, false);
+          return record;
+        }
+      }
       if ((this.state.archivedBindings ?? []).includes(binding.id))
         throw new Error("Repository binding archived");
       await this.inspectBinding(binding);
@@ -361,9 +503,23 @@ export class TargetWorktreeService {
         mode: request.mode,
         ...(request.baseRef === undefined ? {} : { baseRef: request.baseRef }),
       };
+      const receipt = request.receipt && {
+        kind: "create" as const,
+        id: request.workspaceId,
+        requestKey: request.receipt.requestKey,
+        status: "pending" as const,
+        presentation: {
+          title: request.receipt.title,
+          sortOrder: request.receipt.sortOrder,
+          origin: "created" as const,
+        },
+      };
       await this.save({
         ...this.state,
         pendingCreations: [...(this.state.pendingCreations ?? []), intent],
+        operationReceipts: receipt
+          ? [...(this.state.operationReceipts ?? []), receipt]
+          : this.state.operationReceipts,
       });
       await createGitWorktree({
         repositoryPath: binding.repositoryPath,
@@ -508,9 +664,27 @@ export class TargetWorktreeService {
     workspaceId: string,
     expectedGeneration: string,
     confirmed: boolean,
+    receipt?: {
+      title: string;
+      sortOrder: number;
+      origin: "adopted" | "created";
+      requestKey: string;
+    },
   ): Promise<TargetWorkspaceRecord> {
     if (!confirmed) return Promise.reject(new Error("Explicit removal confirmation required"));
     const key = `${workspaceId}\0${expectedGeneration}`;
+    if (receipt && this.receipt("remove", workspaceId)) {
+      const old = this.receipt("remove", workspaceId)!;
+      if (old.requestKey !== receipt.requestKey || old.status !== "succeeded")
+        return Promise.reject(new Error("Target removal conflicting or unknown"));
+      return this.exclusive(async () => {
+        const record = this.workspace(workspaceId);
+        if (record.lifecycle !== "removed" || record.generation !== expectedGeneration)
+          throw new Error("Target removal result unknown");
+        await this.inspectBinding(this.binding(record.bindingId));
+        return record;
+      });
+    }
     if (!this.previews.delete(key)) return Promise.reject(new Error("Removal preview required"));
     this.frozen.add(workspaceId);
     return this.exclusive(async () => {
@@ -546,14 +720,32 @@ export class TargetWorktreeService {
       await this.save({
         ...this.state,
         workspaces: this.state.workspaces.map((item) => (item.id === workspaceId ? pending : item)),
+        operationReceipts: receipt
+          ? [
+              ...(this.state.operationReceipts ?? []),
+              {
+                kind: "remove",
+                id: workspaceId,
+                requestKey: receipt.requestKey,
+                status: "pending",
+                presentation: {
+                  title: receipt.title,
+                  sortOrder: receipt.sortOrder,
+                  origin: receipt.origin,
+                },
+              } satisfies TargetOperationReceipt,
+            ]
+          : this.state.operationReceipts,
       });
       await removeGitWorktree(binding.repositoryPath, record.path);
       await this.options.afterGitRemove?.();
       const removed: TargetWorkspaceRecord = { ...pending, lifecycle: "removed" };
-      await this.save({
+      const next = {
         ...this.state,
         workspaces: this.state.workspaces.map((item) => (item.id === workspaceId ? removed : item)),
-      });
+      };
+      if (receipt) await this.finish("remove", workspaceId, next);
+      else await this.save(next);
       return removed;
     }).finally(() => {
       this.frozen.delete(workspaceId);
