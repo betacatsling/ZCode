@@ -3,9 +3,18 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createFixture, runLoad, validateOptions, validateProductFacts } from './runner.mjs';
+import { createFixture, runLoad, validateOptions, validateProductFacts, isolatedEnvironment } from './runner.mjs';
 
 const temp = () => mkdtemp(join(tmpdir(), 'load-contract-test-'));
+
+test('launch environment does not inherit provider tokens or endpoints', () => {
+  const env = isolatedEnvironment({PATH:'/bin',LANG:'C',AWS_ACCESS_KEY_ID:'hidden',MODEL_BASE_URL:'private',ANTHROPIC_AUTH_TOKEN:'hidden'}, {home:'/disposable',xdgConfig:'/disposable/config',xdgData:'/disposable/data',desktopUserData:'/disposable/desktop'});
+  assert.equal(env.PATH,'/bin');
+  assert.equal(env.HOME,'/disposable');
+  assert.equal(env.AWS_ACCESS_KEY_ID,undefined);
+  assert.equal(env.MODEL_BASE_URL,undefined);
+  assert.equal(env.ANTHROPIC_AUTH_TOKEN,undefined);
+});
 
 test('acceptance facts require separate host and renderer process metrics while mounted', () => {
   const facts = {durableEvents:0,backlog:0,backlogHighWater:0,implicitCliStarts:0,fullHistorySidebarReads:0,worktreeMutations:0,childProcesses:0,acceptedPrompts:0,focusStable:true,draftStable:true,selectedStable:true,heapBytes:1,rssBytes:1};

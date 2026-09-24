@@ -87,7 +87,7 @@ function checkSample(sample) {
 }
 function p95(values) { if (!values.length) return null; const sorted = [...values].sort((a,b) => a-b); return sorted[Math.ceil(sorted.length * .95) - 1]; }
 async function isolation(root) {
-  const paths = { home: join(root, 'home'), xdgConfig: join(root, 'xdg-config'), xdgData: join(root, 'xdg-data'), desktopUserData: join(root, 'desktop-user-data'), webProfile: join(root, 'web-profile') };
+  const paths = { home: join(root, 'home'), xdgConfig: join(root, 'xdg-config'), xdgData: join(root, 'xdg-data'), desktopUserData: join(root, 'desktop-user-data'), webProfile: join(root, 'web-profile'), temporary: join(root, 'temporary') };
   for (const path of Object.values(paths)) { await mkdir(path); if (!inside(root, await realpath(path))) throw new Error('isolation path escaped artifact root'); }
   return paths;
 }
@@ -102,6 +102,16 @@ async function comparison(path, result) {
   if (!['load-measured-baseline-pending','load-measured'].includes(base.status) || base.machine !== result.machine || JSON.stringify(base.config) !== JSON.stringify(result.config) || base.metadata?.driverVersion !== result.metadata?.driverVersion || base.metadata?.productionCommit === result.metadata?.productionCommit) return { status: 'incomparable-baseline' };
   if (!base.p95?.typedInputMs || !base.p95?.sessionSwitchMs) return { status: 'incomparable-baseline' };
   return { status: 'comparable', baselineCommit: base.metadata.productionCommit, typedInputRatio: result.p95.typedInputMs / base.p95.typedInputMs, sessionSwitchRatio: result.p95.sessionSwitchMs / base.p95.sessionSwitchMs };
+}
+
+export function isolatedEnvironment(current, paths) {
+  const allowed = Object.fromEntries(['PATH','LANG','LC_ALL','TZ'].filter(key => current[key] !== undefined).map(key => [key,current[key]]));
+  return {...allowed,HOME:paths.home,XDG_CONFIG_HOME:paths.xdgConfig,XDG_DATA_HOME:paths.xdgData,ZCODE_DATA_BASE_DIR:paths.desktopUserData,TMPDIR:paths.temporary ?? paths.home};
+}
+function applyIsolation(paths) {
+  const next = isolatedEnvironment(process.env, paths);
+  for (const key of Object.keys(process.env)) delete process.env[key];
+  Object.assign(process.env,next);
 }
 
 export async function runLoad(input = {}) {
@@ -120,7 +130,7 @@ export async function runLoad(input = {}) {
   if (enclosingGit || enclosingBare) throw new Error('artifact base must be outside all Git checkouts');
   const root = await mkdtemp(join(baseReal, 'load-'));
   const paths = await isolation(root);
-  if (input.isolateProcessEnv) Object.assign(process.env,{HOME:paths.home,XDG_CONFIG_HOME:paths.xdgConfig,XDG_DATA_HOME:paths.xdgData,ZCODE_DATA_BASE_DIR:paths.desktopUserData});
+  if (input.isolateProcessEnv) applyIsolation(paths);
   const result = { mode:o.mode, status:'failed', artifacts:root, machine, config:configOf(o), metadata:null, discovered:0, expanded:0, sessions:0, committedEvents:0, reconnects:0, elapsedMs:0, samples:{typedInputMs:[],sessionSwitchMs:[],sessionIds:[]}, p95:{typedInputMs:null,sessionSwitchMs:null}, backlog:[], backlogSummary:null, memory:[], cleanup:null, comparison:{status:'missing-baseline'}, gateway:{status:'unsupported'}, unsupported:['live-provider-latency-not-measured','paid-provider-not-used','ssh-not-used','desktop-and-web-require-separate-runs'], failures:[] };
   let mount, start, startingEvents = 0, phase = 'fixture';
   const takeFacts = async phase => {
@@ -231,8 +241,7 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(new URL(import.meta.
   await mkdir(base,{recursive:true});
   const launch = await mkdtemp(join(base,'load-launch-'));
   const launchPaths = await isolation(launch);
-  for (const [key,value] of Object.entries(process.env)) if (/(_API_KEY|_TOKEN|_SECRET|_PASSWORD|_AUTHORIZATION)$/i.test(key)) delete process.env[key];
-  Object.assign(process.env,{HOME:launchPaths.home,XDG_CONFIG_HOME:launchPaths.xdgConfig,XDG_DATA_HOME:launchPaths.xdgData,ZCODE_DATA_BASE_DIR:launchPaths.desktopUserData});
+  applyIsolation(launchPaths);
   const driver = (await import(pathToFileURL(driverPath).href)).default;
   const result = await runLoad({driver,...options,artifactBase:base,baselinePath:val('--baseline'),isolateProcessEnv:true});
   console.log(JSON.stringify({status:result.status,artifacts:result.artifacts,elapsedMs:Math.round(result.elapsedMs),failures:result.failures}));
