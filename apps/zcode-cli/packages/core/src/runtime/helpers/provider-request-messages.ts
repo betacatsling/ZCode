@@ -117,6 +117,13 @@ function reorderAttachmentLikeEntries(
       continue;
     }
 
+    // developer 是独立的指令边界：反向扫描时先放边界再放待移动的 reminder，
+    // 反转后 reminder 仍位于 developer 之前，不能被冒泡跨过或伪装成指令。
+    if (!isRuntimeAttachmentEntry(entry) && entry.message.role === "developer") {
+      result.push(entry, ...pending);
+      pending.length = 0;
+      continue;
+    }
     if (
       (isPresentedInput(entry) ||
         (!isRuntimeAttachmentEntry(entry) && isBubbleStop(entry.message))) &&
@@ -318,7 +325,7 @@ function findPreviousNonSystemMessageIndex(
   startIndex: number,
 ): number | undefined {
   for (let index = Math.min(startIndex, messages.length - 1); index >= 0; index--) {
-    if (messages[index]?.role !== "system") return index;
+    if (messages[index]?.role !== "system" && messages[index]?.role !== "developer") return index;
   }
   return undefined;
 }
@@ -326,7 +333,8 @@ function findPreviousNonSystemMessageIndex(
 function clearNonSystemMessageCacheControl(messages: ModelInputMessage[]): void {
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index]!;
-    if (message.role === "system" || !message.cacheControl) continue;
+    if (message.role === "system" || message.role === "developer" || !message.cacheControl)
+      continue;
     const { cacheControl: _cacheControl, ...messageWithoutCacheControl } = message;
     messages[index] = messageWithoutCacheControl;
   }

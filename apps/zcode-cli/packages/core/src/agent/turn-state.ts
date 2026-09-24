@@ -4,6 +4,7 @@
 
 import type {
   ModelMessageContent,
+  ModelMessageRole,
   PendingTurnInput,
   SessionId,
   ToolCallId,
@@ -80,7 +81,7 @@ export interface ModelRequestState {
 
 // ModelMessage for turn state - uses ToolCall from contracts
 export interface ModelMessage {
-  role: "system" | "user" | "assistant" | "tool";
+  role: ModelMessageRole;
   content: ModelMessageContent;
   toolCalls?: ToolCall[];
   toolCallId?: string;
