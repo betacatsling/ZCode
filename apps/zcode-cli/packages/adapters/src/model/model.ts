@@ -85,6 +85,9 @@ class ExecutableModel implements Model {
       messages: request.messages,
       tools: request.tools,
       responseJsonSchema: request.responseJsonSchema,
+      temperature: request.temperature,
+      anthropicMetadataUserId: request.anthropicMetadataUserId,
+      anthropicEffort: request.anthropicEffort,
       abortSignal: request.abortSignal,
       options: {
         ...validateOptions(this.optionSpecs, { ...this.options, ...requestOptions }),
@@ -153,6 +156,12 @@ function validatePartialOptions(specs: ModelOptionSpecs, options: ModelOptions):
 }
 
 function validateRequestProperties(properties: ModelProperties, request: ModelRequest): void {
+  if (request.temperature !== undefined && (typeof request.temperature !== "number" || !Number.isFinite(request.temperature) || request.temperature < 0 || request.temperature > 1))
+    throw invalidRequest("Anthropic temperature must be between 0 and 1");
+  if (request.anthropicMetadataUserId !== undefined && (typeof request.anthropicMetadataUserId !== "string" || !request.anthropicMetadataUserId.trim() || request.anthropicMetadataUserId.length > 256 || Array.from(request.anthropicMetadataUserId).some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)))
+    throw invalidRequest("Invalid Anthropic attribution identifier");
+  if (request.anthropicEffort !== undefined && !["low", "medium", "high", "xhigh", "max"].includes(request.anthropicEffort))
+    throw invalidRequest("Invalid Anthropic effort");
   if (request.tools && request.tools.length > 0 && !properties.supportsToolCall) {
     throw invalidRequest("Model does not support tool calls");
   }

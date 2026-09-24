@@ -11,6 +11,7 @@ import {
   type ModelInputFormat,
   type ModelMessageContent,
   type ModelMessageContentBlock,
+  type ModelTextContentBlock,
 } from "@zcode/contracts";
 import { AiSdkModelAdapterError } from "./errors.js";
 import { providerOptionsForReasoningBlock } from "./anthropic-reasoning-metadata.js";
@@ -55,6 +56,24 @@ export function toAiSdkMessages(
   const shouldStripOpenAiResponsesStoredReasoning =
     shouldStripStoredReasoningForOpenAiResponsesStatelessReplay(options);
 
+  // 修复原因：Anthropic SDK 的缓存点最多四处，超过时仅告警并丢弃；边界必须先拒绝而不是静默改变缓存语义。
+  let cacheBreakpoints = 0;
+  for (const message of normalizedMessages) {
+    const parts = typeof message.content === "string" ? [] : message.content.filter((block): block is ModelTextContentBlock => block.type === "text" && block.cacheControl !== undefined);
+    if (message.cacheControl && parts.length) throw new AiSdkModelAdapterError(ModelErrorCode.InvalidModelRequest, "Conflicting message and text-part cache markers");
+    if (parts.some((part) => !part.text))
+      throw new AiSdkModelAdapterError(ModelErrorCode.InvalidModelRequest, "Empty cached text part is not serializable");
+    if (parts.length && (options.providerKind !== "anthropic" || message.role !== "user"))
+      throw new AiSdkModelAdapterError(ModelErrorCode.InvalidModelRequest, "Text-part caching requires Anthropic user content");
+    for (const marker of [message.cacheControl, ...parts.map((part) => part.cacheControl)]) {
+      if (!marker) continue;
+      if (options.providerKind === "anthropic" && (marker.type !== "ephemeral" || marker.scope !== undefined || (marker.ttl !== undefined && marker.ttl !== "5m" && marker.ttl !== "1h")))
+        throw new AiSdkModelAdapterError(ModelErrorCode.InvalidModelRequest, "Unsupported Anthropic cache marker");
+      cacheBreakpoints++;
+    }
+  }
+  if (options.providerKind === "anthropic" && cacheBreakpoints > 4)
+    throw new AiSdkModelAdapterError(ModelErrorCode.InvalidModelRequest, "Anthropic cache breakpoint limit exceeded");
   const transformedMessages: AiSdkModelMessage[] = [];
   let pendingToolMediaParts: Extract<AiSdkUserContent, unknown[]> = [];
   const textifyStructuredToolResults = shouldTextifyStructuredToolResults(options);
@@ -419,7 +438,7 @@ function contentBlockToAiSdkUserParts(
 ): Extract<AiSdkUserContent, unknown[]> {
   switch (block.type) {
     case "text":
-      return block.text.length > 0 ? [{ type: "text", text: block.text }] : [];
+      return block.text.length > 0 ? [{ type: "text", text: block.text, ...providerOptionsForCacheControl(block.cacheControl) }] : [];
 
     case "reasoning":
       return block.text.length > 0 ? [{ type: "text", text: block.text }] : [];

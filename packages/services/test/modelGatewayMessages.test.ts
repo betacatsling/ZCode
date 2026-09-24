@@ -57,9 +57,12 @@ test("Messages decoder preserves image and single-block ephemeral cache marker",
     { role: "user", content: [{ type: "image", mediaType: "image/png", dataUrl: "data:image/png;base64,aGVsbG8=" }, { type: "text", text: "look" }] },
     { role: "user", content: "cached", cacheControl: { type: "ephemeral" } },
   ]);
-  assert.throws(() => decodeAnthropicMessagesRequest({ ...base, messages: [
-    { role: "user", content: [{ type: "text", text: "one", cache_control: { type: "ephemeral" } }, { type: "text", text: "two" }] },
-  ] }, headers), /unsupported_cache_boundary/);
+  const multi = decodeAnthropicMessagesRequest({ ...base, messages: [
+    { role: "user", content: [{ type: "text", text: "one" }, { type: "text", text: "two" }, { type: "text", text: "three", cache_control: { type: "ephemeral" } }] },
+  ] }, headers);
+  assert.deepEqual(multi.request.messages, [{ role: "user", content: [
+    { type: "text", text: "one" }, { type: "text", text: "two" }, { type: "text", text: "three", cacheControl: { type: "ephemeral" } },
+  ] }]);
 });
 
 test("Messages decoding retains system order and pairs two tool results with original tool names", () => {
@@ -132,6 +135,15 @@ test("Messages decoding retains system order and pairs two tool results with ori
   );
 });
 
+test("Messages decoder preserves observed native sampling, attribution, and distinct effort", () => {
+  const result = decodeAnthropicMessagesRequest({ ...base, temperature: 1,
+    metadata: { user_id: "opaque-fixture" }, output_config: { effort: "high" } }, headers);
+  assert.equal(result.request.temperature, 1);
+  assert.equal(result.request.anthropicMetadataUserId, "opaque-fixture");
+  assert.equal(result.request.anthropicEffort, "high");
+  assert.deepEqual(result.request.options, { maxOutputTokens: 128 });
+});
+
 test("Messages decoder rejects unsupported headers, flags, versions, malformed tools and auxiliary payloads", () => {
   const reject = (body: unknown, h = headers) =>
     assert.throws(
@@ -165,8 +177,10 @@ test("Messages decoder rejects unsupported headers, flags, versions, malformed t
   reject({ ...base, stream: false });
   reject({ ...base, context_management: {} });
   reject({ ...base, thinking: { type: "enabled", budget_tokens: 1024 } });
-  reject({ ...base, output_config: { effort: "low" } });
-  reject({ ...base, temperature: 0 });
+  reject({ ...base, output_config: { format: { type: "json_schema" } } });
+  reject({ ...base, temperature: 2 });
+  reject({ ...base, metadata: { user_id: "\n" } });
+  reject({ ...base, output_config: { effort: "unknown" } });
   reject({
     ...base,
     tools: [{ name: "x", input_schema: { type: "object" }, cache_control: { type: "ephemeral" } }],

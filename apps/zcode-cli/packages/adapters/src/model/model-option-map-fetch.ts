@@ -21,6 +21,11 @@ export function createModelOptionMapFetch(input: {
     if (bodyText === undefined) return input.fetch(request, init);
     const body = parseJsonObject(bodyText);
     const patched = input.maps.apply(body, input.values);
+    // 修复原因：冻结的 reasoning map 如改写原生 effort，不能静默覆盖已接纳的请求选择。
+    const requestedEffort = nestedEffort(body);
+    const mappedEffort = nestedEffort(patched);
+    if (requestedEffort !== undefined && requestedEffort !== mappedEffort)
+      throw new Error("anthropic_native_option_conflict");
     if (input.capture) input.capture.body = patched;
     const patchedBody = JSON.stringify(patched);
     if (request instanceof Request) {
@@ -28,6 +33,11 @@ export function createModelOptionMapFetch(input: {
     }
     return input.fetch(request, { ...init, body: patchedBody });
   };
+}
+
+function nestedEffort(body: JsonObject): unknown {
+  const config = body.output_config;
+  return config && typeof config === "object" && !Array.isArray(config) ? (config as JsonObject).effort : undefined;
 }
 
 async function readRequestBody(

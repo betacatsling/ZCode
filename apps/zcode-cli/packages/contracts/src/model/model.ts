@@ -28,8 +28,16 @@ export interface ModelOptions {
   maxOutputTokens?: number;
 }
 
+export type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
+
 export interface ModelRequest {
   messages: ModelInputMessage[];
+  /** Native sampling; restricted to the Anthropic Messages 0..1 range at ingress. */
+  temperature?: number;
+  /** Provider-only attribution, not a host/session identity. */
+  anthropicMetadataUserId?: string;
+  /** Separate native effort control; never aliases the host-frozen reasoningLevel. */
+  anthropicEffort?: AnthropicEffort;
   tools?: ModelToolContract[];
   responseJsonSchema?: JsonSchema;
   options?: ModelOptions;

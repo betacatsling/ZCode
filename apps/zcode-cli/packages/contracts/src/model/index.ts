@@ -342,6 +342,7 @@ export interface AttachmentRef {
 export interface ModelTextContentBlock {
   type: "text";
   text: string;
+  cacheControl?: ModelCacheControl;
 }
 
 export interface ModelReasoningContentBlock {
@@ -851,6 +852,10 @@ const modelMessageContentBlockJsonSchema = {
       properties: {
         type: { enum: ["text"] },
         text: { type: "string" },
+        cacheControl: {
+          type: "object", required: ["type"], additionalProperties: false,
+          properties: { type: { enum: ["ephemeral"] }, ttl: { enum: ["5m", "1h"] } },
+        },
       },
     },
     {
@@ -963,6 +968,38 @@ const modelToolChoiceJsonSchema = {
       },
     },
   ],
+} satisfies JsonSchema;
+
+export const modelGatewayToolJsonSchema = {
+  type: "object", required: ["name", "inputSchema"], additionalProperties: false,
+  properties: {
+    name: { type: "string", minLength: 1 },
+    description: { type: "string" },
+    inputSchema: { type: "object" },
+    strict: { type: "boolean" },
+  },
+} satisfies JsonSchema;
+
+// Gateway boundary only: unlike ModelTextRequest this excludes runtime abort/callback and arbitrary provider options.
+export const modelRequestJsonSchema = {
+  type: "object",
+  required: ["messages"],
+  additionalProperties: false,
+  properties: {
+    messages: { type: "array", items: modelInputMessageJsonSchema },
+    tools: { type: "array", items: modelGatewayToolJsonSchema },
+    responseJsonSchema: { type: "object" },
+    temperature: { type: "number", minimum: 0, maximum: 1 },
+    anthropicMetadataUserId: { type: "string", minLength: 1, maxLength: 256 },
+    anthropicEffort: { enum: ["low", "medium", "high", "xhigh", "max"] },
+    options: {
+      type: "object", additionalProperties: false,
+      properties: {
+        reasoningLevel: { type: "string", minLength: 1 },
+        maxOutputTokens: { type: "integer", minimum: 1 },
+      },
+    },
+  },
 } satisfies JsonSchema;
 
 export const modelTextRequestJsonSchema = {
