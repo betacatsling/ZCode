@@ -17,32 +17,19 @@ import type { HarnessAdapter } from "../../agent-host/harnessRegistry.js";
 import type { TrustedClaudeProfile } from "./contract.js";
 import { ClaudeCodeTransport, type ClaudeTransportEvent } from "./claudeTransport.js";
 import { checkClaudePlan, claudeCwd, claudeDir } from "./claudeSessionScope.js";
-import { projectClaudeEvent } from "./claudeProjection.js";
+import {
+  emitClaudeEvent,
+  projectNativeClaudeEvent,
+  reserveClaudeTurn,
+  revokeClaudeTurn,
+  type ClaudeRuntime as Runtime,
+  type ClaudeTurn as Turn,
+  type ClaudeEventPayload,
+} from "./claudeTurnLifecycle.js";
 
 const blocked = (reason: string): CapabilityReport => ({ support: "unsupported", reason });
 const nativeGatewayBlock =
   "Pinned Claude Code 2.1.263 emits claude-code-20250219 beta; native Messages Gateway rejects it (422); profile not certified";
-interface Turn {
-  id: string;
-  transport: ClaudeCodeTransport;
-  token: string;
-  interactions: Map<string, string>;
-  tools: Map<string, string>;
-  cancelled: boolean;
-  done: Promise<void>;
-  settle(): void;
-}
-interface Runtime {
-  spec: SessionSpecV2;
-  binding: BackendBindingV2;
-  dir: string;
-  cwd: string;
-  sequence: number;
-  committed: boolean;
-  uncertain?: boolean;
-  prepared?: { turnId: string; epoch: string; token: string; nativeModelId: string };
-  turn?: Turn;
-}
 /** Target-local mechanics; unsupported Host capabilities until native Gateway wire profile is certified. */
 export class ClaudeHarnessAdapter implements HarnessAdapter {
   readonly id = "claude-code";
@@ -238,76 +225,83 @@ export class ClaudeHarnessAdapter implements HarnessAdapter {
       runtime.turn
     )
       throw new Error("Claude turn not prepared");
+    // 修复：意图写入是异步的；在第一次 await 之前保留完整 turn/lease 所有权，shutdown 才能看见并撤销它。
+    const turn = reserveClaudeTurn(command.turnId, prepared.token);
     runtime.prepared = undefined;
-    let transport: ClaudeCodeTransport;
+    runtime.turn = turn;
+    this.#emit(runtime, turn.id, { kind: "turn.started" });
+    this.#emit(runtime, turn.id, {
+      kind: "message.finished",
+      role: "user",
+      messageId: `${turn.id}:user`,
+      text: command.text,
+    });
+    const assertOwned = () => {
+      if (
+        runtime.turn !== turn ||
+        this.#sessions.get(command.hostSessionId) !== runtime ||
+        turn.cancelled
+      )
+        throw new Error("Claude turn ownership revoked during shutdown or cancellation");
+    };
     try {
-      // 修复：发给 SDK 前落盘意图；崩溃后的最后请求可能已到上游，不允许推断可以再次发送。
-      await writeFile(
-        join(runtime.dir, "inflight.json"),
-        JSON.stringify({ nativeId: runtime.binding.backendSessionId, turnId: command.turnId }),
-        { flag: "wx", mode: 0o600 },
-      );
-      transport = (
+      // 修复：SDK 前独占落盘意图；写入后再次检查 owner，禁止 shutdown 间隙启动无主子进程。
+      const path = join(runtime.dir, "inflight.json");
+      const contents = JSON.stringify({
+        nativeId: runtime.binding.backendSessionId,
+        turnId: turn.id,
+      });
+      if (this.profile.writeInflight) await this.profile.writeInflight(path, contents);
+      else await writeFile(path, contents, { flag: "wx", mode: 0o600 });
+      assertOwned();
+      const transport = (
         this.profile.transportFactory ?? ((options) => new ClaudeCodeTransport(options))
       )({
         cwd: runtime.cwd,
         profileDir: runtime.dir,
         gatewayUrl: this.profile.gateway.url,
-        gatewayToken: prepared.token,
+        gatewayToken: turn.token,
         model: prepared.nativeModelId,
         ...(runtime.committed
           ? { resumeId: runtime.binding.backendSessionId }
           : { sessionId: runtime.binding.backendSessionId }),
       });
-    } catch (error) {
-      runtime.uncertain = true;
-      this.profile.gateway.revokeToken(prepared.token);
-      throw error;
-    }
-    let settle!: () => void;
-    const done = new Promise<void>((resolve) => {
-      settle = resolve;
-    });
-    const turn: Turn = {
-      id: command.turnId,
-      transport,
-      token: prepared.token,
-      interactions: new Map(),
-      tools: new Map(),
-      cancelled: false,
-      done,
-      settle,
-    };
-    runtime.turn = turn;
-    this.#emit(runtime, command.turnId, { kind: "turn.started" });
-    try {
+      turn.transport = transport;
+      assertOwned();
       const result = await transport.run(command.text, (event) =>
         this.#native(runtime, turn, event),
       );
-      if (result.nativeSessionId !== runtime.binding.backendSessionId || turn.cancelled)
+      assertOwned();
+      if (result.nativeSessionId !== runtime.binding.backendSessionId)
         throw new Error("Claude native identity or turn changed");
       // 修复：只在原生 result 与子进程零退出均确认后记录可恢复事实，绝不重放未知 prompt。
       const tmp = join(runtime.dir, `committed.${randomUUID()}.tmp`);
-      await writeFile(
-        tmp,
-        JSON.stringify({ nativeId: result.nativeSessionId, turnId: command.turnId }),
-        { mode: 0o600 },
-      );
+      await writeFile(tmp, JSON.stringify({ nativeId: result.nativeSessionId, turnId: turn.id }), {
+        mode: 0o600,
+      });
+      assertOwned();
       await rename(tmp, join(runtime.dir, "committed.json"));
+      assertOwned();
       runtime.committed = true;
-      await rm(join(runtime.dir, "inflight.json"));
-      this.#emit(runtime, command.turnId, { kind: "turn.finished", outcome: "success" });
+      await rm(path);
+      assertOwned();
+      // Terminal replacement is authoritative for the same assistant message ID as the deltas.
+      this.#emit(runtime, turn.id, {
+        kind: "message.finished",
+        role: "assistant",
+        messageId: turn.id,
+        text: turn.assistantText,
+      });
+      this.#finish(runtime, turn, "success");
     } catch (error) {
       runtime.uncertain = true;
-      this.#emit(runtime, command.turnId, {
-        kind: "turn.finished",
-        outcome: turn.cancelled ? "cancelled" : "unknown",
-      });
+      if (this.#sessions.get(command.hostSessionId) === runtime)
+        this.#finish(runtime, turn, turn.cancelled ? "cancelled" : "unknown");
       throw error;
     } finally {
       turn.interactions.clear();
       turn.tools.clear();
-      this.profile.gateway.revokeToken(turn.token);
+      this.#revoke(turn);
       if (runtime.turn === turn) runtime.turn = undefined;
       turn.settle();
     }
@@ -322,8 +316,8 @@ export class ClaudeHarnessAdapter implements HarnessAdapter {
     )
       throw new Error("stale Claude cancel");
     turn.cancelled = true;
-    this.profile.gateway.revokeToken(turn.token);
-    turn.transport.cancel();
+    this.#revoke(turn);
+    turn.transport?.cancel();
   }
   async resolveInteraction(
     command: Extract<AgentCommand, { type: "resolveInteraction" }>,
@@ -338,7 +332,7 @@ export class ClaudeHarnessAdapter implements HarnessAdapter {
       !turn.interactions.has(command.interactionId)
     )
       throw new Error("stale Claude approval");
-    if (!turn.transport.reply(command.interactionId, command.decision))
+    if (!turn.transport?.reply(command.interactionId, command.decision))
       throw new Error("late Claude approval");
     turn.interactions.delete(command.interactionId);
     this.#emit(runtime, turn.id, {
@@ -351,9 +345,12 @@ export class ClaudeHarnessAdapter implements HarnessAdapter {
     const runtime = this.#require(hostSessionId);
     const running = runtime.turn;
     if (running) {
+      // 修复：先撤销租约并发布不确定终态，再移除 owner；后续异步写入/SDK 回调不得产生成功事件。
       running.cancelled = true;
-      this.profile.gateway.revokeToken(running.token);
-      running.transport.cancel();
+      runtime.uncertain = true;
+      this.#revoke(running);
+      running.transport?.cancel();
+      this.#finish(runtime, running, "unknown");
     }
     if (runtime.prepared) this.profile.gateway.revokeToken(runtime.prepared.token);
     this.#sessions.delete(hostSessionId);
@@ -375,31 +372,26 @@ export class ClaudeHarnessAdapter implements HarnessAdapter {
     };
   }
   #native(runtime: Runtime, turn: Turn, event: ClaudeTransportEvent): void {
-    if (runtime.turn !== turn || turn.cancelled) return;
-    for (const payload of projectClaudeEvent(runtime.binding.backendSessionId, turn, event))
+    if (
+      runtime.turn !== turn ||
+      this.#sessions.get(runtime.spec.hostSessionId) !== runtime ||
+      turn.cancelled ||
+      turn.terminalEmitted
+    )
+      return;
+    for (const payload of projectNativeClaudeEvent(runtime, turn, event))
       this.#emit(runtime, turn.id, payload);
   }
-  #emit(
-    runtime: Runtime,
-    turnId: string,
-    payload: AgentEvent extends infer E
-      ? E extends AgentEvent
-        ? Omit<E, "hostSessionId" | "runtimeEpoch" | "sequence" | "eventId" | "at" | "turnId"> & {
-            kind: E["kind"];
-          }
-        : never
-      : never,
-  ): void {
-    const event = {
-      ...payload,
-      hostSessionId: runtime.spec.hostSessionId,
-      runtimeEpoch: runtime.binding.runtimeEpoch,
-      sequence: ++runtime.sequence,
-      eventId: randomUUID(),
-      at: Date.now(),
-      turnId,
-    } as AgentEvent;
-    for (const listener of this.#listeners.get(runtime.spec.hostSessionId) ?? []) listener(event);
+  #revoke(turn: Turn): void {
+    revokeClaudeTurn(turn, this.profile.gateway);
+  }
+  #finish(runtime: Runtime, turn: Turn, outcome: "success" | "cancelled" | "unknown"): void {
+    if (turn.terminalEmitted) return;
+    turn.terminalEmitted = true;
+    this.#emit(runtime, turn.id, { kind: "turn.finished", outcome });
+  }
+  #emit(runtime: Runtime, turnId: string, payload: ClaudeEventPayload): void {
+    emitClaudeEvent(runtime, turnId, payload, this.#listeners.get(runtime.spec.hostSessionId));
   }
   #require(id: string): Runtime {
     const runtime = this.#sessions.get(id);
