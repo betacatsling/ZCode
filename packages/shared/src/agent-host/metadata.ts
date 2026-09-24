@@ -1,9 +1,9 @@
 import { z } from "zod";
-import type { SessionSpec } from "./session-spec.js";
+import type { LegacySessionSpec, SessionSpecV2 } from "./session-spec.js";
 
 /** Manifest lifecycle, not evidence that a backend process or turn is still active. */
 export interface StoredAgentSessionSummary {
-  spec: SessionSpec;
+  spec: LegacySessionSpec | SessionSpecV2;
   state: "creating" | "running" | "terminated";
   updatedAt: number;
 }
