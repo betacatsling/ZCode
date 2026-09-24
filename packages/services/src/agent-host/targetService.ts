@@ -2,6 +2,7 @@ import type { AgentCommand, AgentCommandReceipt, AgentEvent, ExecutionTarget, Ha
 import { harnessCapabilitiesV2Schema, readableSessionSpecSchema, writableSessionSpecV2Schema } from "@zcode/shared/agent-host";
 import type { ConversationSnapshot, V4ConversationRowsRangeParams, V4ConversationRowsRangeResult } from "@zcode/shared/zcode-protocol-v4";
 import { HarnessRegistry } from "./harnessRegistry.js";
+import { CreationJournal, type CreationCommand } from "./creationJournal.js";
 import { SessionHost } from "./sessionHost.js";
 import type { ModelCatalogPort } from "./modelBindingPlanner.js";
 
@@ -23,6 +24,7 @@ export class AgentHostTargetService {
   readonly #hosts = new Map<string, SessionHost>();
   readonly #owners = new Map<string, string>();
   readonly #listeners = new Set<(result: TargetHostEvent) => void>();
+  readonly #creates = new Map<string, { spec: string; result: Promise<ConversationSnapshot> }>();
 
   constructor(options: {
     root: string;
@@ -54,7 +56,7 @@ export class AgentHostTargetService {
       .find((record) => record.spec.hostSessionId === spec.hostSessionId && JSON.stringify(record.spec) === JSON.stringify(spec));
     const unsupported = { support: "unsupported" as const, reason: "history only: session target or backend is not verified" };
     const supported = { support: "supported" as const };
-    const history = stored?.state !== "creating" ? supported : unsupported;
+    const history = stored && stored.state !== "creating" ? supported : unsupported;
     const historyOnly: HarnessCapabilitiesV2 = {
       text: unsupported, tools: unsupported, approvals: unsupported, cancelTurn: unsupported,
       resumeExecution: unsupported, history, images: unsupported, modelSwitch: unsupported,
@@ -85,14 +87,17 @@ export class AgentHostTargetService {
       hostManagedModel, fork: notImplemented, subagents: notImplemented,
     });
   }
-  async getRuntimeActivity(workspaceId: string): Promise<{ running: number; waiting: number; uncertain: number }> {
-    const records = await this.listWorkspaceSessions(workspaceId);
+  async getRuntimeActivity(workspaceId?: string): Promise<{ running: number; waiting: number; uncertain: number }> {
+    const records = await SessionHost.listStoredSessions(this.#root, { targetId: this.#target.id, ...(workspaceId === undefined ? {} : { workspaceId }) });
     const counts = { running: 0, waiting: 0, uncertain: 0 };
+    const manifestIds = new Set(records.map((record) => record.spec.hostSessionId));
+    const pendingCreates = new Set((await CreationJournal.listUnresolved(this.#root, this.#target.id, workspaceId)).map((spec) => spec.hostSessionId));
+    for (const id of pendingCreates) if (!manifestIds.has(id)) counts.uncertain++;
     for (const record of records) {
       if (record.state === "terminated") continue;
       const host = this.#hosts.get(this.#key(record.spec));
-      // 离线/重启后 manifest 的 running 不能当空闲，删除必须 fail closed。
-      const activity = host?.getActivity() ?? "uncertain";
+      // 修复离线历史被一律视为未知：只有未确认创建、未完成命令或未解决的工具门禁才阻止维护。
+      const activity = pendingCreates.has(record.spec.hostSessionId) ? "uncertain" : host?.getActivity() ?? await SessionHost.historyActivity(this.#root, record.spec);
       if (activity !== "idle") counts[activity]++;
     }
     return counts;
@@ -110,16 +115,41 @@ export class AgentHostTargetService {
     const spec = matches[0]?.spec;
     return spec?.schemaVersion === 2 ? spec : undefined;
   }
-  async create(raw: SessionSpecV2): Promise<ConversationSnapshot> {
+  async queryCreationCommand(commandId: string): Promise<CreationCommand | undefined> {
+    return CreationJournal.query(this.#root, commandId);
+  }
+  async create(raw: SessionSpecV2, commandId: string): Promise<ConversationSnapshot> {
     const spec = writableSessionSpecV2Schema.parse(raw);
+    const serialized = JSON.stringify(spec);
+    const flight = this.#creates.get(commandId);
+    if (flight) {
+      if (flight.spec !== serialized) throw new Error("creation command ID collision: different session spec");
+      return flight.result;
+    }
+    const result = this.#create(spec, commandId);
+    this.#creates.set(commandId, { spec: serialized, result });
+    try { return await result; }
+    finally { this.#creates.delete(commandId); }
+  }
+  async #create(spec: SessionSpecV2, commandId: string): Promise<ConversationSnapshot> {
+    // 重试先查持久命令；已完成的创建可以只读恢复，不能再次触发 adapter.create。
+    const prior = await CreationJournal.query(this.#root, commandId);
+    if (prior) return this.#creationResult(spec, prior);
     return this.#admit(spec, async (key) => {
-      if (this.#hosts.has(key)) throw new Error("duplicate external session owner");
-      if ((await SessionHost.listStoredSessions(this.#root, { targetId: this.#target.id })).some((record) => record.spec.hostSessionId === spec.hostSessionId))
+      if (this.#hosts.has(key) || (await SessionHost.listStoredSessions(this.#root, { targetId: this.#target.id })).some((record) => record.spec.hostSessionId === spec.hostSessionId))
         throw new Error("duplicate host session ID in index");
+      const existing = await CreationJournal.reserve(this.#root, spec, commandId);
+      if (existing) return this.#creationResult(spec, existing);
       const host = await SessionHost.create({ root: this.#root, spec, target: this.#target, catalog: this.#catalog, registry: this.#registry });
+      await CreationJournal.finish(this.#root, spec, commandId);
       this.#mount(key, host);
       return host.snapshot();
     });
+  }
+  async #creationResult(spec: SessionSpecV2, prior: CreationCommand): Promise<ConversationSnapshot> {
+    if (JSON.stringify(prior.spec) !== JSON.stringify(spec)) throw new Error("creation command ID collision: different session spec");
+    if (prior.receipt.status !== "completed") throw new Error("execution-unknown: creation command may have reached backend; inspect receipt");
+    return this.snapshot(spec);
   }
   async attach(raw: SessionSpecV2): Promise<ConversationSnapshot> {
     const spec = writableSessionSpecV2Schema.parse(raw);
