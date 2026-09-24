@@ -47,7 +47,7 @@ test("Pi SDK with fake ZCode executor reads, writes, tests and follows up over t
   const registry = new HarnessRegistry();
   registry.register(new PiHarnessAdapter({ root: join(root, "workers"), modelFactory: () => scriptedModel() }));
   const spec = {
-    schemaVersion: 1 as const, hostSessionId: "pi-loop", execution: { targetId: "local", workspaceIdentity: "fixture-loop", worktreePath: worktree },
+    schemaVersion: 2 as const, projectId: "fixture-project", workspaceId: "fixture-workspace", hostSessionId: "pi-loop", execution: { targetId: "local", workspaceIdentity: "fixture-loop", worktreePath: worktree, worktreeGeneration: "fixture-generation", cwdRelativeToWorktree: "." },
     harness: { id: "pi", adapterVersion: "0.87.1" },
     modelBinding: { kind: "host-managed" as const, selection: { providerId: "test-provider", modelId: "test-model", options: { reasoningLevel: "off" } } },
   };
