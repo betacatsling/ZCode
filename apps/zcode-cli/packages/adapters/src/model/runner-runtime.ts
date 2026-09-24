@@ -7,6 +7,7 @@ import type {
 } from "@zcode/contracts";
 import type { ZCodeProviderAccountAccess } from "@zcode/shared";
 import type { AiSdkResolvedModel } from "./model-execution.js";
+import type { OpenAiInstructionPlan } from "./openai-developer-role.js";
 
 export type AiSdkGenerateTextOptions = Parameters<typeof aiGenerateText>[0];
 export type AiSdkGenerateTextResult = Awaited<ReturnType<typeof aiGenerateText>>;
@@ -14,6 +15,7 @@ export type AiSdkStreamTextOptions = Parameters<typeof aiStreamText>[0];
 export type AiSdkStreamTextResult = ReturnType<typeof aiStreamText>;
 export type ResolvedAiSdkModel = AiSdkResolvedModel & {
   properties: ModelProperties;
+  instructionPlan?: OpenAiInstructionPlan;
   accountAccess?: ZCodeProviderAccountAccess;
 };
 

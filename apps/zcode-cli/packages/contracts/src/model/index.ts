@@ -317,7 +317,7 @@ export function createModelId(modelId: string): ModelId {
   return normalized as ModelId;
 }
 
-export type ModelMessageRole = "system" | "user" | "assistant" | "tool";
+export type ModelMessageRole = "system" | "developer" | "user" | "assistant" | "tool";
 
 export interface ModelToolCall {
   id: string;
@@ -929,7 +929,7 @@ export const modelInputMessageJsonSchema = {
   required: ["role", "content"],
   additionalProperties: false,
   properties: {
-    role: { enum: ["system", "user", "assistant", "tool"] },
+    role: { enum: ["system", "developer", "user", "assistant", "tool"] },
     content: modelMessageContentJsonSchema,
     cacheControl: {
       type: "object",

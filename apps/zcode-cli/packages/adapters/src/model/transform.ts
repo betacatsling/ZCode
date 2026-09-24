@@ -25,6 +25,7 @@ import { dataUrlToDataContent, unsupportedInputMediaText } from "./media-transfo
 import { normalizeOpenAiCompatibleSystemMessages } from "./system-message-compat.js";
 
 export interface AiSdkMessageTransformOptions {
+  developerRolePlanned?: boolean;
   apiFormat?: string;
   providerOptions?: Record<string, unknown>;
   providerKind?: "openai" | "anthropic" | "openai-compatible" | "gateway" | "custom";
@@ -69,6 +70,20 @@ export function toAiSdkMessages(
     }
 
     switch (message.role) {
+      case "developer":
+        if (!options.developerRolePlanned || options.providerKind !== "openai") {
+          throw new AiSdkModelAdapterError(
+            ModelErrorCode.InvalidModelRequest,
+            "Developer messages require a verified OpenAI Responses role plan",
+          );
+        }
+        transformedMessages.push({
+          role: "system",
+          content: modelMessageContentToText(message.content),
+          ...providerOptionsForCacheControl(message.cacheControl),
+        });
+        break;
+
       case "system":
         transformedMessages.push({
           role: "system",

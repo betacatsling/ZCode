@@ -1,0 +1,227 @@
+import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import { once } from "node:events";
+import { test } from "node:test";
+import Ajv from "ajv";
+import {
+  ModelErrorCode,
+  modelInputMessageJsonSchema,
+  type ModelInputMessage,
+} from "@zcode/contracts";
+import { AiSdkModelAdapter, type CreateAiSdkModelOptions } from "./runner.js";
+import {
+  createOpenAiDeveloperRoleFetch,
+  createOpenAiInstructionPlan,
+} from "./openai-developer-role.js";
+
+const modelOptions = (baseUrl: string, type = "openai-responses"): CreateAiSdkModelOptions => ({
+  providerId: "synthetic-provider",
+  modelId: "synthetic-model",
+  providerConfig: {
+    access: { type: "api-key", apiKey: "synthetic-test-key" },
+    api: { type, baseUrl },
+  } as CreateAiSdkModelOptions["providerConfig"],
+  modelConfig: {
+    properties: {
+      requiresMfjsToolSchema: false,
+      contextWindow: 8192,
+      inputFormat: {
+        supportsText: true,
+        supportsImage: false,
+        supportsVideo: false,
+        supportsAudio: false,
+        supportsPdf: false,
+      },
+      outputFormat: { supportsText: true },
+      supportsToolCall: true,
+      supportsJsonSchemaOutput: false,
+      supportsNativeWebSearch: false,
+      supportsMidConversationSystem: true,
+    },
+    optionSpecs: {
+      reasoningLevel: { values: ["off"], map: "{}" },
+      maxOutputTokens: { max: 1000, map: '{"max_output_tokens": maxOutputTokens}' },
+    },
+  } as unknown as CreateAiSdkModelOptions["modelConfig"],
+  options: { reasoningLevel: "off", maxOutputTokens: 100 },
+});
+
+const messages = (...roles: Array<"system" | "developer">): ModelInputMessage[] => [
+  ...roles.map((role, index) => ({ role, content: `synthetic instruction ${index}` })),
+  { role: "user", content: "synthetic question" },
+];
+
+function successResponse(): string {
+  return JSON.stringify({
+    id: "resp_synthetic",
+    model: "synthetic-model",
+    created_at: 1760000000,
+    output: [
+      {
+        type: "message",
+        role: "assistant",
+        id: "msg_synthetic",
+        content: [{ type: "output_text", text: "synthetic answer", annotations: [] }],
+      },
+    ],
+    usage: { input_tokens: 6, output_tokens: 2 },
+  });
+}
+
+async function withFakeResponses<T>(
+  respond: (
+    body: Record<string, unknown>,
+    headers: Record<string, string | string[] | undefined>,
+    index: number,
+  ) => { status: number; body: string },
+  run: (baseUrl: string, captured: Record<string, unknown>[]) => Promise<T>,
+): Promise<T> {
+  const captured: Record<string, unknown>[] = [];
+  const server = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const body = JSON.parse(Buffer.concat(chunks).toString()) as Record<string, unknown>;
+    captured.push(body);
+    try {
+      const result = respond(body, request.headers, captured.length);
+      response.writeHead(result.status, { "content-type": "application/json" });
+      response.end(result.body);
+    } catch (error) {
+      response.writeHead(500, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { message: String(error), type: "assertion_error" } }));
+    }
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    return await run(`http://127.0.0.1:${address.port}/v1`, captured);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+}
+
+const rolesInWire = (body: Record<string, unknown>): string[] =>
+  (body.input as Array<{ role: string }>)
+    .filter((entry) => entry.role === "system" || entry.role === "developer")
+    .map((entry) => entry.role);
+
+test("modelInputMessageJsonSchema accepts developer and refuses unknown roles", () => {
+  const validate = new Ajv().compile(modelInputMessageJsonSchema);
+  assert.equal(validate({ role: "developer", content: "policy" }), true);
+  assert.equal(validate({ role: "owner", content: "policy" }), false);
+  assert.equal(validate({ role: "developer", content: "policy", injected: true }), false);
+});
+
+test("OpenAI Responses adapter preserves concurrent opposite role plans, auth, options and native unchanged", async () => {
+  await withFakeResponses(
+    (body, headers) => {
+      assert.equal(headers.authorization, "Bearer synthetic-test-key");
+      assert.equal(body.model, "synthetic-model");
+      assert.equal(body.max_output_tokens, 100);
+      assert.equal(body.instructions, undefined);
+      return { status: 200, body: successResponse() };
+    },
+    async (baseUrl, captured) => {
+      const model = new AiSdkModelAdapter({ retry: { maxAttempts: 1 } }).createModel(
+        modelOptions(baseUrl),
+      );
+      const plans = [
+        messages("system", "developer"),
+        messages("developer", "system"),
+        messages("system"),
+      ];
+      const results = await Promise.all(
+        plans.map((plan) => model.generateText({ messages: plan })),
+      );
+      assert.equal(results.length, 3);
+      assert.deepEqual(
+        captured.map(rolesInWire).sort(),
+        [["system", "developer"], ["developer", "system"], ["system"]].sort(),
+      );
+      assert.deepEqual(captured.map((body) => (body.input as unknown[]).length).sort(), [2, 3, 3]);
+    },
+  );
+});
+
+test("OpenAI Responses retry gets the same source role plan on every SDK attempt", async () => {
+  await withFakeResponses(
+    (_body, _headers, index) =>
+      index === 1
+        ? {
+            status: 503,
+            body: JSON.stringify({ error: { message: "temporary", type: "server_error" } }),
+          }
+        : { status: 200, body: successResponse() },
+    async (baseUrl, captured) => {
+      const model = new AiSdkModelAdapter({
+        retry: { maxAttempts: 2, baseDelayMs: 0, jitter: false },
+      }).createModel(modelOptions(baseUrl));
+      await model.generateText({ messages: messages("developer", "system", "developer") });
+      assert.equal(captured.length, 2);
+      assert.deepEqual(captured.map(rolesInWire), [
+        ["developer", "system", "developer"],
+        ["developer", "system", "developer"],
+      ]);
+    },
+  );
+});
+
+test("unsupported provider and aborted request never send a request", async () => {
+  await withFakeResponses(
+    () => ({ status: 200, body: successResponse() }),
+    async (baseUrl, captured) => {
+      for (const type of ["anthropic-messages", "openai-chat-completions"]) {
+        const model = new AiSdkModelAdapter({ retry: { maxAttempts: 1 } }).createModel(
+          modelOptions(baseUrl, type),
+        );
+        await assert.rejects(
+          model.generateText({ messages: messages("developer") }),
+          /Developer messages require/,
+        );
+      }
+      const model = new AiSdkModelAdapter({ retry: { maxAttempts: 1 } }).createModel(
+        modelOptions(baseUrl),
+      );
+      const abort = new AbortController();
+      abort.abort();
+      await assert.rejects(
+        model.generateText({ messages: messages("developer"), abortSignal: abort.signal }),
+      );
+      assert.equal(captured.length, 0);
+    },
+  );
+});
+
+test("SDK instruction body tampering, extra instruction, and missing instruction fail before fetch", async () => {
+  let sent = 0;
+  const fetch = async () => {
+    sent++;
+    return new Response(successResponse());
+  };
+  const plan = createOpenAiInstructionPlan(messages("system", "developer"), "openai");
+  assert.ok(plan);
+  const guarded = createOpenAiDeveloperRoleFetch(fetch, plan);
+  for (const input of [
+    [
+      { role: "system", content: "tampered" },
+      { role: "system", content: "synthetic instruction 1" },
+    ],
+    [{ role: "system", content: "synthetic instruction 0" }],
+    [
+      { role: "system", content: "synthetic instruction 0" },
+      { role: "system", content: "synthetic instruction 1" },
+      { role: "system", content: "extra" },
+    ],
+  ]) {
+    await assert.rejects(
+      guarded("http://127.0.0.1/", { method: "POST", body: JSON.stringify({ input }) }),
+      (error: { code?: string }) => error.code === ModelErrorCode.InvalidModelRequest,
+    );
+  }
+  assert.equal(sent, 0);
+});

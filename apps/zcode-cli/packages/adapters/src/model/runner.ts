@@ -42,6 +42,7 @@ import {
   type ResolvedAiSdkModel,
 } from "./runner-runtime.js";
 import { createModel, type ModelExecutionRequest } from "./model.js";
+import { createOpenAiInstructionPlan } from "./openai-developer-role.js";
 
 export type { AiSdkModelRetryOptions } from "./retry-policy.js";
 export type {
@@ -225,6 +226,7 @@ export class AiSdkModelAdapter {
       optionValues: Required<ModelOptions>,
     ): ((requestAuth?: ModelRequestAuth) => ResolvedAiSdkModel) => {
       const maxOutputTokens = requireMaxOutputTokens(optionValues);
+      const instructionPlan = createOpenAiInstructionPlan(request.messages, resolved.providerKind);
       return request.refreshRuntimeHeadersBeforeAttempt
         ? (requestAuth) => ({
             ...assertSameBoundModel(
@@ -235,6 +237,7 @@ export class AiSdkModelAdapter {
                   reasoningLevel: optionValues.reasoningLevel,
                 },
                 requestAuth,
+                instructionPlan,
               }),
             ),
             properties,
@@ -248,6 +251,7 @@ export class AiSdkModelAdapter {
                 maxOutputTokens,
                 reasoningLevel: optionValues.reasoningLevel,
               },
+              instructionPlan,
             }),
             properties,
             ...(options.providerConfig.access.type === "zhipu-account"
