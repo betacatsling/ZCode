@@ -1,3 +1,4 @@
+import { createServiceDescriptor } from "../descriptors.js";
 import type {
   Project,
   RepositoryBinding,
@@ -93,3 +94,5 @@ export interface IProjectCatalogService {
   readonly revision: number;
   onChange(listener: (revision: number) => void): () => void;
 }
+
+export const IProjectCatalogService = createServiceDescriptor<IProjectCatalogService>("project-catalog");

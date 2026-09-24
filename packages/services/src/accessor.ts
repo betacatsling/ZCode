@@ -11,6 +11,8 @@ import type { IBroadcastService } from "./broadcast/broadcast.js";
 import type { IZCodeTaskService } from "./session/zcodeTaskService.js";
 import type { IZCodeAgentService } from "./zcode-agent/zcodeAgent.js";
 import type { IAgentHostService } from "./agent-host/serviceContract.js";
+import type { IProjectCatalogService } from "./project-workspaces/serviceContract.js";
+import type { IWorkspaceHierarchyService } from "./workspace-hierarchy/serviceContract.js";
 import type { IZCodeSessionService } from "./zcode-session/zcodeSession.js";
 import type { ICuaPermissionService } from "./cua-permission-broker/cuaPermissionService.js";
 import type { IBotsService } from "./bots/bots.js";
@@ -60,6 +62,10 @@ export interface IServiceAccessor {
   readonly zcodeAgentService: IZCodeAgentService;
   /** Opt-in external harness owner; missing on older or disabled hosts. */
   readonly agentHostService?: IAgentHostService;
+  /** Host-owned profile catalog, absent on legacy/unmounted transports. */
+  readonly projectCatalogService?: IProjectCatalogService;
+  /** Target-scoped navigation and server-derived creation; never infer native from absence. */
+  readonly workspaceHierarchyService?: IWorkspaceHierarchyService;
   readonly zcodeSessionService: IZCodeSessionService;
   // CUA 是 opt-in 内测特性：local macOS host 提供，远端 等 host 没有。可选避免连锁必填。
   readonly cuaPermissionService?: ICuaPermissionService;

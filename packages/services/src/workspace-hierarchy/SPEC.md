@@ -1,0 +1,11 @@
+# Workspace hierarchy service
+
+Profile Catalog owns project/binding/workspace display state and the persistent agent index; TargetWorktreeService owns Git, generation and admission; native session storage owns native IDs and runtime truth; Host owns external specs, commands and events. Hierarchy is a read/command composition only, never an allocator for native IDs or a second queue. Unknown IDs must fail closed; feature-off native transport remains unchanged.
+
+Client submits workspace ID, harness ID, model binding, relative cwd and stable command ID. Hierarchy reads the authoritative workspace/binding/manifest, derives v2 spec, target verifies generation/cwd under admission, Host durably records creation before adapter effect. Same command ID retry queries original receipt; different intent with same ID rejects. Native creation uses the existing native V4 creation path with its original allocator, not Host. Navigation returns original native session ID and scope, or stored external spec/history-only. Resolve path+identity+remoteSessionId only within the authenticated target scope; no path-only remote ownership.
+
+Activity: native + external accepted/waiting/running/uncertain must be aggregated before removal or maintenance. Automatic maintenance obtains admission fence before fresh activity read, holds it through operation, refuses offline/unknown/uncertain; explicit operator stop remains separate. A disabled new-admission flag does not stop running sessions. Target-local callbacks remain in Node and are never serialized over RPC.
+
+Event order: client intent → catalog/target owner check → target admission → Host create-command reservation → adapter activation → Host journal/event → hierarchy projection. Desktop continuous and mobile replayable consume the same durable owner; reconnect queries command/receipts rather than resending prompts. Stale target generation, epoch or ambiguous native mapping blocks mutation. Tests: two targets same path, unknown ID, command retry/conflict, native original scope, inactive external history, accepted-before-running removal/maintenance, offline target, concurrent creation and removal.
+
+Current implementation limitations must be reported where prerequisite native readonly directory, durable Host create command or maintenance lease is absent; never pretend an empty source is authoritative.
