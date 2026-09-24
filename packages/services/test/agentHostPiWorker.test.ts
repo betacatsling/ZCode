@@ -37,7 +37,7 @@ test("real Pi SDK worker enforces a write approval before executing the tool", {
   const registry = new HarnessRegistry();
   registry.register(new PiHarnessAdapter({ root: join(root, "workers"), modelFactory: () => fakeModel }));
   const spec = {
-    schemaVersion: 1 as const, hostSessionId: "pi-test", execution: { targetId: "local", workspaceIdentity: "fixture", worktreePath: worktree },
+    schemaVersion: 2 as const, projectId: "fixture-project", workspaceId: "fixture-workspace", hostSessionId: "pi-test", execution: { targetId: "local", workspaceIdentity: "fixture", worktreePath: worktree, worktreeGeneration: "fixture-generation", cwdRelativeToWorktree: "." },
     harness: { id: "pi", adapterVersion: "0.87.1" },
     modelBinding: { kind: "host-managed" as const, selection: { providerId: "provider-a", modelId: "model-a", options: { reasoningLevel: "off" } } },
   };

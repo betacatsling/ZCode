@@ -19,10 +19,11 @@ export function createRpcAgentHostService(target: AgentHostTargetService, admiss
     listWorkspaceSessions: (workspaceId) => target.listWorkspaceSessions(workspaceId),
     rowsRange: (spec, request) => target.rowsRange(spec, request),
     listSessions: (workspaceIdentity, worktreePath) => target.listSessions(workspaceIdentity, worktreePath),
-    create: (spec) => {
+    create: (spec, commandId) => {
       if (!admissionEnabled()) throw new Error("new external sessions disabled; existing history remains readable");
-      return target.create(spec);
+      return target.create(spec, commandId);
     },
+    queryCreationCommand: (commandId) => target.queryCreationCommand(commandId),
     attach: (spec) => target.attach(spec),
     dispatch: (spec, command) => target.dispatch(spec, command),
     snapshot: (spec) => target.snapshot(spec),

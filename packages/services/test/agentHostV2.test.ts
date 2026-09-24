@@ -8,6 +8,7 @@ import { HarnessRegistry } from "../src/agent-host/harnessRegistry.js";
 import { MockHarness } from "../src/agent-host/mockHarness.js";
 import { AgentHostTargetService, type WorkspaceAdmissionPort } from "../src/agent-host/targetService.js";
 import { CommandJournal } from "../src/agent-host/commandJournal.js";
+import { CreationJournal } from "../src/agent-host/creationJournal.js";
 import { manifestPath } from "../src/agent-host/sessionManifest.js";
 import { journalPath } from "../src/agent-host/journalStorage.js";
 
@@ -44,23 +45,26 @@ test("v2 admission rejects legacy, foreign generation and duplicate IDs across s
   const a = spec(path, "a");
   assert.deepEqual((await service.catalogForTarget("local")).map((entry) => [entry.manifest.id, entry.availability]), [["mock", "supported"]]);
   await assert.rejects(service.catalogForTarget("foreign"), /foreign target/);
-  await assert.rejects(service.create({ ...a, schemaVersion: 1 } as unknown as SessionSpecV2), /invalid|literal|expected/i);
-  await assert.rejects(service.create({ ...a, execution: { ...a.execution, worktreeGeneration: "recreated" } }), /stale/);
-  await service.create(a);
+  await assert.rejects(service.create({ ...a, schemaVersion: 1 } as unknown as SessionSpecV2, "legacy"), /invalid|literal|expected/i);
+  await assert.rejects(service.create({ ...a, execution: { ...a.execution, worktreeGeneration: "recreated" } }, "stale"), /stale/);
+  await service.create(a, `create-${a.hostSessionId}`);
   assert.equal((await service.getSessionCapabilities(a)).approvals.support, "supported");
   assert.equal((await service.getSessionCapabilities(a)).terminateSession.support, "supported");
-  await service.create(spec(path, "b"));
+  await service.create(spec(path, "b"), "create-b");
   assert.deepEqual((await service.listWorkspaceSessions("workspace")).map((row) => row.spec.hostSessionId).sort(), ["a", "b"]);
-  await assert.rejects(service.create({ ...a, workspaceId: "foreign" }), /stale/);
-  await assert.rejects(service.create(a), /duplicate/);
+  await assert.rejects(service.create({ ...a, workspaceId: "foreign" }, "foreign"), /stale/);
+  await assert.rejects(service.create(a, "create-other"), /duplicate/);
   assert.deepEqual(await service.getSessionSpec({ targetId: "local", workspaceId: "workspace", hostSessionId: "a" }), a);
   assert.equal(await service.getSessionSpec({ targetId: "foreign", workspaceId: "workspace", hostSessionId: "a" }), undefined);
-  assert.deepEqual(await service.getRuntimeActivity("workspace"), { running: 0, waiting: 0, uncertain: 0 });
+  assert.deepEqual(await service.getRuntimeActivity(), { running: 0, waiting: 0, uncertain: 0 });
+  assert.equal((await service.queryCreationCommand("create-a"))?.receipt.status, "completed");
+  assert.deepEqual(await service.create(a, "create-a"), await service.snapshot(a));
+  await assert.rejects(service.create(spec(path, "different"), "create-a"), /collision|different|conflict/);
 }));
 
 test("desktop continuous events, mobile replay/rows, immutable turn route and scoped read after removal", async () => fixture(async (root, path, service, mock) => {
   const a = spec(path, "a");
-  await service.create(a);
+  await service.create(a, `create-${a.hostSessionId}`);
   const desktop: number[] = [];
   const unsubscribe = service.subscribe(({ spec: source, event }) => { if (source.hostSessionId === "a") desktop.push(event.sequence); });
   assert.equal((await service.dispatch(a, send("a", "turn-1"))).status, "accepted");
@@ -94,16 +98,74 @@ test("desktop continuous events, mobile replay/rows, immutable turn route and sc
   assert.ok((await history.snapshot(a)).rows.window.length);
   assert.equal((await history.getSessionCapabilities(a)).viewHistory.support, "supported");
   assert.equal((await history.getSessionCapabilities(a)).text.support, "unsupported");
-  assert.deepEqual(await history.getRuntimeActivity("workspace"), { running: 0, waiting: 0, uncertain: 1 });
+  assert.deepEqual(await history.getRuntimeActivity("workspace"), { running: 0, waiting: 0, uncertain: 0 });
+  assert.equal((await history.queryCreationCommand("create-a"))?.receipt.status, "completed");
   assert.equal((await history.rowsRange(a, { sessionId: "a", limit: 1 })).rows.length, 1);
   assert.equal((await history.queryCommand(a, "turn-1"))?.status, "completed");
   await assert.rejects(history.attach(a), /removed generation/);
   await history.close();
 }));
 
+test("interrupted create reserves command and spec before backend effect; retry never allocates again", async () => {
+  let launches = 0;
+  const mock = new class extends MockHarness {
+    override async create(candidate: SessionSpecV2) {
+      launches++;
+      throw new Error(`lost backend acknowledgement for ${candidate.hostSessionId}`);
+    }
+  }();
+  await fixture(async (_root, path, service) => {
+    const a = spec(path, "interrupted");
+    assert.equal((await service.getSessionCapabilities(a)).viewHistory.support, "unsupported");
+    await assert.rejects(service.create(a, "lost-ack"), /lost backend acknowledgement/);
+    assert.deepEqual(await service.queryCreationCommand("lost-ack"), {
+      spec: a, receipt: { commandId: "lost-ack", status: "execution-unknown", reasonCode: "execution-unknown" },
+    });
+    await assert.rejects(service.create(a, "lost-ack"), /execution-unknown/);
+    await assert.rejects(service.create(spec(path, "other"), "lost-ack"), /collision/);
+    assert.equal(launches, 1);
+    assert.deepEqual(await service.getRuntimeActivity(), { running: 0, waiting: 0, uncertain: 1 });
+  }, mock);
+});
+
+test("orphan creation reservation without manifest still blocks target-wide maintenance", async () => fixture(async (root, path, service) => {
+  const a = spec(path, "reserved-only");
+  await CreationJournal.reserve(join(root, "sessions"), a, "create-orphan");
+  assert.equal((await service.queryCreationCommand("create-orphan"))?.receipt.status, "execution-unknown");
+  assert.deepEqual(await service.getRuntimeActivity(), { running: 0, waiting: 0, uncertain: 1 });
+  assert.deepEqual(await service.getRuntimeActivity("other-workspace"), { running: 0, waiting: 0, uncertain: 0 });
+}));
+
+test("accepted send is visible to target-wide maintenance activity before backend starts", async () => {
+  let unblock!: () => void;
+  const gate = new Promise<void>((resolve) => { unblock = resolve; });
+  const mock = new class extends MockHarness {
+    override async prepareTurn(): Promise<void> { await gate; }
+  }();
+  try {
+    await fixture(async (_root, path, service) => {
+      const a = spec(path, "pending");
+      await service.create(a, "create-pending");
+      const sendPending = service.dispatch(a, send("pending", "turn-pending"));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.deepEqual(await service.getRuntimeActivity(), { running: 1, waiting: 0, uncertain: 0 });
+      assert.deepEqual(await service.getRuntimeActivity("other-workspace"), { running: 0, waiting: 0, uncertain: 0 });
+      unblock();
+      assert.equal((await sendPending).status, "accepted");
+      for (let attempt = 0; attempt < 100; attempt++) {
+        try { await mock.waitForInteraction("pending"); break; }
+        catch { await new Promise((resolve) => setTimeout(resolve, 5)); }
+      }
+      const epoch = (await service.snapshot(a)).logEpoch;
+      await service.dispatch(a, { type: "cancelTurn", commandId: "cancel-pending", hostSessionId: "pending", turnId: "turn-pending", runtimeEpoch: epoch });
+      await service.waitForIdle(a);
+    }, mock);
+  } finally { unblock(); }
+});
+
 test("server refuses uncertified approval without executing tool and rejects stale epoch", async () => fixture(async (_root, path, service, mock) => {
   const a = spec(path, "a");
-  await service.create(a);
+  await service.create(a, `create-${a.hostSessionId}`);
   await service.dispatch(a, send("a", "turn-1"));
   await mock.waitForInteraction("a");
   const epoch = (await service.snapshot(a)).logEpoch;
@@ -134,14 +196,14 @@ test("legacy manifest stays readable without adapter, but v1 and future versions
   assert.equal((await service.getSessionCapabilities(v1)).approvals.support, "unsupported");
   await assert.rejects(service.attach(v1 as unknown as SessionSpecV2));
   await assert.rejects(service.dispatch(v1 as unknown as SessionSpecV2, send("old", "no-write")));
-  await assert.rejects(service.create({ ...spec(path, "future"), schemaVersion: 3 } as unknown as SessionSpecV2));
+  await assert.rejects(service.create({ ...spec(path, "future"), schemaVersion: 3 } as unknown as SessionSpecV2, "future"));
 }));
 
 test("source gap fences execution while desktop/mobile recover committed prefix through snapshot", async () => {
   const mock = new MockHarness({ gapBeforeText: true });
   await fixture(async (_root, path, service) => {
     const a = spec(path, "gap");
-    await service.create(a);
+    await service.create(a, `create-${a.hostSessionId}`);
     await service.dispatch(a, send("gap", "turn-gap"));
     await mock.waitForInteraction("gap");
     const snapshot = await service.snapshot(a);
@@ -185,7 +247,7 @@ test("turn route is durable before prepare/send and later catalog changes affect
     catalog: { get fingerprint() { return fingerprint; }, validateSelection: () => ({ ok: true }) } });
   try {
     const a = spec(path, "a");
-    await service.create(a);
+    await service.create(a, `create-${a.hostSessionId}`);
     for (const turn of ["one", "two"]) {
       assert.equal((await service.dispatch(a, send("a", turn))).status, "accepted");
       await mock.waitForInteraction("a");
@@ -201,7 +263,7 @@ test("turn route is durable before prepare/send and later catalog changes affect
 
 test("parallel sends on one host admit only one and uncertain crash fences next send", async () => fixture(async (_root, path, service, mock) => {
   const a = spec(path, "a");
-  await service.create(a);
+  await service.create(a, `create-${a.hostSessionId}`);
   const receipts = await Promise.all([service.dispatch(a, send("a", "turn-1")), service.dispatch(a, send("a", "turn-2"))]);
   assert.deepEqual(receipts.map((receipt) => receipt.status), ["accepted", "rejected"]);
   await mock.waitForInteraction("a");
