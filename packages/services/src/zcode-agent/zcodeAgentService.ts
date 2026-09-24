@@ -1103,7 +1103,9 @@ export function createZCodeAgentService(
   options?: CreateZCodeAgentServiceOptions,
 ): IZCodeAgentService & { disposeAllAndWait(): Promise<void> } {
   let spawnFrozen = false;
-  const waitForSpawnAdmission: NonNullable<CreateZCodeAgentServiceOptions["waitForSpawnAdmission"]> = async (context) => {
+  const waitForSpawnAdmission: NonNullable<
+    CreateZCodeAgentServiceOptions["waitForSpawnAdmission"]
+  > = async (context) => {
     // 中文：spawn 前后均检查冻结位；旧异步 env/preflight 回调不能穿过维护边界。
     if (spawnFrozen) throw new Error("native process admission frozen");
     await options?.waitForSpawnAdmission?.(context);
@@ -5728,13 +5730,33 @@ export function createZCodeAgentService(
   }
   const nativeManagers = [processManager, pluginProcessManager, mcpStatusProcessManager];
   let frozenFacts: NativeProcessActivity | undefined;
+  let frozenClients: readonly ZCodeProtocolClient[] | undefined;
   nativeProcessPorts.set(service, {
     async activity() {
-      const unresolved = nativeManagers.reduce((sum, manager) => sum + manager.countUnresolvedWorkers(), 0);
+      const unresolved = nativeManagers.reduce(
+        (sum, manager) => sum + manager.countUnresolvedWorkers(),
+        0,
+      );
       const workers = nativeManagers.flatMap((manager) => manager.listManagedProcesses());
-      if (spawnFrozen && frozenFacts && unresolved === 0) return frozenFacts;
-      // 中文：未持有同代 CLI lease 时不能从 SQLite 或 client request count 推断运行态为空。
-      return { running: 0, waiting: 0, uncertain: unresolved + workers.length, offline: false };
+      // 中文：旧实现只看 frozenFacts；CLI 退出后 workers 为空仍返回缓存的 0，
+      // 把失效租约错报成可停机。必须每次验证同代 client 仍归本进程管理。
+      if (
+        spawnFrozen &&
+        frozenFacts &&
+        unresolved === 0 &&
+        frozenClients &&
+        workers.length === frozenClients.length &&
+        frozenClients.every(
+          (client) => !client.isDisposed && workers.some((entry) => entry.client === client),
+        )
+      )
+        return frozenFacts;
+      return {
+        running: 0,
+        waiting: 0,
+        uncertain: unresolved + workers.length + (spawnFrozen && frozenClients ? 1 : 0),
+        offline: false,
+      };
     },
     async fenceAdmissions() {
       if (spawnFrozen) throw new Error("native process fence already held");
@@ -5742,6 +5764,7 @@ export function createZCodeAgentService(
       spawnFrozen = true;
       frozenFacts = undefined;
       const workers = nativeManagers.flatMap((manager) => manager.listManagedProcesses());
+      frozenClients = workers.map((worker) => worker.client);
       if (nativeManagers.some((manager) => manager.countUnresolvedWorkers() > 0))
         throw new Error("native worker startup or retirement unresolved");
       const leases: Array<{
@@ -5750,13 +5773,19 @@ export function createZCodeAgentService(
       }> = [];
       const stillOwned = () => {
         const current = nativeManagers.flatMap((manager) => manager.listManagedProcesses());
-        return current.length === workers.length && workers.every(
-          (worker) => current.some((entry) => entry.client === worker.client && !entry.client.isDisposed),
-        ) && nativeManagers.every((manager) => manager.countUnresolvedWorkers() === 0);
+        return (
+          current.length === workers.length &&
+          workers.every((worker) =>
+            current.some((entry) => entry.client === worker.client && !entry.client.isDisposed),
+          ) &&
+          nativeManagers.every((manager) => manager.countUnresolvedWorkers() === 0)
+        );
       };
       for (const worker of workers) {
         const result = await worker.client.request(
-          zcodeProtocolMethods.nativeMaintenanceFreeze, {}, nativeMaintenanceFreezeResultSchema,
+          zcodeProtocolMethods.nativeMaintenanceFreeze,
+          {},
+          nativeMaintenanceFreezeResultSchema,
         );
         leases.push({ worker, lease: result.lease });
         if (!stillOwned() || result.activity.unknown || !result.activity.frozen)
@@ -5765,21 +5794,47 @@ export function createZCodeAgentService(
       const verify = async () => {
         if (!stillOwned() || leases.length !== workers.length)
           throw new Error("native worker epoch changed");
-        const snapshots = await Promise.all(leases.map(({ worker, lease }) => worker.client.request(
-          zcodeProtocolMethods.nativeMaintenanceGetActivity, lease, nativeMaintenanceActivitySchema,
-          { lifecycle: "observation" },
-        )));
-        if (!stillOwned() || snapshots.some((snapshot, i) =>
-          snapshot.epoch !== leases[i]!.lease.epoch || !snapshot.frozen || snapshot.unknown ||
-          ![snapshot.active, snapshot.accepted, snapshot.pending, snapshot.tools, snapshot.approvals]
-            .every((value) => Number.isSafeInteger(value) && value >= 0),
-        )) throw new Error("native process activity uncertain");
-        frozenFacts = { running: snapshots.reduce((n, s) => n + s.active + s.tools, 0),
+        const snapshots = await Promise.all(
+          leases.map(({ worker, lease }) =>
+            worker.client.request(
+              zcodeProtocolMethods.nativeMaintenanceGetActivity,
+              lease,
+              nativeMaintenanceActivitySchema,
+              { lifecycle: "observation" },
+            ),
+          ),
+        );
+        if (
+          !stillOwned() ||
+          snapshots.some(
+            (snapshot, i) =>
+              snapshot.epoch !== leases[i]!.lease.epoch ||
+              !snapshot.frozen ||
+              snapshot.unknown ||
+              ![
+                snapshot.active,
+                snapshot.accepted,
+                snapshot.pending,
+                snapshot.tools,
+                snapshot.approvals,
+              ].every((value) => Number.isSafeInteger(value) && value >= 0),
+          )
+        )
+          throw new Error("native process activity uncertain");
+        frozenFacts = {
+          running: snapshots.reduce((n, s) => n + s.active + s.tools, 0),
           waiting: snapshots.reduce((n, s) => n + s.accepted + s.pending + s.approvals, 0),
-          uncertain: 0, offline: false };
+          uncertain: 0,
+          offline: false,
+        };
         return snapshots.every((snapshot) =>
-          [snapshot.active, snapshot.accepted, snapshot.pending, snapshot.tools, snapshot.approvals]
-            .every((value) => value === 0),
+          [
+            snapshot.active,
+            snapshot.accepted,
+            snapshot.pending,
+            snapshot.tools,
+            snapshot.approvals,
+          ].every((value) => value === 0),
         );
       };
       return {
@@ -5788,12 +5843,15 @@ export function createZCodeAgentService(
           if (!stillOwned()) throw new Error("native worker changed before release");
           for (const { worker, lease } of [...leases].reverse()) {
             const result = await worker.client.request(
-              zcodeProtocolMethods.nativeMaintenanceRelease, lease, nativeMaintenanceReleaseResultSchema,
+              zcodeProtocolMethods.nativeMaintenanceRelease,
+              lease,
+              nativeMaintenanceReleaseResultSchema,
             );
             if (!result.released) throw new Error("native process release rejected");
           }
           if (!stillOwned()) throw new Error("native worker changed during release");
           frozenFacts = undefined;
+          frozenClients = undefined;
           spawnFrozen = false;
         },
       };
