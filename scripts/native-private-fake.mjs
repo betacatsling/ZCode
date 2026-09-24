@@ -5,12 +5,19 @@ export async function startPrivateFake({ cwd, readPath, writePath, writeContent,
   const routeCounts = [0, 0, 0];
   let requests = 0;
   let forbiddenRequests = 0;
+  let forbiddenRegisteredTools = 0;
   const server = createServer(async (request, response) => {
     requests++;
     if (request.url !== "/fixture/v1/messages" || request.method !== "POST") forbiddenRequests++;
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
     const body = Buffer.concat(chunks);
+    // 修复：检查真实送往 Model 的工具注册面，不只依赖响应流拦截成功。
+    try {
+      const tools = JSON.parse(body.toString("utf8")).tools ?? [];
+      if (tools.some((tool) => !["Read", "Write", "Bash", ...(fault === "webfetch-exposed" ? ["WebFetch"] : [])].includes(tool.name)))
+        forbiddenRegisteredTools++;
+    } catch { forbiddenRegisteredTools++; }
     const phase = body.includes(Buffer.from("fixture instruction 3")) ? 2 :
       body.includes(Buffer.from("fixture instruction 2")) ? 1 : 0;
     const step = routeCounts[phase]++;
@@ -39,8 +46,19 @@ export async function startPrivateFake({ cwd, readPath, writePath, writeContent,
     if (phase === 1 && step === 0 && fault === "wrong-write") Object.assign(tool, { input: { file_path: writePath, content: "wrong" } });
     if (phase === 1 && step === 1 && fault === "extra-cwd") Object.assign(tool, { input: { command: bashCommand, cwd: cwd + "/other" } });
     if (phase === 0 && step === 0 && fault === "other-tool") Object.assign(tool, { name: "Glob", input: { pattern: "**/*", path: cwd } });
+    if (phase === 0 && step === 0 && ["agent-compact", "task-multiline", "workflow-compact"].includes(fault))
+      Object.assign(tool, { name: fault === "agent-compact" ? "Agent" : fault === "task-multiline" ? "Task" : "CreateWorkflow", input: { prompt: "do not delegate" } });
     const sawFreshRead = phase === 2 && step > 0 && body.includes(Buffer.from(changedContent()));
-    const event = (type, data) => `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`;
+    const event = (type, data) => {
+      const json = JSON.stringify({ type, ...data });
+      if (type === "content_block_start" && fault === "agent-compact") return `event: ${type}\ndata:${json}\n\n`;
+      if (type === "content_block_start" && fault === "workflow-compact") return `event: ${type}\rdata:${json}\r\r`;
+      if (type === "content_block_start" && fault === "task-multiline") {
+        const split = json.indexOf(',"content_block"');
+        return `event: ${type}\ndata:${json.slice(0, split + 1)}\ndata: ${json.slice(split + 1)}\n\n`;
+      }
+      return `event: ${type}\ndata: ${json}\n\n`;
+    };
     response.writeHead(200, { "content-type": "text/event-stream" });
     response.end(
       event("message_start", { message: { id: `msg_fixture_${requests}`, type: "message", role: "assistant", model: "fixture-model", content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 4, output_tokens: 0 } } }) +
@@ -57,7 +75,7 @@ export async function startPrivateFake({ cwd, readPath, writePath, writeContent,
   const address = server.address();
   return {
     baseUrl: `http://127.0.0.1:${address.port}/fixture`,
-    get counts() { return { requests, forbiddenRequests, routeCounts }; },
+    get counts() { return { requests, forbiddenRequests, forbiddenRegisteredTools, routeCounts }; },
     close: async () => {
       server.closeAllConnections();
       let timer;

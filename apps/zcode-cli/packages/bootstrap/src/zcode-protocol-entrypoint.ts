@@ -284,14 +284,22 @@ export async function runZCodeProtocolAgent(
           ...(dependencies.fileSystemPort ? { fileSystemPort: dependencies.fileSystemPort } : {}),
           ...(dependencies.executionPort ? { executionPort: dependencies.executionPort } : {}),
           ...(dependencies.httpClientPort ? { httpClientPort: dependencies.httpClientPort } : {}),
-          ...(dependencies.privateToolAllowlist ? {
-            runtimeConfig: { ...appOptions.runtimeConfig, toolAllowlist: [...dependencies.privateToolAllowlist], dynamicWorkflowEnabled: false },
-          } : {}),
           ...applyProtocolProviderRegistry(
             applyProtocolPresentationSurface(appOptions, presentationSurface),
             activeProviderRegistryRuntime.runtime.registryService,
             activeProviderRegistryRuntime.configuredDefaultModelSelection,
           ),
+          // 修复：V4 create 的 runtimeConfig 在组合阶段覆盖了私有 allowlist；
+          // 在全部 presentation/provider 合成之后再次收窄，注册前即禁用委派工具。
+          ...(dependencies.privateToolAllowlist ? {
+            privateToolRegistrationOnly: true,
+            runtimeConfig: {
+              ...appOptions.runtimeConfig,
+              presentationSurface,
+              toolAllowlist: [...dependencies.privateToolAllowlist],
+              dynamicWorkflowEnabled: false,
+            },
+          } : {}),
           // 只读同进程已应用快照；不为子任务另发 Host RPC，也不在 ModelFactory 偷换模型。
           resolveEffectiveModelSelection: (selection) => {
             const view = modelSelectionFacade.getView(undefined, undefined, { selection });

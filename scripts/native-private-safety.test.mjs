@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { removeBounded } from "./native-private-cleanup.mjs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -23,6 +25,7 @@ async function fake(fault, implicit = false) {
   if (fault !== "hang-scan") assert.equal(report.childExit, 0);
   assert.equal(report.httpDispatches, report.fakeUpstreamRequests);
   assert.equal(report.fakeForbiddenRequests, 0);
+  assert.equal(report.fakeForbiddenRegisteredTools, 0, "effective native Model tool registry must be fixture-only");
   return { code, report };
 }
 
@@ -51,16 +54,35 @@ test("same fake/live V4 orchestrator completes three isolated turns and private 
   assert.ok(report.httpAttempts <= 12 && report.modelCalls.stream > 0);
 });
 
-for (const fault of ["webfetch", "webfetch-exposed", "other-tool", "wrong-write", "extra-cwd", "stale-session", "stale-call", "stale-turn", "unsolicited-outcome", "old-row", "wrong-bash", "no-read", "wrong-read", "echo-500", "error-200", "broken-sse", "hang-scan", "hang-cleanup"]) {
+for (const fault of ["webfetch", "webfetch-exposed", "other-tool", "agent-compact", "task-multiline", "workflow-compact", "wrong-write", "extra-cwd", "stale-session", "stale-call", "stale-turn", "unsolicited-outcome", "old-row", "wrong-bash", "no-read", "wrong-read", "echo-500", "error-200", "broken-sse", "hang-scan", "hang-cleanup"]) {
   test(`same native child rejects ${fault} and scans whole disposable`, { timeout: 60000 }, async () => {
     const { code, report } = await fake(fault);
     assert.equal(code, 1);
     assert.equal(report.scenarioVerified, false);
+    if (["agent-compact", "task-multiline", "workflow-compact"].includes(fault)) {
+      assert.equal(report.fakeUpstreamRequests, 1, "adversarial SSE must reach the guarded Model transport exactly once");
+      assert.equal(report.httpDispatches, 1);
+      assert.equal(report.forbiddenToolRequests, 0, "no delegated port may run");
+      assert.ok(report.turns.every((turn) => turn.actions.length === 0 && turn.observedToolNames.length === 0));
+    }
     if (fault === "webfetch") assert.equal(report.forbiddenToolRequests, 0, "unregistered tool must not run");
     if (fault === "webfetch-exposed") assert.ok(report.forbiddenToolRequests > 0, "preapproved tool must hit denied port, not network");
     if (fault === "hang-scan") assert.equal(report.privateArtifactScan, false);
   });
 }
+
+test("cleanup worker without exit even after SIGKILL is bounded and never reported removed", { timeout: 3000 }, async () => {
+  const worker = new EventEmitter();
+  let kills = 0;
+  worker.kill = () => { kills++; return false; };
+  const start = Date.now();
+  const removed = await removeBounded("/synthetic-disposable", Date.now() + 90, {
+    rootDir: root, launch: () => worker,
+  });
+  assert.equal(removed, false);
+  assert.equal(kills, 1);
+  assert.ok(Date.now() - start < 1000);
+});
 
 test("registered spawn/exit latch: signal before finally and close-after-exit cannot hang", { timeout: 5000 }, async () => {
   const ch = openPrivateChannel(process.execPath, ["-e", "process.kill(process.pid, 'SIGTERM')"], { stdio: ["pipe", "pipe", "pipe", "ipc"] }, () => {});

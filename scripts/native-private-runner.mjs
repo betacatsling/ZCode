@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 // No implicit paid calls. Fake and live share the same native V4 lifecycle and cleanup.
-import { spawn } from "node:child_process";
 import { randomUUID, createHash } from "node:crypto";
 import { mkdtemp, mkdir, writeFile, readFile, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -10,6 +9,7 @@ import { openPrivateChannel } from "./native-private-channel.mjs";
 import { startPrivateFake } from "./native-private-fake.mjs";
 import { assertAbsent } from "./native-private-artifacts.mjs";
 import { matchingFinalAnswer, matchingTerminal, matchingTool, nativeEvidenceRows, permittedFixtureAction, isExactFixtureAction } from "../apps/zcode-cli/packages/bootstrap/src/native-private-evidence.ts";
+import { removeBounded } from "./native-private-cleanup.mjs";
 
 const rootDir = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const routes = new Set(["stepfun/step-3.5-flash", "axonhub/deepseek-v4-flash"]);
@@ -21,22 +21,6 @@ if (args.length === 1 && args[0] === "--help") {
 } else if (args.length === 2 && args[0] === "--live" && routes.has(args[1])) {
   await run(args[1]);
 } else { console.error("invalid route/mode; use --help"); process.exitCode = 2; }
-
-// Cleanup runs in its own killable worker; a hung rm never continues mutating artifacts after timeout.
-async function removeBounded(disposable, deadlineAt, hang = false) {
-  const child = spawn(process.execPath, [join(rootDir, "scripts/native-private-remove.mjs"), disposable], {
-    stdio: "ignore", env: { PATH: process.env.PATH, HOME: disposable, ...(hang ? { ZCODE_NATIVE_FAKE_HANG_REMOVE: "1" } : {}) },
-  });
-  let timer;
-  const exited = new Promise((resolve) => {
-    child.on("error", () => resolve(false));
-    child.on("exit", (code) => resolve(code === 0));
-  });
-  const result = await Promise.race([exited, new Promise((resolve) => { timer = setTimeout(() => resolve(false), Math.max(1, deadlineAt - Date.now())); })]);
-  clearTimeout(timer);
-  if (!result) { child.kill("SIGKILL"); await exited; }
-  return result;
-}
 
 async function run(route) {
   const deadlineAt = Date.now() + 240_000;
@@ -68,7 +52,7 @@ async function run(route) {
     await writeFile(readPath, "seed=violet\n");
     await writeFile(join(cwd, "approved-content.txt"), writeContent);
     await writeFile(join(cwd, "verify.cjs"), "require('node:fs').writeFileSync('bash-effect.txt', 'bash-verified'); console.log('exit=0')\n");
-    fault = fake && ["webfetch", "webfetch-exposed", "other-tool", "wrong-write", "extra-cwd", "stale-session", "stale-call", "stale-turn", "unsolicited-outcome", "old-row", "hang-scan", "hang-cleanup", "wrong-bash", "no-read", "wrong-read", "echo-500", "error-200", "broken-sse"].includes(process.env.ZCODE_NATIVE_FAKE_FAULT) ? process.env.ZCODE_NATIVE_FAKE_FAULT : undefined;
+    fault = fake && ["webfetch", "webfetch-exposed", "other-tool", "agent-compact", "task-multiline", "workflow-compact", "wrong-write", "extra-cwd", "stale-session", "stale-call", "stale-turn", "unsolicited-outcome", "old-row", "hang-scan", "hang-cleanup", "wrong-bash", "no-read", "wrong-read", "echo-500", "error-200", "broken-sse"].includes(process.env.ZCODE_NATIVE_FAKE_FAULT) ? process.env.ZCODE_NATIVE_FAKE_FAULT : undefined;
     if (fake) upstream = await startPrivateFake({ cwd, readPath, writePath, writeContent, bashCommand, changedContent: () => changedContent, fault });
     const childEnv = { PATH: process.env.PATH, HOME: fake ? disposable : process.env.HOME, TMPDIR: disposable, NODE_ENV: "production" };
     if (fake) childEnv.ZCODE_NATIVE_FAKE_URL = upstream.baseUrl;
@@ -245,16 +229,17 @@ async function run(route) {
       report.childOutputBytes = channel.outputBytes;
     }
     if (upstream) {
-      if (upstream.counts.requests !== report.httpDispatches || upstream.counts.forbiddenRequests !== 0) failure = true;
+      if (upstream.counts.requests !== report.httpDispatches || upstream.counts.forbiddenRequests !== 0 || upstream.counts.forbiddenRegisteredTools !== 0) failure = true;
       try { await upstream.close(); } catch { failure = true; }
       report.fakeUpstreamRequests = upstream.counts.requests;
       report.fakeForbiddenRequests = upstream.counts.forbiddenRequests;
+      report.fakeForbiddenRegisteredTools = upstream.counts.forbiddenRegisteredTools;
     }
     if (fault === "hang-cleanup") {
-      await removeBounded(disposable, Date.now() + 1500, true);
+      await removeBounded(disposable, Date.now() + 1500, { rootDir, hang: true });
       failure = true; // synthetic timeout is a failed gate, not a successful cleanup proof
     }
-    report.cleanup = await removeBounded(disposable, fake ? Math.min(deadlineAt, Date.now() + 8000) : deadlineAt);
+    report.cleanup = await removeBounded(disposable, fake ? Math.min(deadlineAt, Date.now() + 8000) : deadlineAt, { rootDir });
     report.scenarioVerified = report.scenarioVerified && !failure && !!finalCounts && finalCounts.kind === "exit" &&
       report.childExit === 0 && report.privateArtifactScan && report.forbiddenToolRequests === 0 && report.cleanup && Date.now() <= deadlineAt;
     // Runtime UUIDs are only needed in-memory for stale-turn fencing, not retained proof.

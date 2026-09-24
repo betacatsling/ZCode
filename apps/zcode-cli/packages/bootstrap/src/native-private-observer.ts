@@ -94,20 +94,29 @@ export function createPrivateObservation(input: {
                   if (pending.length > 131_072) throw new Error("private upstream frame budget");
                   let released = 0;
                   for (;;) {
-                    const lf = pending.indexOf("\n\n", released);
-                    const crlf = pending.indexOf("\r\n\r\n", released);
-                    const at = lf < 0 ? crlf : crlf < 0 ? lf : Math.min(lf, crlf);
-                    if (at < 0) break;
-                    const end = at + (at === crlf ? 4 : 2);
-                    const event = pending.subarray(released, end).toString("utf8");
-                    const data = event.split(/\r?\n/u).find((line) => line.startsWith("data: "))?.slice(6);
-                    if (data) {
-                      let parsed: { type?: string; content_block?: { type?: string; name?: string } };
-                      try { parsed = JSON.parse(data); } catch { throw new Error("private upstream frame invalid"); }
-                      if (parsed.type === "content_block_start" && parsed.content_block?.type === "tool_use" &&
-                          !input.allowedToolNames?.includes(parsed.content_block.name ?? ""))
-                        throw new Error("private tool denied before execution");
+                    // 修复：SDK 的 SSE 解码接受 data:（无空格）、多行 data 和单独 CR；
+                    // 私有闸门必须先按同等事件边界解析，绝不向 SDK 放行未检查的帧。
+                    const remaining = pending.subarray(released).toString("latin1");
+                    const boundary = /\r\n\r\n|\r\n\n|\n\r\n|\n\n|\r\r/u.exec(remaining);
+                    if (!boundary || boundary.index === undefined) break;
+                    const end = released + boundary.index + boundary[0].length;
+                    const event = new TextDecoder("utf-8", { fatal: true }).decode(pending.subarray(released, end));
+                    const dataLines: string[] = [];
+                    for (const line of event.replace(/(?:\r\n|\r|\n)+$/u, "").split(/\r\n|\r|\n/u)) {
+                      if (line.startsWith("data:")) {
+                        const value = line.slice(5);
+                        dataLines.push(value.startsWith(" ") ? value.slice(1) : value);
+                      } else if (line && !line.startsWith(":") && !line.startsWith("event:")) {
+                        throw new Error("private upstream frame invalid");
+                      }
                     }
+                    if (!dataLines.length) throw new Error("private upstream frame invalid");
+                    let parsed: { type?: string; content_block?: { type?: string; name?: string } };
+                    try { parsed = JSON.parse(dataLines.join("\n")); }
+                    catch { throw new Error("private upstream frame invalid"); }
+                    if (parsed.type === "content_block_start" && parsed.content_block?.type === "tool_use" &&
+                        !input.allowedToolNames?.includes(parsed.content_block.name ?? ""))
+                      throw new Error("private tool denied before execution");
                     released = end;
                   }
                   if (released) {
