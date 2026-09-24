@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { createServer } from "node:http";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { createCodexTransport } from "../src/agent-adapters/codex/codexTransport.js";
@@ -258,6 +259,64 @@ test(
     }
   },
 );
+
+test("pinned synthetic fixture preserves developer messages and optional-tool differences", async () => {
+  const fixturePath = join(
+    dirname(fileURLToPath(import.meta.url)),
+    "fixtures",
+    "codexCompatibility0.156.1.fixture.json",
+  );
+  const fixture = JSON.parse(await readFile(fixturePath, "utf8")) as {
+    cliVersion: string;
+    cases: Array<{
+      name: string;
+      request: {
+        body: {
+          input: Array<{ role: string; content: Array<{ text?: string }> }>;
+          instructions?: string;
+          tools: Array<{ name?: string; type: string }>;
+        };
+      };
+    }>;
+  };
+  assert.equal(fixture.cliVersion, "codex-cli 0.156.1");
+  const get = (name: string) => fixture.cases.find((trial) => trial.name === name)!.request.body;
+  assert.equal(
+    get("default").tools.some((tool) => tool.name === "multi_agent_v1"),
+    true,
+  );
+  assert.equal(
+    get("default").tools.some((tool) => tool.type === "web_search"),
+    true,
+  );
+  assert.equal(
+    get("optional-tools-disabled").tools.some((tool) =>
+      ["multi_agent_v1", "web_search"].includes(tool.name ?? tool.type),
+    ),
+    false,
+  );
+  assert.equal("instructions" in get("empty-instruction-overrides"), false);
+  assert.equal(get("custom-base").instructions, "Synthetic base marker. Do not execute tools.");
+  const developer = (name: string) =>
+    get(name)
+      .input.filter((message) => message.role === "developer")
+      .flatMap((message) => message.content.map((content) => content.text ?? ""));
+  assert.equal(
+    developer("custom-developer").some((text) => text.includes("Synthetic developer marker")),
+    true,
+  );
+  for (const trial of fixture.cases) {
+    assert.equal(
+      developer(trial.name).some((text) => text.startsWith("<permissions instructions>")),
+      true,
+    );
+    assert.equal(
+      developer(trial.name).some((text) => text.startsWith("<skills_instructions>")),
+      true,
+    );
+    assert.equal(trial.request.body.input.length > 0 && trial.request.body.tools.length > 0, true);
+  }
+});
 
 test("unknown CLI versions never launch app-server or expose token in argv", async () => {
   const root = await mkdtemp(join(tmpdir(), "zcode-codex-version-"));
