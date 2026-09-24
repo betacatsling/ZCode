@@ -7,11 +7,13 @@ export interface HarnessAssetDescriptor {
   readonly base64: string;
 }
 
+export type SidebarIconAsset = HarnessAssetDescriptor | string;
+
 const maxBase64Length = Math.ceil((256 * 1024) / 3) * 4;
 
 export function safeHarnessPngDataUrl(
   assetId: string | undefined,
-  resolveIconAsset: (assetId: string) => HarnessAssetDescriptor | string | undefined,
+  resolveIconAsset: (assetId: string) => SidebarIconAsset | undefined,
 ): string | undefined {
   if (!assetId || !iconAssetIdSchema.safeParse(assetId).success) return undefined;
   let resource: unknown;

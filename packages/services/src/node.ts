@@ -108,6 +108,11 @@ export type {
   LegacyTargetResolver,
 } from "./project-workspaces/legacyWorkspaceMigration.js";
 export type { CatalogSessionIndex } from "./project-workspaces/sidebarIndexService.js";
+export {
+  nativeHarnessAssetMetadata,
+  resolveHarnessAsset,
+} from "./harness-assets/index.js";
+export type { TrustedPngDescriptor } from "./harness-assets/index.js";
 export { createModelGateway } from "./model-gateway/gateway.js";
 export type {
   ModelGateway,

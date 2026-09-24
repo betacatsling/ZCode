@@ -1,5 +1,6 @@
 import type { SidebarSnapshot } from "@zcode/shared/project-workspaces";
 import type { HarnessCatalogEntry, ModelBindingRequest } from "@zcode/shared/agent-host";
+import type { SidebarIconAsset } from "../agent-host/harnessAssetResolver.js";
 
 export interface DiscoveryCandidate {
   path: string;
@@ -40,7 +41,7 @@ export interface ProjectSidebarProps {
   /** Model labels are presentation hints; not an authoritative persisted binding. */
   modelLabels?: Readonly<Record<string, string>>;
   /** Trusted asset resolver returns a safe image URL or undefined, never raw HTML. */
-  resolveIconAsset: (assetId: string) => string | undefined;
+  resolveIconAsset: (assetId: string) => SidebarIconAsset | undefined;
   discovery?: Readonly<Record<string, readonly DiscoveryCandidate[]>>;
   locale: "en" | "zh";
   modelOptions?: readonly { harnessId: string; label: string; binding: ModelBindingRequest }[];

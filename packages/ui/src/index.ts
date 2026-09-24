@@ -6,6 +6,15 @@ export { HarnessSelector } from "./agent-host/HarnessSelector.js";
 export { ModelBindingSelector } from "./agent-host/ModelBindingSelector.js";
 export { SessionStatusIcon } from "./agent-host/SessionStatusIcon.js";
 export { CompatibilityStatus } from "./agent-host/CompatibilityStatus.js";
+export type {
+  HarnessAssetDescriptor,
+  SidebarIconAsset,
+} from "./agent-host/harnessAssetResolver.js";
+export {
+  createScopedAgentHostConversationFacade,
+  createAgentHostConversationFacade,
+} from "./v4/agentHostConversationFacade.js";
+export type { AgentHostConversationPort } from "./v4/agentHostConversationTransport.js";
 export { AppErrorBoundary, ScopedErrorBoundary } from "./ErrorBoundary.js";
 export type { ScopedErrorBoundaryVariant } from "./ErrorBoundary.js";
 export { Button, buttonVariants } from "./components/ui/button.js";

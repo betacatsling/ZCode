@@ -1,4 +1,5 @@
 import type { HarnessCatalogEntry } from "@zcode/shared/agent-host";
+import type { SidebarIconAsset } from "./harnessAssetResolver.js";
 import { HarnessIcon } from "./HarnessIcon.js";
 import { CompatibilityStatus } from "./CompatibilityStatus.js";
 import { labels, type SidebarLocale } from "./labels.js";
@@ -13,7 +14,7 @@ export function HarnessSelector({
   catalog: readonly HarnessCatalogEntry[];
   value: string;
   onChange: (id: string) => void;
-  resolveIconAsset: (assetId: string) => string | undefined;
+  resolveIconAsset: (assetId: string) => SidebarIconAsset | undefined;
   locale: SidebarLocale;
 }) {
   return (

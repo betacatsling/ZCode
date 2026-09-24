@@ -1,14 +1,15 @@
 import { useState } from "react";
 import type { HarnessCatalogEntry } from "@zcode/shared/agent-host";
-import { safeHarnessPngDataUrl, type HarnessAssetDescriptor } from "./harnessAssetResolver.js";
+import { safeHarnessPngDataUrl, type SidebarIconAsset } from "./harnessAssetResolver.js";
 
 export function safeIconUrl(
   assetId: string | undefined,
-  resolveIconAsset: (assetId: string) => string | undefined,
+  resolveIconAsset: (assetId: string) => SidebarIconAsset | undefined,
 ): string | undefined {
   const resolved = assetId ? resolveIconAsset(assetId) : undefined;
-  // 即使注入的资源解析器出错，也不允许第三方 URL/协议借图标向外发请求。
-  return resolved?.startsWith("/") &&
+  // 修复共享解析器返回 Harness PNG 描述符时把对象误当 URL 调用 startsWith；Project 只接受站内路径。
+  return typeof resolved === "string" &&
+    resolved.startsWith("/") &&
     !resolved.startsWith("//") &&
     !Array.from(resolved).some((char) => char === "\\" || char.charCodeAt(0) < 32)
     ? resolved
@@ -23,7 +24,7 @@ export function HarnessIcon({
 }: {
   harnessId: string;
   catalog: readonly HarnessCatalogEntry[];
-  resolveIconAsset: (assetId: string) => HarnessAssetDescriptor | string | undefined;
+  resolveIconAsset: (assetId: string) => SidebarIconAsset | undefined;
   theme?: "light" | "dark";
 }) {
   const entry = catalog.find((item) => item.manifest.id === harnessId);

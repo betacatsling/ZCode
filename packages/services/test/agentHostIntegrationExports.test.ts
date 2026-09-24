@@ -11,13 +11,14 @@ import {
   ClaudeCodeTransport,
   CodexTransport,
   AcpTransport,
+  resolveHarnessAsset,
 } from "@zcode/services/node";
 import { writableSessionSpecV2Schema } from "@zcode/shared/agent-host";
 import { sidebarSnapshotSchema } from "@zcode/shared/project-workspaces";
 
 void (undefined as IProjectCatalogService | undefined);
 
-test("public assembly entrypoints retain host, catalog, gateway and transport boundaries", () => {
+test("public assembly entrypoints retain host, catalog, gateway, asset and transport boundaries", async () => {
   assert.ok(IAgentHostService);
   for (const value of [
     AgentHostTargetService,
@@ -33,4 +34,6 @@ test("public assembly entrypoints retain host, catalog, gateway and transport bo
   assert.equal(anthropicMessagesProtocol.id, "anthropic-messages");
   assert.ok(writableSessionSpecV2Schema);
   assert.ok(sidebarSnapshotSchema);
+  assert.equal((await resolveHarnessAsset("builtin:zcode"))?.kind, "trusted-png");
+  assert.equal(await resolveHarnessAsset("../untrusted"), undefined);
 });
