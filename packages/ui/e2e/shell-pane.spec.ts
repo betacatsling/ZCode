@@ -30,6 +30,14 @@ test("unresolved catalog row never opens native task or creates session", async 
   await expect(page.getByTestId("create-calls")).toHaveText("0");
 });
 
+test("restored unproven pane cannot subscribe native even when focused", async ({ page }) => {
+  await page.goto("/shell-pane.html");
+  await page.getByRole("button", { name: "Restore unproven binding" }).click();
+  await expect(page.getByText("Session owner unresolved")).toBeVisible();
+  await expect(page.getByTestId("native-calls")).toHaveText("0");
+  await expect(page.getByTestId("create-calls")).toHaveText("0");
+});
+
 test("real shell uses original native ID rather than Catalog alias", async ({ page }) => {
   await page.goto("/shell-pane.html");
   await page.getByRole("button", { name: /Native session/ }).click();
