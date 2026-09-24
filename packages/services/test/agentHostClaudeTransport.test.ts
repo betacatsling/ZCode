@@ -72,6 +72,11 @@ const init = {
   claude_code_version: "2.1.263",
   tools: ["Edit", "Read"],
 } as SDKMessage;
+const assistant = {
+  type: "assistant",
+  session_id: "native-1",
+  message: { content: [{ type: "text", text: "hi" }] },
+} as SDKMessage;
 const result = {
   type: "result",
   subtype: "success",
@@ -82,7 +87,7 @@ const result = {
 test("Claude SDK uses documented explicit no-thinking control without removing tool hook", async () => {
   const transport = new ClaudeCodeTransport({
     ...base,
-    ...fakeSdk([init, result], 0, async (options) => {
+    ...fakeSdk([init, assistant, result], 0, async (options) => {
       assert.deepEqual(options?.thinking, { type: "disabled" });
       assert.equal(options?.env?.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS, "1");
       assert.equal(options?.hooks?.PreToolUse?.[0]?.hooks.length, 1);
@@ -108,6 +113,7 @@ test("Claude SDK native session/text/tool/result is structured and successful on
           content: [{ type: "tool_use", id: "tool-1", name: "Read", input: { file_path: "x" } }],
         },
       },
+      assistant,
       result,
     ] as SDKMessage[]),
   });
@@ -118,12 +124,15 @@ test("Claude SDK native session/text/tool/result is structured and successful on
   assert.equal(finished.nativeSessionId, "native-1");
   assert.deepEqual(
     events.map((event) => event.type),
-    ["session", "text", "tool", "result"],
+    ["session", "text", "tool", "finalAssistant", "result"],
   );
 });
 
 test("Claude SDK rejects success result followed by nonzero exit", async () => {
-  const transport = new ClaudeCodeTransport({ ...base, ...fakeSdk([init, result], 143) });
+  const transport = new ClaudeCodeTransport({
+    ...base,
+    ...fakeSdk([init, assistant, result], 143),
+  });
   const events: string[] = [];
   await assert.rejects(
     transport.run("hello", (event) => events.push(event.type)),
@@ -140,7 +149,7 @@ test("Claude pre-tool hook waits for decision and duplicate/late replies fail cl
   let requestId = "";
   const transport = new ClaudeCodeTransport({
     ...base,
-    ...fakeSdk([init, result], 0, async (options) => {
+    ...fakeSdk([init, assistant, result], 0, async (options) => {
       const hook: HookCallback = options!.hooks!.PreToolUse![0]!.hooks[0]!;
       const blocked = hook(
         {
@@ -182,7 +191,7 @@ test("Claude abort rejects late approval and does not complete a turn", async ()
   });
   const transport = new ClaudeCodeTransport({
     ...base,
-    ...fakeSdk([init, result], 0, async (options) => {
+    ...fakeSdk([init, assistant, result], 0, async (options) => {
       const hook = options!.hooks!.PreToolUse![0]!.hooks[0]!;
       const blocked = hook(
         {
@@ -319,4 +328,73 @@ test("Claude rejects unknown Gateway origin and wrong native version", async () 
     }).run("hello", () => {}),
     /version/,
   );
+});
+
+test("Claude SDK final assistant content, not divergent partials, owns ordered multi-phase terminal history", async () => {
+  const final = (text: string) =>
+    ({
+      type: "assistant",
+      session_id: "native-1",
+      message: { content: [{ type: "text", text }] },
+    }) as SDKMessage;
+  const transport = new ClaudeCodeTransport({
+    ...base,
+    ...fakeSdk([
+      init,
+      {
+        type: "stream_event",
+        session_id: "native-1",
+        event: {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "incorrect partial" },
+        },
+      } as SDKMessage,
+      final("first"),
+      {
+        type: "assistant",
+        session_id: "native-1",
+        message: {
+          content: [{ type: "tool_use", id: "tool-2", name: "Read", input: { file_path: "x" } }],
+        },
+      } as SDKMessage,
+      final("second"),
+      result,
+    ]),
+  });
+  const events: ClaudeTransportEvent[] = [];
+  await transport.run("hi", (event) => events.push(event));
+  assert.deepEqual(
+    events.filter((event) => event.type === "finalAssistant").map((event) => event.text),
+    ["first", "second"],
+  );
+});
+
+test("Claude SDK final-only empty text is authoritative, but tool-only or malformed assistant cannot claim success", async () => {
+  const final = (content: unknown) =>
+    ({ type: "assistant", session_id: "native-1", message: { content } }) as SDKMessage;
+  for (const content of [[{ type: "text", text: "" }], [{ type: "text", text: "only final" }]]) {
+    const events: ClaudeTransportEvent[] = [];
+    await new ClaudeCodeTransport({ ...base, ...fakeSdk([init, final(content), result]) }).run(
+      "hi",
+      (event) => events.push(event),
+    );
+    assert.deepEqual(
+      events.filter((event) => event.type === "finalAssistant").map((event) => event.text),
+      [content[0]!.text],
+    );
+  }
+  for (const content of [
+    undefined,
+    [{ type: "text", text: 42 }],
+    [{ type: "tool_use", id: "tool", name: "Read", input: {} }],
+  ]) {
+    await assert.rejects(
+      new ClaudeCodeTransport({ ...base, ...fakeSdk([init, final(content), result]) }).run(
+        "hi",
+        () => {},
+      ),
+      /final_assistant/,
+    );
+  }
 });

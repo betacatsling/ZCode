@@ -125,8 +125,13 @@ test("Claude adapter keeps native identity, frozen per-turn leases and independe
             event: {
               type: "content_block_delta",
               index: 0,
-              delta: { type: "text_delta", text: "ok" },
+              delta: { type: "text_delta", text: "wrong partial" },
             },
+          } as SDKMessage;
+          yield {
+            type: "assistant",
+            session_id: id,
+            message: { content: [{ type: "text", text: "ok" }] },
           } as SDKMessage;
           yield {
             type: "result",
@@ -208,6 +213,12 @@ test("Claude adapter keeps native identity, frozen per-turn leases and independe
       ["claude-sonnet-4-6", "claude-sonnet-4-6", "claude-sonnet-4-6"],
     );
     assert.equal(events.filter((event) => event.kind === "turn.finished").length, 2);
+    assert.deepEqual(
+      events
+        .filter((event) => event.kind === "message.finished" && event.role === "assistant")
+        .map((event) => event.text),
+      ["ok", "ok"],
+    );
     assert.deepEqual(
       events.map((event) => event.sequence),
       events.map((_, index) => index + 1),
@@ -390,9 +401,12 @@ test("Claude terminal text and prompt survive SessionHost snapshot and read-only
     },
     transportFactory: (options) =>
       ({
-        run: async (_prompt: string, emit: (event: { type: "text"; text: string }) => void) => {
-          emit({ type: "text", text: "chunk" });
-          emit({ type: "text", text: " answer" });
+        run: async (
+          _prompt: string,
+          emit: (event: { type: "text" | "finalAssistant"; text: string }) => void,
+        ) => {
+          emit({ type: "text", text: "partial wrong" });
+          emit({ type: "finalAssistant", text: "chunk answer" });
           return { nativeSessionId: options.sessionId! };
         },
         cancel: () => {},

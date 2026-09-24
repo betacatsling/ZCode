@@ -236,7 +236,10 @@ export class CodexHarnessAdapter implements HarnessAdapter {
         text: command.text,
       });
       running.nativeTurnId = await transport.startTurn(session.threadId, command.text);
-      if (running.earlyCompletion) await this.#finish(session, running, running.earlyCompletion);
+      // 修复原因：同线程旧 turn 的早到 completion 不能冒充 start 返回的原生 turn ID。
+      const early = running.earlyCompletions.get(running.nativeTurnId);
+      running.earlyCompletions.clear();
+      if (early) await this.#finish(session, running, early);
       // 修复原因：Host 的 send 收据只在 adapter.send 完成后定案；若启动后立刻返回，
       // Host 会把仍在运行且等待审批的 prompt 记为 execution-unknown，阻断后续 turn。
       if ((await running.terminal) === "unknown")
@@ -264,9 +267,11 @@ export class CodexHarnessAdapter implements HarnessAdapter {
     )
       throw new Error("stale Codex turn");
     try {
+      // 修复依据：interrupt RPC 只确认请求已收到；必须等匹配的原生终态才可释放租约。
       await running.transport.interruptTurn(session.threadId!, running.nativeTurnId);
-    } finally {
-      await this.#finish(session, running, "cancelled");
+    } catch (error) {
+      await this.#finish(session, running, "unknown");
+      throw error;
     }
   }
   async resolveInteraction(
@@ -352,7 +357,7 @@ export class CodexHarnessAdapter implements HarnessAdapter {
           : params.turn.status === "interrupted"
             ? "cancelled"
             : "failed";
-      if (!running.nativeTurnId) running.earlyCompletion = outcome;
+      if (!running.nativeTurnId) running.earlyCompletions.set(params.turn.id, outcome);
       else if (params.turn.id === running.nativeTurnId)
         void this.#finish(session, running, outcome);
     } else

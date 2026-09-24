@@ -18,6 +18,7 @@ const MAX_PENDING = 16;
 export type ClaudeTransportEvent =
   | { type: "session"; nativeSessionId: string; version: string }
   | { type: "text"; text: string }
+  | { type: "finalAssistant"; text: string }
   | { type: "tool"; id: string; name: string; input: unknown }
   | { type: "toolResult"; id: string; error: boolean; text?: string }
   | { type: "permission"; id: string; nativeToolId: string; name: string; input: unknown }
@@ -121,6 +122,7 @@ export class ClaudeCodeTransport {
     this.nativeSessionId = undefined;
     let exit: Promise<{ code: number | null; signal: NodeJS.Signals | null }> | undefined;
     let successfulResult: Extract<SDKMessage, { type: "result" }> | undefined;
+    let finalAssistantSeen = false;
     let events = 0;
     const spawnProcess = (options: SpawnOptions): SpawnedProcess => {
       const local = this.options.spawn
@@ -253,7 +255,25 @@ export class ClaudeCodeTransport {
           if (message.subtype !== "success" || message.is_error)
             throw new Error("claude_result_error");
           successfulResult = message;
-        } else this.accept(message, onEvent);
+        } else {
+          if (message.type === "assistant") {
+            if (
+              message.session_id !== this.nativeSessionId ||
+              !Array.isArray(message.message?.content)
+            )
+              throw new Error("claude_final_assistant_invalid");
+            // 修复原因：增量流可能缺失或与 SDK 最终 assistant 不一致，只有最终帧可写入历史。
+            for (const block of message.message.content) {
+              if (block.type === "text") {
+                if (typeof block.text !== "string")
+                  throw new Error("claude_final_assistant_invalid");
+                finalAssistantSeen = true;
+                onEvent({ type: "finalAssistant", text: block.text });
+              }
+            }
+          }
+          this.accept(message, onEvent);
+        }
       }
       if (!exit) throw new Error("claude_process_not_started");
       const status = await exit;
@@ -265,6 +285,7 @@ export class ClaudeCodeTransport {
         successfulResult.session_id !== this.nativeSessionId
       )
         throw new Error("claude_result_missing");
+      if (!finalAssistantSeen) throw new Error("claude_final_assistant_missing");
       onEvent({
         type: "result",
         nativeSessionId: this.nativeSessionId,
@@ -281,6 +302,8 @@ export class ClaudeCodeTransport {
         "claude_process_exit_nonzero",
         "claude_result_missing",
         "claude_result_error",
+        "claude_final_assistant_invalid",
+        "claude_final_assistant_missing",
         "claude_version_or_resume_mismatch",
       ]);
       throw new Error(safeCodes.has(code) ? code : "claude_sdk_failure");

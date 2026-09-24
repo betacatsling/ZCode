@@ -9,7 +9,7 @@ export interface RunningCodexTurn {
   transport: CodexTransport;
   callbacks: Map<string, { interactionId: string; nativeItemId: string }>;
   finish?: Promise<void>;
-  earlyCompletion?: Exclude<CodexTurnOutcome, "unknown">;
+  earlyCompletions: Map<string, Exclude<CodexTurnOutcome, "unknown">>;
   terminal: Promise<CodexTurnOutcome>;
   settle: (outcome: CodexTurnOutcome) => void;
 }
@@ -24,5 +24,13 @@ export function createRunningCodexTurn(
   const terminal: RunningCodexTurn["terminal"] = new Promise((resolve) => {
     settle = resolve;
   });
-  return { turnId, token, transport, callbacks: new Map(), terminal, settle };
+  return {
+    turnId,
+    token,
+    transport,
+    callbacks: new Map(),
+    earlyCompletions: new Map(),
+    terminal,
+    settle,
+  };
 }

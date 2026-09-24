@@ -11,6 +11,8 @@ export interface ClaudeTurn {
   revoked: boolean;
   terminalEmitted: boolean;
   assistantText: string;
+  finalAssistantText: string;
+  finalAssistantSeen: boolean;
   interactions: Map<string, string>;
   tools: Map<string, string>;
   cancelled: boolean;
@@ -47,6 +49,8 @@ export function reserveClaudeTurn(id: string, token: string): ClaudeTurn {
     revoked: false,
     terminalEmitted: false,
     assistantText: "",
+    finalAssistantText: "",
+    finalAssistantSeen: false,
     interactions: new Map(),
     tools: new Map(),
     cancelled: false,
@@ -82,6 +86,11 @@ export function projectNativeClaudeEvent(
   event: ClaudeTransportEvent,
 ): ClaudeEventPayload[] {
   if (event.type === "text") turn.assistantText += event.text;
+  if (event.type === "finalAssistant") {
+    // 修复依据：最终 assistant 内容由原生完整帧持有，增量只用于实时显示。
+    turn.finalAssistantSeen = true;
+    turn.finalAssistantText += event.text;
+  }
   return projectClaudeEvent(
     runtime.binding.backendSessionId,
     {

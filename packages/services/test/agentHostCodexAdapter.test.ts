@@ -48,16 +48,20 @@ const plan: BindingPlan = {
   capabilities: {},
 };
 
-function fakeCodex() {
+function fakeCodex(options: { delayStart?: boolean; failInterrupt?: boolean } = {}) {
   const processes: FakeProcess[] = [];
-  const requests: Array<{ method: string; params: Record<string, unknown>; child: FakeProcess }> =
-    [];
+  const requests: Array<{
+    id?: number;
+    method: string;
+    params: Record<string, unknown>;
+    child: FakeProcess;
+  }> = [];
   const tokens: string[] = [];
   const replies: unknown[] = [];
   const spawnProcess = (
     _command: string,
     args: readonly string[],
-    options: { env?: NodeJS.ProcessEnv },
+    launchOptions: { env?: NodeJS.ProcessEnv },
   ) => {
     const child = new FakeProcess();
     if (args[0] === "--version")
@@ -67,7 +71,7 @@ function fakeCodex() {
       });
     else {
       processes.push(child);
-      tokens.push(options.env?.ZCODE_CODEX_GATEWAY_TOKEN ?? "");
+      tokens.push(launchOptions.env?.ZCODE_CODEX_GATEWAY_TOKEN ?? "");
       let buffer = "";
       child.stdin.on("data", (chunk: Buffer) => {
         buffer += chunk.toString();
@@ -84,7 +88,7 @@ function fakeCodex() {
             replies.push(value);
             continue;
           }
-          requests.push({ method: value.method, params: value.params ?? {}, child });
+          requests.push({ id: value.id, method: value.method, params: value.params ?? {}, child });
           if (value.id === undefined) continue;
           const result =
             value.method === "thread/start" || value.method === "thread/resume"
@@ -96,7 +100,14 @@ function fakeCodex() {
               : value.method === "turn/start"
                 ? { turn: { id: `native-turn-${processes.length}` } }
                 : {};
-          queueMicrotask(() => child.send({ id: value.id, result }));
+          if (value.method === "turn/start" && options.delayStart) continue;
+          queueMicrotask(() =>
+            child.send(
+              options.failInterrupt && value.method === "turn/interrupt"
+                ? { id: value.id, error: { code: -1 } }
+                : { id: value.id, result },
+            ),
+          );
         }
       });
     }
@@ -205,6 +216,14 @@ test("two frozen model leases restart pinned process and resume native thread wi
       hostSessionId: spec.hostSessionId,
       runtimeEpoch: binding.runtimeEpoch,
       turnId: "host-turn-2",
+    });
+    assert.deepEqual(revoked, ["token-1"]);
+    f.processes[1]!.send({
+      method: "turn/completed",
+      params: {
+        threadId: "native-thread",
+        turn: { id: "native-turn-2", status: "interrupted" },
+      },
     });
     await secondRun;
     assert.deepEqual(revoked, ["token-1", "token-2"]);
@@ -494,6 +513,195 @@ test("native child death revokes lease and refuses an automatic prompt retry", a
     );
     assert.equal(leases, 1);
     assert.equal(events.find((event) => event.kind === "turn.finished")?.outcome, "unknown");
+  } finally {
+    await adapter.shutdown();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("interrupt ACK retains Host send and lease until matching native completion; late tool effect stays live", async () => {
+  const root = await mkdtemp(join(tmpdir(), "codex-ack-"));
+  const f = fakeCodex();
+  const revoked: string[] = [],
+    events: AgentEvent[] = [];
+  const adapter = new CodexHarnessAdapter({
+    root,
+    spawnProcess: f.spawnProcess as any,
+    lease: {
+      gatewayUrl: "http://127.0.0.1:54321/v1",
+      gateway: { issueToken: async () => "", revokeToken: (token) => revoked.push(token) },
+      issue: async () => ({ token: "ack-token", modelAlias: "alias-1" }),
+    },
+  });
+  try {
+    const binding = await adapter.create(spec, plan);
+    adapter.subscribe(spec.hostSessionId, (event) => events.push(event));
+    let settled = false;
+    const send = adapter
+      .send({
+        type: "send",
+        commandId: "ack",
+        hostSessionId: spec.hostSessionId,
+        turnId: "ack-turn",
+        text: "hold",
+      })
+      .finally(() => {
+        settled = true;
+      });
+    await until(() => f.requests.some((request) => request.method === "turn/start"));
+    await adapter.cancelTurn({
+      type: "cancelTurn",
+      commandId: "interrupt",
+      hostSessionId: spec.hostSessionId,
+      runtimeEpoch: binding.runtimeEpoch,
+      turnId: "ack-turn",
+    });
+    const child = f.processes[0]!;
+    child.send({
+      method: "item/completed",
+      params: {
+        threadId: "native-thread",
+        turnId: "native-turn-1",
+        item: { id: "late-tool", type: "commandExecution", command: "late", exitCode: 0 },
+      },
+    });
+    assert.equal(settled, false);
+    assert.deepEqual(revoked, []);
+    assert.equal(
+      events.some((event) => event.kind === "turn.finished"),
+      false,
+    );
+    await assert.rejects(
+      adapter.send({
+        type: "send",
+        commandId: "next",
+        hostSessionId: spec.hostSessionId,
+        turnId: "next",
+        text: "next",
+      }),
+      /busy/,
+    );
+    child.send({
+      method: "turn/completed",
+      params: { threadId: "native-thread", turn: { id: "native-turn-1", status: "interrupted" } },
+    });
+    await send;
+    assert.deepEqual(revoked, ["ack-token"]);
+    assert.deepEqual(
+      events.filter((event) => event.kind === "turn.finished").map((event) => event.outcome),
+      ["cancelled"],
+    );
+  } finally {
+    await adapter.shutdown();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("same-thread stale early completion cannot settle new native ID or revoke lease", async () => {
+  const root = await mkdtemp(join(tmpdir(), "codex-early-"));
+  const f = fakeCodex({ delayStart: true });
+  const revoked: string[] = [],
+    events: AgentEvent[] = [];
+  const adapter = new CodexHarnessAdapter({
+    root,
+    spawnProcess: f.spawnProcess as any,
+    lease: {
+      gatewayUrl: "http://127.0.0.1:54321/v1",
+      gateway: { issueToken: async () => "", revokeToken: (token) => revoked.push(token) },
+      issue: async () => ({ token: "early-token", modelAlias: "alias-1" }),
+    },
+  });
+  try {
+    await adapter.create(spec, plan);
+    adapter.subscribe(spec.hostSessionId, (event) => events.push(event));
+    const send = adapter.send({
+      type: "send",
+      commandId: "early",
+      hostSessionId: spec.hostSessionId,
+      turnId: "new",
+      text: "new",
+    });
+    await until(() => f.requests.some((request) => request.method === "turn/start"));
+    const child = f.processes[0]!,
+      request = f.requests.find((entry) => entry.method === "turn/start")!;
+    child.send({
+      method: "turn/completed",
+      params: { threadId: "native-thread", turn: { id: "old-turn", status: "completed" } },
+    });
+    // The fake process records RPC requests with IDs to release the deferred start response.
+    child.send({ id: request.id, result: { turn: { id: "native-turn-1" } } });
+    await until(() => events.some((event) => event.kind === "turn.started"));
+    assert.deepEqual(revoked, []);
+    assert.equal(
+      events.some((event) => event.kind === "turn.finished"),
+      false,
+    );
+    child.send({
+      method: "turn/completed",
+      params: { threadId: "native-thread", turn: { id: "native-turn-1", status: "completed" } },
+    });
+    await send;
+    assert.deepEqual(revoked, ["early-token"]);
+    assert.deepEqual(
+      events.filter((event) => event.kind === "turn.finished").map((event) => event.outcome),
+      ["success"],
+    );
+  } finally {
+    await adapter.shutdown();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("failed interrupt fences reuse as unknown, never reports cancelled", async () => {
+  const root = await mkdtemp(join(tmpdir(), "codex-interrupt-error-"));
+  const f = fakeCodex({ failInterrupt: true });
+  const events: AgentEvent[] = [];
+  const adapter = new CodexHarnessAdapter({
+    root,
+    spawnProcess: f.spawnProcess as any,
+    lease: {
+      gatewayUrl: "http://127.0.0.1:54321/v1",
+      gateway: { issueToken: async () => "", revokeToken: () => {} },
+      issue: async () => ({ token: "error-token", modelAlias: "alias-1" }),
+    },
+  });
+  try {
+    const binding = await adapter.create(spec, plan);
+    adapter.subscribe(spec.hostSessionId, (event) => events.push(event));
+    const send = adapter.send({
+      type: "send",
+      commandId: "error",
+      hostSessionId: spec.hostSessionId,
+      turnId: "error-turn",
+      text: "hold",
+    });
+    void send.catch(() => {});
+    await until(() => f.requests.some((entry) => entry.method === "turn/start"));
+    const cancel = adapter.cancelTurn({
+      type: "cancelTurn",
+      commandId: "cancel",
+      hostSessionId: spec.hostSessionId,
+      runtimeEpoch: binding.runtimeEpoch,
+      turnId: "error-turn",
+    });
+    await until(() => f.requests.some((entry) => entry.method === "turn/interrupt"));
+    assert.equal(f.requests.filter((entry) => entry.method === "turn/interrupt").length, 1);
+    await assert.rejects(cancel);
+    await assert.rejects(send, /unknown/);
+    assert.deepEqual(
+      events.filter((event) => event.kind === "turn.finished").map((event) => event.outcome),
+      ["unknown"],
+    );
+    await assert.rejects(
+      adapter.send({
+        type: "send",
+        commandId: "retry",
+        hostSessionId: spec.hostSessionId,
+        turnId: "retry",
+        text: "retry",
+      }),
+      /unknown/,
+    );
   } finally {
     await adapter.shutdown();
     await rm(root, { recursive: true, force: true });

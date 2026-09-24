@@ -274,6 +274,8 @@ export class ClaudeHarnessAdapter implements HarnessAdapter {
       assertOwned();
       if (result.nativeSessionId !== runtime.binding.backendSessionId)
         throw new Error("Claude native identity or turn changed");
+      // 修复原因：成功的 SDK result 本身不证明 partial delta 构成完整历史。
+      if (!turn.finalAssistantSeen) throw new Error("Claude final assistant missing");
       // 修复：只在原生 result 与子进程零退出均确认后记录可恢复事实，绝不重放未知 prompt。
       const tmp = join(runtime.dir, `committed.${randomUUID()}.tmp`);
       await writeFile(tmp, JSON.stringify({ nativeId: result.nativeSessionId, turnId: turn.id }), {
@@ -290,7 +292,7 @@ export class ClaudeHarnessAdapter implements HarnessAdapter {
         kind: "message.finished",
         role: "assistant",
         messageId: turn.id,
-        text: turn.assistantText,
+        text: turn.finalAssistantText,
       });
       this.#finish(runtime, turn, "success");
     } catch (error) {
