@@ -11,8 +11,17 @@ import type {
   WorktreeWorkspace,
 } from "@zcode/shared/project-workspaces";
 
+/** Read-only durable target facts used after an execution-unknown profile commit.
+ * Undefined means an authoritative absence; transport/offline errors MUST reject instead.
+ * Only the target owner can implement this; no Git retry from Catalog.
+ */
+export interface CatalogTargetRecoveryPort {
+  lookupBinding(id: string): Promise<RepositoryBinding | undefined>;
+  lookupWorkspace(id: string): Promise<WorktreeWorkspace | undefined>;
+}
+
 /** The execution target, not the profile, verifies Git and worktree facts. */
-export interface ProjectCatalogTargetPort {
+export interface ProjectCatalogTargetPort extends CatalogTargetRecoveryPort {
   inspectRepository(input: {
     targetId: string;
     path: string;
@@ -99,6 +108,9 @@ export interface IProjectCatalogService {
     confirmation: true;
   }): Promise<WorktreeWorkspace>;
   previewRemoval(workspaceId: string, expectedGeneration: string): Promise<RemovalPreview>;
+  /** Explicit recovery; production composition runs it before opening admissions. */
+  reconcilePending(): Promise<void>;
+  reconcileArchivePolicies(): Promise<void>;
   /** Compatibility dispatch for existing callers; mutations use the same explicit target port. */
   apply(
     operation: WorktreeOperation,
