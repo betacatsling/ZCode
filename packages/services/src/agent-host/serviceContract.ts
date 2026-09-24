@@ -6,16 +6,21 @@ import type {
   AgentEvent,
   ExecutionTarget,
   HarnessCatalogEntry,
-  SessionSpec,
+  LegacySessionSpec,
   SessionSpecV2,
   StoredAgentSessionSummary,
 } from "@zcode/shared/agent-host";
-import type { ConversationSnapshot } from "@zcode/shared/zcode-protocol-v4";
+import type { ConversationSnapshot, V4ConversationRowsRangeParams, V4ConversationRowsRangeResult } from "@zcode/shared/zcode-protocol-v4";
 import { createServiceDescriptor } from "../descriptors.js";
 
 /** Separate target-authoritative channel; native IZCodeAgentService remains unchanged. */
 export interface IAgentHostService {
-  readonly onEvent: Event<{ spec: SessionSpec; event: AgentEvent }>;
+  readonly onEvent: Event<{ spec: SessionSpecV2; event: AgentEvent }>; 
+  catalogForTarget(targetId: string): Promise<readonly HarnessCatalogEntry[]>;
+  getRuntimeActivity(workspaceId: string): Promise<{ running: number; waiting: number; uncertain: number }>;
+  getSessionSpec(scope: { targetId: string; workspaceId: string; hostSessionId: string }): Promise<SessionSpecV2 | undefined>;
+  listWorkspaceSessions(workspaceId: string): Promise<StoredAgentSessionSummary[]>;
+  rowsRange(spec: SessionSpecV2 | LegacySessionSpec, request: V4ConversationRowsRangeParams): Promise<V4ConversationRowsRangeResult>;
   getAvailability(): Promise<{
     target: ExecutionTarget;
     harnesses: string[];
@@ -25,20 +30,12 @@ export interface IAgentHostService {
     workspaceIdentity: string,
     worktreePath: string,
   ): Promise<StoredAgentSessionSummary[]>;
-  create(spec: SessionSpec): Promise<ConversationSnapshot>;
-  attach(spec: SessionSpec): Promise<ConversationSnapshot>;
-  dispatch(spec: SessionSpec, command: AgentCommand): Promise<AgentCommandReceipt>;
-  snapshot(spec: SessionSpec): Promise<ConversationSnapshot>;
-  eventsSince(spec: SessionSpec, sequence: number): Promise<readonly AgentEvent[]>;
-  queryCommand(spec: SessionSpec, commandId: string): Promise<AgentCommandReceipt | undefined>;
-}
-
-/** Frozen next-generation interface; NOT implemented by the legacy AgentHost channel yet. */
-export interface IAgentHostV2Admission {
-  /** Inspect at the execution target; a trusted manifest is only display metadata. */
-  catalogForTarget(targetId: string): Promise<readonly HarnessCatalogEntry[]>;
-  /** Host must derive execution from verified workspace and reject v1 before writing. */
   create(spec: SessionSpecV2): Promise<ConversationSnapshot>;
+  attach(spec: SessionSpecV2): Promise<ConversationSnapshot>;
+  dispatch(spec: SessionSpecV2, command: AgentCommand): Promise<AgentCommandReceipt>;
+  snapshot(spec: SessionSpecV2 | LegacySessionSpec): Promise<ConversationSnapshot>;
+  eventsSince(spec: SessionSpecV2 | LegacySessionSpec, sequence: number): Promise<readonly AgentEvent[]>;
+  queryCommand(spec: SessionSpecV2 | LegacySessionSpec, commandId: string): Promise<AgentCommandReceipt | undefined>;
 }
 
 export const IAgentHostService = createServiceDescriptor<IAgentHostService>(

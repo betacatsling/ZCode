@@ -10,6 +10,20 @@ Source plan: `ZCode_Multi_Harness_Refactor_Plan_v0.3_Orca_Hierarchy.md` (section
 - `host-managed` is allowed only if the actual model request traverses ZCode's existing model executor, including auxiliary calls. `harness-managed` must be labelled separately and explicitly certified by that adapter; Pi's SDK bridge does not support silently switching into native Pi account mode. A bare endpoint/key override does not prove unified routing. Unsupported and unverified capabilities are rejected, never silently guessed or replaced.
 - No secrets in schema, events, diagnostics or exported traces. Workers get an isolated per-session configuration and narrow credential references. Default gateway listens on target loopback/socket with session-bound authorization.
 
+## P2 target admission and read contract
+
+The injected `WorkspaceAdmissionPort` is the only target authority for new v2 writes. `verify(specV2)` returns canonical cwd only after comparing stored project, binding, target, workspace identity, generation, real Git membership and contained cwd; `withAdmission(specV2, action)` holds the target removal gate across durable create/send admission. No path-only production fallback. History reads use the exact persisted target/workspace/host scope and never require the current worktree, adapter or provider. Legacy v1 and unknown/future manifests are history-only and cannot attach/dispatch; a path recreated at the same name never authorizes reopening an old session. Host IDs are unique in the durable target index across harnesses and scopes.
+
+Public Host RPC accepts v2 only for create/attach/dispatch; read methods accept v1 or v2; `getSessionSpec({targetId,workspaceId,hostSessionId})` and `listWorkspaceSessions(workspaceId)` read the sidecar only; `rowsRange` uses the same persisted event projection as snapshot and checks the requested session ID. `catalogForTarget(targetId)` reports trusted manifest plus actual adapter probe with explicit unavailable reasons; `getRuntimeActivity(workspaceId)` returns `{running,waiting,uncertain}` from mounted execution and durable unknown receipts, so removal never treats an offline or unknown backend as idle. The feature flag blocks only new create, never read/detach/termination. No implicit migration writes.
+
+```text
+v2 create/send → WorktreeService gate + verify → Host accepted journal → per-turn route freeze → adapter prepareTurn → adapter send
+                                                                  └→ journal event seq → desktop continuous / mobile replayable snapshot + gap repair
+history-only read → persisted exact identity → event projection (no target filesystem or worker startup)
+```
+
+A newly admitted send is serialized per Host owner; a duplicate commandId queries the original receipt and never runs again. A crashed, unconfirmed send is `execution-unknown` and blocks new prompts. Wrong epoch/turn/interaction is rejected. Capability denial is server-side before dispatch. Frozen turn route contains no credentials and is written before the adapter executes any prompt/tool; replan on the next turn from the selection, not by changing an active turn. Unsupported prepareTurn fails closed and retains an unknown admission rather than replaying.
+
 ## Commands and event order
 
 ```text
