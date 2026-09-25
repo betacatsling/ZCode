@@ -304,7 +304,9 @@ export class PiHarnessAdapter implements HarnessAdapter {
       new URL(sourceMode ? "./piWorker.ts" : "./piWorker.js", import.meta.url),
       {
         workerData: boot,
-        ...(sourceMode ? { execArgv: ["--import", "tsx"] } : {}),
+        // 修复：裸 tsx preload 从调用者 cwd 解析；外部 worktree 没有依赖时 Worker 尚未 ready 就退出。
+        // 从适配器模块解析可信源码 loader，构建态不注入开发依赖。
+        ...(sourceMode ? { execArgv: ["--import", import.meta.resolve("tsx")] } : {}),
         env: {
           PATH: process.env.PATH ?? "/usr/bin:/bin",
           HOME: isolatedAgentDir,
