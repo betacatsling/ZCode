@@ -66,8 +66,14 @@ export function createLazyTargetAgentHostService(input: {
       flight = (async () => {
         await input.registry.start();
         if (disposed) throw new Error("agent host service disposed during registry startup");
+        // 中文：开始 Registry 异步初始化时可能仍可 admission；若启动/维护持有在 await 期间生效，
+        // 继续加载 adapter 与模型目录就绕过了持有前的懒激活边界。最终执行仍由 Target 持锁复核。
+        if (!input.allowNewSessions())
+          throw new Error("new external execution disabled; existing history remains readable");
         const { createRegistryPiHarness } = await import("../agent-adapters/pi/createPiHarness.js");
         if (disposed) throw new Error("agent host service disposed during adapter startup");
+        if (!input.allowNewSessions())
+          throw new Error("new external execution disabled; existing history remains readable");
         const harnesses = new HarnessRegistry();
         harnesses.registerTrusted(piManifest, () =>
           createRegistryPiHarness({ root: join(input.root, "workers"), registry: input.registry }),
