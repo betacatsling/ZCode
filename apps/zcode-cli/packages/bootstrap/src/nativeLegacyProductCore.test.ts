@@ -26,7 +26,10 @@ const FIXTURE_SELECTION = {
   options: { reasoningLevel: "off" },
 };
 const CORE_FIXTURE = fileURLToPath(
-  new URL("../../../../../packages/zcode-server-cli/src/server-core/nativeLegacyProductCore.fixture.ts", import.meta.url),
+  new URL(
+    "../../../../../packages/zcode-server-cli/src/server-core/nativeLegacyProductCore.fixture.ts",
+    import.meta.url,
+  ),
 );
 
 test(
@@ -150,12 +153,51 @@ test(
     assert.equal(result.forkColdId, result.forkedId);
     assert.equal(result.editStatus, "accepted");
     assert.equal(result.retryStatus, "accepted");
+    assert.equal(result.stalePair.status, "stale");
+    assert.equal(result.stalePair.reasonCode, "proto.staleTarget");
+    assert.equal(result.staleRevision.status, "stale");
+    assert.equal(result.staleRevision.reasonCode, "proto.staleRevision");
+    assert.equal(result.permissionDenial.status, "accepted");
+    assert.equal(result.permissionDenial.noEffect, true);
+    assert.equal(result.permissionApproval.status, "accepted");
+    assert.equal(result.permissionApproval.effectBytes, "approved legacy write\n");
+    assert.equal(result.permissionApproval.continuedWithToolResult, true);
+    assert.equal(result.permissionApproval.staleStatus, "accepted");
+    assert.equal(result.heldStop.status, "accepted");
+    assert.equal(result.heldStop.interrupted, true);
+    assert.equal(result.replayable.profile, "replayable");
+    assert.equal(result.replayable.initialMode, "snapshot");
+    assert.equal(result.replayable.resumeMode, "resume");
+    assert.ok(result.replayable.resumeToSeq > result.replayable.resumeFromSeq);
+    assert.equal(result.replayable.replayedStopTurn, true);
+    assert.equal(result.replayable.snapshotMode, "snapshot");
+    assert.equal(result.replayable.sameSubscription, true);
+    assert.equal(result.replayable.modelCallsUnchanged, true);
+    assert.equal(result.rewoundInputsAbsent, true);
+    assert.equal(result.editContextPreserved, true);
+    assert.equal(result.heldStopRequestRecorded, true);
     assert.ok(result.editTarget.entityId);
     assert.ok(result.retryTarget.entityId);
     assert.notEqual(result.editTarget.rowId, result.retryTarget.rowId);
     assert.ok(result.coldVisibleInputs.some((text) => text.includes(result.editedText)));
-    assert.ok(!result.coldVisibleInputs.some((text) => text.includes("queued parent input")), "cold active branch hides rewound turn");
-    assert.deepEqual(result.modelCalls, ["fixture-model", "fixture-model", "fixture-model", "fixture-model", "fixture-other", "fixture-model", "fixture-model"]);
+    assert.ok(
+      !result.coldVisibleInputs.some((text) => text.includes("queued parent input")),
+      "cold active branch hides rewound turn",
+    );
+    assert.deepEqual(result.modelCalls, [
+      "fixture-model",
+      "fixture-model",
+      "fixture-model",
+      "fixture-model",
+      "fixture-other",
+      "fixture-model",
+      "fixture-model",
+      "fixture-model",
+      "fixture-model",
+      "fixture-model",
+      "fixture-model",
+      "fixture-model",
+    ]);
     assert.deepEqual(result.modelRequestContainsInput, [true, true, true, true, true, true, true]);
     assert.ok(result.workerPids.length >= 2, "fixture must prove it owned real CLI workers");
     for (const pid of result.workerPids)
@@ -200,11 +242,16 @@ test(
       });
       assert.deepEqual(parentSelection.at(-1)?.data, FIXTURE_SELECTION);
       assert.deepEqual(forkSelection.at(-1)?.data, FIXTURE_SELECTION);
-      assert.deepEqual(parentExecution.at(-1)?.data, { mode: "yolo", planEnabled: false });
+      // permission 规则仍保持迁移 seed 的 yolo/allow/deny（上面已断言）；执行态 mode
+      // 是 operations 阶段通过真实 setPermissionMode 命令切到 build 的持久化结果，
+      // 冷重启后读到 build 恰好证明该命令走了真实 CLI 持久化路径。
+      assert.deepEqual(parentExecution.at(-1)?.data, { mode: "build", planEnabled: false });
       const childSelection = sideSelection.at(-1)?.data as { modelId?: unknown } | undefined;
       assert.equal(childSelection?.modelId, "fixture-other");
       const parentMessages = await reopened.messages({ sessionID: LEGACY_SESSION_ID as SessionId });
-      const sideMessages = await reopened.messages({ sessionID: result.sideSessionId as SessionId });
+      const sideMessages = await reopened.messages({
+        sessionID: result.sideSessionId as SessionId,
+      });
       const forkMessages = await reopened.messages({ sessionID: result.forkedId as SessionId });
       const parentText = parentMessages
         .flatMap(({ parts }) => parts)
@@ -220,9 +267,17 @@ test(
       // SQLite retains historical branch messages; only the cold public projection defines visible lineage.
       assert.ok(!parentText.some((text) => text.includes("selection side child input")));
       assert.ok(sideText.some((text) => text.includes("selection side child input")));
-      assert.ok(sideText.some((text) => text.includes("Legacy seed")), "fork copies committed source context");
-      assert.ok(sideText.some((text) => text.includes("Legacy answer")), "fork preserves source answer");
-      const forkText = forkMessages.flatMap(({ parts }) => parts).map((part) => part.type === "text" ? part.text : "");
+      assert.ok(
+        sideText.some((text) => text.includes("Legacy seed")),
+        "fork copies committed source context",
+      );
+      assert.ok(
+        sideText.some((text) => text.includes("Legacy answer")),
+        "fork preserves source answer",
+      );
+      const forkText = forkMessages
+        .flatMap(({ parts }) => parts)
+        .map((part) => (part.type === "text" ? part.text : ""));
       assert.ok(forkText.some((text) => text.includes("Legacy seed")));
       assert.ok(forkText.some((text) => text.includes("queued parent input")));
       assert.ok(!forkText.some((text) => text.includes("selection side child input")));
@@ -282,22 +337,31 @@ function launchCoreFixture(input: {
 
 async function waitForCoreResult(child: ChildProcess, signal: AbortSignal): Promise<CoreResult> {
   assert.ok(child.stderr);
-  let stderr = "";
+  let stderrHead = "";
+  let stderrTail = "";
   child.stderr.on("data", (chunk: Buffer) => {
-    if (stderr.length < 4000) stderr += chunk.toString().slice(0, 4000 - stderr.length);
+    // 失败信息可能出现在头部（fixture catch 的 fixture-error）或尾部
+    // （unhandled rejection / 清理日志），头尾各留一段窗口。
+    stderrHead = (stderrHead + chunk.toString()).slice(0, 4000);
+    stderrTail = (stderrTail + chunk.toString()).slice(-8000);
   });
+  const stderr = () =>
+    stderrTail.includes(stderrHead) ? stderrTail : `${stderrHead}\n…\n${stderrTail}`;
   const message = await new Promise<CoreResult>((resolve, reject) => {
-    const timer = setTimeout(() => settle(new Error(`Core legacy fixture timeout: ${stderr}`)), 80000);
+    const timer = setTimeout(
+      () => settle(new Error(`Core legacy fixture timeout: ${stderr()}`)),
+      80000,
+    );
     const onAbort = () => settle(new Error("Core legacy fixture aborted"));
     const onMessage = (value: unknown) => {
       if (!value || typeof value !== "object") return;
       const record = value as Record<string, unknown>;
       if (record.kind === "result") settle(undefined, record as unknown as CoreResult);
       else if (record.kind === "error")
-        settle(new Error(`Core legacy fixture failed: ${String(record.message)} ${stderr}`));
+        settle(new Error(`Core legacy fixture failed: ${String(record.message)} ${stderr()}`));
     };
     const onExit = (code: number | null, signalCode: NodeJS.Signals | null) => {
-      settle(new Error(`Core legacy fixture exited ${code}/${signalCode}: ${stderr}`));
+      settle(new Error(`Core legacy fixture exited ${code}/${signalCode}: ${stderr()}`));
     };
     function settle(error?: Error, value?: CoreResult) {
       clearTimeout(timer);
@@ -313,11 +377,14 @@ async function waitForCoreResult(child: ChildProcess, signal: AbortSignal): Prom
     if (signal.aborted) onAbort();
   });
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("Core fixture did not exit after result")), 5000);
+    const timer = setTimeout(
+      () => reject(new Error("Core fixture did not exit after result")),
+      5000,
+    );
     child.once("exit", (code) => {
       clearTimeout(timer);
       if (code === 0) resolve();
-      else reject(new Error(`Core fixture exited ${code}: ${stderr}`));
+      else reject(new Error(`Core fixture exited ${code}: ${stderr()}`));
     });
   });
   return message;
@@ -327,9 +394,20 @@ async function stopChild(child: ChildProcess | undefined): Promise<void> {
   if (!child || child.exitCode !== null || child.signalCode !== null) return;
   const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
   child.kill("SIGTERM");
-  if (await Promise.race([exited.then(() => true), new Promise<false>((resolve) => setTimeout(() => resolve(false), 1500))])) return;
+  if (
+    await Promise.race([
+      exited.then(() => true),
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), 1500)),
+    ])
+  )
+    return;
   child.kill("SIGKILL");
-  await Promise.race([exited, new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Core fixture child did not reap")), 1500))]);
+  await Promise.race([
+    exited,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("Core fixture child did not reap")), 1500),
+    ),
+  ]);
 }
 
 interface CoreResult {
@@ -356,6 +434,30 @@ interface CoreResult {
   retryTarget: { rowId: number; entityId: string };
   editStatus: string;
   retryStatus: string;
+  stalePair: { status: string; reasonCode?: string };
+  staleRevision: { status: string; reasonCode?: string };
+  permissionDenial: { status: string; noEffect: boolean };
+  permissionApproval: {
+    status: string;
+    effectBytes: string;
+    continuedWithToolResult: boolean;
+    staleStatus: string;
+  };
+  heldStop: { status: string; interrupted: boolean; foregroundExecutionId: string | null };
+  replayable: {
+    profile: string;
+    initialMode: string;
+    resumeMode: string;
+    resumeFromSeq: number;
+    resumeToSeq: number;
+    replayedStopTurn: boolean;
+    snapshotMode: string;
+    sameSubscription: boolean;
+    modelCallsUnchanged: boolean;
+  };
+  rewoundInputsAbsent: boolean;
+  editContextPreserved: boolean;
+  heldStopRequestRecorded: boolean;
   editedText: string;
   coldVisibleInputs: string[];
   modelCalls: string[];

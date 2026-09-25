@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { createServer, type Server } from "node:http";
 import { realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,6 +15,11 @@ import {
   type LegacyFixtureResult,
 } from "./nativeLegacyProductCore.actions.js";
 import { migrateOriginalLegacySession } from "./nativeLegacyProductCore.migration.js";
+import { startFixtureModel, type FixtureModel } from "./nativeLegacyProductCore.model.js";
+import {
+  verifyHeldStopAndReplayable,
+  verifyPermissionOperations,
+} from "./nativeLegacyProductCore.operations.js";
 import {
   recordWorkerPid,
   sendText,
@@ -36,22 +40,15 @@ const DB_PATH = process.env.ZCODE_SESSION_DB_PATH!;
 const CONFIG_ROOT = join(ROOT, ".zcode", "v2");
 
 let authority: Awaited<ReturnType<typeof createCoreAuthority>> | undefined;
-let server: Server | undefined;
+let model: FixtureModel | undefined;
 let mappingCount = 0;
-const modelCalls: string[] = [];
-const modelRequests: string[] = [];
 const ownedProcessPids = new Set<number>();
-let notifyHeldRequest: (() => void) | undefined;
-const heldRequest = new Promise<void>((resolve) => {
-  notifyHeldRequest = resolve;
-});
-let releaseHeldResponse: (() => void) | undefined;
-const heldResponse = new Promise<void>((resolve) => {
-  releaseHeldResponse = resolve;
-});
 
 try {
-  const modelUrl = await startFixtureModel();
+  model = await startFixtureModel(CWD);
+  const modelCalls = model.calls;
+  const modelRequests = model.requests;
+  const modelUrl = model.url;
   await writeProviderConfig(ROOT, modelUrl);
   process.env.ZCODE_AGENT_SERVER_ARGS_JSON = JSON.stringify([
     "--import",
@@ -171,7 +168,7 @@ try {
     "held parent input",
   );
   assert.equal(runningAck.status, "accepted");
-  await heldRequest;
+  await model.heldQueue.arrived;
   const queuedTerminal = waitForTerminal(joinedAgent, scope, LEGACY_SESSION_ID, queuedCommand);
   const queuedAck = await joinedAgent.sendConversationCommandV4({
     ...scope,
@@ -204,7 +201,7 @@ try {
     },
   });
   assert.equal(queuedRetry.status, "duplicate");
-  releaseHeldResponse?.();
+  model.heldQueue.release();
   await runningTerminal;
   await queuedTerminal;
   assert.equal(modelCalls.length, 4);
@@ -237,6 +234,22 @@ try {
   await joinedAgent.unsubscribeConversationV4({ ...scope, subscriptionId: sideSubscription });
   await joinedAgent.unsubscribeConversationV4({ ...scope, subscriptionId: reconnectSubscription });
   const forkProof = await verifyLegacyActions(joinedAgent, scope, LEGACY_SESSION_ID);
+  const operations = await verifyPermissionOperations(
+    joinedAgent,
+    scope,
+    LEGACY_SESSION_ID,
+    CWD,
+    modelRequests,
+    modelCalls,
+  );
+  const stopAndReplayable = await verifyHeldStopAndReplayable(
+    joinedAgent,
+    scope,
+    LEGACY_SESSION_ID,
+    model.heldStop.arrived,
+    () => model!.heldStop.release(),
+    modelCalls,
+  );
 
   await authority.dispose();
   authority = undefined;
@@ -254,15 +267,12 @@ try {
   const forkSnapshot = await coldAgent.resumeSession({ ...scope, sessionId: forkProof.forkedId });
   await recordWorkerPid(coldAgent, scope, ownedProcessPids);
   const coldVisibleInputs = await readLegacyVisibleInputs(coldAgent, scope, LEGACY_SESSION_ID);
-  assert.deepEqual(modelCalls, [
-    "fixture-model",
-    "fixture-model",
-    "fixture-model",
-    "fixture-model",
-    "fixture-other",
-    "fixture-model",
-    "fixture-model",
-  ]);
+  assert.equal(
+    operations.callsAfterOperations,
+    11,
+    "two Write decisions and two real tool-result continuations",
+  );
+  assert.equal(modelCalls.length, 12, "held stop adds exactly one in-flight Model request");
   const expectedInputs = [
     "legacy core index seed",
     "legacy core followup",
@@ -276,6 +286,18 @@ try {
     (input, index) => modelRequests[index]?.includes(input) ?? false,
   );
   assert.deepEqual(modelRequestContainsInput, [true, true, true, true, true, true, true]);
+  // rewind 语义不能只断言「新文本在场」：被截断的 queued intent 必须不再出现在
+  // edit/retry 之后的请求里，且更早的已提交轮（held parent input）必须仍在上下文中。
+  const rewoundInputsAbsent = [5, 6].every(
+    (index) => !(modelRequests[index] ?? "").includes("queued parent input"),
+  );
+  const editContextPreserved = [5, 6].every((index) =>
+    (modelRequests[index] ?? "").includes("held parent input"),
+  );
+  assert.ok(rewoundInputsAbsent, "rewound queued intent must not appear in post-edit requests");
+  assert.ok(editContextPreserved, "edit must preserve earlier committed turn context");
+  const heldStopRequestRecorded = (modelRequests[11] ?? "").includes("legacy stop held input");
+  assert.ok(heldStopRequestRecorded, "held stop turn must reach the provider before cancellation");
   const result: LegacyFixtureResult = {
     kind: "result",
     unmappedOwner: null,
@@ -298,6 +320,13 @@ try {
     sideSessionParentId: LEGACY_SESSION_ID,
     duplicateSideSessionStatus: duplicateSideAck.status,
     ...forkProof,
+    permissionDenial: operations.permissionDenial,
+    permissionApproval: operations.permissionApproval,
+    heldStop: stopAndReplayable.heldStop,
+    replayable: stopAndReplayable.replayable,
+    rewoundInputsAbsent,
+    editContextPreserved,
+    heldStopRequestRecorded,
     forkColdId: forkSnapshot.session.sessionId,
     coldVisibleInputs,
     modelCalls: [...modelCalls],
@@ -311,17 +340,14 @@ try {
   };
   process.send?.(result);
 } catch (error) {
-  process.send?.({
-    kind: "error",
-    message: error instanceof Error ? error.message : "fixture-failed",
-  });
+  const message = error instanceof Error ? error.message : "fixture-failed";
+  // IPC message 可能在 disconnect 前丢失；同步写 stderr 保证父进程能看到真实失败原因。
+  process.stderr.write(`fixture-error: ${message}\n`);
+  process.send?.({ kind: "error", message });
   process.exitCode = 1;
 } finally {
   await authority?.dispose().catch(() => {});
-  if (server) {
-    server.closeAllConnections();
-    await new Promise<void>((resolve) => server!.close(() => resolve()));
-  }
+  await model?.close().catch(() => {});
   if (process.connected) process.disconnect?.();
 }
 
@@ -333,57 +359,4 @@ async function openCore() {
   });
   await core.reconcileBeforeAdmission();
   return core;
-}
-
-async function startFixtureModel(): Promise<string> {
-  server = createServer(async (request, response) => {
-    const chunks: Buffer[] = [];
-    for await (const chunk of request) chunks.push(Buffer.from(chunk));
-    let model = "unknown";
-    try {
-      const body = Buffer.concat(chunks).toString();
-      modelRequests.push(body);
-      model = String((JSON.parse(body) as { model?: unknown }).model);
-    } catch {
-      response.writeHead(400).end();
-      return;
-    }
-    modelCalls.push(model);
-    const event = (type: string, data: object) =>
-      `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`;
-    response.writeHead(200, { "content-type": "text/event-stream" });
-    if (modelCalls.length === 3) {
-      notifyHeldRequest?.();
-      await heldResponse;
-    }
-    response.end(
-      event("message_start", {
-        message: {
-          id: `legacy-core-${modelCalls.length}`,
-          type: "message",
-          role: "assistant",
-          model,
-          content: [],
-          stop_reason: null,
-          stop_sequence: null,
-          usage: { input_tokens: 4, output_tokens: 0 },
-        },
-      }) +
-        event("content_block_start", { index: 0, content_block: { type: "text", text: "" } }) +
-        event("content_block_delta", {
-          index: 0,
-          delta: { type: "text_delta", text: "native legacy core fixture response" },
-        }) +
-        event("content_block_stop", { index: 0 }) +
-        event("message_delta", {
-          delta: { stop_reason: "end_turn", stop_sequence: null },
-          usage: { output_tokens: 4 },
-        }) +
-        event("message_stop", {}),
-    );
-  });
-  await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  assert.ok(address && typeof address !== "string");
-  return `http://127.0.0.1:${address.port}/fixture`;
 }
