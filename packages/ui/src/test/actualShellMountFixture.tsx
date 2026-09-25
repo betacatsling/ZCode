@@ -254,7 +254,8 @@ function MountedShell({
     sidebarContainerRef: { current: null },
     onCreateTask: noop,
     // 中文：真实 Core owner 校验后 Shell 才调用此导航回调；fixture 只保存视图焦点。
-    handleSelectTask: (_path: string, originalSessionId: string) => setSelectedNativeId(originalSessionId),
+    handleSelectTask: (_path: string, originalSessionId: string) =>
+      setSelectedNativeId(originalSessionId),
     handleStartDraftInWorkspace: noop,
     onWorkspaceMainViewChange: noop,
     onOpenBrowserUrl: noop,

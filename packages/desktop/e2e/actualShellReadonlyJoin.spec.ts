@@ -303,7 +303,9 @@ test("actual Core archive keeps Native and external Shell owners history-only", 
     await expect(window.getByRole("heading", { name: /Fixture Git/ })).toBeVisible({
       timeout: 20_000,
     });
-    await expect(window.locator('button[data-testid^="session-native:"]')).toBeVisible({ timeout: 15_000 });
+    await expect(window.locator('button[data-testid^="session-native:"]')).toBeVisible({
+      timeout: 15_000,
+    });
     await window.locator('button[data-testid^="session-native:"]').click();
     const restoredNative = window.locator(`[data-session-id="${nativeId}"]`);
     const restoredExternal = window.locator(`[data-session-id="${externalId}"]`);
