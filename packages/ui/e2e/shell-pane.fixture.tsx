@@ -27,7 +27,7 @@ const scope = {
   workspacePath: path,
   workspaceIdentity: identity,
 };
-const specs: SessionSpecV2[] = ["one", "two"].map((id) => ({
+const specs: SessionSpecV2[] = ["one", "two", "archive"].map((id) => ({
   schemaVersion: 2,
   hostSessionId: `pi-${id}`,
   projectId: "project",
@@ -57,11 +57,21 @@ const owners = new Map<string, object>([
   ...specs.map(
     (spec) => [spec.hostSessionId, { kind: "external", scope, spec, historyOnly: false }] as const,
   ),
+  [
+    "pi-archive",
+    {
+      kind: "external",
+      scope,
+      spec: specs[2]!,
+      historyOnly: true,
+    },
+  ],
 ]);
 const sessions = [
   { id: "alias-native", title: "Native session", harnessId: "zcode" },
   { id: "pi-one", title: "Pi one", harnessId: "pi" },
   { id: "pi-two", title: "Pi two", harnessId: "pi" },
+  { id: "pi-archive", title: "Pi archived", harnessId: "pi" },
   { id: "orphan", title: "Unknown owner", harnessId: "pi" },
 ];
 const snapshot: SidebarSnapshot = {
@@ -113,7 +123,7 @@ const snapshot: SidebarSnapshot = {
     {
       workspaceId: "ws",
       freshness: "live",
-      totalAgents: 4,
+      totalAgents: 5,
       waiting: 0,
       running: 0,
       errors: 0,
@@ -123,7 +133,7 @@ const snapshot: SidebarSnapshot = {
   projectSummaries: [
     {
       projectId: "project",
-      totalAgents: 4,
+      totalAgents: 5,
       waiting: 0,
       running: 0,
       errors: 0,

@@ -3,6 +3,7 @@ import test from "node:test";
 import type { MountedSessionOwner } from "../src/v4/mountedSessionOwner.js";
 import {
   matchesMountedSessionOwner,
+  mountedSessionReadOnly,
   sameMountedExternalOwner,
 } from "../src/v4/mountedSessionOwner.js";
 
@@ -109,7 +110,12 @@ test("owner comparison normalizes schema property order but rejects changed targ
 });
 
 test("native alias never replaces original runtime ID; local path fallback only with matching scope", () => {
-  const native: MountedSessionOwner = { kind: "native", scope, originalSessionId: "native-real" };
+  const native: MountedSessionOwner = {
+    kind: "native",
+    scope,
+    originalSessionId: "native-real",
+    historyOnly: true,
+  };
   assert.equal(matchesMountedSessionOwner(native, "native-alias", pane), false);
   assert.equal(matchesMountedSessionOwner(native, "native-real", pane), true);
   const local: MountedSessionOwner = {
@@ -121,10 +127,35 @@ test("native alias never replaces original runtime ID; local path fallback only 
       workspacePath: "/repo",
     },
     originalSessionId: "native-local",
+    historyOnly: false,
   };
   assert.equal(matchesMountedSessionOwner(local, "native-local", { workspacePath: "/repo" }), true);
   assert.equal(
     matchesMountedSessionOwner(local, "native-local", { workspacePath: "/wrong" }),
     false,
   );
+});
+
+test("scoped workbench keeps certified history-only native and external owners read-only", () => {
+  const native: MountedSessionOwner = {
+    kind: "native",
+    scope,
+    originalSessionId: "native-real",
+    historyOnly: true,
+  };
+  assert.equal(mountedSessionReadOnly("scoped", "native-real", native, false), true);
+  assert.equal(
+    mountedSessionReadOnly("scoped", "pi-1", { ...owner, historyOnly: true }, false),
+    true,
+  );
+  assert.equal(mountedSessionReadOnly("scoped", "native-real", undefined, false), true);
+  assert.equal(
+    mountedSessionReadOnly("scoped", "native-real", { ...native, historyOnly: false }, false),
+    false,
+  );
+  assert.equal(
+    mountedSessionReadOnly("scoped", "native-real", { ...native, historyOnly: false }, true),
+    true,
+  );
+  assert.equal(mountedSessionReadOnly("native", null, undefined, false), false);
 });

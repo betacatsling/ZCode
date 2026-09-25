@@ -22,6 +22,21 @@ test("controlled shell routes two Pi sessions without creating or native navigat
   await expect(page.getByTestId("shell-events")).not.toContainText("native-navigation:pi-");
 });
 
+test("history-only Host owner remains read-only through shell selection and reload", async ({
+  page,
+}) => {
+  await page.goto("/shell-pane.html");
+  await page.getByRole("button", { name: /Pi archived/ }).click();
+  await expect(page.locator('[data-session-id="pi-archive"]')).toBeVisible();
+  await expect(page.getByTestId("external-draft-workspace-main")).toBeDisabled();
+  await expect(page.getByTestId("native-calls")).toHaveText("0");
+  await page.reload();
+  await expect(page.locator('[data-session-id="pi-archive"]')).toBeVisible();
+  await expect(page.getByTestId("external-draft-workspace-main")).toBeDisabled();
+  await expect(page.getByTestId("native-calls")).toHaveText("0");
+  await expect(page.getByTestId("create-calls")).toHaveText("0");
+});
+
 test("unresolved catalog row never opens native task or creates session", async ({ page }) => {
   await page.goto("/shell-pane.html");
   await page.getByRole("button", { name: /Unknown owner/ }).click();

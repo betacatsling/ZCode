@@ -230,7 +230,11 @@ import { useSlashCommands } from "@/hooks/useSlashCommands.js";
 import { useV4Conversation } from "@/v4/V4ConversationContext.js";
 import { MountedExternalConversationProvider } from "@/v4/MountedExternalConversationProvider.js";
 import { ExternalSessionPane } from "@/v4/ExternalSessionPane.js";
-import { matchesMountedSessionOwner, type MountedSessionOwner } from "@/v4/mountedSessionOwner.js";
+import {
+  matchesMountedSessionOwner,
+  mountedSessionReadOnly,
+  type MountedSessionOwner,
+} from "@/v4/mountedSessionOwner.js";
 import { useConversationProjection } from "@/v4/useConversationProjection.js";
 import { usePendingCommandRecovery } from "@/v4/usePendingCommandRecovery.js";
 import { useV4SessionQuotaBanner } from "@/v4/useV4SessionQuotaBanner.js";
@@ -527,15 +531,30 @@ export function SessionPane(props: SessionPaneProps) {
           <ExternalSessionPane
             paneId={props.paneId}
             owner={mountedOwner}
-            readOnly={props.readOnly}
+            readOnly={mountedSessionReadOnly(
+              props.mountedSessionRouting ?? "native",
+              sessionId,
+              mountedOwner,
+              Boolean(props.readOnly),
+            )}
             workspaceBadge={props.workspaceBadge}
             onClosePane={props.onClosePane}
           />
         </MountedExternalConversationProvider>
       );
   }
-  // Bug 原因：原生 owner 可被权威标记 history-only；不能因 pane 的可编辑默认值丢掉禁写证明。
-  return <NativeSessionPane {...props} readOnly={props.readOnly || mountedOwner?.historyOnly} />;
+  // 原因：直接挂载的 pane 也必须消费权威 historyOnly，不能依赖 workbench 的缓存 binding。
+  return (
+    <NativeSessionPane
+      {...props}
+      readOnly={mountedSessionReadOnly(
+        props.mountedSessionRouting ?? "native",
+        sessionId,
+        mountedOwner,
+        Boolean(props.readOnly),
+      )}
+    />
+  );
 }
 
 function NativeSessionPane({

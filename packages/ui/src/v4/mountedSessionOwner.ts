@@ -5,6 +5,22 @@ import type { SessionOwner, WorkspaceNavigationScope } from "@zcode/services";
 export type MountedSessionScope = WorkspaceNavigationScope;
 export type MountedSessionOwner = SessionOwner;
 
+/** A local pane binding is a view preference, not an execution grant. */
+export function mountedSessionReadOnly(
+  routing: "native" | "scoped",
+  sessionId: string | null,
+  owner: MountedSessionOwner | undefined,
+  bindingReadOnly: boolean,
+): boolean {
+  // 原因：分屏/恢复的本地绑定不包含权威 historyOnly；旧绑定或未解析的 scoped ID
+  // 不能在 pane 挂载前短暂恢复可写。以当前 hierarchy owner 的只读事实为准。
+  return (
+    bindingReadOnly ||
+    (routing === "scoped" && Boolean(sessionId) && !owner) ||
+    Boolean(owner?.historyOnly)
+  );
+}
+
 /** Optional capabilities are authoritative Host facts; the UI never infers them from method presence. */
 export interface MountedExternalSession {
   readonly owner: Extract<MountedSessionOwner, { kind: "external" }>;

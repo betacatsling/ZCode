@@ -38,7 +38,11 @@ import type {
   SyncSubagentSessionTabsRequest,
 } from "@/lib/workspaceSidePane.js";
 import { SessionPane } from "@/v4/SessionPane.js";
-import { matchesMountedSessionOwner, type MountedSessionOwner } from "@/v4/mountedSessionOwner.js";
+import {
+  matchesMountedSessionOwner,
+  mountedSessionReadOnly,
+  type MountedSessionOwner,
+} from "@/v4/mountedSessionOwner.js";
 import type { PaneWorkspaceBadge } from "@/v4/ConversationHeader.js";
 import type { ConversationDropTargetController } from "@/v4/composer/conversationDropTarget.js";
 import { V4PaneConversationProvider } from "@/v4/V4ConversationContext.js";
@@ -561,7 +565,7 @@ export function WorkbenchLeafPane({
   const sessionId = isPrimary
     ? (primaryBinding?.sessionId ?? shell.sessionId)
     : (binding?.sessionId ?? null);
-  const readOnly = Boolean(
+  const bindingReadOnly = Boolean(
     (isPrimary ? primaryBinding?.readOnly : binding?.readOnly) ||
     (isShellWorkspace && shell.readOnly),
   );
@@ -579,6 +583,14 @@ export function WorkbenchLeafPane({
         }),
       )
     : undefined;
+  // 原因：分屏 binding 只保存视图状态；原生历史会话的禁写事实必须从当前 owner
+  // 一直传到 pane，恢复等待期间也不能先显示可执行 composer。
+  const readOnly = mountedSessionReadOnly(
+    mountedSessionRouting,
+    sessionId,
+    mountedOwner,
+    bindingReadOnly,
+  );
   // Bug 原因：旧 pane 的 Host ID 若先经过原生 provider / 恢复索引，即使 SessionPane
   // 最后拒绝未知 owner，也已经发出 native RPC。只有已证实的 native 或草稿才能挂该 provider。
   const nativeProviderAllowed =
