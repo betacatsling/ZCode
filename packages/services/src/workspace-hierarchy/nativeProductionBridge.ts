@@ -3,7 +3,10 @@ import { resolveNativeSessionDbPath } from "@zcode/adapters/config";
 import { ReadonlyNativeSessionMetadataView } from "@zcode/adapters/storage";
 import type { HarnessCapabilitiesV2, ModelBindingRequest } from "@zcode/shared/agent-host";
 import { NativePersistentSessionIndex } from "../session/nativePersistentSessionIndex.js";
-import { NativeSessionDirectory } from "../session/nativeSessionDirectory.js";
+import {
+  NativeSessionDirectory,
+  type NativeCreatedMapping,
+} from "../session/nativeSessionDirectory.js";
 import { NativeSqliteMetadataReader } from "../session/nativeSessionMetadata.js";
 import type { LegacyMapping } from "../project-workspaces/migrationContract.js";
 import type { TargetRuntimeActivity } from "../project-workspaces/worktreeService.js";
@@ -15,8 +18,16 @@ import type { NativeAdmissionFence } from "./maintenance.js";
 export interface NativeRuntimeFactsPort {
   /** Explicit live V4 command-ID receipt certification; absent keeps new native create disabled. */
   readonly certifiedCreate?: boolean;
+  recover?(
+    input: Parameters<NativeRuntimeFactsPort["create"]>[0],
+  ): Promise<{ originalSessionId: string; creationRemoteSessionId?: string } | undefined>;
+  inspect?: NativeHierarchyPort["inspect"];
+  completeCertified?: NativeHierarchyPort["completeCertified"];
   create(input: {
     scope: WorkspaceNavigationScope;
+    projectId: string;
+    repositoryBindingId: string;
+    worktreeGeneration: string;
     commandId: string;
     modelBinding: ModelBindingRequest;
     cwdRelativeToWorktree: string;
@@ -40,19 +51,31 @@ export interface NativeProductionBridge {
  */
 export function createReadonlyNativeDirectory(options: {
   taskIndexDatabasePath: string;
-  nativeSessionDatabasePath: string;
+  nativeSessionDatabasePath: string | (() => string);
   backupDirectory: string;
   profileId: string;
   listMappings(): Promise<readonly LegacyMapping[]>;
+  listNewMappings?(): Promise<readonly NativeCreatedMapping[]>;
 }): NativeSessionDirectory {
   if (
     !isAbsolute(options.taskIndexDatabasePath) ||
-    !isAbsolute(options.nativeSessionDatabasePath) ||
+    !isAbsolute(
+      typeof options.nativeSessionDatabasePath === "function"
+        ? options.nativeSessionDatabasePath()
+        : options.nativeSessionDatabasePath,
+    ) ||
     !isAbsolute(options.backupDirectory)
   )
     throw new Error("native-facts-require-configured-absolute-paths");
-  const view = new ReadonlyNativeSessionMetadataView(options.nativeSessionDatabasePath);
-  const metadata = new NativeSqliteMetadataReader(view, async (scope) => {
+  const databasePath = () =>
+    typeof options.nativeSessionDatabasePath === "function"
+      ? options.nativeSessionDatabasePath()
+      : options.nativeSessionDatabasePath;
+  const targetForScope = async (scope: {
+    workspaceKey: string;
+    workspacePath: string;
+    nativeSessionId: string;
+  }) => {
     const mapped = (await options.listMappings()).filter(
       (row) =>
         row.sourceWorkspaceKey === scope.workspaceKey &&
@@ -61,7 +84,14 @@ export function createReadonlyNativeDirectory(options: {
     );
     if (mapped.length > 1) throw new Error("ambiguous-native-owner");
     return mapped[0]?.targetId;
-  });
+  };
+  const metadata = {
+    read: (scope: { workspaceKey: string; workspacePath: string; nativeSessionId: string }) =>
+      new NativeSqliteMetadataReader(
+        new ReadonlyNativeSessionMetadataView(databasePath()),
+        targetForScope,
+      ).read(scope),
+  };
   const index = new NativePersistentSessionIndex(
     options.taskIndexDatabasePath,
     options.backupDirectory,
@@ -70,10 +100,16 @@ export function createReadonlyNativeDirectory(options: {
   );
   return new NativeSessionDirectory({
     listMappings: options.listMappings,
+    listNewMappings: options.listNewMappings,
     readFacts: () => index.readFacts(),
-    // 中文：即使迁移 sidecar 尚无映射，也必须确认 CLI 数据库真实存在且 schema 可读。
+    // 中文：旧迁移映射仍要校验其原始 DB；但仅含新映射时每条映射已按自身
+    // CLI 报告的 source DB 完成收据认证，不应让无关 bootstrap DB 遮蔽有效历史。
+    // 两种映射皆无时保留旧的来源校验，不把坏库伪装成正常空目录。
     verifySource: async () => {
-      await view.read("");
+      const legacy = await options.listMappings();
+      const fresh = await options.listNewMappings?.();
+      if (legacy.length > 0 || !fresh?.length)
+        await new ReadonlyNativeSessionMetadataView(databasePath()).read("");
     },
     onChange: (listener) => index.onChange(listener),
     metadata,
@@ -121,11 +157,19 @@ export function createNativeProductionBridge(options: {
         originalSessionId: scoped.owner.nativeSessionId,
         sourceWorkspacePath: scoped.owner.sourceWorkspacePath,
         workspaceIdentity: scoped.owner.sourceWorkspaceKey,
+        ...(scoped.owner.remoteSessionId ? { remoteSessionId: scoped.owner.remoteSessionId } : {}),
         worktreeGeneration: scoped.owner.worktreeGeneration,
         repositoryBindingId: scoped.owner.repositoryBindingId,
       };
     },
     create: (request) => options.runtime.create(request),
+    recover: (request) => options.runtime.recover?.(request) ?? Promise.resolve(undefined),
+    completeCertified: (commandId, expected) =>
+      options.runtime.completeCertified?.(commandId, expected) ??
+      Promise.reject(new Error("Native completed-only repair unavailable")),
+    inspect: (commandId, expected) =>
+      options.runtime.inspect?.(commandId, expected) ??
+      Promise.reject(new Error("Native inspection unavailable")),
     capabilities: (owner) => options.runtime.capabilities(owner),
   };
   return {

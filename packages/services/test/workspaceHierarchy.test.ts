@@ -306,6 +306,103 @@ test("real Git/catalog/target/Host: server derives identity and deduplicates cre
       }),
       /creation receipt unavailable/,
     );
+    // RED: explicit completed-only repair is separate from a possibly accepted create retry.
+    let allocations = 0;
+    let repairs = 0;
+    let references = 0;
+    let receiptStatus: "pending" | "completed-unindexed" | "completed" = "pending";
+    let repairHeld = true;
+    const repair = createWorkspaceHierarchyService({
+      targetId: "local",
+      catalog,
+      host: rpc.service,
+      newAdmissionsEnabled: () => false,
+      withNativeAdmission: async (_id, _generation, _cwd, action) => {
+        if (repairHeld) throw new Error("New admission frozen for maintenance");
+        return action();
+      },
+      recoveryFacts: async () => ({
+        status: "confirmed",
+        generation: workspace.worktreeGeneration,
+        receiptKind: "adopt",
+      }),
+      commitNativeReference: async () => {
+        references++;
+      },
+      native: {
+        certifiedCreate: true,
+        resolveOwner: async () => undefined,
+        create: async () => {
+          allocations++;
+          throw new Error("allocator must not run");
+        },
+        capabilities: async () => {
+          throw new Error("unused");
+        },
+        inspect: async (_commandId, scope) =>
+          receiptStatus === "pending"
+            ? { status: "pending" }
+            : receiptStatus === "completed-unindexed"
+              ? {
+                  status: "completed-unindexed",
+                  originalSessionId: "original-v4-id",
+                  diagnostic: { entryId: "0".repeat(64), reason: "unreferenced-completion" },
+                }
+              : {
+                  status: "completed",
+                  originalSessionId: "original-v4-id",
+                  intent: {
+                    targetId: scope.targetId,
+                    projectId: "p",
+                    workspaceId: scope.workspaceId,
+                    repositoryBindingId: "b",
+                    worktreeGeneration: workspace.worktreeGeneration,
+                    workspaceIdentity: scope.workspaceIdentity,
+                    workspacePath: scope.workspacePath,
+                  },
+                },
+        completeCertified: async () => {
+          repairs++;
+          receiptStatus = "completed";
+          return {
+            originalSessionId: "original-v4-id",
+            intent: {
+              targetId: "local",
+              projectId: "p",
+              workspaceId: "w",
+              repositoryBindingId: "b",
+              worktreeGeneration: workspace.worktreeGeneration,
+              workspaceIdentity: workspace.workspaceIdentity,
+              workspacePath: workspace.worktreePath,
+            },
+          };
+        },
+      },
+    });
+    assert.deepEqual(
+      await repair.reconcileCompletedCreateCommand({ workspaceId: "w", commandId: "repair-id" }),
+      { status: "pending" },
+    );
+    assert.equal(repairs, 0);
+    receiptStatus = "completed-unindexed";
+    await assert.rejects(
+      repair.reconcileCompletedCreateCommand({
+        workspaceId: "w",
+        commandId: "repair-id",
+      }),
+      /frozen/,
+    );
+    assert.equal(repairs, 0);
+    assert.equal(references, 0);
+    repairHeld = false;
+    const repaired = await repair.reconcileCompletedCreateCommand({
+      workspaceId: "w",
+      commandId: "repair-id",
+    });
+    assert.equal(repaired.status, "completed");
+    assert.equal(repairs, 1);
+    assert.equal(references, 1);
+    assert.equal(allocations, 0);
     const native = await mapped.resolveOwner({
       targetId: "local",
       workspaceId: "w",

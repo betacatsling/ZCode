@@ -40,7 +40,11 @@ export interface CompositionOptions {
   nativeActivity: (workspaceId?: string) => Promise<TargetRuntimeActivity>;
   newAdmissionsEnabled: () => boolean;
   nativeAdmissionFence: () => Promise<NativeAdmissionFence>;
-  additionalTrustedHarnesses?: readonly { manifest: HarnessManifest; factory: () => HarnessAdapter }[];
+  initiallyHeld?: boolean;
+  additionalTrustedHarnesses?: readonly {
+    manifest: HarnessManifest;
+    factory: () => HarnessAdapter;
+  }[];
   /** Core binds the real Catalog receipt/archive reconciliation, not a window-local fallback. */
   reconcileBoot: (catalog: ProjectCatalog) => Promise<void>;
   resolveRemoteSession?: (workspaceIdentity: string) => Promise<string | undefined>;
@@ -71,6 +75,7 @@ export function createLazyWorkspaceComposition(options: CompositionOptions): {
   let host: IAgentHostService;
   const maintenance = createMaintenanceCoordination({
     nativeFence: options.nativeAdmissionFence,
+    initiallyHeld: options.initiallyHeld,
     activity: async () => {
       const [native, external] = await Promise.all([
         options.nativeActivity(),
@@ -278,6 +283,8 @@ export function createLazyWorkspaceComposition(options: CompositionOptions): {
       return { status: "unresolved" as const, reason: "target-receipts-unavailable" as const };
     },
     native: options.native,
+    commitNativeReference: async (reference) =>
+      (await get()).catalog.commitNativeReference(reference),
     newAdmissionsEnabled,
     withNativeAdmission: (workspaceId, generation, cwd, action) =>
       maintenance.withAdmission(async () => {

@@ -1,7 +1,11 @@
 import { querySessionDebug } from "./session-debug.js";
+import { createHash } from "node:crypto";
+import { isAbsolute } from "node:path";
 import {
-  nativeMaintenanceLeaseSchema, zcodeProtocolEmptyResultSchema,
-  type NativeMaintenanceLease, type NativeMaintenanceActivity,
+  nativeMaintenanceLeaseSchema,
+  zcodeProtocolEmptyResultSchema,
+  type NativeMaintenanceLease,
+  type NativeMaintenanceActivity,
 } from "@zcode/shared";
 import {
   zcodePluginsCancelOperationParamsSchema,
@@ -192,32 +196,57 @@ function getOperationId(params: unknown): string | undefined {
  * 不把 V4 command 放在白名单：入口计数跨 resident await，最终 admission 仍由现有 CommandInbox 决定。
  */
 const MAINTENANCE_READ_METHODS = new Set<string>([
-  V4_METHODS.connectionFlow, V4_METHODS.conversationSubscribe, V4_METHODS.conversationResync,
-  V4_METHODS.conversationUnsubscribe, V4_METHODS.conversationRowsRange,
-  V4_METHODS.conversationPlans, V4_METHODS.backgroundBashOutput,
-  V4_METHODS.conversationFileChanges, V4_METHODS.conversationFileRewindPreview,
-  V4_METHODS.conversationWorkflowRunEvents, V4_METHODS.conversationWorkflowRuns,
-  V4_METHODS.conversationWorkflowRunArtifacts, V4_METHODS.conversationWorkflowRunArtifactData,
-  V4_METHODS.conversationWorkflowRunArtifactRead, V4_METHODS.conversationWorkflowRunWorkspace,
-  V4_METHODS.conversationWorkflowRunNodeResult, V4_METHODS.attachmentRead,
-  V4_METHODS.conversationAttachmentRead, V4_METHODS.conversationAttachmentStat,
-  V4_METHODS.attachmentPreviewSource, V4_METHODS.usageStats, V4_METHODS.conversationUsage,
+  V4_METHODS.connectionFlow,
+  V4_METHODS.conversationSubscribe,
+  V4_METHODS.conversationResync,
+  V4_METHODS.conversationUnsubscribe,
+  V4_METHODS.conversationRowsRange,
+  V4_METHODS.conversationPlans,
+  V4_METHODS.backgroundBashOutput,
+  V4_METHODS.conversationFileChanges,
+  V4_METHODS.conversationFileRewindPreview,
+  V4_METHODS.conversationWorkflowRunEvents,
+  V4_METHODS.conversationWorkflowRuns,
+  V4_METHODS.conversationWorkflowRunArtifacts,
+  V4_METHODS.conversationWorkflowRunArtifactData,
+  V4_METHODS.conversationWorkflowRunArtifactRead,
+  V4_METHODS.conversationWorkflowRunWorkspace,
+  V4_METHODS.conversationWorkflowRunNodeResult,
+  V4_METHODS.attachmentRead,
+  V4_METHODS.conversationAttachmentRead,
+  V4_METHODS.conversationAttachmentStat,
+  V4_METHODS.attachmentPreviewSource,
+  V4_METHODS.usageStats,
+  V4_METHODS.conversationUsage,
   V4_METHODS.commandsQuery,
-  zcodeProtocolMethods.sessionList, zcodeProtocolMethods.sessionSubagents,
-  zcodeProtocolMethods.sessionRead, zcodeProtocolMethods.sessionMessages,
-  zcodeProtocolMethods.sessionEvents, zcodeProtocolMethods.sessionSubscribe,
-  zcodeProtocolMethods.workspaceReadPresentation, zcodeProtocolMethods.mcpList,
-  zcodeProtocolMethods.pluginsList, zcodeProtocolMethods.pluginsReferenceCatalogWithCategory,
-  zcodeProtocolMethods.pluginsReferenceCatalog, zcodeProtocolMethods.skillsReferenceCatalog,
-  zcodeProtocolMethods.workflowsList, zcodeProtocolMethods.workflowsGet,
-  zcodeProtocolMethods.workflowsRuns, zcodeProtocolMethods.pluginsOverview,
-  zcodeProtocolMethods.processChildProcesses, zcodeProtocolMethods.runtimeCapabilities,
-  zcodeProtocolMethods.usageStats, zcodeProtocolMethods.sessionDebug,
+  zcodeProtocolMethods.sessionList,
+  zcodeProtocolMethods.sessionSubagents,
+  zcodeProtocolMethods.sessionRead,
+  zcodeProtocolMethods.sessionMessages,
+  zcodeProtocolMethods.sessionEvents,
+  zcodeProtocolMethods.sessionSubscribe,
+  zcodeProtocolMethods.workspaceReadPresentation,
+  zcodeProtocolMethods.mcpList,
+  zcodeProtocolMethods.pluginsList,
+  zcodeProtocolMethods.pluginsReferenceCatalogWithCategory,
+  zcodeProtocolMethods.pluginsReferenceCatalog,
+  zcodeProtocolMethods.skillsReferenceCatalog,
+  zcodeProtocolMethods.workflowsList,
+  zcodeProtocolMethods.workflowsGet,
+  zcodeProtocolMethods.workflowsRuns,
+  zcodeProtocolMethods.pluginsOverview,
+  zcodeProtocolMethods.processChildProcesses,
+  zcodeProtocolMethods.runtimeCapabilities,
+  zcodeProtocolMethods.nativeOwnerDescription,
+  zcodeProtocolMethods.usageStats,
+  zcodeProtocolMethods.sessionDebug,
   zcodeProtocolMethods.sessionUsage,
 ]);
 const MAINTENANCE_ACCEPTED_CONTROLS = new Set<string>([
-  zcodeProtocolMethods.sessionStop, zcodeProtocolMethods.sessionCancelBackgroundTask,
-  zcodeProtocolMethods.workspaceCancelGenerateText, zcodeProtocolMethods.pluginsCancelOperation,
+  zcodeProtocolMethods.sessionStop,
+  zcodeProtocolMethods.sessionCancelBackgroundTask,
+  zcodeProtocolMethods.workspaceCancelGenerateText,
+  zcodeProtocolMethods.pluginsCancelOperation,
   V4_METHODS.attachmentAbort,
 ]);
 
@@ -246,18 +275,29 @@ export class ZCodeProtocolAgentServer {
 
   private nativeActivity(): NativeMaintenanceActivity {
     const v4 = this.requireV4Gateway().getNativeActivity();
-    let active = v4.active, tools = v4.tools;
+    let active = v4.active,
+      tools = v4.tools;
     const approvals = v4.approvals + this.context.v4Interactions.pendingCount;
     let unknown = v4.unknown;
     for (const record of this.context.sessions.values()) {
       if (record.activeAbortController || record.residencyFinalizationCount) active++;
-      if (record.protocolToolInputTransmissions.size) tools += record.protocolToolInputTransmissions.size;
+      if (record.protocolToolInputTransmissions.size)
+        tools += record.protocolToolInputTransmissions.size;
       if (!this.context.v4Gateway?.hasNativeSnapshot(record.app.sessionId)) unknown = true;
     }
-    return { ...v4, frozen: this.nativeLease !== null,
-      active, tools, approvals,
-      pending: v4.pending + this.protocolMutationInFlight + this.workspaceGenerateTextControllers.size + this.pendingClientRequests.size,
-      unknown };
+    return {
+      ...v4,
+      frozen: this.nativeLease !== null,
+      active,
+      tools,
+      approvals,
+      pending:
+        v4.pending +
+        this.protocolMutationInFlight +
+        this.workspaceGenerateTextControllers.size +
+        this.pendingClientRequests.size,
+      unknown,
+    };
   }
 
   readonly browserControlPort: BrowserControlPort;
@@ -322,6 +362,10 @@ export class ZCodeProtocolAgentServer {
     };
     // v4 通道：gateway 闭包持有 context 做帧出口与命令副作用，构造完立即挂回。
     this.context.v4Gateway = createConversationV4Gateway(this.context);
+    // 中文：启动持有必须在 resident 池、恢复回调或首个 stdio 请求之前进入唯一 Inbox。
+    // 旧 CLI 不实现 claimBoot，Core 因而不能误把普通 freeze 当作启动前屏障。
+    if (resolvedDeps.env?.ZCODE_CORE_BOOT_ADMISSION === "held")
+      this.nativeLease = this.context.v4Gateway.freezeNativeAdmission();
     this.browserControlPort = createProtocolBrowserControlBroker(this.context);
     const sessionResidentTargetCount =
       deps.sessionResidentPoolOptions?.targetCount ?? deps.sessionResidentTargetCount;
@@ -495,8 +539,10 @@ export class ZCodeProtocolAgentServer {
     // request id 可在前一请求完成后复用；新请求不能继承未消费的旧 outbox。
     this.postResponseOutbox.delete(request.id);
     let releaseResidencyOperation: (() => void) | undefined;
-    const protocolMutation = !MAINTENANCE_READ_METHODS.has(request.method) &&
+    const protocolMutation =
+      !MAINTENANCE_READ_METHODS.has(request.method) &&
       !MAINTENANCE_ACCEPTED_CONTROLS.has(request.method) &&
+      request.method !== zcodeProtocolMethods.nativeMaintenanceClaimBoot &&
       request.method !== zcodeProtocolMethods.nativeMaintenanceFreeze &&
       request.method !== zcodeProtocolMethods.nativeMaintenanceGetActivity &&
       request.method !== zcodeProtocolMethods.nativeMaintenanceRelease;
@@ -504,6 +550,12 @@ export class ZCodeProtocolAgentServer {
     // lease 的 trust/config/attachment/v4 command 写请求误判为空闲。
     if (protocolMutation) this.protocolMutationInFlight++;
     try {
+      if (request.method === zcodeProtocolMethods.nativeMaintenanceClaimBoot) {
+        zcodeProtocolEmptyResultSchema.parse(request.params);
+        if (!this.nativeLease || this.context.deps.env?.ZCODE_CORE_BOOT_ADMISSION !== "held")
+          throw new Error("native boot lease unavailable");
+        return this.ok(request.id, { lease: this.nativeLease, activity: this.nativeActivity() });
+      }
       if (request.method === zcodeProtocolMethods.nativeMaintenanceFreeze) {
         zcodeProtocolEmptyResultSchema.parse(request.params);
         if (this.nativeLease) throw new Error("native maintenance already frozen");
@@ -514,14 +566,22 @@ export class ZCodeProtocolAgentServer {
       }
       if (request.method === zcodeProtocolMethods.nativeMaintenanceGetActivity) {
         const lease = nativeMaintenanceLeaseSchema.parse(request.params);
-        if (!this.nativeLease || lease.epoch !== this.nativeLease.epoch || lease.leaseId !== this.nativeLease.leaseId)
+        if (
+          !this.nativeLease ||
+          lease.epoch !== this.nativeLease.epoch ||
+          lease.leaseId !== this.nativeLease.leaseId
+        )
           throw new Error("native maintenance lease mismatch");
         return this.ok(request.id, this.nativeActivity());
       }
       if (request.method === zcodeProtocolMethods.nativeMaintenanceRelease) {
         const lease = nativeMaintenanceLeaseSchema.parse(request.params);
-        if (!this.nativeLease || lease.epoch !== this.nativeLease.epoch || lease.leaseId !== this.nativeLease.leaseId ||
-            !this.requireV4Gateway().releaseNativeAdmission(lease))
+        if (
+          !this.nativeLease ||
+          lease.epoch !== this.nativeLease.epoch ||
+          lease.leaseId !== this.nativeLease.leaseId ||
+          !this.requireV4Gateway().releaseNativeAdmission(lease)
+        )
           throw new Error("native maintenance lease mismatch");
         this.nativeLease = null;
         return this.ok(request.id, { released: true });
@@ -772,8 +832,27 @@ export class ZCodeProtocolAgentServer {
         return await getPluginsOverview(this.context, request.params);
       case zcodeProtocolMethods.processChildProcesses:
         return listChildProcesses(this.context.deps.mcpTelemetry?.listProcesses() ?? []);
+      case zcodeProtocolMethods.nativeOwnerDescription: {
+        const store = this.context.deps.sessionStore;
+        // 中文：只报告当前 CLI 已打开的实际数据库；没有 storage owner 的旧实例不能推断路径。
+        if (!store || !("getDatabasePath" in store) || typeof store.getDatabasePath !== "function")
+          throw new Error("native-storage-owner-unavailable");
+        const path = store.getDatabasePath() as string;
+        if (!isAbsolute(path)) throw new Error("native-storage-path-not-absolute");
+        return {
+          nativeDatabasePath: path,
+          databaseId: createHash("sha256").update(path).digest("hex"),
+        };
+      }
       case zcodeProtocolMethods.runtimeCapabilities:
-        return { independentPlanState: true };
+        // 中文：旧 worker 不能被 Core 当成可认证 create owner；只有本 worker 真正
+        // 挂载 receipt 写端与实际配置持久化端时才声明增量能力。
+        return {
+          independentPlanState: true,
+          nativeCoreCreateV1:
+            !!this.context.deps.sessionStore?.commitNativeCreateReceipt &&
+            !!this.context.deps.sessionStore?.completeNativeCreateReceipt,
+        };
       case zcodeProtocolMethods.pluginsMarketplaceAdd:
         return await this.withPluginOperationSignal(request, (signal) =>
           addPluginMarketplace(this.context, request.params, signal),

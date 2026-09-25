@@ -1,4 +1,5 @@
 import { createConfig } from "@zcode/adapters/config";
+import type { AiSdkModelAdapter } from "@zcode/adapters/model";
 import { createNodeModelSelectionFacade } from "@zcode/provider-node";
 import { createNodeLoggerFactory } from "@zcode/adapters/logging";
 import {
@@ -13,8 +14,13 @@ import {
   type ZCodeMcpTelemetryEvent,
 } from "@zcode/shared";
 import type { SqliteSessionStore } from "@zcode/adapters/storage";
-import { traceContextToLogContext, createRootTraceContext } from "@zcode/contracts";
-import type { McpPort, ModelSelection } from "@zcode/contracts";
+import type { NativeCreateReceipt } from "@zcode/contracts";
+import {
+  traceContextToLogContext,
+  createRootTraceContext,
+  type LoggerFactory,
+} from "@zcode/contracts";
+import type { McpPort, ModelSelection, FileSystemPort, ExecutionPort } from "@zcode/contracts";
 import type { PresentationSurface } from "@zcode/core";
 import type { RunZCodeProtocolAgentOptions, ZCodeAppOptions } from "./app/types.js";
 import { createZCodeApp } from "./app/create-app.js";
@@ -83,6 +89,17 @@ type NativeProtocolRegistryRuntime = Pick<
 > & { readonly runtime: Pick<ProcessRegistryRuntime["runtime"], "registryService"> };
 
 export interface NativeProtocolBootstrapDependencies {
+  /** Trusted test fixture only: barrier after SQLite COMMIT but before command ACK. Never serialized. */
+  readonly onNativeCreateReceiptCommitted?: (receipt: NativeCreateReceipt) => Promise<void>;
+  /** Trusted test fixture only: hold after durable first-input admission, before promotion. */
+  readonly onNativeCreateInputAdmitted?: () => Promise<void>;
+  /** 可信 Node-only 私有运行器可注入原有 Adapter 的观测配置；绝不进入 wire/schema。 */
+  readonly modelAdapter?: AiSdkModelAdapter;
+  /** 私有一次性验证不允许把 provider 原始错误/endpoint 落盘。 */
+  readonly loggerFactory?: LoggerFactory;
+  /** 私有 fixture 对免确认 Read 与底层 Bash 仍必须实施 I/O 端口级范围约束。 */
+  readonly fileSystemPort?: FileSystemPort;
+  readonly executionPort?: ExecutionPort;
   readonly startProviderRegistryRuntime?: (
     env: Readonly<Record<string, string | undefined>>,
   ) => Promise<NativeProtocolRegistryRuntime>;
@@ -105,7 +122,7 @@ export async function runZCodeProtocolAgent(
   const presentationSurface = options.presentationSurface ?? "terminal";
   const input = options.input ?? process.stdin;
   const output = options.output ?? process.stdout;
-  const loggerFactory = createNodeLoggerFactory({ env: options.env });
+  const loggerFactory = dependencies.loggerFactory ?? createNodeLoggerFactory({ env: options.env });
   const traceContext = createRootTraceContext({
     attributes: {
       entrypoint: "zcode_protocol",
@@ -161,6 +178,26 @@ export async function runZCodeProtocolAgent(
             }),
         }),
     });
+    if (dependencies.onNativeCreateReceiptCommitted) {
+      const store = sessionStore;
+      const commit = store.commitNativeCreateReceipt.bind(store);
+      store.commitNativeCreateReceipt = async (input) => {
+        const receipt = await commit(input);
+        await dependencies.onNativeCreateReceiptCommitted!(receipt);
+        return receipt;
+      };
+    }
+    if (dependencies.onNativeCreateInputAdmitted) {
+      const store = sessionStore;
+      const save = store.saveSessionInput.bind(store);
+      store.saveSessionInput = async (input) => {
+        const result = await save(input);
+        if (input.payload.sourceCommandType === "createSession") {
+          await dependencies.onNativeCreateInputAdmitted!();
+        }
+        return result;
+      };
+    }
     const runtimeEnv = options.env ?? process.env;
     options.lifecycle?.signal.throwIfAborted();
     providerRegistryRuntime = await acquireProtocolStartupResource({
@@ -263,6 +300,10 @@ export async function runZCodeProtocolAgent(
     const server = (serverForCleanup = new ZCodeProtocolAgentServer({
       createZCodeApp: (appOptions = {}) =>
         createZCodeApp({
+          ...(dependencies.modelAdapter ? { modelAdapter: dependencies.modelAdapter } : {}),
+          ...(dependencies.loggerFactory ? { loggerFactory: dependencies.loggerFactory } : {}),
+          ...(dependencies.fileSystemPort ? { fileSystemPort: dependencies.fileSystemPort } : {}),
+          ...(dependencies.executionPort ? { executionPort: dependencies.executionPort } : {}),
           ...applyProtocolProviderRegistry(
             applyProtocolPresentationSurface(appOptions, presentationSurface),
             activeProviderRegistryRuntime.runtime.registryService,

@@ -11,6 +11,8 @@ export interface SqliteSessionStoreOptions {
   dbPath?: string;
   /** 仅供事务原子性测试；生产调用不得设置。 */
   forkCommitFaultAt?: ForkCommitFaultStage;
+  /** 仅供 native create 事务崩溃回归；生产调用不得设置。 */
+  nativeCreateFaultAt?: "beforeTransaction" | "afterSession" | "afterReceipt" | "afterCommit";
   /** 仅供启动锁等待边界测试；生产调用使用默认值。 */
   startupLockTimeoutMs?: number;
 }

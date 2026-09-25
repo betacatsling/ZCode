@@ -27,6 +27,10 @@ export interface MaintenanceCoordination extends MaintenanceLeasePort {
   /** Local-only convenience; do not serialize callbacks across RPC. */
   withMaintenance<T>(action: () => Promise<T>): Promise<T>;
   admissionEnabled(): boolean;
+  /** Instance-local initial hold, independent of ordinary maintenance leases. */
+  releaseInitialHold(): Promise<void>;
+  /** Attach the already-frozen boot worker, never perform an idle-gated late freeze. */
+  attachBootFence(fence: NativeAdmissionFence): void;
   withAdmission<T>(action: () => Promise<T>): Promise<T>;
 }
 
@@ -34,7 +38,10 @@ export interface MaintenanceCoordination extends MaintenanceLeasePort {
 export function createMaintenanceCoordination(input: {
   nativeFence: () => Promise<NativeAdmissionFence | (() => Promise<void>)>;
   activity: () => Promise<MaintenanceActivity>;
+  initiallyHeld?: boolean;
 }): MaintenanceCoordination {
+  let initialHold = input.initiallyHeld === true;
+  let bootFence: NativeAdmissionFence | undefined;
   let phase: "open" | "acquiring" | "held" | "releasing" | "poisoned" = "open";
   let epoch = 0;
   let held: MaintenanceLease | undefined;
@@ -55,9 +62,29 @@ export function createMaintenanceCoordination(input: {
     phase = "open";
   };
   const port: MaintenanceCoordination = {
-    admissionEnabled: () => phase === "open",
+    admissionEnabled: () => phase === "open" && !initialHold,
+    attachBootFence(fence) {
+      if (!initialHold || bootFence) throw new Error("Invalid boot fence owner");
+      bootFence = fence;
+    },
+    async releaseInitialHold() {
+      if (!initialHold) return;
+      if (phase !== "open" || !bootFence)
+        throw new Error("Boot fence missing or maintenance in progress");
+      // 中文：先解除同代 CLI 的实际 Inbox；丢 ACK 后保持 workspace 关闭，不能重发解除并回滚。
+      phase = "releasing";
+      try {
+        await bootFence.release();
+      } catch (error) {
+        phase = "poisoned";
+        throw error;
+      }
+      bootFence = undefined;
+      initialHold = false;
+      phase = "open";
+    },
     async withAdmission(action) {
-      if (phase !== "open") throw new Error("New admission frozen for maintenance");
+      if (phase !== "open" || initialHold) throw new Error("New admission frozen for maintenance");
       inflight++;
       try {
         return await action();
@@ -72,12 +99,19 @@ export function createMaintenanceCoordination(input: {
       phase = "acquiring";
       const nextEpoch = ++epoch;
       try {
-        const acquired = await input.nativeFence();
-        native = typeof acquired === "function" ? {
-          release: acquired,
-          // 中文：旧回调只有解除能力，无法确认 CLI epoch；拒绝发放可停机的 lease。
-          verify: async () => { throw new Error("Unverifiable native maintenance fence"); },
-        } : acquired;
+        const acquired = bootFence
+          ? { verify: () => bootFence!.verify(), release: async () => {} }
+          : await input.nativeFence();
+        native =
+          typeof acquired === "function"
+            ? {
+                release: acquired,
+                // 中文：旧回调只有解除能力，无法确认 CLI epoch；拒绝发放可停机的 lease。
+                verify: async () => {
+                  throw new Error("Unverifiable native maintenance fence");
+                },
+              }
+            : acquired;
         if (!native || typeof native.release !== "function" || typeof native.verify !== "function")
           throw new Error("Native CLI fence did not provide a verifiable release capability");
       } catch (error) {

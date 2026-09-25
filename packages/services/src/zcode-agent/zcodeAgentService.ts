@@ -6,6 +6,7 @@ import {
 } from "@zcode/shared";
 /* oxlint-disable eslint(max-lines) -- ZCode Protocol transport、通知 wiring 和 app-facing session 方法必须共享同一个 client/emitter 上下文。 */
 import { randomUUID } from "node:crypto";
+import { ReadonlyNativeSessionMetadataView } from "@zcode/adapters/storage";
 import { ensureIndependentPlanSupport } from "./independentPlanSupport.js";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -76,6 +77,8 @@ import {
   summarizeOfficialMcpIdentityHeaders,
   zcodeProtocolEmptyResultSchema,
   zcodeProtocolMethods,
+  zcodeRuntimeCapabilitiesSchema,
+  zcodeNativeOwnerDescriptionSchema,
   zcodeProtocolNotifications,
   zcodeMcpTelemetryEventSchema,
   zcodeMcpResourceSamplesSchema,
@@ -864,8 +867,10 @@ function createRuntimeUnavailableError(params: ZCodeAgentWorkspaceTarget): Error
 
 interface CreateZCodeAgentServiceOptions extends Omit<
   ZCodeAgentProcessManagerOptions,
-  "idleTimeoutMs"
+  "idleTimeoutMs" | "bootAdmissionHeld"
 > {
+  /** Core instance-owned boot mode; only its first storage worker receives constructor hold. */
+  bootAdmissionHeld?: boolean;
   /** 仅供 MCP 状态探测进程使用，不能把空闲回收传给 chat。 */
   mcpStatusIdleTimeoutMs?: number;
   accountProviderConfigSource?: ProviderSource<AccountProviderConfigSnapshot>;
@@ -1060,6 +1065,14 @@ function resolveOffPeakToolSelection(
 }
 /** Node-local only: not registered as an RPC service or exposed to renderer. */
 export interface NativeMaintenanceControlPort {
+  /** Claim the constructor-installed CLI Inbox lease; never initiates a late freeze. */
+  claimBoot(
+    target: ZCodeAgentWorkspaceTarget,
+  ): Promise<import("@zcode/shared").NativeMaintenanceFreezeResult>;
+  releaseBoot(
+    target: ZCodeAgentWorkspaceTarget,
+    lease: import("@zcode/shared").NativeMaintenanceLease,
+  ): Promise<void>;
   freeze(
     target: ZCodeAgentWorkspaceTarget,
   ): Promise<import("@zcode/shared").NativeMaintenanceFreezeResult>;
@@ -1092,6 +1105,40 @@ export interface NativeProcessControlPort {
   activity(): Promise<NativeProcessActivity>;
   fenceAdmissions(): Promise<{ verify(): Promise<boolean>; release(): Promise<void> }>;
 }
+export class NativeCreationOwnershipChangedError extends Error {
+  constructor(phase: "before-effect" | "after-effect") {
+    super(`native-create-owner-changed-${phase}`);
+  }
+}
+export interface NativeCreationControlPort {
+  describe(target: ZCodeAgentWorkspaceTarget): Promise<{
+    nativeDatabasePath: string;
+    databaseId: string;
+    runtimeIdentity: string;
+    generation: number;
+  }>;
+  create(
+    target: ZCodeAgentWorkspaceTarget,
+    expected: {
+      runtimeIdentity: string;
+      generation: number;
+      databaseId: string;
+      nativeDatabasePath: string;
+    },
+    envelope: {
+      commandId: string;
+      payload: ReturnType<typeof commandPayloadSchemas.createSession.parse>;
+    },
+  ): Promise<void>;
+}
+const nativeCreationPorts = new WeakMap<IZCodeAgentService, NativeCreationControlPort>();
+export function getNativeCreationControlPort(
+  service: IZCodeAgentService,
+): NativeCreationControlPort {
+  const port = nativeCreationPorts.get(service);
+  if (!port) throw new Error("native creation port unavailable");
+  return port;
+}
 const nativeProcessPorts = new WeakMap<IZCodeAgentService, NativeProcessControlPort>();
 export function getNativeProcessControlPort(service: IZCodeAgentService): NativeProcessControlPort {
   const port = nativeProcessPorts.get(service);
@@ -1102,16 +1149,31 @@ export function getNativeProcessControlPort(service: IZCodeAgentService): Native
 export function createZCodeAgentService(
   options?: CreateZCodeAgentServiceOptions,
 ): IZCodeAgentService & { disposeAllAndWait(): Promise<void> } {
-  let spawnFrozen = false;
+  let spawnFrozen = options?.bootAdmissionHeld === true;
+  let bootPreparing = false;
+  let bootWorkspaceKey: string | undefined;
   const waitForSpawnAdmission: NonNullable<
     CreateZCodeAgentServiceOptions["waitForSpawnAdmission"]
   > = async (context) => {
     // 中文：spawn 前后均检查冻结位；旧异步 env/preflight 回调不能穿过维护边界。
+    const allowed = () =>
+      !spawnFrozen || (bootPreparing && context.workspaceKey === bootWorkspaceKey);
+    if (!allowed()) throw new Error("native process admission frozen");
+    await options?.waitForSpawnAdmission?.(context);
+    if (!allowed()) throw new Error("native process admission frozen");
+  };
+  const processManager = new ZCodeAgentProcessManager({
+    ...options,
+    waitForSpawnAdmission,
+    // 中文：旧实现把 held env 固定给所有后续 worker；开门后新 workspace 仍永久 frozen。
+    // 标记仅授予启动 storage worker，后续 worker 由常规进程/Workspace 门禁管理。
+    bootAdmissionHeld: () => bootPreparing && spawnFrozen,
+  });
+  const otherLaneSpawnAdmission: typeof waitForSpawnAdmission = async (context) => {
     if (spawnFrozen) throw new Error("native process admission frozen");
     await options?.waitForSpawnAdmission?.(context);
     if (spawnFrozen) throw new Error("native process admission frozen");
   };
-  const processManager = new ZCodeAgentProcessManager({ ...options, waitForSpawnAdmission });
   // Windows indicator 与 macOS producer lifecycle client 共用已校验、去重的 sideband facts。
   const cuaOperationTurnTracker =
     options?.cuaOperationStateReporter || options?.onCuaPipSessionLifecycle
@@ -1138,7 +1200,7 @@ export function createZCodeAgentService(
     presentationSurface: options?.presentationSurface,
     requestTimeoutMs: options?.requestTimeoutMs,
     resolveSpawnEnv: options?.resolveSpawnEnv,
-    waitForSpawnAdmission,
+    waitForSpawnAdmission: otherLaneSpawnAdmission,
   });
   // 合并时误删了独立进程：mcp/list 的慢握手会堵住串行 stdio 队列，连带卡住插件卸载。
   // 恢复专用控制面进程及空闲回收；共享 workspace 路径，不共享请求队列或 watchdog。
@@ -1148,7 +1210,7 @@ export function createZCodeAgentService(
     processLifecycleReporter: options?.processLifecycleReporter,
     requestTimeoutMs: options?.requestTimeoutMs,
     resolveSpawnEnv: options?.resolveSpawnEnv,
-    waitForSpawnAdmission,
+    waitForSpawnAdmission: otherLaneSpawnAdmission,
     lane: "mcp-status",
     idleTimeoutMs: options?.mcpStatusIdleTimeoutMs ?? MCP_STATUS_LANE_IDLE_TIMEOUT_MS,
   });
@@ -3386,9 +3448,20 @@ export function createZCodeAgentService(
 
   const service: IZCodeAgentService & { disposeAllAndWait(): Promise<void> } = {
     async prepareStorage(params) {
-      const client = await processManager.getClient(params);
-      wireClient(client, params, "chat");
-      await client.storageStartup.wait();
+      if (options?.bootAdmissionHeld) {
+        if (bootPreparing || bootWorkspaceKey)
+          throw new Error("boot storage worker already selected");
+        bootWorkspaceKey = resolveWorkspaceKey(params);
+        bootPreparing = true;
+      }
+      try {
+        const client = await processManager.getClient(params);
+        wireClient(client, params, "chat");
+        await client.storageStartup.wait();
+      } finally {
+        // 中文：只有启动 storage worker 可穿过进程闸门；失败不开放其它 spawn。
+        bootPreparing = false;
+      }
     },
     async getStorageStartupState(params) {
       return processManager.getStorageStartupState(params);
@@ -5730,6 +5803,13 @@ export function createZCodeAgentService(
   }
   const nativeManagers = [processManager, pluginProcessManager, mcpStatusProcessManager];
   let frozenFacts: NativeProcessActivity | undefined;
+  let bootWorker:
+    | {
+        key: string;
+        client: ZCodeProtocolClient;
+        lease: import("@zcode/shared").NativeMaintenanceLease;
+      }
+    | undefined;
   let frozenClients: readonly ZCodeProtocolClient[] | undefined;
   nativeProcessPorts.set(service, {
     async activity() {
@@ -5738,6 +5818,41 @@ export function createZCodeAgentService(
         0,
       );
       const workers = nativeManagers.flatMap((manager) => manager.listManagedProcesses());
+      if (bootWorker && spawnFrozen) {
+        const { key, client, lease } = bootWorker;
+        if (
+          unresolved ||
+          workers.length !== 1 ||
+          workers[0]?.client !== client ||
+          client.isDisposed ||
+          activeClientsByWorkspaceKey.get(key)?.client !== client
+        )
+          return { running: 0, waiting: 0, uncertain: 1, offline: false };
+        try {
+          const snapshot = await client.request(
+            zcodeProtocolMethods.nativeMaintenanceGetActivity,
+            lease,
+            nativeMaintenanceActivitySchema,
+            { lifecycle: "observation" },
+          );
+          if (
+            client.isDisposed ||
+            activeClientsByWorkspaceKey.get(key)?.client !== client ||
+            snapshot.epoch !== lease.epoch ||
+            !snapshot.frozen ||
+            snapshot.unknown
+          )
+            throw new Error("boot worker changed");
+          return {
+            running: snapshot.active + snapshot.tools,
+            waiting: snapshot.accepted + snapshot.pending + snapshot.approvals,
+            uncertain: 0,
+            offline: false,
+          };
+        } catch {
+          return { running: 0, waiting: 0, uncertain: 1, offline: false };
+        }
+      }
       // 中文：旧实现只看 frozenFacts；CLI 退出后 workers 为空仍返回缓存的 0，
       // 把失效租约错报成可停机。必须每次验证同代 client 仍归本进程管理。
       if (
@@ -5857,7 +5972,164 @@ export function createZCodeAgentService(
       };
     },
   });
+  nativeCreationPorts.set(service, {
+    async describe(target) {
+      const client = (await getOrStartReadOnlyClient(target)).client;
+      const key = resolveWorkspaceKey(target);
+      assertCurrent(key, client);
+      await client.storageStartup.wait();
+      const capability = await client.request(
+        zcodeProtocolMethods.runtimeCapabilities,
+        {},
+        zcodeRuntimeCapabilitiesSchema,
+      );
+      assertCurrent(key, client);
+      if (capability.nativeCoreCreateV1 !== true)
+        throw new Error("native-create-capability-unavailable");
+      const description = await client.request(
+        zcodeProtocolMethods.nativeOwnerDescription,
+        {},
+        zcodeNativeOwnerDescriptionSchema,
+        { lifecycle: "observation" },
+      );
+      assertCurrent(key, client);
+      if (
+        description.databaseId !== client.storageStartup.snapshot?.databaseId ||
+        client.storageStartup.snapshot?.phase !== "ready"
+      )
+        throw new Error("native-create-storage-epoch-mismatch");
+      const runtime = await processManager.getRuntimeIdentity(target);
+      assertCurrent(key, client);
+      return { ...description, runtimeIdentity: runtime.identity, generation: runtime.generation };
+    },
+    async create(target, expected, envelope) {
+      const current = await this.describe(target);
+      if (
+        current.runtimeIdentity !== expected.runtimeIdentity ||
+        current.generation !== expected.generation ||
+        current.databaseId !== expected.databaseId ||
+        current.nativeDatabasePath !== expected.nativeDatabasePath
+      )
+        throw new NativeCreationOwnershipChangedError("before-effect");
+      await getClient(target); // existing readiness owner validates real Registry before enabling a writable native command
+      const { key, client } = await currentClient(target);
+      const runtime = await processManager.getRuntimeIdentity(target);
+      assertCurrent(key, client);
+      if (
+        runtime.identity !== expected.runtimeIdentity ||
+        runtime.generation !== expected.generation ||
+        client.storageStartup.snapshot?.databaseId !== expected.databaseId ||
+        client.storageStartup.snapshot?.phase !== "ready"
+      )
+        throw new NativeCreationOwnershipChangedError("before-effect");
+      // 中文：worker lease / 路径 hash 未变不等于真实 SQLite schema 未变；效果前复核该 CLI 报告的库。
+      // 只读查询不做迁移，也不向 Core 写入 CLI 业务表。
+      await new ReadonlyNativeSessionMetadataView(expected.nativeDatabasePath).read("");
+      assertCurrent(key, client);
+      let ack: CommandAck;
+      try {
+        ack = await client.request(
+          V4_METHODS.command,
+          {
+            commandId: envelope.commandId,
+            clientId: "core-native-create",
+            sessionId: null,
+            type: "createSession",
+            issuedAt: Date.now(),
+            payload: envelope.payload,
+          },
+          commandAckSchema,
+        );
+      } catch (error) {
+        // 中文：丢 ACK 与 worker 换代不同；后者不可由 Core 本次只读收据直接升级为可写。
+        const after = await processManager.getRuntimeIdentity(target).catch(() => undefined);
+        if (
+          !after ||
+          after.identity !== expected.runtimeIdentity ||
+          after.generation !== expected.generation ||
+          client.storageStartup.snapshot?.databaseId !== expected.databaseId ||
+          client.storageStartup.snapshot?.phase !== "ready"
+        )
+          throw new NativeCreationOwnershipChangedError("after-effect");
+        assertCurrent(key, client);
+        throw error;
+      }
+      // 中文：ACK 可能已提交；若 worker/DB 在 await 期间换代，不可将旧收据
+      // 当成当前 writable owner。调用方须保留 uncertain，由下一次只读恢复处理。
+      try {
+        assertCurrent(key, client);
+        const after = await processManager.getRuntimeIdentity(target);
+        assertCurrent(key, client);
+        if (
+          after.identity !== expected.runtimeIdentity ||
+          after.generation !== expected.generation ||
+          client.storageStartup.snapshot?.databaseId !== expected.databaseId ||
+          client.storageStartup.snapshot?.phase !== "ready"
+        )
+          throw new NativeCreationOwnershipChangedError("after-effect");
+      } catch {
+        throw new NativeCreationOwnershipChangedError("after-effect");
+      }
+      // 中文：仅隔离进程中的测试故障注入：CLI 已写 completed，Node 服务在 Core
+      // 收到 ACK 之前丢弃结果；Core 只能凭只读收据恢复，不能重发 CommandInbox。
+      if (process.env.ZCODE_CORE_NATIVE_DROP_ACK_TEST_ONLY === envelope.commandId)
+        throw new Error("native-create-completed-ack-dropped-test-only");
+      if (ack.status !== "accepted" && ack.status !== "duplicate")
+        throw new Error(`native-create-command-${ack.status}`);
+    },
+  });
   nativeMaintenancePorts.set(service, {
+    async claimBoot(target) {
+      if (
+        !options?.bootAdmissionHeld ||
+        bootPreparing ||
+        !spawnFrozen ||
+        resolveWorkspaceKey(target) !== bootWorkspaceKey ||
+        nativeManagers.some((manager) => manager.countUnresolvedWorkers() > 0)
+      )
+        throw new Error("native boot worker unavailable");
+      const workers = nativeManagers.flatMap((manager) => manager.listManagedProcesses());
+      const { key, client } = await currentClient(target);
+      if (workers.length !== 1 || workers[0]?.client !== client)
+        throw new Error("native boot worker changed");
+      const result = await client.request(
+        zcodeProtocolMethods.nativeMaintenanceClaimBoot,
+        {},
+        nativeMaintenanceFreezeResultSchema,
+        { lifecycle: "observation" },
+      );
+      assertCurrent(key, client);
+      if (!result.activity.frozen || result.activity.epoch !== result.lease.epoch)
+        throw new Error("native boot lease uncertain");
+      bootWorker = { key, client, lease: result.lease };
+      return result;
+    },
+    async releaseBoot(target, lease) {
+      if (
+        !options?.bootAdmissionHeld ||
+        !spawnFrozen ||
+        bootPreparing ||
+        resolveWorkspaceKey(target) !== bootWorkspaceKey
+      )
+        throw new Error("native boot owner changed");
+      const { key, client } = await currentClient(target);
+      const workers = nativeManagers.flatMap((manager) => manager.listManagedProcesses());
+      if (
+        workers.length !== 1 ||
+        workers[0]?.client !== client ||
+        nativeManagers.some((manager) => manager.countUnresolvedWorkers() > 0)
+      )
+        throw new Error("native boot worker changed");
+      const result = await client.request(
+        zcodeProtocolMethods.nativeMaintenanceRelease,
+        nativeMaintenanceLeaseSchema.parse(lease),
+        nativeMaintenanceReleaseResultSchema,
+      );
+      assertCurrent(key, client);
+      if (!result.released) throw new Error("native boot release uncertain");
+      bootWorker = undefined;
+      spawnFrozen = false;
+    },
     async freeze(target) {
       const { key, client } = await currentClient(target);
       const result = await client.request(

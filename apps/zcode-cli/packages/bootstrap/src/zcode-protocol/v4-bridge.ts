@@ -38,6 +38,9 @@ import {
   mergeColdConversationEvents,
 } from "../zcode-protocol-v4/cold-event-merge.js";
 import { lookupGlobalCreateSessionCommand } from "../zcode-protocol-v4/create-session-command-fact.js";
+import { nativeCreateIntent } from "../zcode-protocol-v4/native-create-intent.js";
+import { projectIdFromDirectory } from "../app/paths.js";
+import { resolve } from "node:path";
 import type { V4CommandCoreHost } from "../zcode-protocol-v4/commands/types.js";
 import type {
   ConversationRowTargetResolution,
@@ -582,10 +585,10 @@ export function createConversationV4Gateway(
       const workspacePath = live?.workspace.workspacePath ?? stored?.directory;
       if (!workspacePath) return null;
       const workspaceIdentity = live?.workspace.workspaceIdentity ?? stored?.workspaceID;
+      // 中文：旧实现让冷 session 的 commands/query 顺带丢弃 admitted 输入；
+      // 查询只能读取事实，真正的冷恢复由 resumePersistedSession 负责 disposition。
       const facts = context.deps.sessionStore
-        ? await loadPersistentCommandFacts(context.deps.sessionStore, sessionId as SessionId, {
-            discardAdmittedOnLoad: !live,
-          })
+        ? await loadPersistentCommandFacts(context.deps.sessionStore, sessionId as SessionId)
         : undefined;
       return {
         workspacePath,
@@ -725,9 +728,9 @@ export function createConversationV4Gateway(
       const kind = input.kind;
       const record = context.sessions.get(sessionId);
       if (record?.persistence === "deferred") {
-        // session_input 有 session 外键；draft 要到 startPromptTurn 后台阶段才持久化，
-        // 如果先写 ledger 会直接 FK 失败，accepted 前仍没有权威记录。因此 admission
-        // 先走 runtime 的统一首发持久化边界，再落 ledger，随后 handler 只负责执行。
+        // 普通旧 draft 可能尚无 session 行；V4 create 已同事务持久化原始 ID/receipt。
+        // runtime 的首发边界仍负责模型选型、标题及 execution-state 持久化，
+        // 然后才能将 firstInput ledger 标为已接受，查询不可替代恢复/取消。
         await record.app.runtime.ensureSessionPersistedForExternalActivity(input.text ?? "", {
           traceContext: record.traceContext,
         });
@@ -1102,6 +1105,59 @@ export function createConversationV4Gateway(
     // createSession 的执行面：record 建立/事件接线/catalog 同步/失败自清理全在旧
     // createSession op 内（半初始化 record 的回收顺序修过 bug，不重复实现）。
     // 语义决策（draft persistence / firstInput 走原生 prompt turn）在原生 handler。
+    completeNativeCreateReceipt: async (commandId, sessionId, actual) => {
+      if (!context.deps.sessionStore?.completeNativeCreateReceipt)
+        throw new Error("fault.command.nativeCreateReceiptUnavailable");
+      await context.deps.sessionStore.completeNativeCreateReceipt(
+        commandId,
+        sessionId as SessionId,
+        actual,
+      );
+    },
+    commitNativeCreateReceipt: async (envelope, sessionId) => {
+      const store = context.deps.sessionStore;
+      if (!store?.commitNativeCreateReceipt)
+        throw new Error("fault.command.nativeCreateReceiptUnavailable");
+      const record = context.sessions.get(sessionId);
+      if (!record) throw new Error("fault.command.nativeCreateRecordMissing");
+      const { workspaceScope, intentFingerprint } = nativeCreateIntent(envelope);
+      const workspacePath = record.workspace.workspacePath;
+      const persisted = await store.commitNativeCreateReceipt({
+        commandId: envelope.commandId,
+        workspaceScope,
+        intentFingerprint,
+        hasFirstInput: !!(envelope.payload as { firstInput?: unknown }).firstInput,
+        session: {
+          id: sessionId as SessionId,
+          projectID: projectIdFromDirectory(resolve(workspacePath)),
+          ...(record.workspace.workspaceIdentity
+            ? { workspaceID: record.workspace.workspaceIdentity as WorkspaceId }
+            : {}),
+          traceID: record.traceContext.traceId,
+          taskType: record.taskType,
+          slug:
+            sessionId
+              .toLowerCase()
+              .replace(/[^a-z0-9._-]+/g, "-")
+              .replace(/^-+|-+$/g, "") || "session",
+          directory: workspacePath,
+          path: workspacePath,
+          title: "Untitled session",
+          titleSource: "first_input",
+          version: context.deps.version ?? "0.0.0",
+          permission: { mode: record.app.getMode() },
+        },
+      });
+      if (String(persisted.originalSessionId) !== sessionId) {
+        // 极少数跨进程并发：handler 会清理新 record；持久 receipt 里的 ID 仍权威。
+        throw new Error("guard.nativeCreateAlreadyCommittedElsewhere");
+      }
+      // 中文：只在测试显式指定原命令时截断真实 CLI 的 COMMIT→complete 边界；
+      // 已持久化 pending 不能被 Core 的丢 ACK 恢复误判为 completed。
+      if (process.env.ZCODE_NATIVE_CREATE_POST_COMMIT_PENDING_TEST_ONLY === envelope.commandId)
+        throw new Error("native-create-post-commit-pending-test-only");
+      return sessionId;
+    },
     createSessionRecord: async ({
       workspaceId,
       mcpServers,
@@ -1119,7 +1175,7 @@ export function createConversationV4Gateway(
       // 本地 workspacePath 处理。
       const created = await createSessionRecordForV4(context, {
         workspace: resolveWorkspaceRefFromId(workspaceId),
-        // 一律 deferred（draft 不进 sqlite）；提升时机归原生 prompt-turn。
+        // runtime 保持 deferred，原始 session 行由 receipt 事务创建，首发再提升。
         persistence: "deferred",
         // MCP 是 runtime 创建期配置；v4 createSession 必须与 legacy
         // session/create 等价透传，否则创建的 session 永远不会启动这些工具。
@@ -1429,6 +1485,15 @@ export function createConversationV4Gateway(
   return new ConversationV4Gateway({
     cliVersion: context.deps.version,
     sessionExists: (sessionId) => context.sessions.has(sessionId),
+    validateCreateRetry: async (envelope) => {
+      const prior = await context.deps.sessionStore?.getNativeCreateReceipt?.(envelope.commandId);
+      if (!prior) return true;
+      const intent = nativeCreateIntent(envelope);
+      return (
+        prior.workspaceScope === intent.workspaceScope &&
+        prior.intentFingerprint === intent.intentFingerprint
+      );
+    },
     onDebug: (message) => log?.debug(message),
     onTargetCompleted: (sessionId) => {
       const record = context.sessions.get(sessionId);
@@ -1472,6 +1537,14 @@ export function createConversationV4Gateway(
         },
         { reusePersistedMessages: true },
       );
+      // 中文：只有 runtime 真正完成 cold resume 才能判定旧 admitted 输入不可重播；
+      // 在 query 时做此写入会使观察行为取消用户仍存活的输入。
+      if (context.deps.sessionStore) {
+        await loadPersistentCommandFacts(context.deps.sessionStore, sessionId as SessionId, {
+          discardAdmittedOnLoad: true,
+        });
+        persistentCommands.invalidate(sessionId);
+      }
       return {
         status: "resumed",
         persistedMessages: activated.persistedMessages,
@@ -1617,7 +1690,9 @@ export function createConversationV4Gateway(
     // 共用该索引；anchor/marker/child/discarded 写入走 record 增量更新。
     lookupTranscriptCommand: (key) =>
       key.sessionId === null
-        ? lookupGlobalCreateSessionCommand(context.deps.sessionStore, key.commandId)
+        ? lookupGlobalCreateSessionCommand(context.deps.sessionStore, key.commandId, (sessionId) =>
+            context.sessions.has(sessionId),
+          )
         : persistentCommands.lookup("transcript", key),
     lookupTimelineCommand: (key) => persistentCommands.lookup("timeline", key),
     lookupChildCommand: (key) => persistentCommands.lookup("child", key),

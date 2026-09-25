@@ -22,8 +22,8 @@ import {
 /**
  * createSession：回落面最后一项的原生化。
  * 语义决策（原生层持有）：
- * - draft 语义：新会话一律 deferred（不进 sqlite），首条发送时由 prompt-turn 提升
- *   immediate——record 创建钩子固定传 deferred，提升逻辑不在钩子里。
+ * - draft 语义：新会话 runtime 仍 deferred（不提交输入/不启动 turn），但原始 native
+ *   session row + create receipt 必须在 ACK 前同事务落 SQLite；首条发送由 prompt-turn 提升。
  * - firstInput 可选：有则经原生 prompt turn 提交（与 sendText 同一条写路径——
  *   draft 提升/提交即返/ready 边界三个语义免费获得），不再经旧 sendPrompt op。
  * - workspaceId：本地工作区 = workspacePath（Workspace Identity 约束的本地 fallback）；
@@ -47,12 +47,27 @@ async function createSession(
   ) {
     throw new V4InputAdmissionRejectedError("proto.invalidPayload", "input must not be empty");
   }
-  const { sessionId } = await host.createSessionRecord({
+  const { sessionId: materializedId } = await host.createSessionRecord({
     workspaceId: payload.workspaceId,
     mcpServers: payload.mcpServers,
     offPeakToolEnabled: payload.offPeakToolEnabled,
     dynamicWorkflowEnabled: payload.dynamicWorkflowEnabled,
   });
+  let sessionId: string;
+  try {
+    if (!host.commitNativeCreateReceipt)
+      throw new Error("fault.command.nativeCreateReceiptUnavailable");
+    sessionId = await host.commitNativeCreateReceipt(envelope, materializedId);
+  } catch (error) {
+    // 中文：事务回滚后 draft 仅在进程内，若不摘掉就会残留不可恢复的幽灵 record；
+    // 事务已提交但 ACK 未完成时也只能保留 SQLite pending receipt，不能继续使用新 record。
+    try {
+      await host.closeSession?.(materializedId);
+    } catch {
+      /* 清理错误不能把原始事务失败误报为另一种结果。 */
+    }
+    throw error;
+  }
   // createSession.config 消费——草稿态 UI 的先行选择（模型/思考深度/
   // 模式）在首发之前应用并补发事件，首条 turn 即用所选配置。必须在 firstInput 之前。
   // 应用失败不连坐会话创建（record 已建成，failed ACK 只会泄漏会话）：降级 warn，
@@ -125,6 +140,18 @@ async function createSession(
       throw error;
     }
   }
+  if (!host.completeNativeCreateReceipt)
+    throw new Error("fault.command.nativeCreateReceiptUnavailable");
+  const actual = requireRecord(host, sessionId).app;
+  // 中文：匹配 workspace 缺省值时 setModel 不发变更事件；不能让 completed 收据
+  // 掩盖未落盘的模型/权限，冷启动后再次读取全局缺省会改变原会话行为。
+  await host.completeNativeCreateReceipt(envelope.commandId, sessionId, {
+    ...(actual.runtime.getSessionModelSelection()
+      ? { modelSelection: actual.runtime.getSessionModelSelection()! }
+      : {}),
+    mode: actual.getMode(),
+    planEnabled: actual.runtime.getPlanEnabled(),
+  });
   return { type: "createSession", sessionId, ...(firstInput ? { input: firstInput } : {}) };
 }
 

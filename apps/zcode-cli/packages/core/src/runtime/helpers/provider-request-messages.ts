@@ -53,9 +53,15 @@ export function buildProviderRequestMessages(input: {
 }): ProviderRequestMessageProjectionResult {
   const useMidConversationSystem = input.useMidConversationSystem !== false;
   const origins = new ProviderEntryOrigins();
-  const reorderResult = reorderAttachmentLikeEntries(
-    projectIncomingMessageEntries(input.entries, origins),
-  );
+  const incomingEntries = projectIncomingMessageEntries(input.entries, origins);
+  // 修复：带有中途 developer 的历史需要逐项保留源序；普通 reminder 冒泡算法
+  // 会把 assistant 前的 reminder 移到其后，即使没有直接跨 developer 也改变指令语义。
+  // 仅该场景关闭冒泡；无 developer 的普通/初始 prefix 行为保持原样。
+  const reorderResult = incomingEntries.some(
+    (entry) => !isRuntimeAttachmentEntry(entry) && entry.message.role === "developer",
+  )
+    ? { entries: [...incomingEntries], bubbledAttachmentEntryCount: 0 }
+    : reorderAttachmentLikeEntries(incomingEntries);
   const midSystemProjection = useMidConversationSystem
     ? projectMidConversationSystemEntries(reorderResult.entries, origins)
     : { entries: reorderResult.entries };
@@ -117,10 +123,10 @@ function reorderAttachmentLikeEntries(
       continue;
     }
 
-    // developer 是独立的指令边界：反向扫描时先放边界再放待移动的 reminder，
-    // 反转后 reminder 仍位于 developer 之前，不能被冒泡跨过或伪装成指令。
+    // 修复：反向扫描的 pending 来自 developer 之后；必须先冲刷再放指令，
+    // 否则反转后「指令后 reminder」会被错误移到指令之前。
     if (!isRuntimeAttachmentEntry(entry) && entry.message.role === "developer") {
-      result.push(entry, ...pending);
+      result.push(...pending, entry);
       pending.length = 0;
       continue;
     }

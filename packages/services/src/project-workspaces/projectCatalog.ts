@@ -1,5 +1,6 @@
 /* eslint-disable max-lines -- Profile owner serializes catalog mutations and durable recovery under one lease. */
 import { z } from "zod";
+import { readFile } from "node:fs/promises";
 import { Emitter } from "@zcode/rpc";
 import {
   projectSchema,
@@ -46,6 +47,21 @@ const pendingSchema = z.discriminatedUnion("kind", [
 ]);
 type Pending = z.infer<typeof pendingSchema>;
 
+export const nativeCatalogReferenceSchema = z.strictObject({
+  commandId: z.string().min(1),
+  originalSessionId: z.string().min(1),
+  targetId: z.string().min(1),
+  projectId: z.string().min(1),
+  workspaceId: z.string().min(1),
+  repositoryBindingId: z.string().min(1),
+  worktreeGeneration: z.string().min(1),
+  workspaceIdentity: z.string().min(1),
+  workspacePath: z.string().min(1),
+  /** Creation provenance only; never a current authenticated attachment lease. */
+  remoteSessionId: z.string().min(1).optional(),
+});
+export type NativeCatalogReference = z.infer<typeof nativeCatalogReferenceSchema>;
+
 const catalogSchema = z.strictObject({
   schemaVersion: z.literal(1),
   revision: z.number().int().nonnegative(),
@@ -53,8 +69,21 @@ const catalogSchema = z.strictObject({
   bindings: z.array(repositoryBindingSchema),
   workspaces: z.array(worktreeWorkspaceSchema),
   pending: pendingSchema.optional(),
+  nativeReferences: z.array(nativeCatalogReferenceSchema).optional(),
 });
 type State = z.infer<typeof catalogSchema>;
+/** Read-only Catalog projection for the Core directory; no CLI startup or migration. */
+export async function readNativeCatalogReferences(
+  path: string,
+): Promise<readonly NativeCatalogReference[]> {
+  try {
+    return catalogSchema.parse(JSON.parse(await readFile(path, "utf8"))).nativeReferences ?? [];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+}
+
 const initial: State = {
   schemaVersion: 1,
   revision: 0,
@@ -145,6 +174,47 @@ export class ProjectCatalog implements IProjectCatalogService {
   async workspace(id: string): Promise<WorktreeWorkspace | undefined> {
     return this.state.workspaces.find((w) => w.id === id);
   }
+  /** Local Core-only commit after the CLI receipt and new mapping are certified. Not an RPC method. */
+  async commitNativeReference(value: NativeCatalogReference): Promise<void> {
+    const reference = nativeCatalogReferenceSchema.parse(value);
+    // 中文：故障注入只发生在完成的 CLI 映射之后、Catalog 提交之前；检验只读修复。
+    if (process.env.ZCODE_CORE_NATIVE_CATALOG_FAULT_TEST_ONLY === reference.commandId)
+      throw new Error("native-catalog-commit-fault-test-only");
+    await this.mutate(async (state) => {
+      const workspace = state.workspaces.find((row) => row.id === reference.workspaceId);
+      const binding = state.bindings.find((row) => row.id === reference.repositoryBindingId);
+      // 中文：补写已完成的 Catalog 引用也不能把复用路径/旧代绑定变成当前可执行 owner。
+      if (
+        !workspace ||
+        !binding ||
+        workspace.lifecycle !== "active" ||
+        workspace.archived ||
+        workspace.projectId !== reference.projectId ||
+        workspace.repositoryBindingId !== reference.repositoryBindingId ||
+        workspace.worktreeGeneration !== reference.worktreeGeneration ||
+        workspace.workspaceIdentity !== reference.workspaceIdentity ||
+        workspace.worktreePath !== reference.workspacePath ||
+        binding.executionTargetId !== reference.targetId ||
+        binding.projectId !== reference.projectId
+      )
+        throw new Error("native-catalog-reference-stale-scope");
+      const prior = state.nativeReferences?.find((row) => row.commandId === reference.commandId);
+      if (prior) {
+        if (JSON.stringify(prior) !== JSON.stringify(reference))
+          throw new Error("native-catalog-reference-conflict");
+        return { state, result: undefined, unchanged: true };
+      }
+      if (
+        state.nativeReferences?.some((row) => row.originalSessionId === reference.originalSessionId)
+      )
+        throw new Error("native-catalog-reference-duplicate-id");
+      return {
+        state: { ...state, nativeReferences: [...(state.nativeReferences ?? []), reference] },
+        result: undefined,
+      };
+    });
+  }
+
   async sidebarSnapshot() {
     await this.queue;
     const state = this.state;
@@ -166,12 +236,14 @@ export class ProjectCatalog implements IProjectCatalogService {
       state: State;
       result: T;
       afterCommit?: () => Promise<void>;
+      unchanged?: boolean;
     }>,
   ): Promise<T> {
     if (this.closing) return Promise.reject(new Error("catalog-closed"));
     const job = this.queue.then(async () => {
       if (this.state.pending) throw new Error("catalog-pending-target-operation");
-      const { state, result, afterCommit } = await action(this.state);
+      const { state, result, afterCommit, unchanged } = await action(this.state);
+      if (unchanged) return result;
       const next = catalogSchema.parse({
         ...state,
         pending: undefined,

@@ -36,7 +36,8 @@ export function createLazyTargetAgentHostService(input: {
     factory: () => HarnessAdapter;
   }[];
 }): { service: IAgentHostService; dispose(): Promise<void> } {
-  // 中文：预检所有清单，避免尾部重复/非法时前部 factory 已占用进程或端口。
+  // 中文：若后列 manifest 重复/非法，不能先运行前列 factory（可能已占有进程或端口）。
+  // Node-only 构造阶段预检全表；真正注册时 HarnessRegistry 仍校验 adapter 与 manifest 一致。
   const seen = new Set([piManifest.id]);
   for (const trusted of input.additionalTrustedHarnesses ?? []) {
     const manifest = harnessManifestSchema.parse(trusted.manifest);
@@ -71,7 +72,7 @@ export function createLazyTargetAgentHostService(input: {
         harnesses.registerTrusted(piManifest, () =>
           createRegistryPiHarness({ root: join(input.root, "workers"), registry: input.registry }),
         );
-        // 中文：仅受信 Node 工厂能注入；登记时严格验证 manifest/重复 ID，不执行仓库元数据。
+        // 中文：仅调用方的 Node 工厂可注入；严格验证 manifest/重复 ID，永不从仓库元数据执行代码。
         for (const trusted of input.additionalTrustedHarnesses ?? [])
           harnesses.registerTrusted(trusted.manifest, trusted.factory);
         // 中文：异步 import/Registry 可能晚于 close；关停后不得产生新的 Host 或写入者。
@@ -101,6 +102,7 @@ export function createLazyTargetAgentHostService(input: {
     onEvent: events.event,
     getAvailability: async () => ({
       target: input.target,
+      // 中文：读取只公布构造阶段已验证的受信清单；不启动 Registry/adapter，也不新增生产 Pi 以外的模型资格。
       harnesses: [...seen],
       admissionEnabled: input.allowNewSessions() && input.target.available,
     }),

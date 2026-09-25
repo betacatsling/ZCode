@@ -101,7 +101,11 @@ export class ProfileFileOwner {
   }
 }
 
-export async function atomicJsonWrite(path: string, value: unknown): Promise<void> {
+export async function atomicJsonWrite(
+  path: string,
+  value: unknown,
+  testOnlyBeforeDirectorySync?: () => void,
+): Promise<void> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const temp = `${path}.${randomUUID()}.tmp`;
   const file = await open(temp, "wx", 0o600);
@@ -112,6 +116,7 @@ export async function atomicJsonWrite(path: string, value: unknown): Promise<voi
     await rename(temp, path);
     const dir = await open(dirname(path), "r");
     try {
+      testOnlyBeforeDirectorySync?.();
       await dir.sync();
     } finally {
       await dir.close();
