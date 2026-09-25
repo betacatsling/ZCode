@@ -422,6 +422,7 @@ test(
       const launched: ChildProcess[] = [];
       const launchedClosed: Promise<void>[] = [];
       let installedCoreEndpoint: { host: string; port: number } | undefined;
+      let installedSpec: SessionSpecV2 | undefined;
       const supervisor = new Supervisor({
         layout,
         version: manifest.version,
@@ -430,7 +431,7 @@ test(
           launch(generation, release, bootMode) {
             assert.equal(
               release?.releaseDir,
-              bootMode === "held" ? candidate.releaseDir : manifest.releaseDir,
+              generation === 1 ? manifest.releaseDir : candidate.releaseDir,
             );
             const selectedRuntime = join(release!.releaseDir, "runtime");
             const selectedNode = join(selectedRuntime, "node");
@@ -459,7 +460,12 @@ test(
               },
             );
             child.on("message", (value: { type?: string; host?: string; port?: number }) => {
-              if (value.type === "ready" && value.host && value.port && generation === 1)
+              if (
+                value.type === "ready" &&
+                value.host &&
+                value.port &&
+                (generation === 1 || generation === 3)
+              )
                 installedCoreEndpoint = { host: value.host, port: value.port };
             });
             launched.push(child);
@@ -540,6 +546,7 @@ test(
               },
             },
           };
+          installedSpec = spec;
           await ingress.host.create(spec, "installed-create");
           const receipt = await ingress.host.dispatch(spec, {
             type: "send",
@@ -716,6 +723,140 @@ test(
           ),
           false,
         );
+        // RED probe is opt-in while Core's profile writer deliberately forbids unattended
+        // stale-owner recovery. Keep the previously passing installed lifecycle suite runnable;
+        // never present that default run as unknown-state acceptance.
+        if (process.env.ZCODE_SUPERVISOR_UNCERTAIN_PROBE === "1") {
+          assert.ok(installedSpec && fixtureModel);
+          await releases.writePending(manifest);
+          const active = launched[1]!;
+          const activeStatus = supervisor.status();
+          assert.equal(active.pid, activeStatus.pid);
+          assert.equal(active.exitCode, null);
+          const resumed = await connectInstalledHost(activeStatus.host!, activeStatus.port!);
+          try {
+            // 中文：A→B 正常更新已终止原挂载；B 先显式 attach 冷历史，再受理下一轮。
+            // 把冷会话未挂载错误当作不确定态会掩盖真正接受后的故障边界。
+            await resumed.host.attach(installedSpec);
+            assert.equal((await resumed.host.getSessionReadModel(installedSpec)).activity, "idle");
+            const accepted = await resumed.host.dispatch(installedSpec, {
+              type: "send",
+              commandId: "installed-uncertain",
+              hostSessionId: installedSpec.hostSessionId,
+              turnId: "turn-uncertain",
+              text: "Hold the third request before owned Core crash",
+            });
+            assert.equal(accepted.status, "accepted", JSON.stringify(accepted));
+            const requestDeadline = Date.now() + 12_000;
+            while (fixtureModel.requestCount() < 3 && Date.now() < requestDeadline)
+              await new Promise((resolve) => setTimeout(resolve, 40));
+            assert.equal(
+              fixtureModel.requestCount(),
+              3,
+              "accepted third turn reached loopback Model",
+            );
+            assert.equal(
+              (await resumed.host.getSessionReadModel(installedSpec)).activity,
+              "running",
+            );
+            // 中文：只能对本 fixture 保留的已安装 Core ChildProcess 发信号；Pi 是 Core 内线程。
+            // RPC 断线本身不是未知证据：等待旧代际真正 close，再读新代际持久 Host journal。
+            assert.equal(active.kill("SIGKILL"), true);
+            const closed = await Promise.race([
+              launchedClosed[1]!.then(() => true),
+              new Promise<false>((resolveTimeout) =>
+                setTimeout(() => resolveTimeout(false), 12_000),
+              ),
+            ]);
+            assert.equal(closed, true, "owned installed Core must actually close before recovery");
+            const recoveryDeadline = Date.now() + 25_000;
+            while (
+              (supervisor.status().state !== "ready" || supervisor.status().generation !== 3) &&
+              Date.now() < recoveryDeadline
+            )
+              await new Promise((resolve) => setTimeout(resolve, 40));
+            assert.equal(
+              supervisor.status().state,
+              "ready",
+              "managed Core recovery did not complete",
+            );
+            assert.equal(supervisor.status().generation, 3);
+            assert.equal(supervisor.status().pid, launched[2]?.pid);
+            assert.notEqual(supervisor.status().pid, activeStatus.pid);
+            assert.ok(installedCoreEndpoint);
+            const recovered = await connectInstalledHost(
+              installedCoreEndpoint.host,
+              installedCoreEndpoint.port,
+            );
+            try {
+              const durable = await recovered.host.queryCommand(
+                installedSpec,
+                "installed-uncertain",
+              );
+              assert.ok(durable, "accepted send receipt must survive Core crash");
+              assert.equal(
+                (await recovered.host.getSessionReadModel(installedSpec)).activity,
+                "uncertain",
+              );
+              assert.ok((await recovered.host.getRuntimeActivity()).uncertain > 0);
+              const duplicate = await recovered.host.queryCommand(
+                installedSpec,
+                "installed-uncertain",
+              );
+              assert.deepEqual(duplicate, durable, "repeat query reads the same durable receipt");
+              // 冷历史未挂载时直接 send 只会得到 not-attached，而非证明未知命令门禁。
+              await recovered.host.attach(installedSpec);
+              assert.equal(
+                (await recovered.host.getSessionReadModel(installedSpec)).activity,
+                "uncertain",
+              );
+              const next = await recovered.host.dispatch(installedSpec, {
+                type: "send",
+                commandId: "installed-after-uncertain",
+                hostSessionId: installedSpec.hostSessionId,
+                turnId: "turn-after-uncertain",
+                text: "Must not reach model after crash",
+              });
+              assert.notEqual(next.status, "accepted", JSON.stringify(next));
+              const recoveredStatus = supervisor.status();
+              await assert.rejects(
+                requestControl(layout.controlEndpoint, { command: "apply-update" }, 30_000),
+                /Active or uncertain tasks require --force for update|Cannot confirm maintenance admission fence; Core remains unsafe/,
+              );
+              assert.equal(supervisor.status().state, "ready");
+              assert.equal(supervisor.status().generation, recoveredStatus.generation);
+              assert.equal(supervisor.status().pid, recoveredStatus.pid);
+              assert.equal(launched.length, 3, "uncertain refusal cannot spawn a candidate");
+              assert.equal(
+                launched[2]?.exitCode,
+                null,
+                "uncertain refusal cannot stop recovered Core",
+              );
+              assert.deepEqual(await releases.readCurrentForExecution(), candidate);
+              assert.deepEqual(await releases.readPending(), manifest);
+              assert.equal(
+                await stat(layout.updateTransactionFile).then(
+                  () => true,
+                  () => false,
+                ),
+                false,
+              );
+              assert.equal((await new DataRootLock(layout.lockFile).inspect()).state, "active");
+              assert.equal(
+                fixtureModel.requestCount(),
+                3,
+                "recovery, queries and blocked command must not resend",
+              );
+              process.stdout.write(
+                "installed Host durable unknown after owned Core SIGKILL and managed replacement; nonforce refused with unchanged owner/pointers/lock, no Model resend\n",
+              );
+            } finally {
+              await recovered.close();
+            }
+          } finally {
+            await resumed.close();
+          }
+        }
       } finally {
         try {
           await supervisor.stop("installed-real-process-cleanup");
@@ -748,9 +889,16 @@ test(
           }
         }
       }
-      assert.equal(launched.length, 2);
-      assert.equal(launched[0]!.exitCode, 0);
-      assert.equal(launched[1]!.exitCode, 0);
+      if (process.env.ZCODE_SUPERVISOR_UNCERTAIN_PROBE === "1") {
+        assert.equal(launched.length, 3);
+        assert.equal(launched[0]!.exitCode, 0);
+        assert.equal(launched[1]!.signalCode, "SIGKILL");
+        assert.equal(launched[2]!.exitCode, 0);
+      } else {
+        assert.equal(launched.length, 2);
+        assert.equal(launched[0]!.exitCode, 0);
+        assert.equal(launched[1]!.exitCode, 0);
+      }
       assert.equal(supervisor.status().state, "stopped");
       assert.deepEqual(await new DataRootLock(layout.lockFile).inspect(), { state: "missing" });
       await assert.rejects(requestControl(layout.controlEndpoint, { command: "status" }));

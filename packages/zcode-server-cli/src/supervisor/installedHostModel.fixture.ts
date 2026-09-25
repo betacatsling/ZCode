@@ -5,6 +5,7 @@ import { join } from "node:path";
 /** Disposable fake model; no provider credentials, global listener, or real model calls. */
 export async function createInstalledHostModel(dir: string): Promise<{
   requestSeen: Promise<void>;
+  requestCount(): number;
   sendWriteCallOnNextRequest(): void;
   close(): Promise<void>;
 }> {
@@ -13,6 +14,7 @@ export async function createInstalledHostModel(dir: string): Promise<{
     received = resolve;
   });
   let nextWriteCall = false;
+  let requests = 0;
   const frame = (type: string, fields: Record<string, unknown>) =>
     `event: ${type}\ndata: ${JSON.stringify({ type, ...fields })}\n\n`;
   const server = createServer((request, response) => {
@@ -24,6 +26,7 @@ export async function createInstalledHostModel(dir: string): Promise<{
     request.resume();
     response.writeHead(200, { "content-type": "text/event-stream" });
     response.flushHeaders();
+    requests += 1;
     received();
     if (nextWriteCall) {
       nextWriteCall = false;
@@ -135,6 +138,7 @@ export async function createInstalledHostModel(dir: string): Promise<{
     );
     return {
       requestSeen,
+      requestCount: () => requests,
       sendWriteCallOnNextRequest() {
         nextWriteCall = true;
       },
