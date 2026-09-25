@@ -13,7 +13,10 @@ import { currentServerTarget } from "../runtime/manifest.js";
 import { resolveServerLayout } from "../runtime/paths.js";
 import { ReleaseManager } from "../runtime/releaseManager.js";
 import { hashReleaseTree } from "../runtime/immutableRelease.js";
-import { registerTrustedLocalSourceBootSelection } from "../runtime/releaseBootSelection.js";
+import {
+  registerTrustedLocalSourceBootSelection,
+  verifyTrustedLocalSourceBootSelection,
+} from "../runtime/releaseBootSelection.js";
 import { createReleaseAgentWiring } from "../runtime/agentWiring.js";
 import { requestControl } from "../ipc/controlClient.js";
 import { DataRootLock } from "../runtime/lock.js";
@@ -566,6 +569,10 @@ test(
         assert.equal(afterDefaultUpdate.state, "ready");
         assert.equal(afterDefaultUpdate.generation, 2);
         assert.notEqual(afterDefaultUpdate.pid, cliCorePid);
+        assert.throws(() => process.kill(cliCorePid!, 0), { code: "ESRCH" });
+        process.stdout.write(
+          "installed default CLI two-archive held update: old Core reaped, generation2 ready after ACK\n",
+        );
         cliCorePid = afterDefaultUpdate.pid ?? undefined;
         assert.deepEqual(await releases.readCurrentForExecution(), candidate);
         assert.equal(await releases.readPending(), null);
@@ -605,6 +612,245 @@ test(
         ]);
         assert.equal(finished, true, "owned installed CLI must close before profile removal");
       }
+
+      // Controlled launch-failure fault after trusted A/B preflight: the installed candidate
+      // Core receives no compatible boot declaration, so its REAL factory fails before READY;
+      // rollback must verify and boot the installed previous Core held, not a fake authority.
+      await releases.writePending(manifest);
+      const rollbackChildren: ChildProcess[] = [];
+      const rollbackClosed: Promise<void>[] = [];
+      const rollbackSupervisor = new Supervisor({
+        layout,
+        version: candidate.version,
+        coreReadyTimeoutMs: 8_000,
+        verifyHeldRelease: (release) => verifyTrustedLocalSourceBootSelection(layout, release),
+        launcher: {
+          launch(generation, release, bootMode, selected) {
+            assert.ok(release?.releaseDir);
+            const root = join(release.releaseDir, "runtime");
+            const node = join(root, "node");
+            const child = fork(join(root, "server-core.js"), [String(generation), bootMode], {
+              execPath: node,
+              execArgv: [],
+              cwd: dir,
+              env: {
+                ...isolatedEnv,
+                ZCODE_SERVER_ROOT: layout.serverRoot,
+                ...createReleaseAgentWiring(root, node, {}, selected),
+                // Drop only the candidate declaration at this transport fault boundary;
+                // previous release remains trusted and receives a genuine held lease.
+                ZCODE_AGENT_SERVER_BOOT_FENCE_V1:
+                  generation === 2 && bootMode === "held"
+                    ? undefined
+                    : selected?.protocol === "constructor-held-native-v1"
+                      ? "1"
+                      : undefined,
+              },
+              stdio: ["ignore", "ignore", "pipe", "ipc"],
+            });
+            rollbackChildren.push(child);
+            rollbackClosed.push(
+              new Promise<void>((resolveClosed) => child.once("close", () => resolveClosed())),
+            );
+            return child;
+          },
+        },
+      });
+      try {
+        await rollbackSupervisor.start();
+        const readyDeadline = Date.now() + 25_000;
+        while (rollbackSupervisor.status().state !== "ready" && Date.now() < readyDeadline)
+          await new Promise((resolveDelay) => setTimeout(resolveDelay, 40));
+        assert.equal(rollbackSupervisor.status().state, "ready");
+        await assert.rejects(
+          requestControl(layout.controlEndpoint, { command: "apply-update" }, 30_000),
+          /Core failed|ready|boot/i,
+        );
+        assert.equal(rollbackSupervisor.status().state, "ready");
+        assert.equal(rollbackSupervisor.status().generation, 3);
+        assert.equal(rollbackSupervisor.status().pid, rollbackChildren[2]?.pid);
+        assert.equal(rollbackChildren[0]?.exitCode, 0);
+        assert.ok(
+          rollbackChildren[1]?.exitCode !== null || rollbackChildren[1]?.signalCode !== null,
+          "failed candidate must be reaped before previous held Core launches",
+        );
+        assert.deepEqual(await releases.readCurrentForExecution(), candidate);
+        assert.equal(await releases.readPending(), null);
+        assert.equal(
+          await stat(layout.updateTransactionFile).then(
+            () => true,
+            () => false,
+          ),
+          false,
+        );
+        process.stdout.write(
+          "real pre-open candidate failure: child2 reaped, previous installed B held rollback gen3 opened after restored pointer\n",
+        );
+      } finally {
+        await rollbackSupervisor.stop("installed-rollback-cleanup");
+        for (const [index, child] of rollbackChildren.entries()) {
+          if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+          const closed = await Promise.race([
+            rollbackClosed[index]!.then(() => true),
+            new Promise<false>((resolveTimeout) => setTimeout(() => resolveTimeout(false), 2_000)),
+          ]);
+          if (!closed) child.kill("SIGKILL");
+          assert.equal(
+            await Promise.race([
+              rollbackClosed[index]!.then(() => true),
+              new Promise<false>((resolveTimeout) =>
+                setTimeout(() => resolveTimeout(false), 2_000),
+              ),
+            ]),
+            true,
+            "rollback fixture child must close before profile removal",
+          );
+        }
+      }
+      assert.equal(rollbackChildren.length, 3);
+      assert.equal(rollbackChildren[2]!.exitCode, 0);
+      assert.deepEqual(await new DataRootLock(layout.lockFile).inspect(), { state: "missing" });
+      await assert.rejects(requestControl(layout.controlEndpoint, { command: "status" }));
+
+      // Transport-only loss AFTER an actual Core processed the exact boot-release request.
+      // The real candidate may now admit native work; no rollback or automatic kill is safe.
+      await releases.writePending(manifest);
+      const ackChildren: ChildProcess[] = [];
+      const ackClosed: Promise<void>[] = [];
+      let droppedOpenAck: { requestId: string; leaseId: string } | undefined;
+      const ackSupervisor = new Supervisor({
+        layout,
+        version: candidate.version,
+        coreReadyTimeoutMs: 8_000,
+        verifyHeldRelease: (release) => verifyTrustedLocalSourceBootSelection(layout, release),
+        launcher: {
+          launch(generation, release, bootMode, selected) {
+            assert.ok(release?.releaseDir);
+            const root = join(release.releaseDir, "runtime");
+            const node = join(root, "node");
+            const child = fork(join(root, "server-core.js"), [String(generation), bootMode], {
+              execPath: node,
+              execArgv: [],
+              cwd: dir,
+              env: {
+                ...isolatedEnv,
+                ZCODE_SERVER_ROOT: layout.serverRoot,
+                ...createReleaseAgentWiring(root, node, {}, selected),
+              },
+              stdio: ["ignore", "ignore", "pipe", "ipc"],
+            });
+            if (generation === 2 && bootMode === "held") {
+              const originalEmit = (
+                child.emit as (event: string, ...values: unknown[]) => boolean
+              ).bind(child);
+              child.emit = ((event: string, ...values: unknown[]) => {
+                const value = values[0];
+                if (
+                  event === "message" &&
+                  !droppedOpenAck &&
+                  value &&
+                  typeof value === "object" &&
+                  "type" in value &&
+                  value.type === "maintenance" &&
+                  "requestId" in value &&
+                  typeof value.requestId === "string" &&
+                  "leaseId" in value &&
+                  typeof value.leaseId === "string"
+                ) {
+                  droppedOpenAck = { requestId: value.requestId, leaseId: value.leaseId };
+                  return false; // suppress only OS IPC delivery to Supervisor, never Core's effect
+                }
+                return originalEmit(event, ...values);
+              }) as typeof child.emit;
+            }
+            ackChildren.push(child);
+            ackClosed.push(
+              new Promise<void>((resolveClosed) => child.once("close", () => resolveClosed())),
+            );
+            return child;
+          },
+        },
+      });
+      try {
+        await ackSupervisor.start();
+        const readyDeadline = Date.now() + 25_000;
+        while (ackSupervisor.status().state !== "ready" && Date.now() < readyDeadline)
+          await new Promise((resolveDelay) => setTimeout(resolveDelay, 40));
+        assert.equal(ackSupervisor.status().state, "ready");
+        await assert.rejects(
+          requestControl(layout.controlEndpoint, { command: "apply-update" }, 30_000),
+          /release|acknowledge|uncertain/i,
+        );
+        assert.ok(droppedOpenAck?.requestId && droppedOpenAck.leaseId);
+        assert.match(droppedOpenAck.requestId, /^[a-f0-9-]{36}$/iu);
+        assert.equal(ackSupervisor.status().state, "stop-failed");
+        assert.equal(ackSupervisor.status().pid, ackChildren[1]?.pid);
+        assert.equal(ackChildren[0]?.exitCode, 0);
+        assert.equal(ackChildren[1]?.exitCode, null, "possibly admitting Core remains live");
+        assert.deepEqual(await releases.readCurrentForExecution(), manifest);
+        assert.equal(await releases.readPending(), null);
+        assert.equal((await new DataRootLock(layout.lockFile).inspect()).state, "active");
+        // Fresh real Core maintenance proves underlying boot release opened its native gate.
+        const admitted = ackChildren[1]!;
+        async function directMaintenance(
+          command: "maintenance-begin" | "maintenance-release",
+          leaseId?: string,
+        ) {
+          const requestId = randomUUID();
+          const response = new Promise<Record<string, unknown>>((resolveReply, reject) => {
+            const timer = setTimeout(
+              () => reject(new Error("actual open-ACK-loss Core did not answer")),
+              5_000,
+            );
+            function onMessage(message: Record<string, unknown>) {
+              if (message.type !== "maintenance" || message.requestId !== requestId) return;
+              clearTimeout(timer);
+              admitted.off("message", onMessage);
+              resolveReply(message);
+            }
+            admitted.on("message", onMessage);
+          });
+          admitted.send({ command, requestId, ...(leaseId ? { leaseId } : {}) });
+          return await response;
+        }
+        const actualOpen = await directMaintenance("maintenance-begin");
+        assert.ok(actualOpen.leaseId, "Core truly reopened despite missing Supervisor ACK");
+        assert.deepEqual(actualOpen.nativeActivity, { running: 0, waiting: 0, uncertain: 0 });
+        assert.equal(
+          (await directMaintenance("maintenance-release", String(actualOpen.leaseId))).leaseId,
+          actualOpen.leaseId,
+        );
+        assert.equal(ackSupervisor.status().state, "stop-failed");
+        assert.equal((await new DataRootLock(layout.lockFile).inspect()).state, "active");
+        process.stdout.write(
+          "real Core post-open ACK lost: actual reply suppressed once, newly opened maintenance succeeds; previous B reaped, candidate A/pointer/lock retained stop-failed\n",
+        );
+      } finally {
+        // Explicit operator-equivalent cleanup only after asserting uncertain owner retained.
+        await ackSupervisor.stop("installed-open-ack-loss-fixture-cleanup");
+        for (const [index, child] of ackChildren.entries()) {
+          if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+          const closed = await Promise.race([
+            ackClosed[index]!.then(() => true),
+            new Promise<false>((resolveTimeout) => setTimeout(() => resolveTimeout(false), 2_000)),
+          ]);
+          if (!closed) child.kill("SIGKILL");
+          assert.equal(
+            await Promise.race([
+              ackClosed[index]!.then(() => true),
+              new Promise<false>((resolveTimeout) =>
+                setTimeout(() => resolveTimeout(false), 2_000),
+              ),
+            ]),
+            true,
+            "ACK-loss fixture child must close before profile removal",
+          );
+        }
+      }
+      assert.equal(ackChildren.length, 2);
+      assert.equal(ackChildren[1]!.exitCode, 0);
+      assert.deepEqual(await new DataRootLock(layout.lockFile).inspect(), { state: "missing" });
+      await assert.rejects(requestControl(layout.controlEndpoint, { command: "status" }));
     } finally {
       if (core && core.exitCode === null) core.kill("SIGTERM");
       if (core && coreClosed) {
