@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import { fork, spawn, type ChildProcess } from "node:child_process";
+import type { SessionSpecV2 } from "@zcode/shared/agent-host";
+import { execFile, fork, spawn, type ChildProcess } from "node:child_process";
+import { promisify } from "node:util";
 import { createReadStream } from "node:fs";
 import {
   access,
@@ -32,6 +34,10 @@ import { requestControl } from "../ipc/controlClient.js";
 import { DataRootLock } from "../runtime/lock.js";
 import { Supervisor } from "./supervisor.js";
 import { isolatedReleaseEnv } from "./supervisorRealProcessEnv.fixture.js";
+import { connectInstalledHost } from "./installedHostIngress.fixture.js";
+import { createInstalledHostModel } from "./installedHostModel.fixture.js";
+
+const git = promisify(execFile);
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 async function hash(path: string): Promise<string> {
@@ -78,6 +84,7 @@ test(
     ];
     let core: ChildProcess | undefined;
     let coreClosed: Promise<void> | undefined;
+    let fixtureModel: Awaited<ReturnType<typeof createInstalledHostModel>> | undefined;
     try {
       for (const path of paths) await access(path); // no empty or synthetic Core fallback
       assert.equal(process.version, "v24.14.0");
@@ -408,11 +415,13 @@ test(
         );
       }
 
+      fixtureModel = await createInstalledHostModel(dir);
       // 中文：独立 Core freeze 正常并不证明 Supervisor 的 IPC、current 选择和收口顺序。
       // 用已安装可执行文件重新启动实际 Supervisor，经控制 socket 受理一次
       // 新的原生/外部 census 并释放同一租约，再核验 child close、锁和 socket。
       const launched: ChildProcess[] = [];
       const launchedClosed: Promise<void>[] = [];
+      let installedCoreEndpoint: { host: string; port: number } | undefined;
       const supervisor = new Supervisor({
         layout,
         version: manifest.version,
@@ -440,6 +449,7 @@ test(
                   ZCODE_SERVER_ROOT: layout.serverRoot,
                   ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: provider,
                   ZCODE_SERVER_SKIP_SERVICE_REGISTRATION: "1",
+                  ZCODE_MULTI_HARNESS_ENABLED: "1",
                   ...createReleaseAgentWiring(selectedRuntime, selectedNode, {}),
                   // Scope declaration to the locally rebuilt paired candidate; claimBoot must
                   // still prove the actual boot lease. Production default wiring omits this flag.
@@ -448,6 +458,10 @@ test(
                 stdio: ["ignore", "ignore", "pipe", "ipc"],
               },
             );
+            child.on("message", (value: { type?: string; host?: string; port?: number }) => {
+              if (value.type === "ready" && value.host && value.port && generation === 1)
+                installedCoreEndpoint = { host: value.host, port: value.port };
+            });
             launched.push(child);
             launchedClosed.push(
               new Promise<void>((resolveClosed) => child.once("close", () => resolveClosed())),
@@ -463,6 +477,214 @@ test(
           await new Promise((resolve) => setTimeout(resolve, 40));
         }
         assert.equal(supervisor.status().state, "ready");
+        assert.ok(installedCoreEndpoint, "selected installed Core did not advertise HTTP ingress");
+        const ingress = await connectInstalledHost(
+          installedCoreEndpoint.host,
+          installedCoreEndpoint.port,
+        );
+        try {
+          const availability = await ingress.host.getAvailability();
+          assert.equal(availability.admissionEnabled, true);
+          assert.deepEqual(availability.harnesses, ["pi"]);
+          // 中文：只有安装 Core 公共 Host 入口读取的真实 Catalog/Target 可以授权后续
+          // accepted command；这里不把 capability、feature flag 或 Git 初始化当作活动。
+          const worktree = join(dir, "host-worktree");
+          await mkdir(worktree);
+          await git("git", ["-C", worktree, "init", "-q"]);
+          await git("git", [
+            "-C",
+            worktree,
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "initial",
+          ]);
+          await ingress.catalog.importProject({
+            id: "p",
+            bindingId: "b",
+            targetId: availability.target.id,
+            name: "Fixture",
+            repositoryPath: worktree,
+          });
+          const workspace = await ingress.catalog.adopt({
+            bindingId: "b",
+            workspaceId: "w",
+            title: "Main",
+            worktreePath: worktree,
+          });
+          assert.equal(workspace.id, "w");
+          const spec: SessionSpecV2 = {
+            schemaVersion: 2,
+            projectId: "p",
+            workspaceId: workspace.id,
+            hostSessionId: "installed-host-running",
+            execution: {
+              targetId: availability.target.id,
+              workspaceIdentity: workspace.workspaceIdentity,
+              worktreePath: workspace.worktreePath,
+              worktreeGeneration: workspace.worktreeGeneration,
+              cwdRelativeToWorktree: ".",
+            },
+            harness: { id: "pi", adapterVersion: "0.87.1" },
+            modelBinding: {
+              kind: "host-managed",
+              selection: {
+                providerId: "fixture-local",
+                modelId: "fixture-model",
+                options: { reasoningLevel: "off" },
+              },
+            },
+          };
+          await ingress.host.create(spec, "installed-create");
+          const receipt = await ingress.host.dispatch(spec, {
+            type: "send",
+            commandId: "installed-turn",
+            hostSessionId: spec.hostSessionId,
+            turnId: "turn-1",
+            text: "Read the fixture",
+          });
+          assert.equal(receipt.status, "accepted", JSON.stringify(receipt));
+          assert.ok(fixtureModel);
+          await Promise.race([
+            fixtureModel.requestSeen,
+            new Promise<never>((_, reject) =>
+              setTimeout(
+                () => reject(new Error("accepted Host turn never reached loopback fake model")),
+                12_000,
+              ),
+            ),
+          ]);
+          assert.equal((await ingress.host.getSessionReadModel(spec)).activity, "running");
+          assert.ok((await ingress.host.getRuntimeActivity()).running > 0);
+          const oldStatus = supervisor.status();
+          // 中文：Core 原有协调器先执行真实 native+Host census；busy 时在签发
+          // lease 前拒绝。Supervisor 收不到 lease 必须 fail closed，不能凭心跳推进 stop。
+          await assert.rejects(
+            requestControl(layout.controlEndpoint, { command: "apply-update" }, 30_000),
+            /Cannot confirm maintenance admission fence; Core remains unsafe/,
+          );
+          assert.equal(supervisor.status().state, "ready");
+          assert.equal(supervisor.status().pid, oldStatus.pid);
+          assert.equal(supervisor.status().generation, oldStatus.generation);
+          assert.equal(launched.length, 1, "busy refusal cannot spawn candidate");
+          assert.equal(launched[0]?.exitCode, null, "busy refusal cannot stop accepted owner");
+          assert.deepEqual(await releases.readCurrentForExecution(), manifest);
+          assert.deepEqual(await releases.readPending(), candidate);
+          assert.equal(
+            await stat(layout.updateTransactionFile).then(
+              () => true,
+              () => false,
+            ),
+            false,
+          );
+          assert.equal((await new DataRootLock(layout.lockFile).inspect()).state, "active");
+          const snapshot = await ingress.host.snapshot(spec);
+          const cancel = await ingress.host.dispatch(spec, {
+            type: "cancelTurn",
+            commandId: "installed-cancel",
+            hostSessionId: spec.hostSessionId,
+            runtimeEpoch: snapshot.logEpoch,
+            turnId: "turn-1",
+          });
+          assert.ok(["accepted", "completed"].includes(cancel.status), JSON.stringify(cancel));
+          const drainedBy = Date.now() + 12_000;
+          while ((await ingress.host.getRuntimeActivity()).running > 0 && Date.now() < drainedBy)
+            await new Promise((resolve) => setTimeout(resolve, 40));
+          assert.deepEqual(await ingress.host.getRuntimeActivity(), {
+            running: 0,
+            waiting: 0,
+            uncertain: 0,
+          });
+          process.stdout.write(
+            "installed Host accepted running turn; Core rejected pre-lease busy census, nonforce refused before stop/spawn/pointer, real cancel drained\n",
+          );
+          fixtureModel.sendWriteCallOnNextRequest();
+          const waitingReceipt = await ingress.host.dispatch(spec, {
+            type: "send",
+            commandId: "installed-wait",
+            hostSessionId: spec.hostSessionId,
+            turnId: "turn-wait",
+            text: "Try writing a file, but wait for approval",
+          });
+          assert.equal(waitingReceipt.status, "accepted", JSON.stringify(waitingReceipt));
+          const waitingBy = Date.now() + 12_000;
+          let approval = (await ingress.host.eventsSince(spec, 0)).find(
+            (event) => event.kind === "interaction.requested" && event.turnId === "turn-wait",
+          );
+          while (!approval && Date.now() < waitingBy) {
+            await new Promise((resolve) => setTimeout(resolve, 40));
+            approval = (await ingress.host.eventsSince(spec, 0)).find(
+              (event) => event.kind === "interaction.requested" && event.turnId === "turn-wait",
+            );
+          }
+          assert.ok(
+            approval && approval.kind === "interaction.requested",
+            "real Pi write approval not committed",
+          );
+          assert.equal((await ingress.host.getSessionReadModel(spec)).activity, "waiting");
+          assert.ok((await ingress.host.getRuntimeActivity()).waiting > 0);
+          await assert.rejects(
+            requestControl(layout.controlEndpoint, { command: "apply-update" }, 30_000),
+            /Cannot confirm maintenance admission fence; Core remains unsafe/,
+          );
+          assert.equal(supervisor.status().state, "ready");
+          assert.equal(supervisor.status().pid, oldStatus.pid);
+          assert.equal(supervisor.status().generation, oldStatus.generation);
+          assert.equal(launched.length, 1);
+          assert.equal(launched[0]?.exitCode, null);
+          assert.equal((await ingress.host.getSessionReadModel(spec)).activity, "waiting");
+          assert.deepEqual(await releases.readCurrentForExecution(), manifest);
+          assert.deepEqual(await releases.readPending(), candidate);
+          assert.equal(
+            await stat(layout.updateTransactionFile).then(
+              () => true,
+              () => false,
+            ),
+            false,
+          );
+          assert.equal((await new DataRootLock(layout.lockFile).inspect()).state, "active");
+          await assert.rejects(access(join(worktree, "unapproved.txt")), { code: "ENOENT" });
+          const waitingSnapshot = await ingress.host.snapshot(spec);
+          const denial = await ingress.host.dispatch(spec, {
+            type: "resolveInteraction",
+            commandId: "installed-deny",
+            hostSessionId: spec.hostSessionId,
+            runtimeEpoch: waitingSnapshot.logEpoch,
+            turnId: "turn-wait",
+            interactionId: approval.interactionId,
+            decision: "deny",
+          });
+          assert.ok(["accepted", "completed"].includes(denial.status), JSON.stringify(denial));
+          await ingress.host.dispatch(spec, {
+            type: "cancelTurn",
+            commandId: "installed-wait-cancel",
+            hostSessionId: spec.hostSessionId,
+            runtimeEpoch: waitingSnapshot.logEpoch,
+            turnId: "turn-wait",
+          });
+          const waitingDrainedBy = Date.now() + 12_000;
+          while (
+            Date.now() < waitingDrainedBy &&
+            Object.values(await ingress.host.getRuntimeActivity()).some((count) => count > 0)
+          )
+            await new Promise((resolve) => setTimeout(resolve, 40));
+          assert.deepEqual(await ingress.host.getRuntimeActivity(), {
+            running: 0,
+            waiting: 0,
+            uncertain: 0,
+          });
+          await assert.rejects(access(join(worktree, "unapproved.txt")), { code: "ENOENT" });
+          process.stdout.write(
+            "installed Host accepted waiting write; Core refused nonforce before stop/spawn/pointer; exact denial and cancel drained\n",
+          );
+        } finally {
+          await ingress.close();
+        }
         const live = await requestControl(layout.controlEndpoint, { command: "status" });
         assert.equal((live as { pid: number }).pid, launched[0]?.pid);
         assert.deepEqual(
@@ -1159,6 +1381,7 @@ test(
           await coreClosed;
         }
       }
+      if (fixtureModel) await fixtureModel.close();
       await rm(dir, { recursive: true, force: true, maxRetries: 15, retryDelay: 100 });
     }
   },
