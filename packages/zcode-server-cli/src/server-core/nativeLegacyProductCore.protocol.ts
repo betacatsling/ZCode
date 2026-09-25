@@ -53,10 +53,21 @@ export function waitForTerminal(
   sessionId: string,
   commandId: string,
 ): Promise<void> {
+  return waitForTurnState(agent, scope, sessionId, commandId, "completedSuccess");
+}
+
+/** 等待指定命令产生并到达给定 turnHeader 终态（completedSuccess / completedInterrupted / failed）。 */
+export function waitForTurnState(
+  agent: any,
+  scope: WorkspaceScope,
+  sessionId: string,
+  commandId: string,
+  state: "running" | "completedSuccess" | "completedInterrupted" | "failed",
+): Promise<void> {
   return waitForFrame(agent, scope, (wire) => {
     if (wire.topic !== `conversation/${sessionId}`) return false;
     return terminalRows(wire).some(
-      (row) => row.sourceCommandId === commandId && row.state === "completedSuccess",
+      (row) => row.sourceCommandId === commandId && row.state === state,
     );
   });
 }
