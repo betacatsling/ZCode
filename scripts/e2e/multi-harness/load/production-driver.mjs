@@ -1,69 +1,268 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-import { realpath, readdir, writeFile } from 'node:fs/promises';
-import { relative, isAbsolute, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
+/* oxlint-disable eslint(max-lines) -- 中文：格式化展开既有单 owner backend/driver 后超过 lint 行数；保留原状态与清理边界，不为行数拆出第二条生命周期路径。 */
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { realpath, readdir, writeFile } from "node:fs/promises";
+import { relative, isAbsolute, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
 
 const exec = promisify(execFile);
-const checkout = fileURLToPath(new URL('../../../..', import.meta.url));
-const within = (parent, child) => { const r = relative(parent, child); return r === '' || (r !== '..' && !r.startsWith('../') && !isAbsolute(r)); };
+const checkout = fileURLToPath(new URL("../../../..", import.meta.url));
+const within = (parent, child) => {
+  const r = relative(parent, child);
+  return r === "" || (r !== ".." && !r.startsWith("../") && !isAbsolute(r));
+};
 
 // No product import, subprocess, provider resolution, or browser launch precedes this assertion.
 export async function assertIsolated(input) {
   const root = await realpath(input.root);
-  if (!within(await realpath(input.artifacts), root) || root === await realpath(input.artifacts) && !root.includes('load-')) throw new Error('load artifact root required');
+  if (
+    !within(await realpath(input.artifacts), root) ||
+    (root === (await realpath(input.artifacts)) && !root.includes("load-"))
+  )
+    throw new Error("load artifact root required");
   for (const [key, path] of Object.entries(input.isolation)) {
     if (!within(root, await realpath(path))) throw new Error(`isolation escaped root: ${key}`);
   }
-  const permitted = new Set(['PATH','LANG','LC_ALL','TZ','HOME','XDG_CONFIG_HOME','XDG_DATA_HOME','ZCODE_DATA_BASE_DIR','TMPDIR']);
-  for (const key of Object.keys(process.env)) if (!permitted.has(key)) throw new Error('untrusted inherited environment before product import');
-  for (const [key, path] of Object.entries({ HOME:input.isolation.home, XDG_CONFIG_HOME:input.isolation.xdgConfig, XDG_DATA_HOME:input.isolation.xdgData, ZCODE_DATA_BASE_DIR:input.isolation.desktopUserData, TMPDIR:input.isolation.temporary })) {
+  const permitted = new Set([
+    "PATH",
+    "LANG",
+    "LC_ALL",
+    "TZ",
+    "HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "ZCODE_DATA_BASE_DIR",
+    "TMPDIR",
+  ]);
+  for (const key of Object.keys(process.env))
+    if (!permitted.has(key))
+      throw new Error("untrusted inherited environment before product import");
+  for (const [key, path] of Object.entries({
+    HOME: input.isolation.home,
+    XDG_CONFIG_HOME: input.isolation.xdgConfig,
+    XDG_DATA_HOME: input.isolation.xdgData,
+    ZCODE_DATA_BASE_DIR: input.isolation.desktopUserData,
+    TMPDIR: input.isolation.temporary,
+  })) {
     if (process.env[key] !== path) throw new Error(`effective process isolation missing: ${key}`);
   }
-  if (!within(root, await realpath(input.repo)) || !(await realpath(input.repo)).startsWith(root + '/')) throw new Error('repository not disposable');
-  for (const path of input.worktrees) if (!within(root, await realpath(path))) throw new Error('foreign worktree');
+  if (
+    !within(root, await realpath(input.repo)) ||
+    !(await realpath(input.repo)).startsWith(root + "/")
+  )
+    throw new Error("repository not disposable");
+  for (const path of input.worktrees)
+    if (!within(root, await realpath(path))) throw new Error("foreign worktree");
   return root;
 }
 
 // Trusted synthetic adapter: bounded canonical lifecycle; never resolves a Model, calls the CLI, or mutates files.
 class LoadHarness {
-  id = 'load-synthetic';
-  version = '1.0.0';
-  hostManagedRoute = 'mock';
+  id = "load-synthetic";
+  version = "1.0.0";
+  hostManagedRoute = "mock";
   #states = new Map();
   #listeners = new Map();
-  async probe() { return {support:'supported'}; }
-  async hostManagedSupport() { return {support:'supported'}; }
-  async capabilities() { return {text:{support:'supported'},tools:{support:'unsupported',reason:'load only'},approvals:{support:'unsupported',reason:'load only'},cancelTurn:{support:'unsupported',reason:'load only'},resumeExecution:{support:'unsupported',reason:'load only'},history:{support:'supported'},images:{support:'unsupported',reason:'load only'},modelSwitch:{support:'unsupported',reason:'load only'},detach:{support:'supported'},terminateSession:{support:'supported'},viewHistory:{support:'supported'},hostManagedModel:{support:'supported'},fork:{support:'unsupported',reason:'load only'},subagents:{support:'unsupported',reason:'load only'}}; }
+  #turnGates = new Map();
+  #turnRuns = new Map();
+  async probe() {
+    return { support: "supported" };
+  }
+  async hostManagedSupport() {
+    return { support: "supported" };
+  }
+  async capabilities() {
+    return {
+      text: { support: "supported" },
+      tools: { support: "supported" },
+      approvals: { support: "unsupported", reason: "load only" },
+      cancelTurn: { support: "supported" },
+      resumeExecution: { support: "unsupported", reason: "load only" },
+      history: { support: "supported" },
+      images: { support: "unsupported", reason: "load only" },
+      modelSwitch: { support: "unsupported", reason: "load only" },
+      detach: { support: "supported" },
+      terminateSession: { support: "supported" },
+      viewHistory: { support: "supported" },
+      hostManagedModel: { support: "supported" },
+      fork: { support: "unsupported", reason: "load only" },
+      subagents: { support: "unsupported", reason: "load only" },
+    };
+  }
   async create(spec) {
-    if (this.#states.has(spec.hostSessionId)) throw new Error('duplicate synthetic session');
-    const binding = {schemaVersion:2,targetId:spec.execution.targetId,workspaceId:spec.workspaceId,worktreeGeneration:spec.execution.worktreeGeneration,harnessId:this.id,hostSessionId:spec.hostSessionId,backendSessionId:`synthetic-${randomUUID()}`,backendVersion:this.version,runtimeEpoch:randomUUID()};
-    this.#states.set(spec.hostSessionId,{binding,sequence:0});
+    if (this.#states.has(spec.hostSessionId)) throw new Error("duplicate synthetic session");
+    const binding = {
+      schemaVersion: 2,
+      targetId: spec.execution.targetId,
+      workspaceId: spec.workspaceId,
+      worktreeGeneration: spec.execution.worktreeGeneration,
+      harnessId: this.id,
+      hostSessionId: spec.hostSessionId,
+      backendSessionId: `synthetic-${randomUUID()}`,
+      backendVersion: this.version,
+      runtimeEpoch: randomUUID(),
+    };
+    this.#states.set(spec.hostSessionId, { binding, sequence: 0 });
     return binding;
   }
-  async attach(spec,binding) { if (this.#states.get(spec.hostSessionId)?.binding.runtimeEpoch !== binding.runtimeEpoch) throw new Error('synthetic runtime not attached'); }
-  async send() { throw new Error('load harness cannot send prompts'); }
-  async cancelTurn() { throw new Error('load harness cannot accept commands'); }
-  async resolveInteraction() { throw new Error('load harness cannot approve tools'); }
-  async terminate(id) { this.#states.delete(id); }
-  subscribe(id,fn) { const listeners = this.#listeners.get(id) ?? new Set(); listeners.add(fn); this.#listeners.set(id,listeners); return () => { listeners.delete(fn); if (!listeners.size) this.#listeners.delete(id); }; }
-  emit(id,eventId) {
+  async attach(spec, binding) {
+    if (this.#states.get(spec.hostSessionId)?.binding.runtimeEpoch !== binding.runtimeEpoch)
+      throw new Error("synthetic runtime not attached");
+  }
+  async send(command) {
+    const state = this.#states.get(command.hostSessionId);
+    if (!state || this.#turnGates.has(command.hostSessionId))
+      throw new Error("load turn already active");
+    let release;
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    this.#turnGates.set(command.hostSessionId, { turnId: command.turnId, release });
+    this.#emitAccepted(command.hostSessionId, "turn.started", { turnId: command.turnId });
+    const run = (async () => {
+      const outcome = await gate;
+      const common = { turnId: command.turnId };
+      const messageId = `load-message-${command.turnId}`;
+      const toolCallId = `load-tool-${command.turnId}`;
+      if (outcome === "cancelled") {
+        this.#emitAccepted(command.hostSessionId, "turn.finished", { ...common, outcome });
+        return;
+      }
+      this.#emitAccepted(command.hostSessionId, "text.delta", {
+        ...common,
+        messageId,
+        text: "Checking the adopted worktree. ",
+      });
+      this.#emitAccepted(command.hostSessionId, "tool.started", {
+        ...common,
+        toolCallId,
+        name: "load.readonly.inspect",
+        inputText: "read-only fixture inspection",
+      });
+      this.#emitAccepted(command.hostSessionId, "tool.finished", {
+        ...common,
+        toolCallId,
+        name: "load.readonly.inspect",
+        outcome: "success",
+        outputText: "The owned Host accepted and completed this fixture turn.",
+      });
+      this.#emitAccepted(command.hostSessionId, "text.delta", {
+        ...common,
+        messageId,
+        text: "Accepted turn completed.",
+      });
+      this.#emitAccepted(command.hostSessionId, "message.finished", {
+        ...common,
+        messageId,
+        role: "assistant",
+        text: "Checking the adopted worktree. Accepted turn completed.",
+      });
+      this.#emitAccepted(command.hostSessionId, "turn.finished", { ...common, outcome: "success" });
+    })();
+    this.#turnRuns.set(command.hostSessionId, run);
+    const cleanup = () => {
+      this.#turnGates.delete(command.hostSessionId);
+      this.#turnRuns.delete(command.hostSessionId);
+    };
+    void run.then(cleanup, cleanup);
+    return run;
+  }
+  async cancelTurn(command) {
+    const gate = this.#turnGates.get(command.hostSessionId);
+    if (!gate || gate.turnId !== command.turnId) throw new Error("stale load turn");
+    gate.release("cancelled");
+  }
+  async resolveInteraction() {
+    throw new Error("load harness cannot approve tools");
+  }
+  async terminate(id) {
+    const gate = this.#turnGates.get(id);
+    if (gate) gate.release("cancelled");
+    await this.#turnRuns.get(id);
+    this.#states.delete(id);
+  }
+  get activeTurnIds() {
+    return [...this.#turnGates.keys()];
+  }
+  releaseAll() {
+    for (const gate of this.#turnGates.values()) gate.release("success");
+  }
+  release(id) {
+    const gate = this.#turnGates.get(id);
+    if (!gate) throw new Error("no accepted turn gate");
+    gate.release("success");
+  }
+  async shutdown() {
+    for (const gate of this.#turnGates.values()) gate.release("cancelled");
+    await Promise.all(this.#turnRuns.values());
+  }
+  #emitAccepted(id, kind, payload) {
     const state = this.#states.get(id);
-    if (!state || !/^[a-z0-9-]+$/.test(eventId)) throw new Error('invalid synthetic event');
+    if (!state) throw new Error("unknown accepted session");
+    const sequence = ++state.sequence;
+    const event = {
+      hostSessionId: id,
+      runtimeEpoch: state.binding.runtimeEpoch,
+      sequence,
+      eventId: `${state.binding.runtimeEpoch}-load-${sequence}`,
+      at: sequence,
+      kind,
+      ...payload,
+    };
+    for (const fn of this.#listeners.get(id) ?? []) fn(event);
+    return event;
+  }
+  subscribe(id, fn) {
+    const listeners = this.#listeners.get(id) ?? new Set();
+    listeners.add(fn);
+    this.#listeners.set(id, listeners);
+    return () => {
+      listeners.delete(fn);
+      if (!listeners.size) this.#listeners.delete(id);
+    };
+  }
+  emit(id, eventId) {
+    const state = this.#states.get(id);
+    if (!state || !/^[a-z0-9-]+$/.test(eventId)) throw new Error("invalid synthetic event");
     // 中文：七步闭合一个真实可投影的合成轮次；每步只向 Host 交付一次，不制造空扩展事件。
-    const step=state.sequence%7,turnId=`load-turn-${Math.floor(state.sequence/7)}`;
-    const base={hostSessionId:id,runtimeEpoch:state.binding.runtimeEpoch,sequence:++state.sequence,eventId,at:state.sequence,turnId};
-    const messageId=`${turnId}-message`,toolCallId=`${turnId}-tool`;
-    const event=[
-      {kind:'turn.started'},
-      {kind:'text.delta',messageId,text:'Inspecting synthetic worktree state. '},
-      {kind:'tool.started',toolCallId,name:'load.readonly.inspect',inputText:'synthetic fixture only'},
-      {kind:'tool.finished',toolCallId,name:'load.readonly.inspect',outcome:'success',outputText:'fixture inspection completed'},
-      {kind:'text.delta',messageId,text:'Synthetic inspection complete.'},
-      {kind:'message.finished',messageId,text:'Inspecting synthetic worktree state. Synthetic inspection complete.',role:'assistant'},
-      {kind:'turn.finished',outcome:'success'},
-    ].map(shape=>({...base,...shape}))[step];
+    const step = state.sequence % 7,
+      turnId = `load-turn-${Math.floor(state.sequence / 7)}`;
+    const base = {
+      hostSessionId: id,
+      runtimeEpoch: state.binding.runtimeEpoch,
+      sequence: ++state.sequence,
+      eventId,
+      at: state.sequence,
+      turnId,
+    };
+    const messageId = `${turnId}-message`,
+      toolCallId = `${turnId}-tool`;
+    const event = [
+      { kind: "turn.started" },
+      { kind: "text.delta", messageId, text: "Inspecting synthetic worktree state. " },
+      {
+        kind: "tool.started",
+        toolCallId,
+        name: "load.readonly.inspect",
+        inputText: "synthetic fixture only",
+      },
+      {
+        kind: "tool.finished",
+        toolCallId,
+        name: "load.readonly.inspect",
+        outcome: "success",
+        outputText: "fixture inspection completed",
+      },
+      { kind: "text.delta", messageId, text: "Synthetic inspection complete." },
+      {
+        kind: "message.finished",
+        messageId,
+        text: "Inspecting synthetic worktree state. Synthetic inspection complete.",
+        role: "assistant",
+      },
+      { kind: "turn.finished", outcome: "success" },
+    ].map((shape) => ({ ...base, ...shape }))[step];
     for (const fn of this.#listeners.get(id) ?? []) fn(event);
     return event.sequence;
   }
@@ -72,136 +271,373 @@ class LoadHarness {
 // This is an actual Target/Catalog/Host composition, not a replacement in-memory journal or fake worktree list.
 export async function createProductionBackend(input) {
   await assertIsolated(input);
-  const {register} = await import('tsx/esm/api');
+  const { register } = await import("tsx/esm/api");
   const unregister = register();
   let target, catalog, host;
   try {
     const [worktrees, bridgeModule, catalogModule, registryModule, hostModule] = await Promise.all([
-      import('../../../../packages/services/src/project-workspaces/worktreeService.ts'),
-      import('../../../../packages/services/src/project-workspaces/targetBridge.ts'),
-      import('../../../../packages/services/src/project-workspaces/projectCatalog.ts'),
-      import('../../../../packages/services/src/agent-host/harnessRegistry.ts'),
-      import('../../../../packages/services/src/agent-host/targetService.ts'),
+      import("../../../../packages/services/src/project-workspaces/worktreeService.ts"),
+      import("../../../../packages/services/src/project-workspaces/targetBridge.ts"),
+      import("../../../../packages/services/src/project-workspaces/projectCatalog.ts"),
+      import("../../../../packages/services/src/agent-host/harnessRegistry.ts"),
+      import("../../../../packages/services/src/agent-host/targetService.ts"),
     ]);
     const runRoot = await realpath(input.root);
     let hostRef;
-    target = await worktrees.TargetWorktreeService.open({storageDirectory:join(runRoot,'target-owner'),executionTargetId:'load-local',activity:async workspaceId => {
-      if (!hostRef) return {running:0,waiting:0,tools:0,uncertain:1,offline:true};
-      const activity = await hostRef.getRuntimeActivity(workspaceId);
-      return {...activity,tools:0,offline:false};
-    }});
-    const bridge = new bridgeModule.ProjectCatalogTargetBridge(target,'load-local',(_id,canonical) => canonical);
+    target = await worktrees.TargetWorktreeService.open({
+      storageDirectory: join(runRoot, "target-owner"),
+      executionTargetId: "load-local",
+      activity: async (workspaceId) => {
+        if (!hostRef) return { running: 0, waiting: 0, tools: 0, uncertain: 1, offline: true };
+        const activity = await hostRef.getRuntimeActivity(workspaceId);
+        return { ...activity, tools: 0, offline: false };
+      },
+    });
+    const bridge = new bridgeModule.ProjectCatalogTargetBridge(
+      target,
+      "load-local",
+      (_id, canonical) => canonical,
+    );
     const adoptedIds = new Set();
     const index = {
       async allSessions() {
-        if (!hostRef) throw new Error('Host index unavailable');
-        const batches = await Promise.all([...adoptedIds].map(id=>hostRef.listWorkspaceSessions(id)));
-        const activity=await Promise.all([...adoptedIds].map(id=>hostRef.getRuntimeActivity(id)));
-        const byWorkspace=new Map([...adoptedIds].map((id,i)=>[id,activity[i]]));
-        return batches.flat().map(({spec,state,updatedAt},sortOrder)=>{
-          const owner=byWorkspace.get(spec.workspaceId);
-          const idle=state==='running' && owner?.running===0 && owner?.waiting===0 && owner?.uncertain===0;
-          return {session:{schemaVersion:1,id:spec.hostSessionId,projectId:spec.projectId,workspaceId:spec.workspaceId,harnessId:spec.harness.id,title:spec.hostSessionId,sortOrder,archived:state==='terminated'},
-            updatedAt:Math.floor(updatedAt),activity:idle ? 'idle' : 'unknown',freshness:owner?.uncertain ? 'unknown' : 'live',unread:false};
+        if (!hostRef) throw new Error("Host index unavailable");
+        const batches = await Promise.all(
+          [...adoptedIds].map((id) => hostRef.listWorkspaceSessions(id)),
+        );
+        const activity = await Promise.all(
+          [...adoptedIds].map((id) => hostRef.getRuntimeActivity(id)),
+        );
+        const byWorkspace = new Map([...adoptedIds].map((id, i) => [id, activity[i]]));
+        return batches.flat().map(({ spec, state, updatedAt }, sortOrder) => {
+          const owner = byWorkspace.get(spec.workspaceId);
+          const idle =
+            state === "running" &&
+            owner?.running === 0 &&
+            owner?.waiting === 0 &&
+            owner?.uncertain === 0;
+          return {
+            session: {
+              schemaVersion: 1,
+              id: spec.hostSessionId,
+              projectId: spec.projectId,
+              workspaceId: spec.workspaceId,
+              harnessId: spec.harness.id,
+              title: spec.hostSessionId,
+              sortOrder,
+              archived: state === "terminated",
+            },
+            updatedAt: Math.floor(updatedAt),
+            activity: idle ? "idle" : "unknown",
+            freshness: owner?.uncertain ? "unknown" : "live",
+            unread: false,
+          };
         });
       },
       async workspaceFreshness(workspace) {
-        if (!hostRef) return 'unknown';
-        const activity=await hostRef.getRuntimeActivity(workspace.id);
-        return activity.uncertain ? 'unknown' : 'live';
+        if (!hostRef) return "unknown";
+        const activity = await hostRef.getRuntimeActivity(workspace.id);
+        return activity.uncertain ? "unknown" : "live";
       },
     };
-    catalog = await catalogModule.ProjectCatalog.open(join(runRoot,'load-catalog.json'),bridge,index);
-    await catalog.importProject({id:'load-project',bindingId:'load-binding',name:'Disposable Load',targetId:'load-local',repositoryPath:input.repo});
+    catalog = await catalogModule.ProjectCatalog.open(
+      join(runRoot, "load-catalog.json"),
+      bridge,
+      index,
+    );
+    await catalog.importProject({
+      id: "load-project",
+      bindingId: "load-binding",
+      name: "Disposable Load",
+      targetId: "load-local",
+      repositoryPath: input.repo,
+    });
     const registry = new registryModule.HarnessRegistry();
     const harness = new LoadHarness();
-    registry.registerTrusted({schemaVersion:1,id:harness.id,name:'Load synthetic',adapterVersion:harness.version},()=>harness);
-    const workspaceAdmission = new bridgeModule.CatalogWorkspaceAdmission(catalog,target,'load-local');
-    host = new hostModule.AgentHostTargetService({root:join(runRoot,'host-journal'),target:{id:'load-local',kind:'local',platform:process.platform,available:true},catalog:{fingerprint:'load-only',validateSelection:()=>({ok:true})},registry,admission:{verify:spec=>workspaceAdmission.verify(spec),withAdmission:(spec,action)=>workspaceAdmission.withAdmission(spec,canonicalCwd=>action({canonicalCwd}))}});
+    registry.registerTrusted(
+      { schemaVersion: 1, id: harness.id, name: "Load synthetic", adapterVersion: harness.version },
+      () => harness,
+    );
+    const workspaceAdmission = new bridgeModule.CatalogWorkspaceAdmission(
+      catalog,
+      target,
+      "load-local",
+    );
+    host = new hostModule.AgentHostTargetService({
+      root: join(runRoot, "host-journal"),
+      target: { id: "load-local", kind: "local", platform: process.platform, available: true },
+      catalog: { fingerprint: "load-only", validateSelection: () => ({ ok: true }) },
+      registry,
+      admission: {
+        verify: (spec) => workspaceAdmission.verify(spec),
+        withAdmission: (spec, action) =>
+          workspaceAdmission.withAdmission(spec, (canonicalCwd) => action({ canonicalCwd })),
+      },
+    });
     hostRef = host;
     const specs = new Map();
     const candidates = new Map();
     let unsubscribe;
     let ownerEvents = 0;
+    const acceptedCommands = new Map();
+    const activeCommandBySession = new Map();
     let liveCursor = new Map();
     let detached = false;
-    const onEvent = ({spec,event}) => { ownerEvents++; if (!detached && input.delivery === 'desktop-continuous') liveCursor.set(spec.hostSessionId,event.sequence); };
+    const onEvent = ({ spec, event }) => {
+      ownerEvents++;
+      if (!detached && input.delivery === "desktop-continuous")
+        liveCursor.set(spec.hostSessionId, event.sequence);
+    };
+    const releasePendingTurns = async () => {
+      const pending = [...activeCommandBySession.keys()].map((id) => specs.get(id)).filter(Boolean);
+      harness.releaseAll();
+      const results = await Promise.allSettled(pending.map((spec) => host.waitForIdle(spec)));
+      for (const spec of pending) activeCommandBySession.delete(spec.hostSessionId);
+      acceptedCommands.clear();
+      const failed = results.find((result) => result.status === "rejected");
+      if (failed) throw failed.reason;
+    };
     const source = {
-      target,catalog,host,harness,specs,
-      async discover({repo,candidates:paths}) {
-        if (await realpath(repo) !== await realpath(input.repo) || paths.length !== input.worktrees.length || paths.some((p,i)=>p!==input.worktrees[i])) throw new Error('foreign fixture');
-        const found = await catalog.discover('load-binding');
-        const byPath = new Map(await Promise.all(found.map(async c=>[await realpath(c.worktreePath),c])));
-        if (byPath.size !== paths.length) throw new Error('Target discovery count mismatch');
-        return await Promise.all(paths.map(async (path,i) => { const canonical=await realpath(path); if (!byPath.has(canonical)) throw new Error('undiscovered real Git worktree'); const c = byPath.get(canonical); const id = `load-workspace-${i}`; candidates.set(id,c); return {id,path}; }));
+      target,
+      catalog,
+      host,
+      harness,
+      specs,
+      async discover({ repo, candidates: paths }) {
+        if (
+          (await realpath(repo)) !== (await realpath(input.repo)) ||
+          paths.length !== input.worktrees.length ||
+          paths.some((p, i) => p !== input.worktrees[i])
+        )
+          throw new Error("foreign fixture");
+        const found = await catalog.discover("load-binding");
+        const byPath = new Map(
+          await Promise.all(found.map(async (c) => [await realpath(c.worktreePath), c])),
+        );
+        if (byPath.size !== paths.length) throw new Error("Target discovery count mismatch");
+        return await Promise.all(
+          paths.map(async (path, i) => {
+            const canonical = await realpath(path);
+            if (!byPath.has(canonical)) throw new Error("undiscovered real Git worktree");
+            const c = byPath.get(canonical);
+            const id = `load-workspace-${i}`;
+            candidates.set(id, c);
+            return { id, path };
+          }),
+        );
       },
-      async prepareSessions({expandedWorktrees,sessions}) {
+      async prepareSessions({ expandedWorktrees, sessions }) {
         const expanded = new Map();
-        for (const {id,path} of expandedWorktrees) {
+        for (const { id, path } of expandedWorktrees) {
           const candidate = candidates.get(id);
-          if (!candidate || await realpath(candidate.worktreePath) !== await realpath(path)) throw new Error('unverified candidate');
-          expanded.set(id,await catalog.adopt({bindingId:'load-binding',workspaceId:id,title:`Workspace ${id}`,worktreePath:path}));
+          if (!candidate || (await realpath(candidate.worktreePath)) !== (await realpath(path)))
+            throw new Error("unverified candidate");
+          expanded.set(
+            id,
+            await catalog.adopt({
+              bindingId: "load-binding",
+              workspaceId: id,
+              title: `Workspace ${id}`,
+              worktreePath: path,
+            }),
+          );
           adoptedIds.add(id);
         }
-        if (new Set(sessions.map(s=>s.workspaceId)).size !== expanded.size) throw new Error('sessions do not cover expanded workspaces');
+        if (new Set(sessions.map((s) => s.workspaceId)).size !== expanded.size)
+          throw new Error("sessions do not cover expanded workspaces");
         for (const session of sessions) {
           const workspace = expanded.get(session.workspaceId);
-          if (!workspace || specs.has(session.id)) throw new Error('foreign or duplicate synthetic session');
-          const spec = {schemaVersion:2,hostSessionId:session.id,projectId:'load-project',workspaceId:workspace.id,execution:{targetId:'load-local',workspaceIdentity:workspace.workspaceIdentity,worktreePath:workspace.worktreePath,worktreeGeneration:workspace.worktreeGeneration,cwdRelativeToWorktree:'.'},harness:{id:harness.id,adapterVersion:harness.version},modelBinding:{kind:'host-managed',selection:{providerId:'load-no-provider',modelId:'load-no-model'}}};
-          await host.create(spec,`load-create-${session.id}`);
-          specs.set(session.id,spec);
-          liveCursor.set(session.id,0);
+          if (!workspace || specs.has(session.id))
+            throw new Error("foreign or duplicate synthetic session");
+          const spec = {
+            schemaVersion: 2,
+            hostSessionId: session.id,
+            projectId: "load-project",
+            workspaceId: workspace.id,
+            execution: {
+              targetId: "load-local",
+              workspaceIdentity: workspace.workspaceIdentity,
+              worktreePath: workspace.worktreePath,
+              worktreeGeneration: workspace.worktreeGeneration,
+              cwdRelativeToWorktree: ".",
+            },
+            harness: { id: harness.id, adapterVersion: harness.version },
+            modelBinding: {
+              kind: "host-managed",
+              selection: { providerId: "load-no-provider", modelId: "load-no-model" },
+            },
+          };
+          await host.create(spec, `load-create-${session.id}`);
+          specs.set(session.id, spec);
+          liveCursor.set(session.id, 0);
         }
-        unsubscribe = host.subscribe(onEvent);
+        if (input.delivery === "desktop-continuous") unsubscribe = host.subscribe(onEvent);
         return await catalog.sidebarSnapshot();
       },
-      async emitCommitted({sessionId,eventId}) {
+      async emitCommitted({ sessionId, eventId }) {
         const spec = specs.get(sessionId);
-        if (!spec) throw new Error('unknown session');
-        const sequence = harness.emit(sessionId,eventId);
+        if (!spec) throw new Error("unknown session");
+        const sequence = harness.emit(sessionId, eventId);
         // Host serializes and fsyncs source events before resolving this owner read.
-        const committed = await host.eventsSince(spec,sequence-1);
-        if (committed.length !== 1 || committed[0].sequence !== sequence || committed[0].sourceEventId !== eventId) throw new Error('owner commit not visible');
+        const committed = await host.eventsSince(spec, sequence - 1);
+        if (
+          committed.length !== 1 ||
+          committed[0].sequence !== sequence ||
+          committed[0].sourceEventId !== eventId
+        )
+          throw new Error("owner commit not visible");
         return sequence;
       },
-      async ownerRows(sessionId,cursor=0) { const spec=specs.get(sessionId); if (!spec) throw new Error('unknown session'); return host.eventsSince(spec,cursor); },
-      async detach() { detached=true; if (input.delivery === 'desktop-continuous') { unsubscribe?.(); unsubscribe=undefined; } },
+      async acceptTurn({ sessionId, commandId }) {
+        const spec = specs.get(sessionId);
+        if (!spec) throw new Error("unknown session");
+        const turnId = `load-turn-${commandId}`;
+        const cursor = (await host.getSessionReadModel(spec)).seq;
+        const command = {
+          type: "send",
+          commandId,
+          hostSessionId: sessionId,
+          turnId,
+          text: `Inspect ${spec.execution.worktreePath}`,
+        };
+        const receipt = await host.dispatch(spec, command);
+        if (receipt.status !== "accepted" && receipt.status !== "duplicate")
+          throw new Error(`Host rejected accepted-turn fixture: ${receipt.status}`);
+        if (receipt.status === "accepted") {
+          acceptedCommands.set(commandId, { spec, command });
+          activeCommandBySession.set(sessionId, commandId);
+        }
+        const read = await host.getSessionReadModel(spec);
+        const started = (await host.eventsSince(spec, cursor)).some(
+          (event) => event.kind === "turn.started" && event.turnId === turnId,
+        );
+        if (read.activity !== "running" || !started)
+          throw new Error("Host did not journal the accepted running turn");
+        return receipt;
+      },
+      async retryAcceptedTurn(commandId) {
+        const accepted = acceptedCommands.get(commandId);
+        if (!accepted) throw new Error("unknown accepted command");
+        return host.dispatch(accepted.spec, accepted.command);
+      },
+      async releaseTurn(sessionId) {
+        const spec = specs.get(sessionId);
+        if (!spec) throw new Error("unknown session");
+        const commandId = activeCommandBySession.get(sessionId);
+        const accepted = commandId ? acceptedCommands.get(commandId) : undefined;
+        if (!accepted) throw new Error("no active accepted command for session");
+        const before = await host.getSessionReadModel(spec);
+        harness.release(sessionId);
+        try {
+          await host.waitForIdle(spec);
+          const after = await host.getSessionReadModel(spec);
+          if (host.queryCommand(spec, commandId)?.status !== "completed")
+            throw new Error("accepted command did not complete");
+          return {
+            committedEvents: after.seq - before.seq,
+            cursor: after.seq,
+            commandId,
+          };
+        } finally {
+          acceptedCommands.delete(commandId);
+          activeCommandBySession.delete(sessionId);
+        }
+      },
+      async releaseTurns() {
+        await releasePendingTurns();
+      },
+      async ownerRows(sessionId, cursor = 0) {
+        const spec = specs.get(sessionId);
+        if (!spec) throw new Error("unknown session");
+        return host.eventsSince(spec, cursor);
+      },
+      async detach() {
+        detached = true;
+        if (input.delivery === "desktop-continuous") {
+          unsubscribe?.();
+          unsubscribe = undefined;
+        }
+      },
       async reconnect() {
         // Query-only recovery. Desktop resubscribes to live events after querying gap; Web uses replay by owner cursor.
-        for (const [id,spec] of specs) {
+        for (const [id, spec] of specs) {
           let cursor = liveCursor.get(id) ?? 0;
           while (true) {
-            const batch = await host.eventsSince(spec,cursor);
+            const batch = await host.eventsSince(spec, cursor);
             if (!batch.length) break;
-            for (const event of batch) { if (event.sequence !== ++cursor) throw new Error('owner journal gap'); }
+            for (const event of batch) {
+              if (event.sequence !== ++cursor) throw new Error("owner journal gap");
+            }
           }
           const snapshot = await host.snapshot(spec);
-          if (snapshot.seq !== cursor) throw new Error('owner snapshot gap');
-          liveCursor.set(id,cursor);
+          if (snapshot.seq !== cursor) throw new Error("owner snapshot gap");
+          liveCursor.set(id, cursor);
         }
-        detached=false;
-        if (input.delivery === 'desktop-continuous') unsubscribe=host.subscribe(onEvent);
-        return {replayedWithoutResend:true,caughtUp:true};
+        detached = false;
+        if (input.delivery === "desktop-continuous") unsubscribe = host.subscribe(onEvent);
+        return { replayedWithoutResend: true, caughtUp: true };
       },
-      get observed() {return {ownerEvents,liveCursor:new Map(liveCursor)};},
+      get observed() {
+        return { ownerEvents, liveCursor: new Map(liveCursor) };
+      },
       async close() {
         unsubscribe?.();
-        try {await host?.close();} finally {try {await catalog?.close();} finally {await target?.close(); unregister();}}
-        const files=[...(await readdir(join(runRoot,'host-journal'))),...(await readdir(join(runRoot,'target-owner'))),...(await readdir(runRoot)).filter(name=>name==='load-catalog.json.lock')];
-        if (files.some(name=>name.endsWith('.lock') || name.endsWith('.owner'))) throw new Error('owned Host/Catalog/Target lease remains after close');
+        let releaseError;
+        try {
+          await releasePendingTurns();
+        } catch (error) {
+          releaseError = error;
+        }
+        try {
+          await host?.close();
+        } finally {
+          try {
+            await catalog?.close();
+          } finally {
+            await target?.close();
+            unregister();
+          }
+        }
+        const files = [
+          ...(await readdir(join(runRoot, "host-journal"))),
+          ...(await readdir(join(runRoot, "target-owner"))),
+          ...(await readdir(runRoot)).filter((name) => name === "load-catalog.json.lock"),
+        ];
+        if (files.some((name) => name.endsWith(".lock") || name.endsWith(".owner")))
+          throw new Error("owned Host/Catalog/Target lease remains after close");
         // No driver-owned process is spawned. Git fixture children belong to runner and have exited before open.
-        await writeFile(join(runRoot,'driver-cleanup.json'),JSON.stringify({hostClosed:true,catalogClosed:true,targetClosed:true,ownedChildProcesses:0,ownerLocks:0})+'\n');
+        await writeFile(
+          join(runRoot, "driver-cleanup.json"),
+          JSON.stringify({
+            hostClosed: true,
+            catalogClosed: true,
+            targetClosed: true,
+            ownedChildProcesses: 0,
+            ownerLocks: 0,
+          }) + "\n",
+        );
+        if (releaseError) throw releaseError;
       },
     };
     return source;
   } catch (error) {
-    try {await host?.close();} finally {try {await catalog?.close();} finally {await target?.close(); unregister();}}
+    try {
+      await host?.close();
+    } finally {
+      try {
+        await catalog?.close();
+      } finally {
+        await target?.close();
+        unregister();
+      }
+    }
     throw error;
   }
 }
 
 // 中文：顶层 disposer 在 open 前就可调用；部分打开、正常 close 和 runner 重试清理只关闭同一 owner 一次。
-let activeOwner, closed = false;
+let activeOwner,
+  closed = false;
 async function disposeOwner() {
   if (closed) return;
   closed = true;
@@ -213,30 +649,68 @@ export default {
   sourceCheckout: checkout,
   dispose: disposeOwner,
   async open(input) {
-    if (closed || activeOwner) throw new Error('driver cannot be reused after disposal');
-    if (typeof input.registerCleanup !== 'function' || typeof input.registerChild !== 'function') throw new Error('runner cleanup registry required');
+    if (closed || activeOwner) throw new Error("driver cannot be reused after disposal");
+    if (typeof input.registerCleanup !== "function" || typeof input.registerChild !== "function")
+      throw new Error("runner cleanup registry required");
     input.registerCleanup(disposeOwner);
     await assertIsolated(input);
-    if (!['desktop-continuous','web-remote-replayable'].includes(input.delivery)) throw new Error('explicit delivery mode required');
-    if (input.sourceCheckout && await realpath(input.sourceCheckout) !== await realpath(checkout)) throw new Error('driver source checkout mismatch');
-    const {stdout} = await exec('git',['rev-parse','HEAD'],{cwd:checkout,env:{PATH:process.env.PATH,HOME:input.isolation.home,GIT_CONFIG_GLOBAL:'/dev/null',GIT_CONFIG_NOSYSTEM:'1'}});
+    if (!["desktop-continuous", "web-remote-replayable"].includes(input.delivery))
+      throw new Error("explicit delivery mode required");
+    if (
+      input.sourceCheckout &&
+      (await realpath(input.sourceCheckout)) !== (await realpath(checkout))
+    )
+      throw new Error("driver source checkout mismatch");
+    const { stdout } = await exec("git", ["rev-parse", "HEAD"], {
+      cwd: checkout,
+      env: {
+        PATH: process.env.PATH,
+        HOME: input.isolation.home,
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_CONFIG_NOSYSTEM: "1",
+      },
+    });
     const owner = await createProductionBackend(input);
     activeOwner = owner;
     return {
-      metadata:{productionCommit:stdout.trim(),driverVersion:'production-driver-1',paths:input.isolation},
-      discover:args=>owner.discover(args),
+      metadata: {
+        productionCommit: stdout.trim(),
+        driverVersion: "production-driver-1",
+        paths: input.isolation,
+      },
+      discover: (args) => owner.discover(args),
       async mount(args) {
         await owner.prepareSessions(args);
-        // This checkout's WorkspaceShellLayout has no mountedOwner/scoped external route. A sidebar fixture
-        // or a standalone SessionPane is NOT an actual Shell->Sidebar->Pane production mount.
-        throw new Error('missing committed WorkspaceShellLayout mountedOwner/mountedSessionRouting + real browser attachment port (shell-pane)');
+        // 中文：Shell 已有 mounted owner 路由；缺口是本测试进程的 Host/Catalog/Target 尚未接入生产 Core→window utility Host→MessagePort，不能据此伪造 UI owner 或绘制延迟。
+        throw new Error(
+          "missing same-owner Core-to-utility-Host Shell attachment and real browser paint observer",
+        );
       },
-      async emit(args) {return owner.emitCommitted(args);},
-      async detach() {return owner.detach();},
-      async reconnect() {return owner.reconnect();},
-      async sample() {throw new Error('no real mounted browser paint sampler');},
-      async facts() {throw new Error('no separate mounted Host/renderer process metrics or owner-derived UI cursor');},
-      async close() {await disposeOwner();},
+      async emit({ sessionId, eventId }) {
+        const spec = owner.specs.get(sessionId);
+        const before = await owner.host.getSessionReadModel(spec);
+        await owner.acceptTurn({ sessionId, commandId: eventId });
+        const released = await owner.releaseTurn(sessionId);
+        const after = await owner.host.getSessionReadModel(spec);
+        return { ...released, committedEvents: after.seq - before.seq };
+      },
+      async detach() {
+        return owner.detach();
+      },
+      async reconnect() {
+        return owner.reconnect();
+      },
+      async sample() {
+        throw new Error("no real mounted browser paint sampler");
+      },
+      async facts() {
+        throw new Error(
+          "no separate mounted Host/renderer process metrics or owner-derived UI cursor",
+        );
+      },
+      async close() {
+        await disposeOwner();
+      },
     };
   },
 };
