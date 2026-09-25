@@ -12,6 +12,8 @@ export interface RunningCodexTurn {
   earlyCompletions: Map<string, Exclude<CodexTurnOutcome, "unknown">>;
   earlyEvents: Array<Extract<CodexNativeEvent, { kind: "notification" }>>;
   earlyBytes: number;
+  /** Wire-shape guard only; Host journal/projector remains the usage accounting owner. */
+  knownUsageFields: Set<"inputTokens" | "outputTokens">;
   terminal: Promise<CodexTurnOutcome>;
   settle: (outcome: CodexTurnOutcome) => void;
 }
@@ -34,6 +36,7 @@ export function createRunningCodexTurn(
     earlyCompletions: new Map(),
     earlyEvents: [],
     earlyBytes: 0,
+    knownUsageFields: new Set(),
     terminal,
     settle,
   };

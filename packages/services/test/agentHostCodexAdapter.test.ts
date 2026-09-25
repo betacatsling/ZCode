@@ -602,7 +602,15 @@ test(
   },
 );
 
-for (const nativeFault of ["signal-death", "fragmented-unterminated", "aggregate-early"] as const) {
+for (const nativeFault of [
+  "signal-death",
+  "fragmented-unterminated",
+  "aggregate-early",
+  "usage-omission",
+  "usage-omission-all",
+  "usage-negative",
+  "usage-noninteger",
+] as const) {
   test(
     `pinned OS child ${nativeFault} behind Host ACK persists unknown across independent reopen without replay`,
     {
@@ -610,7 +618,9 @@ for (const nativeFault of ["signal-death", "fragmented-unterminated", "aggregate
         process.env[
           nativeFault === "signal-death"
             ? "ZCODE_CODEX_HOST_OS_DEATH"
-            : "ZCODE_CODEX_HOST_OS_BYTE_FAULT"
+            : nativeFault.startsWith("usage-")
+              ? "ZCODE_CODEX_HOST_OS_USAGE_FAULT"
+              : "ZCODE_CODEX_HOST_OS_BYTE_FAULT"
         ] !== "1",
       timeout: 45000,
     },
@@ -644,6 +654,9 @@ for (const nativeFault of ["signal-death", "fragmented-unterminated", "aggregate
       let nativeProcess: ChildProcessWithoutNullStreams | undefined;
       let injectedStdout: PassThrough | undefined;
       let heldAckCount = 0;
+      let nativeThreadId: string | undefined;
+      let nativeTurnId: string | undefined;
+      let genuineTurnAck: string | undefined;
       let resolveHeldAck!: () => void;
       const heldAck = new Promise<void>((resolve) => {
         resolveHeldAck = resolve;
@@ -663,7 +676,9 @@ for (const nativeFault of ["signal-death", "fragmented-unterminated", "aggregate
               return;
             }
           }
-          response.writeHead(503).end("synthetic upstream unavailable");
+          if (!nativeFault.startsWith("usage-"))
+            response.writeHead(503).end("synthetic upstream unavailable");
+          // Usage fixtures keep the real native turn live until the matched fault is injected.
         })().catch(() => response.destroy());
       });
       const spawnProcess: typeof spawn = (command, args, options) => {
@@ -684,8 +699,14 @@ for (const nativeFault of ["signal-death", "fragmented-unterminated", "aggregate
             if (end < 0) break;
             const line = buffered.slice(0, end + 1);
             buffered = buffered.slice(end + 1);
-            const frame = JSON.parse(line) as { result?: { turn?: { id?: unknown } } };
+            const frame = JSON.parse(line) as {
+              result?: { thread?: { id?: unknown }; turn?: { id?: unknown } };
+            };
+            if (typeof frame.result?.thread?.id === "string")
+              nativeThreadId = frame.result.thread.id;
             if (typeof frame.result?.turn?.id === "string" && heldAckCount === 0) {
+              nativeTurnId = frame.result.turn.id;
+              genuineTurnAck = line;
               heldAckCount++;
               resolveHeldAck();
             } else {
@@ -762,7 +783,73 @@ for (const nativeFault of ["signal-death", "fragmented-unterminated", "aggregate
         // ACK delivery order is not a provider-effect proof; record zero or more actual fake-upstream requests.
 
         const nativeExit = once(nativeProcess, "exit");
-        if (nativeFault === "signal-death") nativeProcess.kill("SIGKILL");
+        if (nativeFault.startsWith("usage-")) {
+          assert.ok(
+            nativeThreadId && nativeTurnId,
+            "usage must target the actual pinned native turn",
+          );
+          const usage = (last: Record<string, unknown>) =>
+            `${JSON.stringify({
+              method: "thread/tokenUsage/updated",
+              params: {
+                threadId: nativeThreadId,
+                turnId: nativeTurnId,
+                tokenUsage: { last },
+              },
+            })}\n`;
+          // The actual turn/start reply, not a fabricated ACK, releases these matched early notifications.
+          injectedStdout!.write(usage({ inputTokens: 3 }));
+          injectedStdout!.write(usage({ inputTokens: 3, outputTokens: 2 }));
+          assert.ok(genuineTurnAck);
+          injectedStdout!.write(genuineTurnAck);
+          await bounded(
+            (async () => {
+              while (
+                host!.eventsSince(0).filter((event) => event.kind === "usage.accounted").length < 2
+              )
+                await new Promise((resolve) => setTimeout(resolve, 10));
+            })(),
+            5000,
+          ).catch((error: unknown) => {
+            t.diagnostic(
+              `usage precondition failed: ${String(error)}; events=${JSON.stringify(host!.eventsSince(0).map((event) => event.kind))}; thread=${nativeThreadId}; turn=${nativeTurnId}`,
+            );
+            throw error;
+          });
+          const committedUsage = host
+            .eventsSince(0)
+            .filter((event) => event.kind === "usage.accounted");
+          assert.equal(committedUsage.length, 2);
+          assert.equal(
+            committedUsage[0]!.outputTokens,
+            undefined,
+            "first unknown counter is absent, not zero",
+          );
+          assert.deepEqual(
+            committedUsage.map((event) => [event.inputTokens, event.outputTokens]),
+            [
+              [3, undefined],
+              [3, 2],
+            ],
+          );
+          assert.deepEqual(host.snapshot().usage.cumulative, {
+            inputTokens: 3,
+            outputTokens: 2,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+          });
+          injectedStdout!.write(
+            usage(
+              nativeFault === "usage-negative"
+                ? { inputTokens: -1, outputTokens: 2 }
+                : nativeFault === "usage-noninteger"
+                  ? { inputTokens: 3.5, outputTokens: 2 }
+                  : nativeFault === "usage-omission-all"
+                    ? {}
+                    : { outputTokens: 2 },
+            ),
+          );
+        } else if (nativeFault === "signal-death") nativeProcess.kill("SIGKILL");
         else if (nativeFault === "fragmented-unterminated") {
           // 修复依据：真实进程的预 ACK 流也必须按累计字节拒绝，不能只依赖模拟子进程的同步退出。
           injectedStdout!.write(Buffer.alloc(600_000, 120));
@@ -822,6 +909,23 @@ for (const nativeFault of ["signal-death", "fragmented-unterminated", "aggregate
           catalog,
         });
         assert.equal(reopened.queryCommand("accepted-os-once")?.status, "execution-unknown");
+        if (nativeFault.startsWith("usage-")) {
+          assert.equal(
+            reopened.eventsSince(0).filter((event) => event.kind === "usage.accounted").length,
+            2,
+            "invalid replacement must not enter the durable Host journal",
+          );
+          assert.deepEqual(
+            reopened.snapshot().usage.cumulative,
+            {
+              inputTokens: 3,
+              outputTokens: 2,
+              cacheReadTokens: 0,
+              cacheWriteTokens: 0,
+            },
+            "independent reopen must preserve readable accepted usage",
+          );
+        }
         assert.equal(
           reopened.eventsSince(0).find((event) => event.kind === "turn.finished")?.outcome,
           "unknown",
