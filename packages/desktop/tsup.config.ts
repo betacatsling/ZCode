@@ -126,7 +126,10 @@ const desktopNodeRuntimeExternals = [
   "node-forge",
   // Only the test entry imports Host/Core into Main. Their CJS dependencies need native
   // require in that opt-in build; default packaged runtime keeps its existing dependency closure.
-  ...(process.env.ZCODE_ACTUAL_SHELL_FIXTURE_BUILD === "1" ? ["debug", "@vercel/oidc"] : []),
+  ...(process.env.ZCODE_ACTUAL_SHELL_FIXTURE_BUILD === "1" ||
+  process.env.ZCODE_PAIRED_PHONE_FIXTURE_BUILD === "1"
+    ? ["debug", "@vercel/oidc"]
+    : []),
   // ZIP 解包器内部依赖 CommonJS require("fs")，不能内联到 ESM main/host 产物。
   "yauzl",
 ];
@@ -146,6 +149,9 @@ const desktopConfigs: Options[] = [
       // Isolated, explicitly guarded test-only Electron entry; never included in packaged app.
       ...(process.env.ZCODE_ACTUAL_SHELL_FIXTURE_BUILD === "1"
         ? { "main/actualShellMount": "e2e/actualShellMount.main.ts" }
+        : {}),
+      ...(process.env.ZCODE_PAIRED_PHONE_FIXTURE_BUILD === "1"
+        ? { "main/pairedPhoneActual": "e2e/pairedPhoneActual.main.ts" }
         : {}),
       "main/browserWebmRecorder": "src/main/browserView/electronBrowserWebmRecorder.ts",
       "main/zcodeDataSizeWorker": "src/main/zcodeDataSizeWorker.ts",

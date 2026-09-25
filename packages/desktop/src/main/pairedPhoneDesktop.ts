@@ -1,8 +1,10 @@
 import { BrowserWindow, MessageChannelMain, ipcMain } from "electron";
 import type { UtilityProcess, MessagePortMain } from "electron";
 import { randomUUID } from "node:crypto";
-import { connectViaProtocol } from "@zcode/client";
-import { MessagePortProtocol } from "@zcode/rpc";
+import { ChannelClient, MessagePortProtocol, ProxyChannel } from "@zcode/rpc";
+// 中文：仅用类型导入，Main 打包不能把 services 实现图（含 debug→tty）拉进 ESM bundle。
+import type { IAgentHostService, IWorkspaceHierarchyService } from "@zcode/services";
+import { ServiceChannels } from "@zcode/shared";
 import { HostMessageTypes } from "@zcode/shared";
 import { pairedPhonePort } from "./pairedPhonePort.js";
 import { createPairedPhoneTransport, type PairedPhoneScope } from "./pairedPhoneTransport.js";
@@ -77,11 +79,16 @@ export function registerPairedPhoneDesktop(options: {
     async certify(scope) {
       const port = portFor(scope);
       const protocol = new MessagePortProtocol(pairedPhonePort(port));
+      const client = new ChannelClient(protocol);
       try {
-        const services = connectViaProtocol(protocol);
-        const host = services.agentHostService;
-        const hierarchy = services.workspaceHierarchyService;
-        if (!host || !hierarchy) throw new Error("phone owner denied");
+        // 中文：Main 只读取两条受限 RPC；不导入浏览器完整 ServiceAccessor 的构建图。
+        const host = ProxyChannel.toService<IAgentHostService>(
+          client.getChannel(ServiceChannels.AgentHost),
+        );
+        const hierarchy = ProxyChannel.toService<IWorkspaceHierarchyService>(
+          // 中文：层级服务频道名是服务契约里的字面量，shared 的 ServiceChannels 尚未收录。
+          client.getChannel("workspace-hierarchy"),
+        );
         const targetId = scope.targetId;
         const spec = await host.getSessionSpec({
           targetId,
@@ -107,6 +114,7 @@ export function registerPairedPhoneDesktop(options: {
           throw new Error("phone owner denied");
         return owner;
       } finally {
+        client.dispose();
         protocol.disconnect();
       }
     },
