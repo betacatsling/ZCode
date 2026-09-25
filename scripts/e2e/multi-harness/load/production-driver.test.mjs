@@ -49,7 +49,7 @@ for(const delivery of ['desktop-continuous','web-remote-replayable']) test(`real
       assert.equal((await owner.host.listWorkspaceSessions(expanded[0].id)).length,2);
       await owner.emitCommitted({sessionId:'synthetic-0',eventId:'synthetic-event-0'});
       const before=(await owner.ownerRows('synthetic-0',0))[0];
-      assert.equal(before.kind,'extension.event');
+      assert.equal(before.kind,'turn.started');
       assert.equal(before.sourceEventId,'synthetic-event-0');
       assert.equal((await owner.host.snapshot(owner.specs.get('synthetic-0'))).seq,1);
       await owner.detach();
@@ -119,8 +119,15 @@ test('50 discovered real Git worktrees and 10 durable Host sessions across five 
       const sessions=Array.from({length:10},(_,i)=>({id:`synthetic-${i}`,workspaceId:expanded[i%5].id}));
       const snapshot=await owner.prepareSessions({expandedWorktrees:expanded,sessions});
       assert.equal(snapshot.sessions.length,10);
-      for(let i=0;i<30;i++) await owner.emitCommitted({sessionId:sessions[i%10].id,eventId:`event-${i}`});
-      for(const session of sessions) assert.equal((await owner.ownerRows(session.id)).length,3);
+      for(let i=0;i<10;i++) await owner.emitCommitted({sessionId:sessions[i].id,eventId:`event-${i}`});
+      for(const workspace of expanded) assert.equal((await owner.host.getRuntimeActivity(workspace.id)).running,2);
+      for(let i=10;i<70;i++) await owner.emitCommitted({sessionId:sessions[i%10].id,eventId:`event-${i}`});
+      for(const session of sessions) {
+        const rows=await owner.ownerRows(session.id);
+        assert.deepEqual(rows.map(row=>row.kind),['turn.started','text.delta','tool.started','tool.finished','text.delta','message.finished','turn.finished']);
+        assert.ok(rows.filter(row=>row.kind==='text.delta').every(row=>row.text.length>0));
+      }
+      for(const workspace of expanded) assert.equal((await owner.host.getRuntimeActivity(workspace.id)).running,0);
       await owner.detach();
       assert.deepEqual(await owner.reconnect(),{replayedWithoutResend:true,caughtUp:true});
     } finally {await owner.close(); assert.deepEqual(JSON.parse(await readFile(join(input.root,'driver-cleanup.json'),'utf8')),{hostClosed:true,catalogClosed:true,targetClosed:true,ownedChildProcesses:0,ownerLocks:0});}

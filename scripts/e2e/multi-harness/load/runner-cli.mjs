@@ -1,4 +1,5 @@
-import {mkdtemp} from 'node:fs/promises';
+import {mkdtemp,readFile,realpath} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
 import {tmpdir} from 'node:os';
 import {isAbsolute,join,resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
@@ -19,8 +20,16 @@ export async function runCli() {
   const safeBase=await prepareArtifactBase(base);
   const launch=await mkdtemp(join(safeBase,'load-launch-'));
   applyIsolation(await isolation(launch));
-  const driver=(await import(pathToFileURL(driverPath).href)).default;
-  const result=await runLoad({driver,...options,artifactBase:base,baselinePath:val('--baseline'),sourceCheckout:val('--source-checkout'),buildArtifactPath:val('--build-artifact'),buildProvenancePath:val('--build-provenance'),isolateProcessEnv:true});
-  console.log(JSON.stringify({status:result.status,artifacts:result.artifacts,elapsedMs:Math.round(result.elapsedMs),failures:result.failures}));
-  if(result.status==='failed') process.exitCode=1;
+  const driverFile=await realpath(driverPath);
+  const digest=async file=>createHash('sha256').update(await readFile(file)).digest('hex');
+  const driverSha256=await digest(driverFile);
+  const supportFiles=await Promise.all(['runner.mjs','runner-cli.mjs','facts.mjs','measurement.mjs'].map(async name=>{
+    const path=await realpath(new URL(name,import.meta.url));
+    return {path,sha256:await digest(path)};
+  }));
+  const driver=(await import(pathToFileURL(driverFile).href)).default;
+  const result=await runLoad({driver,driverFile,driverSha256,supportFiles,...options,artifactBase:base,baselinePath:val('--baseline'),sourceCheckout:val('--source-checkout'),buildArtifactPath:val('--build-artifact'),buildProvenancePath:val('--build-provenance'),isolateProcessEnv:true});
+  const exitCode=result.status==='failed'?1:['smoke-only','latency-measured'].includes(result.status)?0:2;
+  console.log(JSON.stringify({status:result.status,exitCode,artifacts:result.artifacts,elapsedMs:Math.round(result.elapsedMs),failures:result.failures}));
+  process.exitCode=exitCode;
 }

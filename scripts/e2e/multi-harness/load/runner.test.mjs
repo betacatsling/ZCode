@@ -313,7 +313,7 @@ test('smoke baseline is incomparable to controlled benchmark, mismatched window 
   ]) {
     const {result} = await baselinePair({baselineMutate:async json => change(json)});
     assert.equal(result.comparison.status,'incomparable-baseline');
-    assert.equal(result.status,'latency-baseline-pending');
+    assert.equal(result.status,'baseline-incomparable');
   }
 });
 

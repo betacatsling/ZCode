@@ -26,7 +26,7 @@ export async function assertIsolated(input) {
   return root;
 }
 
-// Trusted synthetic adapter: only inert canonical events; never resolves a Model, calls the CLI, or mutates files.
+// Trusted synthetic adapter: bounded canonical lifecycle; never resolves a Model, calls the CLI, or mutates files.
 class LoadHarness {
   id = 'load-synthetic';
   version = '1.0.0';
@@ -51,7 +51,19 @@ class LoadHarness {
   emit(id,eventId) {
     const state = this.#states.get(id);
     if (!state || !/^[a-z0-9-]+$/.test(eventId)) throw new Error('invalid synthetic event');
-    const event = {kind:'extension.event',namespace:'load.synthetic',version:1,payload:{},hostSessionId:id,runtimeEpoch:state.binding.runtimeEpoch,sequence:++state.sequence,eventId,at:state.sequence};
+    // 中文：七步闭合一个真实可投影的合成轮次；每步只向 Host 交付一次，不制造空扩展事件。
+    const step=state.sequence%7,turnId=`load-turn-${Math.floor(state.sequence/7)}`;
+    const base={hostSessionId:id,runtimeEpoch:state.binding.runtimeEpoch,sequence:++state.sequence,eventId,at:state.sequence,turnId};
+    const messageId=`${turnId}-message`,toolCallId=`${turnId}-tool`;
+    const event=[
+      {kind:'turn.started'},
+      {kind:'text.delta',messageId,text:'Inspecting synthetic worktree state. '},
+      {kind:'tool.started',toolCallId,name:'load.readonly.inspect',inputText:'synthetic fixture only'},
+      {kind:'tool.finished',toolCallId,name:'load.readonly.inspect',outcome:'success',outputText:'fixture inspection completed'},
+      {kind:'text.delta',messageId,text:'Synthetic inspection complete.'},
+      {kind:'message.finished',messageId,text:'Inspecting synthetic worktree state. Synthetic inspection complete.',role:'assistant'},
+      {kind:'turn.finished',outcome:'success'},
+    ].map(shape=>({...base,...shape}))[step];
     for (const fn of this.#listeners.get(id) ?? []) fn(event);
     return event.sequence;
   }

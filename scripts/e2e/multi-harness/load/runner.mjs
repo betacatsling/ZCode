@@ -10,6 +10,9 @@ export { validateProductFacts } from './facts.mjs';
 
 const HOUR8 = 8 * 60 * 60 * 1000;
 const LATENCY_BUDGET = 1.10;
+const SCHEMA_VERSION = 2;
+const runtime = {nodeVersion:process.version,v8Version:process.versions.v8,platform:platform(),arch:arch()};
+const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const CLEANUP_DEADLINE_MS = 750;
 const defaults = { delivery: 'desktop-continuous', mode: 'acceptance', durationMs: HOUR8, eventCount: 100_000, worktreeCount: 50, sessionCount: 10, expandedCount: 5, sampleEveryMs: 60_000, reconnectEveryMs: 300_000, idleMs: 60_000, maxBacklog: 10_000, maxOwnedChildren: 32 };
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -84,7 +87,7 @@ async function preservedSource(checkout, expectedCommit) {
   const top = (await git(root, 'rev-parse', '--show-toplevel')).trim();
   const head = (await git(root, 'rev-parse', 'HEAD')).trim();
   // 中文：不能仅信任 result.json 自报的 commit，必须核验保留的 Git checkout。
-  if (top !== root || head !== expectedCommit || (await git(root, 'status', '--porcelain', '--untracked-files=no')).trim()) throw new Error('source identity changed');
+  if (top !== root || head !== expectedCommit || (await git(root, 'status', '--porcelain', '--untracked-files=all')).trim()) throw new Error('source identity changed');
   return root;
 }
 async function buildHash(path) {
@@ -111,14 +114,24 @@ async function verifiedProvenance(checkout, buildArtifactPath, commit, artifactR
   }
   return {sourceCheckout,buildArtifactPath:build,buildSha256,...(buildPreparation?{buildPreparation}:{})};
 }
+async function verifiedFiles(files) {
+  if (!Array.isArray(files) || files.length !== 4 || new Set(files.map(file=>file.path)).size !== files.length) return false;
+  return (await Promise.all(files.map(async file=>typeof file.path === 'string' && isAbsolute(file.path) &&
+    /^[a-f0-9]{64}$/.test(file.sha256) && hash(await readFile(file.path)) === file.sha256))).every(Boolean);
+}
 async function comparison(path, result) {
   if (!path) return {status:'missing-baseline'};
-  if (result.mode !== 'benchmark') return {status:'incomparable-baseline'};
   const base = JSON.parse(await readFile(path,'utf8'));
+  if (base.schemaVersion !== SCHEMA_VERSION) return {status:'incomparable-baseline',reason:'schema-mismatch'};
+  if (result.mode !== 'benchmark') return {status:'incomparable-baseline',reason:'mode-mismatch'};
   const a = base.metadata, b = result.metadata;
-  if (!a || !b || !['latency-baseline-pending','latency-measured'].includes(base.status) ||
+  if (!a || !b ||
+    JSON.stringify(a.runtime) !== JSON.stringify(b.runtime)) return {status:'incomparable-baseline',reason:'runtime-mismatch'};
+  if (!['latency-baseline-pending','latency-measured'].includes(base.status) ||
     base.mode !== 'benchmark' || base.machine !== result.machine || JSON.stringify(base.config) !== JSON.stringify(result.config) ||
     a.driverVersion !== b.driverVersion || a.delivery !== b.delivery || a.productionCommit === b.productionCommit ||
+    a.driverSha256 !== b.driverSha256 || a.driverFile !== b.driverFile ||
+    JSON.stringify(a.supportFiles) !== JSON.stringify(b.supportFiles) ||
     !validMeasurement(base) || !validMeasurement(result) || JSON.stringify(base.measurement.plan) !== JSON.stringify(result.measurement.plan) ||
     (a.driverVersion !== 'contract-stub' && (!a.buildPreparation || !b.buildPreparation)) ||
     !Number.isFinite(result.elapsedMs) || result.elapsedMs < result.config.durationMs ||
@@ -132,6 +145,10 @@ async function comparison(path, result) {
     result.p95.typedInputMs !== p95(result.samples.typedInputMs) || result.p95.sessionSwitchMs !== p95(result.samples.sessionSwitchMs)) return {status:'incomparable-baseline'};
   try {
     if (inside(resolve(base.artifacts),a.sourceCheckout) || inside(resolve(base.artifacts),a.buildArtifactPath) || inside(result.artifacts,b.sourceCheckout) || inside(result.artifacts,b.buildArtifactPath) ||
+      (a.driverFile && hash(await readFile(a.driverFile)) !== a.driverSha256) ||
+      (b.driverFile && hash(await readFile(b.driverFile)) !== b.driverSha256) ||
+      (a.supportFiles && !(await verifiedFiles(a.supportFiles))) ||
+      (b.supportFiles && !(await verifiedFiles(b.supportFiles))) ||
       await preservedSource(a.sourceCheckout,a.productionCommit) !== a.sourceCheckout ||
       await buildHash(a.buildArtifactPath) !== a.buildSha256 ||
       (a.buildPreparation && createHash('sha256').update(await readFile(a.buildPreparation.manifestPath)).digest('hex') !== a.buildPreparation.manifestSha256) ||
@@ -248,7 +265,7 @@ export async function runLoad(input = {}) {
   const root = await mkdtemp(join(baseReal, 'load-'));
   const paths = await isolation(root);
   if (input.isolateProcessEnv) applyIsolation(paths);
-  const result = { mode:o.mode, status:'failed', artifacts:root, machine, config:configOf(o), metadata:null, discovered:0, expanded:0, sessions:0, committedEvents:0, reconnects:0, elapsedMs:0, samples:{typedInputMs:[],sessionSwitchMs:[],sessionIds:[],elapsedMs:[],plannedAtMs:[]}, measurement:null, p95:{typedInputMs:null,sessionSwitchMs:null}, backlog:[], backlogSummary:null, memory:[], cleanup:null, comparison:{status:'missing-baseline'}, gateway:{status:'unsupported'}, unsupported:['live-provider-latency-not-measured','paid-provider-not-used','ssh-not-used','desktop-and-web-require-separate-runs'], failures:[] };
+  const result = { schemaVersion:SCHEMA_VERSION, mode:o.mode, status:'failed', artifacts:root, machine, config:configOf(o), metadata:null, discovered:0, expanded:0, sessions:0, committedEvents:0, reconnects:0, elapsedMs:0, samples:{typedInputMs:[],sessionSwitchMs:[],sessionIds:[],elapsedMs:[],plannedAtMs:[]}, measurement:null, p95:{typedInputMs:null,sessionSwitchMs:null}, backlog:[], backlogSummary:null, memory:[], cleanup:null, comparison:{status:'missing-baseline'}, gateway:{status:'unsupported'}, unsupported:['live-provider-latency-not-measured','paid-provider-not-used','ssh-not-used','desktop-and-web-require-separate-runs'], failures:[] };
   let mount, start, startingEvents = 0, phase = 'fixture';
   const cleanup = cleanupRegistry(input.driver);
   const takeFacts = async phase => {
@@ -264,11 +281,14 @@ export async function runLoad(input = {}) {
     mount = await input.driver.open({root,repo:fixture.repo,worktrees:fixture.worktrees,artifacts:root,isolation:paths,mode:o.mode,delivery:o.delivery,sourceCheckout:input.sourceCheckout,buildArtifactPath:input.buildArtifactPath,registerCleanup:cleanup.registerCleanup,registerChild:cleanup.registerChild});
     for (const name of ['discover','mount','emit','sample','detach','reconnect','facts','close']) if (typeof mount?.[name] !== 'function') throw new Error(`missing production hook ${name}`);
     metadataCheck(mount.metadata, paths, o.mode);
-    result.metadata = {productionCommit:mount.metadata.productionCommit,driverVersion:mount.metadata.driverVersion};
+    result.metadata = {productionCommit:mount.metadata.productionCommit,driverVersion:mount.metadata.driverVersion,runtime,driverFile:input.driverFile ?? null,driverSha256:input.driverSha256 ?? null,supportFiles:input.supportFiles ?? null};
+    if (input.driverFile && (await realpath(input.driverFile) !== input.driverFile || hash(await readFile(input.driverFile)) !== input.driverSha256 || !(await verifiedFiles(input.supportFiles)))) throw new Error('driver/support source changed');
+    if (input.driver.sourceCheckout && input.sourceCheckout && await realpath(input.driver.sourceCheckout) !== await realpath(input.sourceCheckout)) throw new Error('driver checkout differs from selected source');
     // Smoke stubs remain incomparable unless both independently verified sources are provided.
     if (input.sourceCheckout || input.buildArtifactPath || o.mode === 'acceptance') {
       phase = 'source-provenance';
       Object.assign(result.metadata,await verifiedProvenance(input.sourceCheckout,input.buildArtifactPath,mount.metadata.productionCommit,root,input.buildProvenancePath,mount.metadata.driverVersion));
+      if (mount.metadata.driverVersion !== 'contract-stub' && (!input.driverFile || !inside(result.metadata.sourceCheckout,input.driverFile))) throw new Error('production driver is outside selected checkout');
     }
     phase = 'discovery';
     const discovered = await mount.discover({repo:fixture.repo,candidates:fixture.worktrees});
@@ -378,15 +398,27 @@ export async function runLoad(input = {}) {
       if (!validMeasurement(result)) result.failures.push('gate-failed:measurement-population');
     }
     if (result.backlog.length) result.backlogSummary = {max:Math.max(...result.backlog.map(b=>b.highWater)),final:result.backlog.findLast(b=>b.phase==='end')?.count ?? null};
+    // 中文：采样与关闭期间不能换源或构建；写结果前再核对实际消费的源码、构建及驱动输入。
+    if (result.metadata && !result.failures.includes('gate-failed:source-provenance')) {
+      try {
+        const m=result.metadata;
+        if (m.driverFile && (hash(await readFile(m.driverFile)) !== m.driverSha256 || !(await verifiedFiles(m.supportFiles)))) throw new Error('driver/support changed');
+        if (m.sourceCheckout) {
+          await preservedSource(m.sourceCheckout,m.productionCommit);
+          if (await buildHash(m.buildArtifactPath) !== m.buildSha256) throw new Error('build changed');
+          if (m.buildPreparation && hash(await readFile(m.buildPreparation.manifestPath)) !== m.buildPreparation.manifestSha256) throw new Error('manifest changed');
+        }
+      } catch {result.failures.push('gate-failed:source-provenance');}
+    }
     try { result.comparison = await comparison(input.baselinePath,result); } catch { result.failures.push('gate-failed:baseline-unreadable'); }
     if (result.comparison.status === 'over-budget') result.failures.push('gate-failed:latency-regression');
-    if (!result.failures.length) result.status = o.mode === 'smoke' ? 'smoke-only' : o.mode === 'benchmark' ? result.comparison.status === 'within-budget' ? 'latency-measured' : 'latency-baseline-pending' : 'load-measured-baseline-pending';
+    if (!result.failures.length) result.status = result.comparison.status === 'incomparable-baseline' ? 'baseline-incomparable' : o.mode === 'benchmark' && input.driverFile && result.metadata?.driverVersion === 'contract-stub' ? 'contract-stub-only' : o.mode === 'smoke' ? input.baselinePath ? 'baseline-incomparable' : 'smoke-only' : o.mode === 'benchmark' ? result.comparison.status === 'within-budget' ? 'latency-measured' : 'latency-baseline-pending' : 'load-measured-baseline-pending';
     const file = join(root,'result.json'); await writeFile(file+'.partial',JSON.stringify(result,null,2)+'\n'); await rename(file+'.partial',file);
   }
   return result;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(new URL(import.meta.url).pathname)) {
-  const {runCli} = await import('./runner-cli.mjs');
-  await runCli();
+  // 中文：CLI 反向导入 runner 时，顶层 await 会导致循环模块永远无法完成求值。
+  import('./runner-cli.mjs').then(({runCli}) => runCli()).catch(() => { process.exitCode = 1; });
 }
