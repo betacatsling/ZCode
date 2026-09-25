@@ -311,38 +311,42 @@ export function ExternalSessionPane({
             </Button>
           </p>
         ) : null}
-        <div className="flex gap-2">
-          <textarea
-            aria-label="Message"
-            data-testid={`external-draft-${paneId}`}
-            className="min-h-9 min-w-0 flex-1 rounded-lg border border-input-border bg-input p-2 text-ui-base text-foreground max-sm:text-mobile-input-safe"
-            value={draft}
-            onChange={(event) => updateDraft(event.target.value)}
-            disabled={!canSend || inFlight}
-            title={!canSend ? (capabilities?.text.reason ?? labels.unavailable) : undefined}
-          />
-          <Button
-            type="button"
-            disabled={!canSend || !draft.trim() || inFlight || !snapshot}
-            title={!canSend ? (capabilities?.text.reason ?? labels.unavailable) : undefined}
-            onClick={() => void send()}
-          >
-            {labels.send}
-          </Button>
-          {activeTurn ? (
+        {/* 归档/失联会话的 owner 是 historyOnly：不渲染可执行入口，避免把"禁用但可点"
+            的 composer 当成可发送能力；只读历史与上面的归档提示保留。 */}
+        {!historyOnly ? (
+          <div className="flex gap-2">
+            <textarea
+              aria-label="Message"
+              data-testid={`external-draft-${paneId}`}
+              className="min-h-9 min-w-0 flex-1 rounded-lg border border-input-border bg-input p-2 text-ui-base text-foreground max-sm:text-mobile-input-safe"
+              value={draft}
+              onChange={(event) => updateDraft(event.target.value)}
+              disabled={!canSend || inFlight}
+              title={!canSend ? (capabilities?.text.reason ?? labels.unavailable) : undefined}
+            />
             <Button
               type="button"
-              variant="outline"
-              disabled={!canCancel || inFlight}
-              title={
-                !canCancel ? (capabilities?.cancelTurn.reason ?? labels.unavailable) : undefined
-              }
-              onClick={() => void stop()}
+              disabled={!canSend || !draft.trim() || inFlight || !snapshot}
+              title={!canSend ? (capabilities?.text.reason ?? labels.unavailable) : undefined}
+              onClick={() => void send()}
             >
-              {labels.stop}
+              {labels.send}
             </Button>
-          ) : null}
-        </div>
+            {activeTurn ? (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={!canCancel || inFlight}
+                title={
+                  !canCancel ? (capabilities?.cancelTurn.reason ?? labels.unavailable) : undefined
+                }
+                onClick={() => void stop()}
+              >
+                {labels.stop}
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
         <p className="mt-1 text-ui-xs text-foreground-subtle">
           {labels.model}: {model}
         </p>

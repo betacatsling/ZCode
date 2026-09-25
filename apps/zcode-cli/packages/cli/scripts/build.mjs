@@ -146,6 +146,13 @@ export const resolveBuildAliases = ({
   ),
   // esbuild alias 按前缀改写导入路径。所有 shared subpath 必须在通用入口前精确声明，
   // 否则会被错误解析为 `src/index.ts/<subpath>` 并让 Desktop agent/SEA 打包失败。
+  // zcode-protocol-v4 自身的子路径同理：漏声明会被下面的目录前缀改写成
+  // `zcode-protocol-v4/index.ts/<subpath>`。native create 意图指纹在 bootstrap
+  // 阶段引用本子路径，必须精确 alias 到真实文件。
+  "@zcode/shared/zcode-protocol-v4/native-create-fingerprint-node": resolve(
+    rootDirectory,
+    "../../packages/shared/src/zcode-protocol-v4/native-create-fingerprint.ts",
+  ),
   "@zcode/shared/zcode-protocol-v4": resolve(
     rootDirectory,
     "../../packages/shared/src/zcode-protocol-v4/index.ts",

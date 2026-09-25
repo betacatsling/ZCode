@@ -1,4 +1,5 @@
 import type { IServiceAccessor } from "@zcode/services";
+import { isRemoteWorkspaceIdentity } from "@zcode/shared";
 import { Event, ProxyChannel, type IChannel } from "@zcode/rpc";
 import { useMemo } from "react";
 import { useOptionalServices, useServices } from "@/hooks/useServices.js";
@@ -80,7 +81,9 @@ function resolveBaseWorkspaceServices(
 
 function hasRemoteWorkspaceMetadata(tab: WorkspaceServiceTargetTab | null | undefined): boolean {
   return Boolean(
-    tab?.workspaceIdentity?.trim() || tab?.remoteSessionId?.trim() || tab?.remoteTarget,
+    tab?.remoteSessionId?.trim() ||
+    tab?.remoteTarget ||
+    (tab?.workspaceIdentity?.trim() && isRemoteWorkspaceIdentity(tab.workspaceIdentity.trim())),
   );
 }
 
@@ -88,13 +91,28 @@ function resolveWorkspaceServiceIsRemoteTarget(params: {
   workspacePath: string | null | undefined;
   workspaceIdentity?: string | null;
   preferredRemoteSessionId?: string | null;
+  remoteTarget?: unknown;
   activeWorkspacePath?: string | null;
   activeWorkspaceIdentity?: string | null;
   activeTab?: WorkspaceServiceTargetTab | null;
   workspaceTabs?: readonly WorkspaceServiceTargetTab[];
 }): boolean {
-  if (params.workspaceIdentity?.trim() || params.preferredRemoteSessionId?.trim()) {
+  const identity = params.workspaceIdentity?.trim();
+  if (params.preferredRemoteSessionId?.trim() || isRemoteWorkspaceIdentity(identity ?? "")) {
     return true;
+  }
+  if (identity) {
+    // Bug 原因：Core 本地 worktree 也有非空 opaque identity；仅凭它判断远端会让
+    // Native pane 永久停在 remote-waiting。只有精确匹配且无远端端点的本地 tab 能走 base Host。
+    const localTab = params.workspaceTabs?.find(
+      (tab) =>
+        tab.workspacePath === params.workspacePath &&
+        tab.workspaceIdentity?.trim() === identity &&
+        !tab.remoteSessionId?.trim() &&
+        !tab.remoteTarget,
+    );
+    if (!localTab || params.remoteTarget) return true;
+    return false;
   }
 
   const workspacePath = params.workspacePath?.trim();
@@ -171,6 +189,7 @@ export function useWorkspaceServicesResolution(
       workspacePath,
       workspaceIdentity,
       preferredRemoteSessionId,
+      remoteTarget,
       activeWorkspacePath: state.activeWorkspacePath,
       activeWorkspaceIdentity: state.activeWorkspaceIdentity,
       activeTab: (() => {

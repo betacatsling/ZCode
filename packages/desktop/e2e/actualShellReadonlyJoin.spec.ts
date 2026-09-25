@@ -125,7 +125,19 @@ test("actual Core archive keeps Native and external Shell owners history-only", 
     const window = await app.firstWindow();
     const rendererErrors: string[] = [];
     let electronDiagnostics = "";
-    window.on("pageerror", (error) => rendererErrors.push(error.stack ?? String(error)));
+    window.on("pageerror", (error) =>
+      rendererErrors.push(
+        JSON.stringify({
+          name: error.name,
+          message: error.message,
+          stack: error.stack,
+          string: String(error),
+        }),
+      ),
+    );
+    window.on("console", (message) => {
+      if (message.type() === "error") rendererErrors.push(`console:${message.text()}`);
+    });
     app.process().stderr?.on("data", (data: Buffer) => {
       electronDiagnostics = (electronDiagnostics + data.toString()).slice(-12_000);
     });
@@ -181,13 +193,60 @@ test("actual Core archive keeps Native and external Shell owners history-only", 
     try {
       await expect(nativePane).toBeVisible({ timeout: 8_000 });
     } catch (error) {
+      const firstClick = {
+        row: await nativeTreeRow.getAttribute("data-state"),
+        panes: await window
+          .locator("[data-pane-id]")
+          .evaluateAll((nodes) => nodes.map((node) => node.outerHTML.slice(0, 2000))),
+        main: await window.locator("main").last().innerText(),
+      };
+      await nativeTreeRow.click();
+      let secondClick: unknown;
+      try {
+        await expect(nativePane).toBeVisible({ timeout: 4_000 });
+        secondClick = "mounted";
+      } catch (retryError) {
+        secondClick = {
+          error: String(retryError),
+          panes: await window
+            .locator("[data-pane-id]")
+            .evaluateAll((nodes) => nodes.map((node) => node.outerHTML.slice(0, 400))),
+        };
+      }
       throw new Error(
-        `Original Native owner did not mount: ${JSON.stringify({ body: await window.locator("body").innerText(), panes: await window.locator("[data-session-id]").evaluateAll((nodes) => nodes.map((node) => node.outerHTML.slice(0, 300))), alerts: await window.getByRole("alert").allInnerTexts(), rendererErrors, coreDiagnostics })}`,
+        `Original Native owner did not mount: ${JSON.stringify({ firstClick, secondClick, body: await window.locator("body").innerText(), alerts: await window.getByRole("alert").allInnerTexts(), rendererErrors, coreDiagnostics })}`,
         { cause: error },
       );
     }
-    await nativePane.getByTestId("v4-composer-input").fill("Native archived history");
-    await nativePane.getByTestId("v4-composer-send").click();
+    const nativeInput = nativePane.getByTestId("v4-composer-input");
+    await nativeInput.fill("Native archived history");
+    const firstInput = await nativeInput.innerText();
+    const nativeSend = nativePane.getByTestId("v4-composer-send");
+    try {
+      await expect(nativeSend).toBeEnabled({ timeout: 8_000 });
+      await nativeSend.click({ timeout: 3_000 });
+    } catch (error) {
+      throw new Error(
+        `Native composer unavailable: ${JSON.stringify({
+          composer: await nativePane.getByTestId("v4-composer").innerText(),
+          firstInput,
+          finalInput: await nativeInput.innerText(),
+          nativeView: await window.evaluate(async () => {
+            const bridge = (
+              window as typeof window & {
+                __actualShellReadonlyJoin?: { inspectNativeSelection(): Promise<unknown> };
+              }
+            ).__actualShellReadonlyJoin;
+            return bridge?.inspectNativeSelection();
+          }),
+          send: await nativeSend.evaluate((node) => node.outerHTML),
+          pane: (await nativePane.innerText()).slice(-2_500),
+          rendererErrors,
+          coreDiagnostics,
+        })}`,
+        { cause: error },
+      );
+    }
     await expect(nativePane).toContainText("Native owner history", { timeout: 15_000 });
 
     await window.getByRole("textbox", { name: "Split session ID" }).fill(externalId);
@@ -289,7 +348,9 @@ test("actual Core archive keeps Native and external Shell owners history-only", 
         if (!bridge) throw new Error("Mounted public Core test bridge unavailable");
         return bridge.createNativeSession();
       }),
-      /archived|admission|scope/i,
+      // 归档 workspace 在 listCreateOptions 准入处即被拒，错误文案为
+      // "Unknown or inactive target workspace"；inactive 同样是真实归档拒绝的证据。
+      /archived|admission|scope|inactive/i,
     );
     assert.equal(modelRequests.length, requestCount, "archive refusal must produce no Model IO");
 

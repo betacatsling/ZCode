@@ -57,6 +57,7 @@ export function mountActualShellFixture(services: IServiceAccessor, platform: IP
     window as typeof window & {
       __actualShellReadonlyJoin?: {
         createNativeSession(): Promise<string>;
+        inspectNativeSelection(): Promise<unknown>;
         archiveWorkspace(): Promise<void>;
         resolveOwner(sessionId: string): Promise<unknown>;
         dispatchHostSend(sessionId: string): Promise<unknown>;
@@ -71,8 +72,25 @@ export function mountActualShellFixture(services: IServiceAccessor, platform: IP
       const workspace = snapshot.workspaces.find((row) => row.id === "main");
       if (!workspace) throw new Error("Mounted Core workspace missing");
       const options = await hierarchy.listCreateOptions(workspace.id);
-      const native = options.options.find((option) => option.harnessId === "zcode");
-      if (!native) throw new Error("Isolated real Native option unavailable");
+      // 中文：选项按 Registry provider 顺序枚举，builtin 在前；若取第一个 zcode 选项，
+      // Native 会被绑到 builtin chat-completions 通道，断言无法区分原生模型路由。
+      // 这里必须选择与会话可用的配置默认（personal provider 的 defaultModelSelection）
+      // 一致的选项，证明该默认真的能被公开 ModelSelectionService + Core owner 选中。
+      const view = await services.modelSelectionService.getView();
+      const preferred = view.preferredSelection;
+      if (!preferred) throw new Error("Mounted Core has no configured default model selection");
+      const native = options.options.find(
+        (option) =>
+          option.harnessId === "zcode" &&
+          option.binding.kind === "host-managed" &&
+          option.binding.selection.providerId === preferred.providerId &&
+          option.binding.selection.modelId === preferred.modelId &&
+          option.binding.selection.options?.reasoningLevel === preferred.options?.reasoningLevel,
+      );
+      if (!native)
+        throw new Error(
+          `Isolated real Native option for the configured default unavailable: ${JSON.stringify(preferred)}`,
+        );
       const created = await hierarchy.createAgent({
         workspaceId: workspace.id,
         harnessId: "zcode",
@@ -97,6 +115,10 @@ export function mountActualShellFixture(services: IServiceAccessor, platform: IP
       )
         throw new Error("Core did not resolve the original Native CLI owner");
       return nativeOwner.originalSessionId;
+    },
+    async inspectNativeSelection() {
+      // Test-only public Host read; never inject a view or alter the renderer's selection.
+      return services.modelSelectionService.getView();
     },
     async archiveWorkspace() {
       if (!services.projectCatalogService) throw new Error("Mounted Core Catalog missing");

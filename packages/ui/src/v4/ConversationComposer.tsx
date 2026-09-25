@@ -985,9 +985,14 @@ function ConversationComposerImpl({
         }),
       );
     };
+    const scheduledRevision = contentRevisionRef.current;
     const applyDraft = () => {
       const api = inputApiRef.current;
       if (!api) return;
+      // Bug 原因：首次 mount 的恢复排在下一帧；用户已在新 scope 输入时，旧的空草稿
+      // 会覆盖刚输入的正文并使 Send 失效。只跳过已经被本 scope 编辑超越的恢复，
+      // scope 切换仍在上方同步落盘旧草稿、绑定新 owner。
+      if (contentRevisionRef.current !== scheduledRevision) return;
       restoreDraftInto(api);
       // 草稿恢复后把光标交还输入框（切会话/切草稿/挂载）；连接中会话待可编辑后兑现。
       requestComposerFocus();

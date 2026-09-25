@@ -186,9 +186,14 @@ export function createWorkspaceHierarchyService(input: {
       workspacePath: workspace.worktreePath,
     };
     const capability = await input.host.getSessionCapabilities(spec);
+    const project = snapshot.projects.find((row) => row.id === workspace.projectId);
     // 中文：路径可能复用；只有目标签发的原始 generation 与当前绑定、project 和身份一致才可执行。
+    // 归档是准入/展示状态而不是 lifecycle 变化；漏查 archived 会让归档 workspace 的
+    // owner 仍报可写，归档后的 send 也会被准入层放行。
     const current =
       workspace.lifecycle === "active" &&
+      !workspace.archived &&
+      !project?.archived &&
       workspace.projectId === spec.projectId &&
       binding.projectId === spec.projectId &&
       workspace.worktreeGeneration === spec.execution.worktreeGeneration &&
@@ -562,16 +567,20 @@ export function createWorkspaceHierarchyService(input: {
       const snapshot = await input.catalog.sidebarSnapshot();
       const workspace = snapshot.workspaces.find((row) => row.id === request.workspaceId);
       const binding = snapshot.bindings.find((row) => row.id === workspace?.repositoryBindingId);
+      const project = snapshot.projects.find((row) => row.id === workspace?.projectId);
       // 中文：旧 attachment ID 只是创建时来源；重连后必须由当前认证 registry
       // 再证明 scope，否则不得仅凭原路径/旧 lease 发放可写 owner。
       const currentAttachment = found.remoteSessionId
         ? await input.resolveRemoteSession?.(found.workspaceIdentity)
         : undefined;
       // 中文：原生旧索引若缺少 generation/仓库绑定证明，不能按相同路径重新关联到新 worktree 执行。
+      // 归档后的 workspace/project 必须把 owner 降级为 historyOnly，否则归档绕过准入仍显示可写。
       const current =
         !!workspace &&
         !!binding &&
         workspace.lifecycle === "active" &&
+        !workspace.archived &&
+        !project?.archived &&
         binding.executionTargetId === input.targetId &&
         binding.projectId === workspace.projectId &&
         found.worktreeGeneration === workspace.worktreeGeneration &&
