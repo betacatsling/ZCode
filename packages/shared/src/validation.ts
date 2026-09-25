@@ -209,6 +209,16 @@ export type WindowHostRemoteWorkspaceDescriptor = z.infer<
 
 export const windowHostAttachmentScopeSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("local") }).strict(),
+  // 仅 Main 经显式 consent 后可发送；Host 仍逐调用查证 Core workspace/session。
+  z
+    .object({
+      kind: z.literal("phone"),
+      workspaceId: nonEmptyStringSchema,
+      hostSessionId: nonEmptyStringSchema,
+      workspacePath: nonEmptyStringSchema,
+      workspaceIdentity: nonEmptyStringSchema,
+    })
+    .strict(),
   z
     .object({
       kind: z.literal("remote"),

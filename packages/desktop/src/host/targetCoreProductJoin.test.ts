@@ -24,6 +24,8 @@ import {
 } from "@zcode/services";
 import { mountLocalCore } from "./targetCoreMount.js";
 import { createRemoteHierarchyAttachment } from "./remoteHierarchyAttachment.js";
+import { registerPairedPhoneChannel } from "./pairedPhoneAgentHost.js";
+import type { IServerChannel } from "@zcode/rpc";
 
 /** Isolated real Core → one-use ticket → public RPC → window service collection. No authority fixture. */
 test("real Core RPC mounts Git Catalog and hierarchy across window detach/restart", async () => {
@@ -254,6 +256,67 @@ test("real Core RPC mounts Git Catalog and hierarchy across window detach/restar
       assert.equal(
         (await mount.services.get(IAgentHostService).getAvailability()).target.id,
         first.installationId,
+      );
+      // 中文：真实 Core 两个 Git worktree 下，手机 Host RPC 也必须在 dispatch 之前
+      // 复核 Catalog 与现存 session；不可因目标相同就把 foreign workspace ID 放行。
+      const channels = new Map<string, IServerChannel>();
+      registerPairedPhoneChannel(
+        {
+          registerChannel: (name, channel) => {
+            channels.set(name, channel);
+          },
+        },
+        mount.services,
+        {
+          workspaceId: workspace.id,
+          hostSessionId: "selected-existing-session",
+          workspacePath: workspace.worktreePath,
+          workspaceIdentity: workspace.workspaceIdentity,
+        },
+        () => true,
+      );
+      assert.deepEqual([...channels.keys()], [IAgentHostService.channelName]);
+      const phoneHost = channels.get(IAgentHostService.channelName)!;
+      await assert.rejects(
+        phoneHost.call(null as never, "getSessionSpec", [
+          {
+            targetId: first.installationId,
+            workspaceId: foreign.id,
+            hostSessionId: "selected-existing-session",
+          },
+        ]),
+        /denied/,
+      );
+      await assert.rejects(
+        phoneHost.call(null as never, "dispatch", [
+          {
+            schemaVersion: 2,
+            hostSessionId: "foreign-session",
+            projectId: "project",
+            workspaceId: foreign.id,
+            execution: {
+              targetId: first.installationId,
+              worktreePath: foreign.worktreePath,
+              workspaceIdentity: foreign.workspaceIdentity,
+              worktreeGeneration: "1",
+              cwdRelativeToWorktree: ".",
+            },
+            harness: { id: "pi", adapterVersion: "1" },
+            modelBinding: { kind: "harness-managed" },
+          },
+          { type: "sendText" },
+        ]),
+        /denied/,
+      );
+      assert.equal(
+        (await mount.services.get(IAgentHostService).listWorkspaceSessions(foreign.id)).length,
+        0,
+      );
+      assert.equal(
+        await mount.services
+          .get(IAgentHostService)
+          .queryCreationCommand("foreign-worktree-must-never-allocate"),
+        undefined,
       );
     } finally {
       mount.attachment.dispose();

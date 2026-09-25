@@ -117,7 +117,8 @@ export function createWindowHostAttachmentRegistry<
 
   function detachLocalAttachments(): void {
     for (const [attachmentId, tracked] of attachments) {
-      if (tracked.params.scope.kind !== "local") continue;
+      // 中文：Core 换代时手机和本地 renderer 使用同一 Host 服务；必须同时撤销旧手机视图。
+      if (tracked.params.scope.kind !== "local" && tracked.params.scope.kind !== "phone") continue;
       attachments.delete(attachmentId);
       disposeTracked(tracked);
     }

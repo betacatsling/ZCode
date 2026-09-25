@@ -15,6 +15,7 @@
  */
 import { createHostDatabaseStartup } from "./hostDatabaseStartup.js";
 import { createRemoteHierarchyAttachment } from "./remoteHierarchyAttachment.js";
+import { registerPairedPhoneChannel } from "./pairedPhoneAgentHost.js";
 import { mountLocalCore, type CoreAttachmentLocation } from "./targetCoreMount.js";
 import { randomUUID } from "node:crypto";
 import {
@@ -2005,6 +2006,24 @@ function exposeServicesOnMessagePort(
   const rawServer = new ChannelServer(protocol, "host", 1000, deferInit);
   const loggedServer = new LoggingChannelServer(rawServer, logRpc);
   const server = new NetworkTelemetryChannelServer(loggedServer);
+  if (attachmentScope.kind === "phone") {
+    // 中文：通用 ServiceCollection 含凭据、文件、终端和全窗口服务，手机端绝不可暴露。
+    // 只暴露 Host 检查每次方法/参数的 AgentHost 小接口；端口关闭即撤销实时效果。
+    if (clientMode !== "web-remote-replayable") throw new Error("phone delivery profile denied");
+    let phoneDisposed = false;
+    registerPairedPhoneChannel(server, services, attachmentScope, () => !phoneDisposed);
+    const handle: ExposedServicePortHandle = {
+      server,
+      dispose() {
+        if (phoneDisposed) return;
+        phoneDisposed = true;
+        rawServer.dispose();
+        protocol.disconnect();
+      },
+    };
+    port.once("close", () => handle.dispose());
+    return handle;
+  }
   const agentService = services.getOptional(IZCodeAgentService);
   const connectionScope = agentService
     ? createZCodeAgentConnectionScope(agentService, {
@@ -2115,7 +2134,7 @@ const windowHostAttachmentRegistry = createWindowHostAttachmentRegistry<
   HostRemoteConnectionCapabilities
 >({
   resolveScope: (scope: WindowHostAttachmentScope) => {
-    if (scope.kind === "local") {
+    if (scope.kind === "local" || scope.kind === "phone") {
       if (!activeServices) {
         throw new Error("local services 尚未初始化");
       }
@@ -2760,7 +2779,10 @@ parentPort.on("message", async (e: Electron.MessageEvent) => {
       logger.error("attach-service-port message missing MessagePort");
       return;
     }
-    if (msg.scope.kind === "local" && databaseStartup?.coordinator.snapshot.phase !== "ready") {
+    if (
+      (msg.scope.kind === "local" || msg.scope.kind === "phone") &&
+      databaseStartup?.coordinator.snapshot.phase !== "ready"
+    ) {
       // 刷新/手机 attachment 复用同一 Host，等待现有准备，不启动第二个执行者。
       pendingStartupAttachments.set(msg.attachmentId, () => {
         windowHostAttachmentRegistry.attach({ ...msg, port });
