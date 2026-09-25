@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { once } from "node:events";
 import { test } from "node:test";
-import Ajv from "ajv";
+// NodeNext 下 Ajv 的默认导入被识别为不可构造的 CommonJS 命名空间；使用已导出的构造函数。
+import { Ajv } from "ajv";
 import {
   ModelErrorCode,
   modelInputMessageJsonSchema,
