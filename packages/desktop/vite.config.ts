@@ -229,7 +229,10 @@ export default defineConfig(({ mode }) => {
           index: resolve(__dirname, "src/renderer/index.html"),
           // Test-only actual Core→preload→Shell entry; default packaged renderer excludes it.
           ...(process.env.ZCODE_ACTUAL_SHELL_FIXTURE_BUILD === "1"
-            ? { "actual-shell-mount": resolve(__dirname, "src/renderer/actual-shell-mount.html") }
+            ? {
+                "actual-shell-mount": resolve(__dirname, "src/renderer/actual-shell-mount.html"),
+                "load-product-mount": resolve(__dirname, "src/renderer/load-product-mount.html"),
+              }
             : {}),
           "resource-manager": resolve(__dirname, "src/renderer/resource-manager.html"),
           "cua-permission-panel": resolve(__dirname, "src/renderer/cua-permission-panel.html"),
