@@ -29,6 +29,8 @@ async function stopOwnedCore(child: ReturnType<typeof fork>): Promise<void> {
 // Default Core → production Electron window/utility Host/preload/MessagePort → real Shell.
 // The first RED run launched the renderer without a Host mount and failed on onboarding.
 test("actual Core → utility Host → preload → Shell Pi create/input/final/usage", async () => {
+  // Finite 100k-event durable append needs a separate bounded window, not an 8h load run.
+  test.setTimeout(process.env.ZCODE_MOUNTED_HISTORY_E2E === "1" ? 60 * 60_000 : 90_000);
   const isolated = await mkdtemp(join(tmpdir(), "zcode-actual-shell-"));
   const repo = join(isolated, "repo");
   const installation = join(isolated, "installation");
@@ -179,6 +181,7 @@ test("actual Core → utility Host → preload → Shell Pi create/input/final/u
         },
       }),
     );
+    const mountedHistory = process.env.ZCODE_MOUNTED_HISTORY_E2E === "1";
     const env = {
       PATH: process.env.PATH ?? "/usr/bin:/bin",
       NODE_OPTIONS: [
@@ -202,11 +205,17 @@ test("actual Core → utility Host → preload → Shell Pi create/input/final/u
       ZCODE_DESKTOP_USER_DATA_DIR: join(isolated, "electron-userdata"),
       ZCODE_DESKTOP_SESSION_DATA_DIR: join(isolated, "electron-session"),
       ZCODE_ACTUAL_SHELL_FIXTURE: "1",
+      ...(mountedHistory ? { ZCODE_MOUNTED_HISTORY_FIXTURE: "1" } : {}),
+      ...(process.env.ZCODE_HISTORY_DIAGNOSTIC_EVENTS
+        ? { ZCODE_HISTORY_DIAGNOSTIC_EVENTS: process.env.ZCODE_HISTORY_DIAGNOSTIC_EVENTS }
+        : {}),
     };
     core = fork(
       resolve(
         root,
-        "packages/zcode-server-cli/src/server-core/coreProductionFactoryChild.fixture.ts",
+        mountedHistory
+          ? "packages/zcode-server-cli/src/server-core/mountedHistoryChild.fixture.ts"
+          : "packages/zcode-server-cli/src/server-core/coreProductionFactoryChild.fixture.ts",
       ),
       [],
       {
@@ -512,14 +521,425 @@ test("actual Core → utility Host → preload → Shell Pi create/input/final/u
     expect(census.map((item) => item.id).sort()).toEqual([sessionId!, secondId!].sort());
     expect(census.map((item) => item.harnessId)).toEqual(["pi", "pi"]);
     expect(nativePaneRpcs).toEqual([]);
+    if (!mountedHistory) return; // Default A/B/desktop C remains the original Pi Core fixture.
 
     // D RED: this must create a synthetic session via the mounted Core's real hierarchy,
     // never by changing a renderer row or writing the journal from the fixture.
-    const createHistory = await app.evaluate(() =>
-      typeof (globalThis as typeof globalThis & { __actualShellCreateHistory?: unknown })
-        .__actualShellCreateHistory,
+    const createHistory = await app.evaluate(
+      () =>
+        typeof (globalThis as typeof globalThis & { __actualShellCreateHistory?: unknown })
+          .__actualShellCreateHistory,
     );
     expect(createHistory).toBe("function");
+    const historyId = await app.evaluate(() =>
+      (
+        globalThis as typeof globalThis & { __actualShellCreateHistory: () => Promise<string> }
+      ).__actualShellCreateHistory(),
+    );
+    expect(historyId).toBeTruthy();
+    // The fixture's trusted Main creates outside the UI dialog. Trigger the existing
+    // mounted sidebar focus refresh; it reads only the real Core Catalog snapshot.
+    await window.evaluate(() => window.dispatchEvent(new Event("focus")));
+    // Keep the synthetic view unattached during the 100k seed; Main sends one
+    // accepted public Core Host command. After commit the real Shell attaches the
+    // original ID, pages it and remains mounted through append/old-row revision.
+    await expect(window.getByTestId(`session-${historyId}`)).toBeVisible({ timeout: 15_000 });
+    const seeded = new Promise<{ seq: number; kinds: Record<string, number> }>(
+      (resolve, reject) => {
+        let lastProgress = 0;
+        const timeout = setTimeout(
+          () =>
+            reject(
+              new Error(
+                `Core synthetic producer not committed at 100k: last=${lastProgress}, stderr=${coreError.slice(-2000)}`,
+              ),
+            ),
+          Number(process.env.ZCODE_HISTORY_DIAGNOSTIC_TIMEOUT_MS) || 52 * 60_000,
+        );
+        core!.on("message", (message: unknown) => {
+          if (
+            !message ||
+            typeof message !== "object" ||
+            !("type" in message) ||
+            !("id" in message) ||
+            message.id !== historyId
+          )
+            return;
+          if (message.type === "history-started") console.log("[history] producer accepted turn");
+          if (
+            ["history-awaiting-commit", "history-observed-commit", "history-rows-emitted"].includes(
+              String(message.type),
+            )
+          )
+            console.log(
+              `[history] ${String(message.type)} seq=${"seq" in message ? String(message.seq) : "?"}`,
+            );
+          if (message.type === "history-producer-error") {
+            clearTimeout(timeout);
+            reject(
+              new Error(`Core producer: ${"error" in message ? String(message.error) : "unknown"}`),
+            );
+          }
+          if (
+            message.type === "history-progress" &&
+            "seq" in message &&
+            typeof message.seq === "number"
+          ) {
+            lastProgress = message.seq;
+            console.log(`[history] Core committed sequence=${lastProgress}`);
+          }
+          if (
+            message.type !== "history-seeded" ||
+            !("seq" in message) ||
+            typeof message.seq !== "number"
+          )
+            return;
+          clearTimeout(timeout);
+          resolve({
+            seq: message.seq,
+            kinds: "kinds" in message ? (message.kinds as Record<string, number>) : {},
+          });
+        });
+      },
+    );
+    const sendReceipt = (await app.evaluate(
+      (_, id) =>
+        (
+          globalThis as typeof globalThis & {
+            __actualShellSendHistory: (id: string) => Promise<unknown>;
+          }
+        ).__actualShellSendHistory(id),
+      historyId,
+    )) as { status: string };
+    expect(sendReceipt.status).toBe("accepted");
+    const committed = await seeded;
+    // RED: old source used ~98k inert unsupported extensions instead of turn-owned history.
+    expect(committed.kinds["extension.event"] ?? 0).toBe(0);
+    expect(committed.kinds["message.finished"]).toBeGreaterThanOrEqual(2_201);
+    expect(Object.values(committed.kinds).reduce((sum, count) => sum + count, 0)).toBe(
+      committed.seq,
+    );
+    const persistedKinds = await app.evaluate(
+      (_, id) =>
+        (
+          globalThis as typeof globalThis & {
+            __actualShellCountHistory: (
+              id: string,
+            ) => Promise<{ sequence: number; kinds: Record<string, number> }>;
+          }
+        ).__actualShellCountHistory(id),
+      historyId,
+    );
+    expect(persistedKinds.sequence).toBe(committed.seq);
+    expect(persistedKinds.kinds).toEqual(committed.kinds);
+    console.log(
+      `[history] durable Core census seq=${persistedKinds.sequence}, kinds=${JSON.stringify(persistedKinds.kinds)}`,
+    );
+    const diagnosticBudget = Number(process.env.ZCODE_HISTORY_DIAGNOSTIC_EVENTS || 0);
+    if (diagnosticBudget)
+      console.log(`[history] DIAGNOSTIC ONLY: ${diagnosticBudget} events; NOT the 100k gate`);
+    expect(committed.seq).toBeGreaterThanOrEqual(diagnosticBudget || 100_000);
+    const history = async (beforeRowId?: number) =>
+      (await app!.evaluate(
+        async (_electron, input) =>
+          (
+            globalThis as typeof globalThis & {
+              __actualShellHistory: (id: string, beforeRowId?: number) => Promise<unknown>;
+            }
+          ).__actualShellHistory(input.id, input.beforeRowId),
+        { id: historyId, beforeRowId },
+      )) as {
+        model: { seq: number };
+        result: {
+          atSeq: number;
+          atRevision: number;
+          rows: Array<{
+            rowId: number;
+            kind: string;
+            name?: string;
+            status?: string;
+            outputText?: string;
+          }>;
+          hasMore: boolean;
+        };
+      };
+    const tail = await history();
+    expect(tail.model.seq).toBeGreaterThanOrEqual(diagnosticBudget || 100_000);
+    expect(tail.result.atSeq).toBe(tail.model.seq);
+    expect(tail.result.rows.at(-1)!.rowId).toBeGreaterThan(2_000);
+    const lastRowId = tail.result.rows.at(-1)!.rowId;
+    const first = await history(10);
+    const earlyTool = first.result.rows.find((row) => row.kind === "toolCall");
+    expect(earlyTool).toBeDefined();
+    // Real Shell controls, not direct rowsRange-only probes: traverse the bounded window to the start.
+    // The window/utility Host is unchanged. Mount the original Core session for D
+    // only after seeding, then keep it mounted across both producer barriers.
+    await window.getByTestId(`session-${historyId}`).click();
+    await expect(window.locator(`[data-session-id="${historyId}"]`)).toBeVisible();
+    const older = window.getByRole("button", { name: "Load earlier messages" });
+    try {
+      await expect
+        .poll(
+          async () =>
+            (await older.count()) > 0 ||
+            (await window.getByTestId("external-history-range").allTextContents()).some((text) =>
+              text.startsWith("Rows 1–"),
+            ),
+          { timeout: 30_000 },
+        )
+        .toBe(true);
+    } catch (cause) {
+      console.log(
+        `[history] UI missing older: ${JSON.stringify({
+          coreTail: lastRowId,
+          pane: await window.locator(`[data-session-id="${historyId}"]`).innerText(),
+          alerts: await window.getByRole("alert").allTextContents(),
+          rowCount: await window
+            .locator(`[data-session-id="${historyId}"] [data-v4-timeline-virtual-history]`)
+            .count(),
+          rendererErrors,
+          electronDiagnostics,
+        })}`,
+      );
+      throw cause;
+    }
+    const range = window.getByTestId("external-history-range");
+    let firstVisible = lastRowId;
+    for (let i = 0; i < 160 && (await older.count()); i++) {
+      // The timeline also invokes the same production older control at its viewport edge.
+      // It may finish the final page between the count and click; never click a stale/disabled button.
+      const current = Number((await range.textContent())?.match(/Rows (\d+)/)?.[1] ?? firstVisible);
+      if (current === 1 || !(await older.count())) break;
+      // 中文：自动预取可能已在途，禁用按钮时不能把一次未触发的点击当作分页失败。
+      await expect
+        .poll(
+          async () =>
+            (await older.isEnabled().catch(() => false)) ||
+            Number((await range.textContent())?.match(/Rows (\d+)/)?.[1] ?? current) < current,
+          { timeout: 20_000 },
+        )
+        .toBe(true);
+      if (
+        Number((await range.textContent())?.match(/Rows (\d+)/)?.[1] ?? current) === current &&
+        (await older.count())
+      )
+        await older.click({ timeout: 10_000 });
+      await expect
+        .poll(
+          async () => Number((await range.textContent())?.match(/Rows (\d+)/)?.[1] ?? current),
+          { timeout: 20_000 },
+        )
+        .toBeLessThan(current);
+      firstVisible = Number((await range.textContent())?.match(/Rows (\d+)/)?.[1]);
+      console.log(`[history] earlier control ${i + 1}: first=${firstVisible}`);
+    }
+    await expect(older).toHaveCount(0);
+    await expect(range).toContainText(`Rows 1–`);
+    const timeline = window.locator(`[data-session-id="${historyId}"] [data-v4-timeline-scroll]`);
+    await timeline.evaluate((element) => {
+      element.scrollTop = 0;
+      element.dispatchEvent(new Event("scroll"));
+    });
+    const visibleEarlyTool = window.locator(
+      `[data-session-id="${historyId}"] [data-row-id="${earlyTool!.rowId}"] [data-status]`,
+    );
+    await expect(visibleEarlyTool).toHaveAttribute("data-status", "in_progress", {
+      timeout: 15_000,
+    });
+    const held = await history(10);
+    expect(held.result.rows.find((row) => row.rowId === earlyTool!.rowId)).toEqual(earlyTool);
+    core!.send({ command: "release-history", id: historyId });
+    await expect
+      .poll(async () => (await history()).model.seq, { timeout: 30_000 })
+      .toBeGreaterThan(committed.seq);
+    await expect(range).toContainText(`Rows 1–`);
+    core!.send({ command: "release-history", id: historyId });
+    await expect
+      .poll(async () => (await history(10)).result.atRevision, { timeout: 30_000 })
+      .toBeGreaterThan(held.result.atRevision);
+    const updated = await history(10);
+    expect(updated.result.rows.find((row) => row.rowId === earlyTool!.rowId)?.status).toBe(
+      "success",
+    );
+    const publicRange = (await window.evaluate(
+      async (id) =>
+        (
+          window as typeof window & { __actualShellPublicHistory: (id: string) => Promise<unknown> }
+        ).__actualShellPublicHistory(id),
+      historyId,
+    )) as { atSeq: number; atRevision: number; rows: Array<{ rowId: number; status?: string }> };
+    const observedEvents = await window.evaluate(
+      (id) =>
+        (
+          window as typeof window & { __actualShellObservedHistoryEvents?: (id: string) => unknown }
+        ).__actualShellObservedHistoryEvents?.(id),
+      historyId,
+    );
+    const paneWatermark = await window
+      .locator(`[data-session-id="${historyId}"]`)
+      .evaluate((element) => ({
+        seq: element.getAttribute("data-projection-seq"),
+        revision: element.getAttribute("data-historical-revision"),
+        browsing: element.getAttribute("data-history-browsing"),
+      }));
+    console.log(
+      `[history] Core/public revisions=${updated.result.atRevision}/${publicRange.atRevision}, seq=${updated.result.atSeq}/${publicRange.atSeq}, oldStatus=${publicRange.rows.find((row) => row.rowId === earlyTool!.rowId)?.status}, mountedPortEvents=${JSON.stringify(observedEvents)}, pane=${JSON.stringify(paneWatermark)}`,
+    );
+    expect(publicRange.rows.find((row) => row.rowId === earlyTool!.rowId)?.status).toBe("success");
+    try {
+      await expect(visibleEarlyTool).toHaveAttribute("data-status", "completed", {
+        timeout: 30_000,
+      });
+    } catch (cause) {
+      const position = await timeline.evaluate((element) => ({
+        top: element.scrollTop,
+        height: element.scrollHeight,
+        viewport: element.clientHeight,
+      }));
+      console.log(
+        `[history] held mutation absent: range=${(await range.allTextContents()).join("|")}, position=${JSON.stringify(position)}, row2=${JSON.stringify(await visibleEarlyTool.allTextContents())}, paneSeq=${await window.locator(`[data-session-id="${historyId}"]`).getAttribute("data-projection-seq")}`,
+      );
+      await timeline.evaluate((element) => {
+        element.scrollTop = 0;
+        element.dispatchEvent(new Event("scroll"));
+      });
+      console.log(
+        `[history] after scroll-to-old: row2=${JSON.stringify(await visibleEarlyTool.allTextContents())}, status=${await visibleEarlyTool
+          .first()
+          .getAttribute("data-status")
+          .catch(
+            () => "absent",
+          )}, pane=${(await window.locator(`[data-session-id="${historyId}"]`).innerText()).slice(0, 650)}, virtual=${await window.locator(`[data-session-id="${historyId}"] [data-v4-timeline-virtual-history]`).count()}`,
+      );
+      throw cause;
+    }
+    await expect(range).toContainText(`Rows 1–`);
+    const heldRange = (await range.textContent())?.match(/Rows (\d+)–(\d+) of (\d+)/);
+    expect(heldRange).toBeTruthy();
+    expect(Number(heldRange![2]) - Number(heldRange![1]) + 1).toBeLessThanOrEqual(2_000);
+    // Navigate forward while the held turn is still open. A terminal turn collapses
+    // its history disclosure and can independently auto-prefetch the visible top edge.
+    await timeline.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+      element.dispatchEvent(new Event("scroll"));
+    });
+    const newer = window.getByRole("button", { name: "Load newer messages" });
+    await expect(newer).toBeVisible();
+    await newer.click();
+    await expect
+      .poll(async () => Number((await range.textContent())?.match(/Rows (\d+)/)?.[1] ?? 1), {
+        timeout: 20_000,
+      })
+      .toBeGreaterThan(1);
+    core!.send({ command: "release-history", id: historyId });
+    await expect
+      .poll(async () => (await history()).model.seq, { timeout: 30_000 })
+      .toBeGreaterThan(updated.model.seq);
+    await window.getByRole("button", { name: "Latest messages" }).click();
+    await expect(range).toHaveCount(0);
+    const finalTail = await history();
+    expect(finalTail.result.rows.at(-1)!.rowId).toBeGreaterThan(lastRowId);
+    expect(finalTail.model.seq).toBe(committed.seq + 258);
+    expect(finalTail.model.seq).toBeLessThan(102_000);
+    // Final tool and turn are the original accepted entities; no extra synthetic replay or side writes.
+    const finalKinds = {
+      ...persistedKinds.kinds,
+      "message.finished": persistedKinds.kinds["message.finished"] + 256,
+      "tool.finished": 1,
+      "turn.finished": 1,
+    };
+    const finalCensus = await app.evaluate(
+      (_, id) =>
+        (
+          globalThis as typeof globalThis & {
+            __actualShellCountHistory: (
+              id: string,
+            ) => Promise<{ sequence: number; kinds: Record<string, number> }>;
+          }
+        ).__actualShellCountHistory(id),
+      historyId,
+    );
+    expect(finalCensus).toEqual({ sequence: finalTail.model.seq, kinds: finalKinds });
+    console.log(
+      `[history] final committed seq=${finalTail.model.seq}, rows=${finalTail.result.rows.at(-1)!.rowId}, seededKinds=${JSON.stringify(committed.kinds)}, oldRow=${earlyTool!.rowId}, revision=${updated.result.atRevision}, owner=${historyId}`,
+    );
+    if (process.env.ZCODE_HISTORY_LIFECYCLE_E2E === "1") {
+      const cancelledId = await app.evaluate(() =>
+        (
+          globalThis as typeof globalThis & { __actualShellCreateHistory: () => Promise<string> }
+        ).__actualShellCreateHistory(),
+      );
+      const cancelledMessage = new Promise<{ seq: number; kinds: Record<string, number> }>(
+        (resolve, reject) => {
+          const timeout = setTimeout(
+            () => reject(new Error("cancelled producer did not settle")),
+            20_000,
+          );
+          core!.on("message", (message: unknown) => {
+            if (
+              !message ||
+              typeof message !== "object" ||
+              !("type" in message) ||
+              !("id" in message) ||
+              message.id !== cancelledId
+            )
+              return;
+            if (message.type === "history-cancelled" && "seq" in message && "kinds" in message) {
+              clearTimeout(timeout);
+              resolve({
+                seq: message.seq as number,
+                kinds: message.kinds as Record<string, number>,
+              });
+            }
+          });
+        },
+      );
+      // 中文：创建回执与 Host 持久索引/窗口侧边栏是不同阶段；等真正 Core 目录行可见再投递。
+      await window.evaluate(() => window.dispatchEvent(new Event("focus")));
+      await expect(window.getByTestId(`session-${cancelledId}`)).toBeVisible({ timeout: 15_000 });
+      const cancelSend = await app.evaluate(
+        (_, id) =>
+          (
+            globalThis as typeof globalThis & {
+              __actualShellSendHistory: (id: string) => Promise<{ status: string }>;
+            }
+          ).__actualShellSendHistory(id),
+        cancelledId,
+      );
+      expect(cancelSend.status).toBe("accepted");
+      const cancelReceipt = await app.evaluate(
+        (_, id) =>
+          (
+            globalThis as typeof globalThis & {
+              __actualShellCancelHistory: (id: string) => Promise<{ status: string }>;
+            }
+          ).__actualShellCancelHistory(id),
+        cancelledId,
+      );
+      expect(cancelReceipt.status).toBe("completed");
+      const cancelled = await cancelledMessage;
+      const observed = await app.evaluate(
+        (_, id) =>
+          (
+            globalThis as typeof globalThis & {
+              __actualShellRead: (
+                id: string,
+              ) => Promise<{ events: Array<{ kind: string; outcome?: string; sequence: number }> }>;
+            }
+          ).__actualShellRead(id),
+        cancelledId,
+      );
+      expect(observed.events.at(-1)).toMatchObject({
+        kind: "turn.finished",
+        outcome: "cancelled",
+        sequence: cancelled.seq,
+      });
+      expect(cancelled.kinds["extension.event"] ?? 0).toBe(0);
+      expect(Object.values(cancelled.kinds).reduce((sum, n) => sum + n, 0)).toBe(cancelled.seq);
+      console.log(
+        `[history] accepted Host cancel completed, seq=${cancelled.seq}, kinds=${JSON.stringify(cancelled.kinds)}, owner=${cancelledId}`,
+      );
+    }
   } finally {
     releaseSecond();
     try {

@@ -21,6 +21,38 @@ export function mountActualShellFixture(services: IServiceAccessor, platform: IP
   if (!services.projectCatalogService || !services.workspaceHierarchyService)
     throw new Error("Core Catalog and hierarchy are required for the mounted Shell");
   registerBaseWorkspaceServices(services);
+  const observedHostEvents = new Map<string, { seq: number; kind: string; count: number }>();
+  services.agentHostService?.onEvent(({ spec, event }) => {
+    if (spec.harness.id !== "synthetic-history") return;
+    const old = observedHostEvents.get(spec.hostSessionId);
+    observedHostEvents.set(spec.hostSessionId, {
+      seq: event.sequence,
+      kind: event.kind,
+      count: (old?.count ?? 0) + 1,
+    });
+  });
+  (
+    window as typeof window & { __actualShellObservedHistoryEvents?: (id: string) => unknown }
+  ).__actualShellObservedHistoryEvents = (id) => observedHostEvents.get(id) ?? null;
+  // Read-only observation over the *same public desktop MessagePort* as the Shell.
+  // It cannot mutate Core facts, inject snapshots or alter the store's browsing cursor.
+  (
+    window as typeof window & { __actualShellPublicHistory?: (id: string) => Promise<unknown> }
+  ).__actualShellPublicHistory = async (id) => {
+    if (!services.agentHostService || !services.projectCatalogService)
+      throw new Error("Mounted Host RPC missing");
+    const catalog = await services.projectCatalogService.sidebarSnapshot();
+    const targetId = catalog.bindings[0]?.executionTargetId;
+    if (!targetId) throw new Error("Mounted Core target missing");
+    const spec = await services.agentHostService.getSessionSpec({
+      targetId,
+      workspaceId: "main",
+      hostSessionId: id,
+    });
+    if (!spec || spec.harness.id !== "synthetic-history")
+      throw new Error("Synthetic owner not found");
+    return services.agentHostService.rowsRange(spec, { sessionId: id, beforeRowId: 10, limit: 9 });
+  };
   createRoot(document.getElementById("root")!).render(
     <ZCodeIntlProvider initialLocale="en-US">
       <PlatformProvider platform={platform}>

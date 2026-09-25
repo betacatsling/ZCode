@@ -148,6 +148,9 @@ export function ExternalSessionPane({
       data-testid={testId(TID_V4_SESSION_PANE, paneId)}
       data-session-id={spec.hostSessionId}
       data-harness={spec.harness.id}
+      data-projection-seq={snapshot?.seq}
+      data-historical-revision={snapshot?.rows.historicalRevision}
+      data-history-browsing={state.externalHistoryBrowsing ? "true" : "false"}
       className="relative flex h-full min-h-0 flex-col bg-background text-foreground"
     >
       <ConversationHeader
@@ -245,7 +248,9 @@ export function ExternalSessionPane({
             totalCount={snapshot?.rows.totalCount ?? 0}
             sessionKey={spec.hostSessionId}
             rowContext={rowContext}
-            canLoadOlder={canLoadExternalOlder(snapshot)}
+            // 原因：浏览旧页时虚拟列表顶部仍可见，自动预取会把用户刚点的“较新”页立刻拉回旧页；
+            // 浏览态只保留上方显式“更早”按钮，不新增计时器或第二份游标。
+            canLoadOlder={canLoadExternalOlder(snapshot) && !state.externalHistoryBrowsing}
             loadingOlder={state.loadingOlder}
             onLoadOlder={() => lease?.store.loadOlder()}
           />

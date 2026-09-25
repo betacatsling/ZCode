@@ -87,6 +87,156 @@ void (async () => {
       read.attachment.dispose();
     }
   };
+  // Fixture initiates a *real* hierarchy creation on the mounted Core, never writes
+  // Catalog rows/read-model facts. The renderer selects the returned Core session ID.
+  (
+    globalThis as typeof globalThis & { __actualShellCreateHistory?: () => Promise<string> }
+  ).__actualShellCreateHistory = async () => {
+    const read = await core.mountLocalCore(location);
+    try {
+      const hierarchy = read.services.get(services.IWorkspaceHierarchyService);
+      const harness = (await hierarchy.listHarnesses("main")).find(
+        (item) => item.manifest.id === "synthetic-history" && item.availability === "supported",
+      );
+      // Production UI's create-option chooser is deliberately Pi-only; fixture selects
+      // the same validated local fake Model binding, then real hierarchy/Host checks it.
+      const selection = (await hierarchy.listCreateOptions("main")).options.find(
+        (item) => item.harnessId === "pi",
+      );
+      if (!harness || !selection)
+        throw new Error("Trusted synthetic harness or fake Model binding unavailable from Core");
+      const created = await hierarchy.createAgent({
+        workspaceId: "main",
+        harnessId: harness.manifest.id,
+        modelBinding: selection.binding,
+        commandId: crypto.randomUUID(),
+      });
+      if (created.owner.kind !== "external" || created.owner.historyOnly)
+        throw new Error("Synthetic Host owner not writable");
+      return created.owner.spec.hostSessionId;
+    } finally {
+      read.attachment.dispose();
+    }
+  };
+  (
+    globalThis as typeof globalThis & {
+      __actualShellSendHistory?: (id: string) => Promise<unknown>;
+    }
+  ).__actualShellSendHistory = async (id) => {
+    const read = await core.mountLocalCore(location);
+    try {
+      const agent = read.services.get(services.IAgentHostService);
+      const spec = await agent.getSessionSpec({
+        targetId: location.installationId,
+        workspaceId: "main",
+        hostSessionId: id,
+      });
+      if (!spec || spec.harness.id !== "synthetic-history")
+        throw new Error("Foreign synthetic Host");
+      const commandId = crypto.randomUUID();
+      // 中文：RPC Promise 未落定前不能释放一次性 ticket，否则已接受发送只留下不确定回执。
+      return await agent.dispatch(spec, {
+        type: "send",
+        commandId,
+        hostSessionId: id,
+        turnId: commandId,
+        text: "Produce synthetic long history",
+      });
+    } finally {
+      read.attachment.dispose();
+    }
+  };
+  // Read-only durable Core event census: producer counters alone do not establish persisted kinds.
+  (
+    globalThis as typeof globalThis & {
+      __actualShellCountHistory?: (id: string) => Promise<unknown>;
+    }
+  ).__actualShellCountHistory = async (id) => {
+    const read = await core.mountLocalCore(location);
+    try {
+      const agent = read.services.get(services.IAgentHostService);
+      const spec = await agent.getSessionSpec({
+        targetId: location.installationId,
+        workspaceId: "main",
+        hostSessionId: id,
+      });
+      if (!spec || spec.harness.id !== "synthetic-history")
+        throw new Error("Foreign synthetic Host");
+      const kinds: Record<string, number> = {};
+      let sequence = 0;
+      while (true) {
+        const batch = await agent.eventsSince(spec, sequence);
+        if (!batch.length) break;
+        for (const event of batch) {
+          if (event.sequence !== sequence + 1)
+            throw new Error(`Noncontiguous Core journal at ${sequence}`);
+          sequence = event.sequence;
+          kinds[event.kind] = (kinds[event.kind] ?? 0) + 1;
+        }
+        if (sequence > 102_000) throw new Error("Synthetic event cap exceeded");
+      }
+      return { sequence, kinds };
+    } finally {
+      read.attachment.dispose();
+    }
+  };
+  (
+    globalThis as typeof globalThis & {
+      __actualShellCancelHistory?: (id: string) => Promise<unknown>;
+    }
+  ).__actualShellCancelHistory = async (id) => {
+    const read = await core.mountLocalCore(location);
+    try {
+      const agent = read.services.get(services.IAgentHostService);
+      const spec = await agent.getSessionSpec({
+        targetId: location.installationId,
+        workspaceId: "main",
+        hostSessionId: id,
+      });
+      if (!spec || spec.harness.id !== "synthetic-history")
+        throw new Error("Foreign synthetic Host");
+      const started = (await agent.eventsSince(spec, 0)).find(
+        (event) => event.kind === "turn.started",
+      );
+      if (!started || started.kind !== "turn.started")
+        throw new Error("Original accepted turn not started");
+      return await agent.dispatch(spec, {
+        type: "cancelTurn",
+        commandId: crypto.randomUUID(),
+        hostSessionId: id,
+        runtimeEpoch: started.runtimeEpoch,
+        turnId: started.turnId,
+      });
+    } finally {
+      read.attachment.dispose();
+    }
+  };
+  (
+    globalThis as typeof globalThis & {
+      __actualShellHistory?: (id: string, beforeRowId?: number) => Promise<unknown>;
+    }
+  ).__actualShellHistory = async (id, beforeRowId) => {
+    const read = await core.mountLocalCore(location);
+    try {
+      const agent = read.services.get(services.IAgentHostService);
+      const spec = await agent.getSessionSpec({
+        targetId: location.installationId,
+        workspaceId: "main",
+        hostSessionId: id,
+      });
+      if (!spec || spec.harness.id !== "synthetic-history")
+        throw new Error("Foreign or missing synthetic Host");
+      const model = await agent.getSessionReadModel(spec);
+      const result = await agent.rowsRange(spec, {
+        sessionId: id,
+        ...(beforeRowId ? { beforeRowId } : {}),
+        limit: 200,
+      });
+      return { model, result };
+    } finally {
+      read.attachment.dispose();
+    }
+  };
   const logger = {
     info: (...messages: unknown[]) =>
       process.stderr.write(`[actual-shell] ${messages.map(String).join(" ")}\n`),
