@@ -12,6 +12,8 @@ import { ReleaseInstaller } from "../runtime/releaseInstaller.js";
 import { currentServerTarget } from "../runtime/manifest.js";
 import { resolveServerLayout } from "../runtime/paths.js";
 import { ReleaseManager } from "../runtime/releaseManager.js";
+import { hashReleaseTree } from "../runtime/immutableRelease.js";
+import { registerTrustedLocalSourceBootSelection } from "../runtime/releaseBootSelection.js";
 import { createReleaseAgentWiring } from "../runtime/agentWiring.js";
 import { requestControl } from "../ipc/controlClient.js";
 import { DataRootLock } from "../runtime/lock.js";
@@ -146,10 +148,25 @@ test(
         }),
       );
       const runtimeNode = join(runtime, "node");
+      // 中文：真实子进程不继承测试框架的 tsx/execArgv、仓库 cwd 或宿主凭据；
+      // 已安装 Node/CLI/依赖只能从隔离发行目录和空 profile 启动。
+      const isolatedEnv: NodeJS.ProcessEnv = {
+        PATH: process.env.PATH,
+        NODE_OPTIONS: process.env.NODE_OPTIONS,
+        TMPDIR: process.env.TMPDIR,
+        LANG: process.env.LANG,
+        HOME: dir,
+        XDG_CONFIG_HOME: join(dir, "config"),
+        ZCODE_DATA_BASE_DIR: dir,
+        ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: provider,
+        ZCODE_SERVER_SKIP_SERVICE_REGISTRATION: "1",
+      };
       core = fork(join(runtime, "server-core.js"), ["1", "open"], {
         execPath: runtimeNode,
+        execArgv: [],
+        cwd: dir,
         env: {
-          ...process.env,
+          ...isolatedEnv,
           HOME: dir,
           XDG_CONFIG_HOME: join(dir, "config"),
           ZCODE_DATA_BASE_DIR: dir,
@@ -215,8 +232,102 @@ test(
       await coreClosed;
       assert.equal(core.exitCode, 0);
 
+      // Only this current-checkout Agent bundle is known to implement constructor-held
+      // Inbox + real native/boot/claim. An arbitrary older archive must never inherit this
+      // test-only declaration from the Supervisor production release wiring.
+      core = fork(join(runtime, "server-core.js"), ["2", "held"], {
+        execPath: runtimeNode,
+        execArgv: [],
+        cwd: dir,
+        env: {
+          ...isolatedEnv,
+          HOME: dir,
+          XDG_CONFIG_HOME: join(dir, "config"),
+          ZCODE_DATA_BASE_DIR: dir,
+          ZCODE_SERVER_ROOT: layout.serverRoot,
+          ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: provider,
+          ZCODE_SERVER_SKIP_SERVICE_REGISTRATION: "1",
+          ...createReleaseAgentWiring(runtime, runtimeNode, {}),
+          ZCODE_AGENT_SERVER_BOOT_FENCE_V1: "1",
+        },
+        stdio: ["ignore", "ignore", "pipe", "ipc"],
+      });
+      coreClosed = new Promise<void>((resolveClosed) => core!.once("close", () => resolveClosed()));
+      let heldStderr = "";
+      core.stderr?.on("data", (part: Buffer) => {
+        heldStderr += part.toString().replaceAll(dir, "<profile>");
+      });
+      const heldReady = await new Promise<Record<string, unknown>>((resolveReady, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error(`held Core ready timeout: ${heldStderr}`)),
+          25_000,
+        );
+        core!.on("message", (message: Record<string, unknown>) => {
+          if (message.type === "ready" || message.type === "fatal") {
+            clearTimeout(timer);
+            resolveReady(message);
+          }
+        });
+        core!.once("close", (code) => {
+          clearTimeout(timer);
+          reject(new Error(`held Core closed ${code}: ${heldStderr}`));
+        });
+      });
+      assert.equal(heldReady.type, "ready", JSON.stringify(heldReady));
+      assert.equal(heldReady.generation, 2);
+      assert.ok(heldReady.bootLeaseId, "real constructor hold must return an actual boot lease");
+      const wrong = await maintenance("maintenance-release", randomUUID());
+      assert.equal(wrong.leaseId, undefined, "a wrong token cannot open held Core");
+      const opened = await maintenance("maintenance-release", String(heldReady.bootLeaseId));
+      assert.equal(opened.leaseId, heldReady.bootLeaseId);
+      const freshAfterOpen = await maintenance("maintenance-begin");
+      assert.ok(freshAfterOpen.leaseId);
+      assert.deepEqual(freshAfterOpen.nativeActivity, { running: 0, waiting: 0, uncertain: 0 });
+      assert.deepEqual(freshAfterOpen.externalActivity, { running: 0, waiting: 0, uncertain: 0 });
+      assert.equal(
+        (await maintenance("maintenance-release", String(freshAfterOpen.leaseId))).leaseId,
+        freshAfterOpen.leaseId,
+      );
+      core.send({ command: "shutdown" });
+      await coreClosed;
+      assert.equal(core.exitCode, 0);
+
+      const stagedCandidate = await stageRelease({
+        target,
+        appVersion: "local-source-b",
+        distDir: dist,
+        agentBundlePath: agent,
+        nodeBinaryPath: process.execPath,
+        workspaceNodeModulesDir: join(repo, "node_modules"),
+        workspacePackageDirs: await workspacePackages(),
+        outputDir: join(dir, "candidate-stage"),
+        notices: {
+          thirdParty: await readFile(join(repo, "NOTICE.md"), "utf8"),
+          node: "LOCAL TEST ONLY: pinned Node 24.14.0, not a published release notice",
+          nodeSource: "LOCAL TEST ONLY: source-paired Node; no official distribution certification",
+        },
+      });
+      assert.ok(stagedCandidate.archivePath);
+      const candidateSha256 = await hash(stagedCandidate.archivePath);
+      const candidate = await installer.installArchive({
+        archivePath: stagedCandidate.archivePath,
+        target,
+        version: "local-source-b",
+        archiveSha256: candidateSha256,
+      });
+      assert.notEqual(candidate.releaseDir, manifest.releaseDir);
+      assert.deepEqual(await releases.readCurrentForExecution(), manifest);
+      assert.deepEqual(await releases.readPending(), candidate);
+      for (let index = 0; index < consumed.length; index++) {
+        assert.equal(
+          await hash(join(candidate.releaseDir, consumed[index]!)),
+          sourceHashes[index],
+          `candidate runtime component ${consumed[index]} must match its own staged source`,
+        );
+      }
+
       // 中文：独立 Core freeze 正常并不证明 Supervisor 的 IPC、current 选择和收口顺序。
-      // 用相同的已安装可执行文件重新启动实际 Supervisor，经控制 socket 受理一次
+      // 用已安装可执行文件重新启动实际 Supervisor，经控制 socket 受理一次
       // 新的原生/外部 census 并释放同一租约，再核验 child close、锁和 socket。
       const launched: ChildProcess[] = [];
       const launchedClosed: Promise<void>[] = [];
@@ -226,22 +337,35 @@ test(
         coreReadyTimeoutMs: 25_000,
         launcher: {
           launch(generation, release, bootMode) {
-            assert.equal(release?.releaseDir, manifest.releaseDir);
-            assert.equal(bootMode, "open");
-            const child = fork(join(runtime, "server-core.js"), [String(generation), bootMode], {
-              execPath: runtimeNode,
-              env: {
-                ...process.env,
-                HOME: dir,
-                XDG_CONFIG_HOME: join(dir, "config"),
-                ZCODE_DATA_BASE_DIR: dir,
-                ZCODE_SERVER_ROOT: layout.serverRoot,
-                ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: provider,
-                ZCODE_SERVER_SKIP_SERVICE_REGISTRATION: "1",
-                ...createReleaseAgentWiring(runtime, runtimeNode, {}),
+            assert.equal(
+              release?.releaseDir,
+              bootMode === "held" ? candidate.releaseDir : manifest.releaseDir,
+            );
+            const selectedRuntime = join(release!.releaseDir, "runtime");
+            const selectedNode = join(selectedRuntime, "node");
+            const child = fork(
+              join(selectedRuntime, "server-core.js"),
+              [String(generation), bootMode],
+              {
+                execPath: selectedNode,
+                execArgv: [],
+                cwd: dir,
+                env: {
+                  ...isolatedEnv,
+                  HOME: dir,
+                  XDG_CONFIG_HOME: join(dir, "config"),
+                  ZCODE_DATA_BASE_DIR: dir,
+                  ZCODE_SERVER_ROOT: layout.serverRoot,
+                  ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: provider,
+                  ZCODE_SERVER_SKIP_SERVICE_REGISTRATION: "1",
+                  ...createReleaseAgentWiring(selectedRuntime, selectedNode, {}),
+                  // Scope declaration to the locally rebuilt paired candidate; claimBoot must
+                  // still prove the actual boot lease. Production default wiring omits this flag.
+                  ZCODE_AGENT_SERVER_BOOT_FENCE_V1: bootMode === "held" ? "1" : undefined,
+                },
+                stdio: ["ignore", "ignore", "pipe", "ipc"],
               },
-              stdio: ["ignore", "ignore", "pipe", "ipc"],
-            });
+            );
             launched.push(child);
             launchedClosed.push(
               new Promise<void>((resolveClosed) => child.once("close", () => resolveClosed())),
@@ -266,6 +390,27 @@ test(
         assert.deepEqual(
           await requestControl(layout.controlEndpoint, { command: "end-fallback-migration" }),
           { released: true },
+        );
+        assert.deepEqual(
+          await requestControl(layout.controlEndpoint, { command: "apply-update" }, 30_000),
+          { applied: true, version: "local-source-b" },
+        );
+        assert.equal(supervisor.status().state, "ready");
+        assert.equal(supervisor.status().generation, 2);
+        assert.equal(supervisor.status().pid, launched[1]?.pid);
+        assert.equal(
+          launched[0]?.exitCode,
+          0,
+          "old installed Core must terminate before candidate opens",
+        );
+        assert.deepEqual(await releases.readCurrentForExecution(), candidate);
+        assert.equal(await releases.readPending(), null);
+        assert.equal(
+          await stat(layout.updateTransactionFile).then(
+            () => true,
+            () => false,
+          ),
+          false,
         );
       } finally {
         try {
@@ -299,11 +444,16 @@ test(
           }
         }
       }
-      assert.equal(launched.length, 1);
+      assert.equal(launched.length, 2);
       assert.equal(launched[0]!.exitCode, 0);
+      assert.equal(launched[1]!.exitCode, 0);
       assert.equal(supervisor.status().state, "stopped");
       assert.deepEqual(await new DataRootLock(layout.lockFile).inspect(), { state: "missing" });
       await assert.rejects(requestControl(layout.controlEndpoint, { command: "status" }));
+      // Test setup only: restore A while no owner/lock exists, preserving two independently
+      // installed archives, so the next installed CLI executes its own production update.
+      await releases.restoreCurrent(manifest);
+      await releases.writePending(candidate);
 
       // 另起真正的已安装 CLI 入口，走 cli.ts 的生产 release/Node/Agent 选择逻辑，
       // 不是测试中重写一个看似等价的 launcher。
@@ -317,8 +467,9 @@ test(
           layout.serverRoot,
         ],
         {
+          cwd: dir,
           env: {
-            ...process.env,
+            ...isolatedEnv,
             HOME: dir,
             XDG_CONFIG_HOME: join(dir, "config"),
             ZCODE_DATA_BASE_DIR: dir,
@@ -362,6 +513,37 @@ test(
           await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
         }
         assert.ok(cliCorePid, `installed CLI/default launcher did not reach READY: ${cliStderr}`);
+        await assert.rejects(
+          requestControl(layout.controlEndpoint, { command: "apply-update" }),
+          /Trusted local boot selection missing/,
+          "no archive-provided boolean or inherited env may authorize held update",
+        );
+        assert.equal(
+          ((await requestControl(layout.controlEndpoint, { command: "status" })) as { pid: number })
+            .pid,
+          cliCorePid,
+        );
+        assert.deepEqual(await releases.readCurrentForExecution(), manifest);
+        assert.deepEqual(await releases.readPending(), candidate);
+        const artifactSha256 = {
+          "server-cli.js": sourceHashes[0]!,
+          "server-core.js": sourceHashes[1]!,
+          "piWorker.js": sourceHashes[2]!,
+          "zcode.cjs": sourceHashes[3]!,
+          node: sourceHashes[4]!,
+        };
+        for (const local of [manifest, candidate]) {
+          await registerTrustedLocalSourceBootSelection(layout, local, {
+            protocol: "constructor-held-native-v1",
+            sourceRecipe:
+              "LOCAL SOURCE ONLY: rebuilt bootstrap, Agent and Core; real held claim/wrong-token/exact-release in this fixture",
+            artifactSha256,
+            componentSha256: Object.fromEntries(
+              (local.components ?? []).map((item) => [item.id, item.sha256]),
+            ),
+            releaseContentSha256: await hashReleaseTree(local.releaseDir),
+          });
+        }
         assert.deepEqual(
           await requestControl(layout.controlEndpoint, { command: "begin-fallback-migration" }),
           { ready: true },
@@ -370,6 +552,23 @@ test(
           await requestControl(layout.controlEndpoint, { command: "end-fallback-migration" }),
           { released: true },
         );
+        assert.deepEqual(
+          await requestControl(layout.controlEndpoint, { command: "apply-update" }, 30_000),
+          { applied: true, version: "local-source-b" },
+        );
+        const afterDefaultUpdate = (await requestControl(layout.controlEndpoint, {
+          command: "status",
+        })) as {
+          state: string;
+          generation: number;
+          pid: number | null;
+        };
+        assert.equal(afterDefaultUpdate.state, "ready");
+        assert.equal(afterDefaultUpdate.generation, 2);
+        assert.notEqual(afterDefaultUpdate.pid, cliCorePid);
+        cliCorePid = afterDefaultUpdate.pid ?? undefined;
+        assert.deepEqual(await releases.readCurrentForExecution(), candidate);
+        assert.equal(await releases.readPending(), null);
         assert.deepEqual(await requestControl(layout.controlEndpoint, { command: "stop" }), {
           stopping: true,
         });
@@ -377,7 +576,11 @@ test(
           cliClosed.then(() => true),
           new Promise<false>((resolveTimeout) => setTimeout(() => resolveTimeout(false), 10_000)),
         ]);
-        assert.equal(closed, true, `installed CLI failed to close: ${cliStderr}`);
+        assert.equal(
+          closed,
+          true,
+          `installed CLI failed to close: pid=${cli.pid} lock=${JSON.stringify(await new DataRootLock(layout.lockFile).inspect())} status=${(await readFile(layout.statusFile, "utf8").catch(() => "missing")).slice(0, 500)} stderr=${cliStderr}`,
+        );
         assert.equal(cli.exitCode, 0, cliStderr);
         // 中文：不凭一个可能复用的 PID 杀进程；只读检验 CLI 的 Supervisor 已收口 Core。
         assert.throws(() => process.kill(cliCorePid!, 0), { code: "ESRCH" });

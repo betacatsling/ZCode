@@ -1,22 +1,29 @@
 import { access } from "node:fs/promises";
 import { join } from "node:path";
+import type { TrustedLocalSourceBootSelection } from "./releaseBootSelection.js";
 
 export interface BundledAgentWiring {
   ZCODE_AGENT_SERVER_COMMAND: string;
   ZCODE_AGENT_SERVER_ARGS_JSON: string;
   /** Require an actual same-path native storage-startup receipt, not a declared capability. */
   ZCODE_AGENT_SERVER_REQUIRES_STORAGE_STARTUP: "1";
+  /** Only from a separate installed-byte-verified trusted local release selection. */
+  ZCODE_AGENT_SERVER_BOOT_FENCE_V1?: "1";
 }
 
 export function createReleaseAgentWiring(
   runtimeRoot: string,
   runtimeNode: string,
   env: Record<string, string | undefined>,
+  selection?: TrustedLocalSourceBootSelection,
 ): BundledAgentWiring | null {
   if (env.ZCODE_AGENT_SERVER_COMMAND?.trim()) return null;
   return {
     ZCODE_AGENT_SERVER_COMMAND: runtimeNode,
     ZCODE_AGENT_SERVER_REQUIRES_STORAGE_STARTUP: "1",
+    ...(selection?.protocol === "constructor-held-native-v1"
+      ? { ZCODE_AGENT_SERVER_BOOT_FENCE_V1: "1" as const }
+      : {}),
     ZCODE_AGENT_SERVER_ARGS_JSON: JSON.stringify([
       join(runtimeRoot, "zcode.cjs"),
       "app-server",

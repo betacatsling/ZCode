@@ -12,6 +12,14 @@ test("only source-bound release wiring requests strict native storage startup", 
     await writeFile(bundle, "// path selection only, not a process fixture\n");
     const release = createReleaseAgentWiring(dir, process.execPath, {});
     assert.equal(release?.ZCODE_AGENT_SERVER_REQUIRES_STORAGE_STARTUP, "1");
+    assert.equal(release?.ZCODE_AGENT_SERVER_BOOT_FENCE_V1, undefined);
+    assert.equal(
+      createReleaseAgentWiring(dir, process.execPath, {
+        ZCODE_AGENT_SERVER_BOOT_FENCE_V1: "1",
+      })?.ZCODE_AGENT_SERVER_BOOT_FENCE_V1,
+      undefined,
+      "inherited env alone cannot grant a release boot capability",
+    );
     assert.deepEqual(JSON.parse(release!.ZCODE_AGENT_SERVER_ARGS_JSON), [
       bundle,
       "app-server",

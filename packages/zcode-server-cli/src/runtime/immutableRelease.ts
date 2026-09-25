@@ -16,7 +16,7 @@ interface ReleaseIntegrity extends ReleaseIdentity {
 
 const RELEASE_INTEGRITY_FILE = ".release-integrity.json";
 
-async function hashReleaseTree(root: string, relativeRoot = ""): Promise<string> {
+export async function hashReleaseTree(root: string, relativeRoot = ""): Promise<string> {
   const hash = createHash("sha256");
   const visit = async (relativeDirectory: string): Promise<void> => {
     const entries = await readdir(join(root, relativeDirectory), { withFileTypes: true });

@@ -18,6 +18,7 @@ import { ControlRequestError } from "../ipc/controlError.js";
 import { DataRootLock } from "../runtime/lock.js";
 import { resolveServerLayout, type ServerLayout } from "../runtime/paths.js";
 import { ReleaseManager } from "../runtime/releaseManager.js";
+import type { TrustedLocalSourceBootSelection } from "../runtime/releaseBootSelection.js";
 import { createStatusPersister } from "../runtime/statusSnapshot.js";
 import { recoverSupervisorStartup } from "../runtime/startupRecovery.js";
 import { waitForUpdateReady } from "../runtime/updateReadiness.js";
@@ -34,6 +35,7 @@ interface CoreLauncher {
     generation: number,
     release: ReleaseManifest | null,
     bootMode: "open" | "held",
+    verifiedSelection?: TrustedLocalSourceBootSelection,
   ): ChildProcess;
 }
 
@@ -49,6 +51,10 @@ interface SupervisorOptions {
   coreKillTimeoutMs?: number;
   now?: () => number;
   onStopped?: () => void;
+  /** Ready transition is latched before an external control-stop can hide it from the CLI. */
+  onReady?: (status: ServerStatus) => void;
+  /** Installed production launcher verifies both releases before stopping the old owner. */
+  verifyHeldRelease?: (release: ReleaseManifest) => Promise<TrustedLocalSourceBootSelection>;
 }
 
 type LifecycleOperationKind = "stop" | "restart" | "update" | "uninstall";
@@ -84,6 +90,7 @@ export class Supervisor {
     | { kind: LifecycleOperationKind; promise: Promise<unknown> }
     | undefined;
   private activeRelease: ReleaseManifest | null = null;
+  private verifiedHeldSelections = new Map<string, TrustedLocalSourceBootSelection>();
   private fallbackMaintenance: MaintenanceLease | undefined;
   private maintenanceInFlight: object | undefined;
   private maintenanceHeld: object | undefined;
@@ -288,15 +295,34 @@ export class Supervisor {
   private async applyUpdate(force: boolean): Promise<unknown> {
     const pending = await this.releaseManager.readPending();
     if (!pending) throw new Error("No pending release is prepared");
-    const maintenance = await this.beginMaintenance();
-    if (!force && maintenance.unsafeCount > 0) {
-      await maintenance.release();
-      throw new Error("Active or uncertain tasks require --force for update");
+    // 中文：旧/伪造的候选或回滚 CLI 若不懂启动冻结，等 claimBoot 失败才发现
+    // 已来不及阻止构造前的自主业务。两端必须在冻结健康旧 Core 前完成可信字节核验。
+    if (this.options.verifyHeldRelease) {
+      const previous = await this.releaseManager.readCurrentForExecution();
+      if (!previous)
+        throw new Error("Previous installed release lacks held rollback qualification");
+      const validated = await Promise.all([
+        this.options.verifyHeldRelease(previous),
+        this.options.verifyHeldRelease(pending),
+      ]);
+      this.verifiedHeldSelections = new Map([
+        [previous.releaseDir, validated[0]!],
+        [pending.releaseDir, validated[1]!],
+      ]);
     }
     try {
-      return await this.applyUpdateWithLease(pending, force, maintenance);
+      const maintenance = await this.beginMaintenance();
+      if (!force && maintenance.unsafeCount > 0) {
+        await maintenance.release();
+        throw new Error("Active or uncertain tasks require --force for update");
+      }
+      try {
+        return await this.applyUpdateWithLease(pending, force, maintenance);
+      } finally {
+        await maintenance.release();
+      }
     } finally {
-      await maintenance.release();
+      this.verifiedHeldSelections.clear();
     }
   }
 
@@ -317,6 +343,7 @@ export class Supervisor {
     try {
       await this.releaseManager.applyPendingWithTransaction(previous);
       this.activeRelease = pending;
+      await this.recheckHeldReleaseBeforeLaunch(pending);
       this.state = "starting";
       this.launchCore("held");
       await waitForUpdateReady(
@@ -368,6 +395,14 @@ export class Supervisor {
       // 不可用状态，用户必须手工 restart 才能恢复服务。
       this.state = "stopped";
       if (previous) {
+        try {
+          await this.recheckHeldReleaseBeforeLaunch(previous);
+        } catch (rollbackError) {
+          this.state = "stop-failed";
+          this.lastExitReason = `rollback release qualification failed: ${updateErrorMessage(rollbackError)}`;
+          await this.persistStatusSnapshot();
+          throw createRollbackFailure(error, rollbackError);
+        }
         this.state = "starting";
         this.launchCore("held");
         try {
@@ -418,9 +453,31 @@ export class Supervisor {
     };
   }
 
+  private async recheckHeldReleaseBeforeLaunch(release: ReleaseManifest): Promise<void> {
+    if (!this.options.verifyHeldRelease) return; // Existing synthetic lifecycle fixtures only.
+    const prior = this.verifiedHeldSelections.get(release.releaseDir);
+    if (!prior) throw new Error("Held release was not qualified before maintenance");
+    const current = await this.options.verifyHeldRelease(release);
+    if (
+      current.archiveSha256 !== prior.archiveSha256 ||
+      current.releaseContentSha256 !== prior.releaseContentSha256 ||
+      current.releaseId !== prior.releaseId
+    )
+      throw new Error("Held release changed after qualification");
+  }
+
   private launchCore(bootMode: "open" | "held" = "open"): void {
     const generation = ++this.generation;
-    const child = this.options.launcher.launch(generation, this.activeRelease, bootMode);
+    const verifiedSelection =
+      bootMode === "held" && this.activeRelease
+        ? this.verifiedHeldSelections.get(this.activeRelease.releaseDir)
+        : undefined;
+    const child = this.options.launcher.launch(
+      generation,
+      this.activeRelease,
+      bootMode,
+      verifiedSelection,
+    );
     this.core = child;
     this.clearCoreScopedStatus();
     this.bootMode = bootMode;
@@ -522,6 +579,9 @@ export class Supervisor {
         port: this.port,
         generation: this.generation,
       });
+      // 中文：对外 READY 与 CLI 的观察必须同一事件提交；随后控制 stop
+      // 可以立即把状态改回 stopped，CLI 不能依赖稍后的轮询碰巧看到 ready。
+      if (this.state === "ready") this.options.onReady?.(this.status());
     } else if (
       message.type === "heartbeat" ||
       message.type === "task-activity" ||
@@ -596,6 +656,7 @@ export class Supervisor {
     if (this.bootFence === fence) {
       this.bootFence = undefined;
       this.state = "ready";
+      this.options.onReady?.(this.status());
     }
   }
 

@@ -21,6 +21,7 @@ import { createReleaseAgentWiring, type BundledAgentWiring } from "./runtime/age
 import { writeStableLauncher } from "./runtime/stableLauncher.js";
 import { runUpdateCommand } from "./runtime/updateCommand.js";
 import { DataRootLock } from "./runtime/lock.js";
+import { verifyTrustedLocalSourceBootSelection } from "./runtime/releaseBootSelection.js";
 import {
   acquireUninstallLock,
   describeLockInspection,
@@ -260,10 +261,14 @@ async function runServe(
   const foregroundCompletion = new Promise<void>((resolve) => {
     foregroundStopped = resolve;
   });
+  let readyReported!: (status: ServerStatus) => void;
+  const firstReady = new Promise<ServerStatus>((resolve) => {
+    readyReported = resolve;
+  });
   const supervisor = new Supervisor({
     layout,
     launcher: {
-      launch: (generation, release, bootMode) => {
+      launch: (generation, release, bootMode, verifiedSelection) => {
         const runtimeRoot = release?.releaseDir ? join(release.releaseDir, "runtime") : null;
         const corePath = runtimeRoot
           ? join(runtimeRoot, "server-core.js")
@@ -273,11 +278,13 @@ async function runServe(
           : process.execPath;
         const inheritedEnv = {
           ...process.env,
+          // 中文：外部 env 声明不是能力；只能由当前安装字节复验后的选择记录派生。
+          ZCODE_AGENT_SERVER_BOOT_FENCE_V1: undefined,
           ZCODE_DATA_BASE_DIR: layout.dataBaseDir,
           ZCODE_SERVER_ROOT: layout.serverRoot,
         };
         const releaseWiring = runtimeRoot
-          ? createReleaseAgentWiring(runtimeRoot, runtimeNode, inheritedEnv)
+          ? createReleaseAgentWiring(runtimeRoot, runtimeNode, inheritedEnv, verifiedSelection)
           : runtimeOptions.bundledAgentWiring;
         return fork(corePath, [String(generation), bootMode], {
           execPath: runtimeNode,
@@ -292,6 +299,13 @@ async function runServe(
     },
     version: ZCODE_VERSION,
     serviceRegistered,
+    verifyHeldRelease: async (release) => {
+      // 自定义 worker 未经本次配对测试/来源选择，不可将旗标升级为能力。
+      if (process.env.ZCODE_AGENT_SERVER_COMMAND?.trim())
+        throw new Error("Custom Agent command is not a qualified held release");
+      return await verifyTrustedLocalSourceBootSelection(layout, release);
+    },
+    onReady: readyReported,
     onStopped: () => {
       process.stdin.pause();
       foregroundStopped();
@@ -301,7 +315,7 @@ async function runServe(
   await supervisor.start();
   let status: ServerStatus;
   try {
-    status = await waitForSupervisorReady(supervisor);
+    status = await waitForSupervisorReady(supervisor, firstReady, foregroundCompletion);
   } catch (error) {
     // Core 进入 crash-loop 时不能把错误直接抛给 CLI 顶层返回：control
     // socket 仍持有事件循环导致前台进程假死；用户 Ctrl+C（此时信号 handler 尚未注册，
@@ -497,16 +511,26 @@ async function waitForPersistedStatus(
   throw new Error(`Timed out waiting for Server ${expectedState}`);
 }
 
-async function waitForSupervisorReady(supervisor: {
-  status: () => ServerStatus;
-}): Promise<ServerStatus> {
+export async function waitForSupervisorReady(
+  supervisor: { status: () => ServerStatus },
+  firstReady: Promise<ServerStatus>,
+  stopped: Promise<void>,
+): Promise<ServerStatus> {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
-    const status = supervisor.status();
-    if (status.state === "ready") return status;
-    if (status.state === "crash-loop-stopped")
-      throw new Error("Server Core entered crash-loop-stopped");
-    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    const state = supervisor.status().state;
+    if (state === "crash-loop-stopped") throw new Error("Server Core entered crash-loop-stopped");
+    // 中文：READY 与随后 stop 可能在两次轮询之间发生。事件回调先兑现 ready，
+    // 状态轮询只负责失败诊断；不以“当前又 stopped”抹掉已确认的 ready。
+    const observed = await Promise.race([
+      firstReady.then((status) => ({ kind: "ready" as const, status })),
+      stopped.then(() => ({ kind: "stopped" as const })),
+      new Promise<{ kind: "pending" }>((resolve) =>
+        setTimeout(() => resolve({ kind: "pending" }), 50),
+      ),
+    ]);
+    if (observed.kind === "ready") return observed.status;
+    if (observed.kind === "stopped") throw new Error("Server Core stopped before first READY");
   }
   throw new Error("Timed out waiting for Server Core ready");
 }
