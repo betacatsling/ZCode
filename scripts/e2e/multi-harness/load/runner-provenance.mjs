@@ -101,8 +101,17 @@ export async function verifiedFiles(files) {
 // Reuse the extracted decision; provenance readers stay here under the runner's single ownership.
 export async function comparison(path, result) {
   return compareBaseline(path, result, {
-    readFile, hash, verifiedFiles, preservedSource, buildHash, inside, resolve,
-    p95, validMeasurement, createHash, schemaVersion: SCHEMA_VERSION,
+    readFile,
+    hash,
+    verifiedFiles,
+    preservedSource,
+    buildHash,
+    inside,
+    resolve,
+    p95,
+    validMeasurement,
+    createHash,
+    schemaVersion: SCHEMA_VERSION,
     latencyBudget: 1.1,
   });
 }
