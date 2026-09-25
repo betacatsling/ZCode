@@ -32,4 +32,17 @@ The joined fixture currently certifies scenarios 1–2 and only the **desktop** 
 
 The actual phone attachment remains separately required. Generic Core `/ws` intentionally denies Host/Catalog/hierarchy; a replayable port on its own does not prove phone pairing or authorization. Desktop's existing remote-workspace replayable port is bound to a pre-existing remote logical session and cannot certify a local phone attachment by itself. Require an authorized, revocable attachment scoped to the existing local window Host before claiming the mobile part of scenario 3. Scenario 4 likewise still requires a bounded, documented **Core-owned** journal producer for mounted history (not a replacement renderer snapshot or a write beside a live journal lock); the prior isolated 100k projection/Host tests are not this joined proof.
 
+## Joined read-only owner gate (assembly candidate)
+
+The actual Core Catalog/Target owns archive and workspace generation. Core hierarchy `resolveOwner` owns the derived history-only bit and resolves the original external Host spec or original Native ID; the window Host transports these public services to the Shell, which projects a read-only pane. Neither fixture nor renderer may override that owner with a writable substitute. Read-only history and existing receipts remain accessible across archive, split, renderer detach and reload. A new send, resume or approval allow must be refused at authoritative admission and must never dispatch to an adapter/Native CLI. Existing cancel/deny on an already mounted exact Host retain their separate guarded path. A stale generation cannot regain write authority after reload.
+
+```text
+Catalog archive / Target generation → Core hierarchy.resolveOwner → window Host ticketed RPC
+    → Shell primary + split history-only projections → no new dispatch
+renderer detach/reload → same Core Host owner + fresh ticket → re-resolve readonly
+mobile replayable attachment → same owner, separate authorized transport (not certified here)
+```
+
+Acceptance on the **same running fixture**: create a real external Host through Core, archive the workspace using public Core RPC, re-resolve the original owner through the public hierarchy; verify Shell primary and split show original session/history and disable sending; attempt a new typed command directly through public Host transport and verify refusal with no Model HTTP request; detach/reload only the renderer and verify the same history-only owner, no second Core/Host/session. Native history-only is checked with an original persisted source ID only when a certified local Native source fixture exists; do not claim it from a synthetic native pane or enable Native creation. This gate does not certify phone pairing, Native production, long-duration load or default enablement.
+
 No packaged binary, Supervisor, SSH, paid provider, Native, live production or multi-hour certification follows from this fixture.

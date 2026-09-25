@@ -203,6 +203,24 @@ test("real Git/catalog/target/Host: server derives identity and deduplicates cre
     if (first.owner.kind !== "external") throw new Error("wrong owner");
     assert.equal(first.owner.spec.execution.worktreeGeneration, workspace.worktreeGeneration);
     assert.equal(first.owner.spec.execution.worktreePath, workspace.worktreePath);
+    await catalog.updateWorkspace("w", { archived: true });
+    const archivedOwner = await hierarchy.resolveOwner({
+      targetId: "local",
+      workspaceId: "w",
+      sessionId: first.owner.spec.hostSessionId,
+    });
+    assert.equal(archivedOwner?.kind, "external");
+    assert.equal(archivedOwner?.historyOnly, true);
+    await assert.rejects(
+      rpc.service.dispatch(first.owner.spec, {
+        type: "send",
+        commandId: "archive-send-refused",
+        hostSessionId: first.owner.spec.hostSessionId,
+        turnId: "archive-turn-refused",
+        text: "must not run",
+      }),
+    );
+    await catalog.updateWorkspace("w", { archived: false });
     // 中文：同一路径重新登记为新 worktree，不可将旧 Host spec 重新绑定到执行入口。
     const rebuiltCatalog = {
       previewRemoval: (id: string, generation: string) => catalog.previewRemoval(id, generation),
