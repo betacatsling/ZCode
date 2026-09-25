@@ -23,15 +23,18 @@ export interface NativeRuntimeFactsPort {
   ): Promise<{ originalSessionId: string; creationRemoteSessionId?: string } | undefined>;
   inspect?: NativeHierarchyPort["inspect"];
   completeCertified?: NativeHierarchyPort["completeCertified"];
-  create(input: {
-    scope: WorkspaceNavigationScope;
-    projectId: string;
-    repositoryBindingId: string;
-    worktreeGeneration: string;
-    commandId: string;
-    modelBinding: ModelBindingRequest;
-    cwdRelativeToWorktree: string;
-  }): Promise<{ originalSessionId: string }>;
+  create(
+    input: {
+      scope: WorkspaceNavigationScope;
+      projectId: string;
+      repositoryBindingId: string;
+      worktreeGeneration: string;
+      commandId: string;
+      modelBinding: ModelBindingRequest;
+      cwdRelativeToWorktree: string;
+    },
+    beforeWrite: () => Promise<void>,
+  ): Promise<{ originalSessionId: string }>;
   capabilities(owner: Extract<SessionOwner, { kind: "native" }>): Promise<HarnessCapabilitiesV2>;
   activity(workspaceId?: string): Promise<TargetRuntimeActivity>;
   fenceAdmissions(): Promise<NativeAdmissionFence>;
@@ -162,7 +165,7 @@ export function createNativeProductionBridge(options: {
         repositoryBindingId: scoped.owner.repositoryBindingId,
       };
     },
-    create: (request) => options.runtime.create(request),
+    create: (request, beforeWrite) => options.runtime.create(request, beforeWrite),
     recover: (request) => options.runtime.recover?.(request) ?? Promise.resolve(undefined),
     completeCertified: (commandId, expected, beforeCommit) =>
       options.runtime.completeCertified?.(commandId, expected, beforeCommit) ??

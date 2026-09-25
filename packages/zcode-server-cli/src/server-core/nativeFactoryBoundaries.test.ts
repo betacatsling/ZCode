@@ -32,6 +32,10 @@ for (const variant of [
   "coreCompletedArchiveDrain",
   "coreCompletedGitSwap",
   "coreCompletedDisposeDrain",
+  "coreCreateGitSwap",
+  "coreCreateLostAckGitSwap",
+  "coreCreateHappy",
+  "coreCreateCatalogGitSwap",
   "schema",
   "source-db",
   "boot-held",
@@ -266,6 +270,39 @@ for (const variant of [
         `${createHash("sha256").update("native-create-1").digest("hex")}.mapping.json`,
       );
       assert.ok((await readFile(mappingPath, "utf8")).includes(first.ids[0]));
+      if (
+        variant === "coreCreateGitSwap" ||
+        variant === "coreCreateLostAckGitSwap" ||
+        variant === "coreCreateHappy" ||
+        variant === "coreCreateCatalogGitSwap"
+      ) {
+        const mode =
+          variant === "coreCreateHappy"
+            ? "happy"
+            : variant === "coreCreateGitSwap"
+              ? "swap"
+              : variant === "coreCreateCatalogGitSwap"
+                ? "catalog"
+                : "lost-ack";
+        const result = await boot(
+          "./coreNativeCreateFenceChild.fixture.ts",
+          {
+            ZCODE_MULTI_HARNESS_ENABLED: "1",
+            ZCODE_CORE_NATIVE_CREATE_TEST_ONLY: "1",
+            ZCODE_CORE_NATIVE_DROP_ACK_TEST_ONLY:
+              mode === "lost-ack" ? "native-create-scope-fence" : "",
+            ZCODE_CORE_NATIVE_CATALOG_FAULT_TEST_ONLY: "",
+            ZCODE_CORE_NATIVE_MAPPING_FSYNC_FAULT_TEST_ONLY: "",
+          },
+          [mode],
+        );
+        assert.equal(result.type, "nativeCreateFence");
+        assert.equal(result.mode, mode);
+        assert.equal(result.observed, 1);
+        assert.equal(count(), before + 1, "one real CLI session allocated without automatic retry");
+        assert.equal(calls.length, 0, "creation must not invoke the Model");
+        return;
+      }
       let secondSource: string | undefined;
       let recoveredIds = first.ids;
       if (variant === "source-db") {

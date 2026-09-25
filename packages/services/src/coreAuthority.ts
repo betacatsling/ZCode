@@ -51,6 +51,10 @@ export interface CoreAuthorityOptions {
     commandId: string,
     target: { workspacePath: string; workspaceIdentity: string },
   ) => Promise<void>;
+  /** Trusted Node fixture observer after the real CLI create attempt and before Core mapping. */
+  testOnlyAfterNativeCreateAttempt?: (commandId: string) => Promise<void>;
+  /** Trusted Node fixture observer after real Core mapping and before Catalog reference. */
+  testOnlyAfterNativeMapping?: (commandId: string) => Promise<void>;
   /** Trusted Node fixture observer at the actual completed-source certificate boundary. */
   testOnlyAfterCompletedCertificate?: (
     commandId: string,
@@ -240,13 +244,14 @@ export async function createCoreAuthority(
           throw new Error("Native completion changed during repair");
         return { originalSessionId: mapping.originalSessionId, intent };
       },
-      async create(input) {
+      async create(input, beforeWrite) {
         if (!nativeEnabled || !creation)
           throw new Error("Native durable creation receipt unavailable");
         if (input.modelBinding.kind !== "host-managed" || input.cwdRelativeToWorktree !== ".")
           throw new Error("native-create-unverifiable-binding-or-cwd");
         const existing = await recover(input);
         if (existing) return existing;
+        await beforeWrite();
         // 中文：Desktop attachment 只是来源/view；目标 Core 的 CLI 已在本机运行，绝不再 SSH 自己。
         const target = {
           workspacePath: input.scope.workspacePath,
@@ -254,6 +259,7 @@ export async function createCoreAuthority(
         };
         const description = await creation.describe(target);
         if (nativeEnabled) await options.testOnlyAfterNativeDescribe?.(input.commandId, target);
+        await beforeWrite();
         const payload = commandPayloadSchemas.createSession.parse({
           workspaceId: input.scope.workspaceIdentity,
           config: { modelSelection: input.modelBinding.selection, mode: "build" },
@@ -275,6 +281,8 @@ export async function createCoreAuthority(
           databaseId: description.databaseId,
           intentFingerprint: nativeCreatePayloadFingerprint(payload),
         });
+        // 中文：意图写入也有 await；发现 Git 换代后不得再向 CLI 提交新的命令。
+        await beforeWrite();
         // 中文：写入意图后 ACK 可能丢失；只读取已完成的 CLI 收据，绝不重发 pending 命令。
         try {
           await creation.create(target, description, { commandId: input.commandId, payload });
@@ -283,8 +291,10 @@ export async function createCoreAuthority(
           // 当前可写 owner；只允许随后经 Target/Catalog 重验的只读恢复。
           if (error instanceof NativeCreationOwnershipChangedError) throw error;
           try {
+            await options.testOnlyAfterNativeCreateAttempt?.(input.commandId);
             return {
-              originalSessionId: (await journal.complete(input.commandId)).originalSessionId,
+              originalSessionId: (await journal.complete(input.commandId, beforeWrite))
+                .originalSessionId,
             };
           } catch {
             throw error;
@@ -294,7 +304,10 @@ export async function createCoreAuthority(
         // 但尚未同步本地映射/目录引用前退出；冷重启只能只读认证原始 ID。
         if (process.env.ZCODE_CORE_NATIVE_BEFORE_MAPPING_FAULT_TEST_ONLY === input.commandId)
           throw new Error("native-create-before-core-mapping-test-only");
-        return { originalSessionId: (await journal.complete(input.commandId)).originalSessionId };
+        await options.testOnlyAfterNativeCreateAttempt?.(input.commandId);
+        const mapped = await journal.complete(input.commandId, beforeWrite);
+        await options.testOnlyAfterNativeMapping?.(input.commandId);
+        return { originalSessionId: mapped.originalSessionId };
       },
       async capabilities(owner) {
         if (!nativeEnabled || !creation) throw new Error("Native capability unavailable");
