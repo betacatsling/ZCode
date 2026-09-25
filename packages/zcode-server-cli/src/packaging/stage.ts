@@ -31,8 +31,18 @@ export async function collectBareModuleSpecifiers(
     [...source.matchAll(/\b(?:var|const|let)\s+(require\d+)\s*=\s*createRequire\d*\s*\(\s*import\.meta\.url\s*\)\s*;/gu)]
       .map((match) => match[1]),
   );
-  const analysisSource = source.replace(/\b(__require|require\d+)(?=\s*\()/gu, (name) =>
-    name === "__require" || boundAliases.has(name) ? "require" : name,
+  // 中文：实际 ESM bundle 的 banner 定义局部 `require`；只给解析副本改名，
+  // 否则 esbuild 将下面的 require2→require 当成普通闭包函数，metafile 漏掉 node-pty。
+  // 其他未知 require 绑定不具备来源证明，拒绝把空依赖闭包当作成功。
+  const bannerRequire = /\bconst\s+require\s*=\s*__zcodeCreateRequire\s*\(\s*import\.meta\.url\s*\)\s*;/gu;
+  const withoutBannerShadow = source.replace(bannerRequire, (match) =>
+    match.replace(/\brequire(?=\s*=)/u, "__zcodeStageRequire"),
+  );
+  if (/\b(?:var|const|let)\s+require\s*=/u.test(withoutBannerShadow))
+    throw new Error("Unrecognized release bundle require binding");
+  const analysisSource = withoutBannerShadow.replace(
+    /\b(__require|require\d+)(?=\s*\()/gu,
+    (name) => (name === "__require" || boundAliases.has(name) ? "require" : name),
   );
   const result = await build({
     stdin: { contents: analysisSource, sourcefile, resolveDir: process.cwd() },
