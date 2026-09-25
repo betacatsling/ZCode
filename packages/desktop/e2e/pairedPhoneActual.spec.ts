@@ -2,6 +2,7 @@ import { _electron as electron, chromium, expect, test } from "@playwright/test"
 import { fork, execFile } from "node:child_process";
 import { once } from "node:events";
 import { createServer } from "node:http";
+import { existsSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -260,10 +261,9 @@ test("actual desktop consent to separate browser Pi input, reconnect and revoke"
       installationId: string;
     };
     app = await electron.launch({
-      executablePath: resolve(
-        root,
-        "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
-      ),
+      executablePath:
+        process.env.ZCODE_TEST_ELECTRON_EXECUTABLE ??
+        resolve(root, "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron"),
       args: [resolve(desktop, "out/main/pairedPhoneActual.js")],
       env: {
         ...env,
@@ -300,8 +300,11 @@ test("actual desktop consent to separate browser Pi input, reconnect and revoke"
     }
     await window.getByRole("button", { name: /New agent in Main checkout/ }).click();
     await window.getByRole("dialog").getByRole("button", { name: "Create agent" }).click();
-    await expect(window.locator("[data-session-id]")).toHaveCount(1);
-    const sessionId = await window.locator("[data-session-id]").getAttribute("data-session-id");
+    // 外部会话 pane 异步挂载；此处必须排除原生 draft pane 的 "draft" 占位，
+    // 否则 count 断言会在外部 pane 出现前以 draft 独占提前通过。
+    const sessionPane = window.locator('[data-session-id]:not([data-session-id="draft"])');
+    await expect(sessionPane).toHaveCount(1);
+    const sessionId = await sessionPane.getAttribute("data-session-id");
     expect(sessionId).toBeTruthy();
     await expect(window.getByRole("button", { name: "Approve phone" })).toBeVisible();
     await window.getByRole("button", { name: "Approve phone" }).click();
@@ -324,10 +327,13 @@ test("actual desktop consent to separate browser Pi input, reconnect and revoke"
     const origin = status.match(/http:\/\/127\.0\.0\.1:\d+/)?.[0];
     expect(origin).toBeTruthy();
     // Independent Chromium process/profile, not a resized Electron renderer or copied Host port.
-    browser = await chromium.launch({
-      headless: true,
-      executablePath: "/Applications/Chromium.app/Contents/MacOS/Chromium",
-    });
+    // 浏览器可执行文件解析顺序：ZCODE_TEST_PHONE_BROWSER 覆盖 → 存在的系统 Chromium →
+    // Playwright 捆绑 Chromium（不传 executablePath）。不假设任一固定路径存在。
+    const systemChromium = "/Applications/Chromium.app/Contents/MacOS/Chromium";
+    const phoneExecutable =
+      process.env.ZCODE_TEST_PHONE_BROWSER ??
+      (existsSync(systemChromium) ? systemChromium : undefined);
+    browser = await chromium.launch({ headless: true, executablePath: phoneExecutable });
     console.log("[phone-e2e] independent Chromium ready");
     const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
     await context.route("**/*", (route) => {
