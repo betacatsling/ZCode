@@ -92,15 +92,18 @@ export interface NativeHierarchyPort {
       }
     | undefined
   >;
-  create(input: {
-    scope: WorkspaceNavigationScope;
-    projectId: string;
-    repositoryBindingId: string;
-    worktreeGeneration: string;
-    commandId: string;
-    modelBinding: ModelBindingRequest;
-    cwdRelativeToWorktree: string;
-  }): Promise<{ originalSessionId: string }>;
+  create(
+    input: {
+      scope: WorkspaceNavigationScope;
+      projectId: string;
+      repositoryBindingId: string;
+      worktreeGeneration: string;
+      commandId: string;
+      modelBinding: ModelBindingRequest;
+      cwdRelativeToWorktree: string;
+    },
+    beforeWrite: () => Promise<void>,
+  ): Promise<{ originalSessionId: string }>;
   capabilities(owner: Extract<SessionOwner, { kind: "native" }>): Promise<HarnessCapabilitiesV2>;
 }
 
@@ -459,8 +462,33 @@ export function createWorkspaceHierarchyService(input: {
         request.cwdRelativeToWorktree ?? ".",
         async (lease) => {
           if (!input.newAdmissionsEnabled()) throw new Error("New native admission frozen");
-          const created = await input.native!.create(nativeRequest);
-          // 中文：mapping 和引用共用 Catalog → Target admission，引用 ACK 前不报告 native create 完成。
+          // 中文：Catalog/Target 串行租约不能阻止外部替换 .git；在实际持久化边界重验真实实例。
+          const revalidate = async () => {
+            const now = await lease.recoveryFacts(workspace.id);
+            const catalog = await lease.catalog.snapshot();
+            const row = catalog.workspaces.find((item) => item.id === workspace.id);
+            const currentBinding = catalog.bindings.find((item) => item.id === binding.id);
+            const currentProject = catalog.projects.find((item) => item.id === project.id);
+            if (
+              now.status !== "confirmed" ||
+              now.generation !== workspace.worktreeGeneration ||
+              row?.worktreeGeneration !== workspace.worktreeGeneration ||
+              row.repositoryBindingId !== binding.id ||
+              row.projectId !== project.id ||
+              row.workspaceIdentity !== scope.workspaceIdentity ||
+              row.worktreePath !== scope.workspacePath ||
+              row.lifecycle !== "active" ||
+              row.archived ||
+              currentBinding?.executionTargetId !== scope.targetId ||
+              currentBinding.projectId !== project.id ||
+              currentProject?.archived
+            )
+              throw new Error("Native create Target/Catalog scope changed");
+          };
+          await revalidate();
+          const created = await input.native!.create(nativeRequest, revalidate);
+          // 中文：mapping 后、引用 fsync 前仍可能有外部 Git 实例变化。
+          await revalidate();
           await lease.catalog.commitNativeReference({
             commandId: request.commandId,
             originalSessionId: created.originalSessionId,
