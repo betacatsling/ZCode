@@ -1431,7 +1431,9 @@ export function createLocalServices(options: {
     CompositionOptions,
     "nativeIndex" | "native" | "nativeActivity" | "nativeAdmissionFence"
   > &
-    Partial<Pick<CompositionOptions, "identity" | "resolveRemoteSession">>;
+    Partial<
+      Pick<CompositionOptions, "identity" | "resolveRemoteSession" | "testOnlyOnWorkspaceAdmission">
+    >;
   cuaProductMcpServerResolver?: CuaProductMcpServerResolver;
   agentRuntimeContext?: {
     getDeviceMid?: () => string | undefined;
@@ -2769,6 +2771,7 @@ export function createLocalServices(options: {
       nativeActivity: composition.nativeActivity,
       nativeAdmissionFence: composition.nativeAdmissionFence,
       initiallyHeld: options.initiallyHeld,
+      testOnlyOnWorkspaceAdmission: composition.testOnlyOnWorkspaceAdmission,
       additionalTrustedHarnesses: options.additionalTrustedHarnesses,
       resolveRemoteSession: composition.resolveRemoteSession,
       reconcileBoot: async (catalog) => {

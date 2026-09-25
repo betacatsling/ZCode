@@ -72,6 +72,13 @@ const catalogSchema = z.strictObject({
   nativeReferences: z.array(nativeCatalogReferenceSchema).optional(),
 });
 type State = z.infer<typeof catalogSchema>;
+export type NativeCatalogWorkspaceSnapshot = Pick<State, "projects" | "bindings" | "workspaces">;
+export interface NativeCatalogRepairLease {
+  /** Read current facts without re-entering the Catalog serial owner. */
+  snapshot(): NativeCatalogWorkspaceSnapshot;
+  /** Persist the single native reference while this Catalog owner lease is active. */
+  commitNativeReference(reference: NativeCatalogReference): Promise<void>;
+}
 /** Read-only Catalog projection for the Core directory; no CLI startup or migration. */
 export async function readNativeCatalogReferences(
   path: string,
@@ -174,45 +181,92 @@ export class ProjectCatalog implements IProjectCatalogService {
   async workspace(id: string): Promise<WorktreeWorkspace | undefined> {
     return this.state.workspaces.find((w) => w.id === id);
   }
-  /** Local Core-only commit after the CLI receipt and new mapping are certified. Not an RPC method. */
-  async commitNativeReference(value: NativeCatalogReference): Promise<void> {
-    const reference = nativeCatalogReferenceSchema.parse(value);
-    // 中文：故障注入只发生在完成的 CLI 映射之后、Catalog 提交之前；检验只读修复。
-    if (process.env.ZCODE_CORE_NATIVE_CATALOG_FAULT_TEST_ONLY === reference.commandId)
-      throw new Error("native-catalog-commit-fault-test-only");
-    await this.mutate(async (state) => {
-      const workspace = state.workspaces.find((row) => row.id === reference.workspaceId);
-      const binding = state.bindings.find((row) => row.id === reference.repositoryBindingId);
-      // 中文：补写已完成的 Catalog 引用也不能把复用路径/旧代绑定变成当前可执行 owner。
-      if (
-        !workspace ||
-        !binding ||
-        workspace.lifecycle !== "active" ||
-        workspace.archived ||
-        workspace.projectId !== reference.projectId ||
-        workspace.repositoryBindingId !== reference.repositoryBindingId ||
-        workspace.worktreeGeneration !== reference.worktreeGeneration ||
-        workspace.workspaceIdentity !== reference.workspaceIdentity ||
-        workspace.worktreePath !== reference.workspacePath ||
-        binding.executionTargetId !== reference.targetId ||
-        binding.projectId !== reference.projectId
-      )
-        throw new Error("native-catalog-reference-stale-scope");
-      const prior = state.nativeReferences?.find((row) => row.commandId === reference.commandId);
-      if (prior) {
-        if (JSON.stringify(prior) !== JSON.stringify(reference))
-          throw new Error("native-catalog-reference-conflict");
-        return { state, result: undefined, unchanged: true };
-      }
-      if (
-        state.nativeReferences?.some((row) => row.originalSessionId === reference.originalSessionId)
-      )
-        throw new Error("native-catalog-reference-duplicate-id");
-      return {
-        state: { ...state, nativeReferences: [...(state.nativeReferences ?? []), reference] },
-        result: undefined,
+  private nextNativeReferenceState(
+    state: State,
+    reference: NativeCatalogReference,
+  ): { state: State; unchanged?: boolean } {
+    const workspace = state.workspaces.find((row) => row.id === reference.workspaceId);
+    const binding = state.bindings.find((row) => row.id === reference.repositoryBindingId);
+    // 中文：补写已完成的 Catalog 引用也不能把复用路径/旧代绑定变成当前可执行 owner。
+    if (
+      !workspace ||
+      !binding ||
+      workspace.lifecycle !== "active" ||
+      workspace.archived ||
+      workspace.projectId !== reference.projectId ||
+      workspace.repositoryBindingId !== reference.repositoryBindingId ||
+      workspace.worktreeGeneration !== reference.worktreeGeneration ||
+      workspace.workspaceIdentity !== reference.workspaceIdentity ||
+      workspace.worktreePath !== reference.workspacePath ||
+      binding.executionTargetId !== reference.targetId ||
+      binding.projectId !== reference.projectId
+    )
+      throw new Error("native-catalog-reference-stale-scope");
+    const prior = state.nativeReferences?.find((row) => row.commandId === reference.commandId);
+    if (prior) {
+      if (JSON.stringify(prior) !== JSON.stringify(reference))
+        throw new Error("native-catalog-reference-conflict");
+      return { state, unchanged: true };
+    }
+    if (
+      state.nativeReferences?.some((row) => row.originalSessionId === reference.originalSessionId)
+    )
+      throw new Error("native-catalog-reference-duplicate-id");
+    return {
+      state: { ...state, nativeReferences: [...(state.nativeReferences ?? []), reference] },
+    };
+  }
+
+  /**
+   * Hold the existing Catalog serial owner across Target admission and native repair.
+   * This preserves Catalog → Target lock order used by archive/remove and avoids re-entering this queue.
+   */
+  withNativeReferenceAdmission<T>(
+    action: (lease: NativeCatalogRepairLease) => Promise<T>,
+  ): Promise<T> {
+    if (this.closing) return Promise.reject(new Error("catalog-closed"));
+    const job = this.queue.then(async () => {
+      if (this.closing) throw new Error("catalog-closed");
+      if (this.state.pending) throw new Error("catalog-pending-target-operation");
+      let active = true;
+      const assertActive = () => {
+        if (!active) throw new Error("Catalog repair proof expired");
       };
+      try {
+        return await action({
+          snapshot: () => {
+            assertActive();
+            return {
+              projects: this.state.projects.map((row) => ({ ...row })),
+              bindings: this.state.bindings.map((row) => ({ ...row })),
+              workspaces: this.state.workspaces.map((row) => ({ ...row })),
+            };
+          },
+          commitNativeReference: async (value) => {
+            assertActive();
+            const reference = nativeCatalogReferenceSchema.parse(value);
+            if (process.env.ZCODE_CORE_NATIVE_CATALOG_FAULT_TEST_ONLY === reference.commandId)
+              throw new Error("native-catalog-commit-fault-test-only");
+            const next = this.nextNativeReferenceState(this.state, reference);
+            if (next.unchanged) return;
+            const committed = catalogSchema.parse({
+              ...next.state,
+              pending: undefined,
+              revision: this.currentRevision + 1,
+            });
+            sidebarIndex({ ...committed, sessions: [], freshness: new Map() });
+            await this.owner.write(committed);
+            this.state = committed;
+            this.currentRevision = Math.max(this.currentRevision, committed.revision - 1);
+            this.emitChange();
+          },
+        });
+      } finally {
+        active = false;
+      }
     });
+    this.queue = job.catch(() => undefined);
+    return job;
   }
 
   async sidebarSnapshot() {

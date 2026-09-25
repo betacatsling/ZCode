@@ -12,6 +12,10 @@ import type { IAgentHostService } from "../agent-host/serviceContract.js";
 import { nativeHarnessAssetMetadata, resolveHarnessAsset } from "../harness-assets/index.js";
 import type { IProjectCatalogService } from "../project-workspaces/serviceContract.js";
 import type {
+  NativeCatalogRepairLease,
+  NativeCatalogWorkspaceSnapshot,
+} from "../project-workspaces/projectCatalog.js";
+import type {
   IWorkspaceHierarchyService,
   SessionOwner,
   WorkspaceNavigationScope,
@@ -106,6 +110,7 @@ type NativeRecoveryFacts = (
   | { status: "confirmed"; generation: string; receiptKind: "adopt" | "create" | "remove" }
   | { status: "unresolved"; reason: "target-receipts-unavailable" | "target-result-unknown" }
 >;
+type CatalogFactsReader = () => Promise<NativeCatalogWorkspaceSnapshot>;
 
 /** Strictly target-local service; never project unknown IDs into native task storage. */
 export function createWorkspaceHierarchyService(input: {
@@ -116,10 +121,6 @@ export function createWorkspaceHierarchyService(input: {
   registry?: ProviderRegistryService;
   native?: NativeHierarchyPort;
   newAdmissionsEnabled: () => boolean;
-  /** Core-local Catalog reference writer; never renderer RPC or CLI SQL. */
-  commitNativeReference?: (
-    reference: import("../project-workspaces/projectCatalog.js").NativeCatalogReference,
-  ) => Promise<void>;
   /** Real Target receipt reader; absent legacy compositions do not invent a receipt. */
   recoveryFacts?: NativeRecoveryFacts;
   /** Core maintenance admission gates native create across the full async effect. */
@@ -127,13 +128,20 @@ export function createWorkspaceHierarchyService(input: {
     workspaceId: string,
     generation: string,
     cwd: string,
-    action: (lease: { recoveryFacts: NativeRecoveryFacts }) => Promise<T>,
+    action: (lease: {
+      recoveryFacts: NativeRecoveryFacts;
+      catalog: NativeCatalogRepairLease;
+    }) => Promise<T>,
   ) => Promise<T>;
   /** Authenticated window attachment registry, not an identity inferred from path. */
   resolveRemoteSession?: (workspaceIdentity: string) => Promise<string | undefined>;
 }): IWorkspaceHierarchyService {
-  const scopeFor = async (workspaceId: string): Promise<WorkspaceNavigationScope | undefined> => {
-    const snapshot = await input.catalog.sidebarSnapshot();
+  const readCatalogFacts: CatalogFactsReader = () => input.catalog.sidebarSnapshot();
+  const scopeFor = async (
+    workspaceId: string,
+    readFacts: CatalogFactsReader = readCatalogFacts,
+  ): Promise<WorkspaceNavigationScope | undefined> => {
+    const snapshot = await readFacts();
     const workspace = snapshot.workspaces.find((row) => row.id === workspaceId);
     const binding = snapshot.bindings.find((row) => row.id === workspace?.repositoryBindingId);
     if (!workspace || !binding || binding.executionTargetId !== input.targetId) return undefined;
@@ -206,15 +214,16 @@ export function createWorkspaceHierarchyService(input: {
   const inspectWithFacts = async (
     request: Parameters<IWorkspaceHierarchyService["inspectCreateCommand"]>[0],
     recoveryFacts: NativeRecoveryFacts | undefined = input.recoveryFacts,
+    readFacts: CatalogFactsReader = readCatalogFacts,
   ): Promise<CreateCommandInspection> => {
     if (!request.commandId?.trim()) throw new Error("Stable creation command ID required");
-    const scope = await scopeFor(request.workspaceId);
+    const scope = await scopeFor(request.workspaceId, readFacts);
     if (!scope) throw new Error("Unknown target workspace");
     const view = scopeWithAttachment(scope, request.attachment);
     const inspected = await input.native?.inspect?.(request.commandId, scope);
     if (!inspected) throw new Error("Native read-only inspection unavailable");
     if (inspected.status !== "completed") return inspected;
-    const snapshot = await input.catalog.sidebarSnapshot();
+    const snapshot = await readFacts();
     const workspace = snapshot.workspaces.find((row) => row.id === request.workspaceId);
     const binding = snapshot.bindings.find((row) => row.id === workspace?.repositoryBindingId);
     const project = snapshot.projects.find((row) => row.id === workspace?.projectId);
@@ -263,15 +272,15 @@ export function createWorkspaceHierarchyService(input: {
     const completeCertified = input.native?.completeCertified;
     if (!workspace || !binding || !project || !completeCertified || !input.withNativeAdmission)
       throw new Error("Native completed-only recovery admission unavailable");
-    // 中文：旧修复入口在维护/启动持有期间绕过了唯一的 workspace/Target admission，
-    // 读后写的 Target generation 检查也无法阻止并发维护发放 idle 租约。
-    // 整段映射+Catalog fsync+最终证书必须作为一个已登记的 admission 排空。
+    // 中文：完成来源修复需要持有 maintenance、Catalog 和 Target 三个同一 owner 的 admission，
+    // 从来源证书到 mapping/reference fsync 与最终检查全部参与 maintenance drain。
     return input.withNativeAdmission(
       workspace.id,
       workspace.worktreeGeneration,
       ".",
       async (lease) => {
-        const fresh = await input.catalog.sidebarSnapshot();
+        const readLeaseFacts: CatalogFactsReader = async () => lease.catalog.snapshot();
+        const fresh = await readLeaseFacts();
         const same = fresh.workspaces.find((row) => row.id === workspace.id);
         const sameBinding = fresh.bindings.find((row) => row.id === same?.repositoryBindingId);
         const sameProject = fresh.projects.find((row) => row.id === same?.projectId);
@@ -285,7 +294,7 @@ export function createWorkspaceHierarchyService(input: {
           sameBinding.executionTargetId !== scope.targetId
         )
           throw new Error("Native completion Catalog changed before repair");
-        const inside = await inspectWithFacts(request, lease.recoveryFacts);
+        const inside = await inspectWithFacts(request, lease.recoveryFacts, readLeaseFacts);
         // 中文：同命令并发修复排队后若已提交，第二个只读返回同一原始 ID。
         if (
           inside.status === "completed" &&
@@ -314,7 +323,7 @@ export function createWorkspaceHierarchyService(input: {
             // 中文：SQLite 来源证明包含 await，必须在 mapping fsync 前再验 Target
             // 实例/owner 及 Catalog 绑定，而非只信进入租约时的快照。
             const now = await lease.recoveryFacts(workspace.id);
-            const catalog = await input.catalog.sidebarSnapshot();
+            const catalog = await readLeaseFacts();
             const row = catalog.workspaces.find((item) => item.id === workspace.id);
             if (
               now.status !== "confirmed" ||
@@ -338,9 +347,7 @@ export function createWorkspaceHierarchyService(input: {
           completed.intent.worktreeGeneration !== workspace.worktreeGeneration
         )
           throw new Error("native-create-intent-conflict");
-        if (!input.commitNativeReference)
-          throw new Error("Native Catalog reference writer unavailable");
-        const current = await scopeFor(request.workspaceId);
+        const current = await scopeFor(request.workspaceId, readLeaseFacts);
         const latest = await lease.recoveryFacts(request.workspaceId);
         if (
           !current ||
@@ -351,7 +358,7 @@ export function createWorkspaceHierarchyService(input: {
           latest.generation !== completed.intent.worktreeGeneration
         )
           throw new Error("Native completion target changed before Catalog repair");
-        await input.commitNativeReference({
+        await lease.catalog.commitNativeReference({
           commandId: request.commandId,
           originalSessionId: completed.originalSessionId,
           targetId: scope.targetId,
@@ -365,7 +372,7 @@ export function createWorkspaceHierarchyService(input: {
             ? { remoteSessionId: completed.intent.remoteSessionId }
             : {}),
         });
-        const verified = await inspectWithFacts(request, lease.recoveryFacts);
+        const verified = await inspectWithFacts(request, lease.recoveryFacts, readLeaseFacts);
         if (
           verified.status !== "completed" ||
           verified.owner.originalSessionId !== inspected.originalSessionId
@@ -397,24 +404,6 @@ export function createWorkspaceHierarchyService(input: {
         commandId: request.commandId,
         modelBinding: request.modelBinding,
         cwdRelativeToWorktree: request.cwdRelativeToWorktree ?? ".",
-      };
-      const commitReference = async (
-        originalSessionId: string,
-        creationRemoteSessionId: string | null = scope.remoteSessionId ?? null,
-      ) => {
-        if (!input.commitNativeReference) return;
-        await input.commitNativeReference({
-          commandId: request.commandId,
-          originalSessionId,
-          targetId: scope.targetId,
-          projectId: project.id,
-          workspaceId: workspace.id,
-          repositoryBindingId: binding.id,
-          worktreeGeneration: workspace.worktreeGeneration,
-          workspaceIdentity: scope.workspaceIdentity,
-          workspacePath: scope.workspacePath,
-          ...(creationRemoteSessionId ? { remoteSessionId: creationRemoteSessionId } : {}),
-        });
       };
       // 中文：旧 recover/commitReference 在门禁之前可能写 mapping 与 Catalog；
       // 先纯读验证原命令（含不可变模型/cwd），未引用完成只走共享修复 admission。
@@ -457,19 +446,28 @@ export function createWorkspaceHierarchyService(input: {
         workspace.lifecycle !== "active"
       )
         throw new Error("New native admission unavailable");
-      const runNative =
-        input.withNativeAdmission ??
-        (<T>(_workspaceId: string, _generation: string, _cwd: string, action: () => Promise<T>) =>
-          action());
-      const result = await runNative(
+      if (!input.withNativeAdmission)
+        throw new Error("Native Target/Catalog admission unavailable");
+      const result = await input.withNativeAdmission(
         workspace.id,
         workspace.worktreeGeneration,
         request.cwdRelativeToWorktree ?? ".",
-        async () => {
+        async (lease) => {
           if (!input.newAdmissionsEnabled()) throw new Error("New native admission frozen");
           const created = await input.native!.create(nativeRequest);
-          // 中文：映射已同步但 Catalog 写失败时不得向调用者报告创建成功；重试只读修复。
-          await commitReference(created.originalSessionId);
+          // 中文：mapping 和引用共用 Catalog → Target admission，引用 ACK 前不报告 native create 完成。
+          await lease.catalog.commitNativeReference({
+            commandId: request.commandId,
+            originalSessionId: created.originalSessionId,
+            targetId: scope.targetId,
+            projectId: project.id,
+            workspaceId: workspace.id,
+            repositoryBindingId: binding.id,
+            worktreeGeneration: workspace.worktreeGeneration,
+            workspaceIdentity: scope.workspaceIdentity,
+            workspacePath: scope.workspacePath,
+            ...(scope.remoteSessionId ? { remoteSessionId: scope.remoteSessionId } : {}),
+          });
           return created;
         },
       );

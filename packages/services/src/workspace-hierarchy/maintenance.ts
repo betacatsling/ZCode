@@ -39,6 +39,8 @@ export function createMaintenanceCoordination(input: {
   nativeFence: () => Promise<NativeAdmissionFence | (() => Promise<void>)>;
   activity: () => Promise<MaintenanceActivity>;
   initiallyHeld?: boolean;
+  /** Trusted fixture observer only; cannot skip or alter admission. */
+  testOnlyOnWorkspaceAdmission?: () => void;
 }): MaintenanceCoordination {
   let initialHold = input.initiallyHeld === true;
   let bootFence: NativeAdmissionFence | undefined;
@@ -87,6 +89,7 @@ export function createMaintenanceCoordination(input: {
       if (phase !== "open" || initialHold) throw new Error("New admission frozen for maintenance");
       inflight++;
       try {
+        input.testOnlyOnWorkspaceAdmission?.();
         return await action();
       } finally {
         inflight--;
