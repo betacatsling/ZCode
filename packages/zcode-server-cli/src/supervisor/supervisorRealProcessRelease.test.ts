@@ -13,6 +13,9 @@ import { currentServerTarget } from "../runtime/manifest.js";
 import { resolveServerLayout } from "../runtime/paths.js";
 import { ReleaseManager } from "../runtime/releaseManager.js";
 import { createReleaseAgentWiring } from "../runtime/agentWiring.js";
+import { requestControl } from "../ipc/controlClient.js";
+import { DataRootLock } from "../runtime/lock.js";
+import { Supervisor } from "./supervisor.js";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 async function hash(path: string): Promise<string> {
@@ -43,7 +46,8 @@ test(
   "local source Core/CLI/Node executable release is staged, installed, and booted",
   { timeout: 300_000 },
   async () => {
-    const dir = await mkdtemp(join(tmpdir(), "supervisor-source-release-"));
+    // 中文：macOS UNIX socket 路径长度有上限；测试 profile 前缀保持短且独立。
+    const dir = await mkdtemp(join(tmpdir(), "sr-"));
     const layout = resolveServerLayout(join(dir, "install"));
     const dist = join(repo, "packages/zcode-server-cli/dist");
     const agent = join(repo, "apps/zcode-cli/packages/cli/dist/zcode.cjs");
@@ -210,6 +214,96 @@ test(
       core.send({ command: "shutdown" });
       await coreClosed;
       assert.equal(core.exitCode, 0);
+
+      // 中文：独立 Core freeze 正常并不证明 Supervisor 的 IPC、current 选择和收口顺序。
+      // 用相同的已安装可执行文件重新启动实际 Supervisor，经控制 socket 受理一次
+      // 新的原生/外部 census 并释放同一租约，再核验 child close、锁和 socket。
+      const launched: ChildProcess[] = [];
+      const launchedClosed: Promise<void>[] = [];
+      const supervisor = new Supervisor({
+        layout,
+        version: manifest.version,
+        coreReadyTimeoutMs: 25_000,
+        launcher: {
+          launch(generation, release, bootMode) {
+            assert.equal(release?.releaseDir, manifest.releaseDir);
+            assert.equal(bootMode, "open");
+            const child = fork(join(runtime, "server-core.js"), [String(generation), bootMode], {
+              execPath: runtimeNode,
+              env: {
+                ...process.env,
+                HOME: dir,
+                XDG_CONFIG_HOME: join(dir, "config"),
+                ZCODE_DATA_BASE_DIR: dir,
+                ZCODE_SERVER_ROOT: layout.serverRoot,
+                ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: provider,
+                ZCODE_SERVER_SKIP_SERVICE_REGISTRATION: "1",
+                ...createReleaseAgentWiring(runtime, runtimeNode, {}),
+              },
+              stdio: ["ignore", "ignore", "pipe", "ipc"],
+            });
+            launched.push(child);
+            launchedClosed.push(
+              new Promise<void>((resolveClosed) => child.once("close", () => resolveClosed())),
+            );
+            return child;
+          },
+        },
+      });
+      try {
+        await supervisor.start();
+        const deadline = Date.now() + 25_000;
+        while (supervisor.status().state !== "ready" && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 40));
+        }
+        assert.equal(supervisor.status().state, "ready");
+        const live = await requestControl(layout.controlEndpoint, { command: "status" });
+        assert.equal((live as { pid: number }).pid, launched[0]?.pid);
+        assert.deepEqual(
+          await requestControl(layout.controlEndpoint, { command: "begin-fallback-migration" }),
+          { ready: true },
+        );
+        assert.deepEqual(
+          await requestControl(layout.controlEndpoint, { command: "end-fallback-migration" }),
+          { released: true },
+        );
+      } finally {
+        try {
+          await supervisor.stop("installed-real-process-cleanup");
+        } finally {
+          // 中文：即使 Supervisor 收口失败，fixture 只回收自己 fork 的 Core，
+          // 等待实际 close 后才删除隔离 profile；不能把 kill 的发出当作终态。
+          for (const [index, child] of launched.entries()) {
+            if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+            const close = launchedClosed[index]!;
+            let ended = await Promise.race([
+              close.then(() => true),
+              new Promise<false>((resolveTimeout) =>
+                setTimeout(() => resolveTimeout(false), 2_000),
+              ),
+            ]);
+            if (!ended) {
+              child.kill("SIGKILL");
+              ended = await Promise.race([
+                close.then(() => true),
+                new Promise<false>((resolveTimeout) =>
+                  setTimeout(() => resolveTimeout(false), 2_000),
+                ),
+              ]);
+            }
+            assert.equal(
+              ended,
+              true,
+              "owned installed Core child must close before profile removal",
+            );
+          }
+        }
+      }
+      assert.equal(launched.length, 1);
+      assert.equal(launched[0]!.exitCode, 0);
+      assert.equal(supervisor.status().state, "stopped");
+      assert.deepEqual(await new DataRootLock(layout.lockFile).inspect(), { state: "missing" });
+      await assert.rejects(requestControl(layout.controlEndpoint, { command: "status" }));
     } finally {
       if (core && core.exitCode === null) core.kill("SIGTERM");
       if (core && coreClosed) {

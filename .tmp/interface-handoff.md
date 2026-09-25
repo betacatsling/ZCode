@@ -33,3 +33,8 @@ Source-bound installed release Core now passes idle IPC freeze/release ACK and c
 
 ## Qualified Node24 checks complete; boot patch still requested
 Private cached pinned-pnpm parent/child Node24 proof, offline frozen ignore-scripts install, root 11-project typecheck, lint 0 errors/76 baseline warnings, architecture 0 new, and latest source 6/6 unit all exit0. Real installed release 1/1 after banner fix, but one idle opening is not update/rollback. `.tmp/MICRO-supervisor-real-process.md` gives paths/hashes and absence of boot-held proof. Please send focused compatible boot-only 1b+754+46 artifact; do not mark Supervisor process-generation gate passed.
+
+## Real Supervisor installed-release smoke now GREEN (still not full gate)
+One release A staged/installed/source SHA checks, direct native/external idle maintenance lease+release, then real Supervisor with installed Core/Node launch from ReleaseManager.current. Control socket status PID, begin/end fallback fresh idle lease/ACK, child graceful exit0, lock missing and socket closed all verified `.tmp/supervisor-real-supervisor-idle-final.log` 1/1 ~54s. No fake Core; no two-version held update/rollback or busy/waiting/unknown. Focused compatible Services boot dependency remains blocking. Check `.tmp/MICRO-supervisor-real-process.md` and final qualified checks when complete.
+
+Final shape pinned Node24 root typecheck/lint/fmt/arch rerun all exit0; evidence logged in MICRO. Still no all-gates pass absent owner boot artifact, two-release lifecycle and real active/unknown admission proof.
