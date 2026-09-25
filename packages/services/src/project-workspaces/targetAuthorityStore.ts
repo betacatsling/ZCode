@@ -1,7 +1,18 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import path from "node:path";
-import type { TargetBindingRecord } from "./worktreeService.js";
+import type { RepositoryBinding } from "@zcode/shared/project-workspaces";
+import type { PendingTargetCreation, TargetBindingRecord } from "./worktreeService.js";
+
+/** Target-local operation proof. Metadata is written before effects; success is atomic with registry result. */
+export interface TargetOperationReceipt {
+  kind: "import" | "adopt" | "create" | "remove";
+  id: string;
+  requestKey: string;
+  status: "pending" | "succeeded";
+  binding?: RepositoryBinding;
+  presentation?: { title: string; sortOrder: number; origin: "adopted" | "created" };
+}
 import type { TargetWorkspaceRecord } from "./worktreeReconciler.js";
 
 function validIdentity(value: unknown): boolean {
@@ -16,6 +27,9 @@ export interface TargetSnapshot {
   executionTargetId: string;
   bindings: TargetBindingRecord[];
   workspaces: TargetWorkspaceRecord[];
+  /** Durable intent written before Git mutation; never replay an uncertain create automatically. */
+  pendingCreations?: PendingTargetCreation[];
+  operationReceipts?: TargetOperationReceipt[];
   /** Deny sets are target-owned; older snapshots without these fields default to empty. */
   archivedBindings?: string[];
   archivedWorkspaces?: string[];
@@ -23,6 +37,7 @@ export interface TargetSnapshot {
 
 /** One target namespace has one writer; stale locks fail closed until explicitly recovered. */
 export class TargetAuthorityStore {
+  private durabilityFailed = false;
   private constructor(
     private readonly dataFile: string,
     private readonly leaseFile: string,
@@ -96,6 +111,49 @@ export class TargetAuthorityStore {
         !Array.isArray(state.bindings) ||
         !Array.isArray(state.workspaces) ||
         !Number.isSafeInteger(state.revision) ||
+        (state.pendingCreations !== undefined &&
+          (!Array.isArray(state.pendingCreations) ||
+            !state.pendingCreations.every(
+              (intent) =>
+                intent &&
+                typeof intent.workspaceId === "string" &&
+                intent.workspaceId.length > 0 &&
+                typeof intent.bindingId === "string" &&
+                intent.bindingId.length > 0 &&
+                typeof intent.worktreePath === "string" &&
+                path.isAbsolute(intent.worktreePath) &&
+                typeof intent.branch === "string" &&
+                intent.branch.length > 0 &&
+                ["new", "existing"].includes(intent.mode) &&
+                (intent.baseRef === undefined || typeof intent.baseRef === "string"),
+            ) ||
+            new Set(state.pendingCreations.map((item) => item.workspaceId)).size !==
+              state.pendingCreations.length ||
+            new Set(state.pendingCreations.map((item) => `${item.bindingId}\0${item.worktreePath}`))
+              .size !== state.pendingCreations.length)) ||
+        (state.operationReceipts !== undefined &&
+          (!Array.isArray(state.operationReceipts) ||
+            !state.operationReceipts.every(
+              (receipt) =>
+                receipt &&
+                ["import", "adopt", "create", "remove"].includes(receipt.kind) &&
+                typeof receipt.id === "string" &&
+                receipt.id.length > 0 &&
+                typeof receipt.requestKey === "string" &&
+                receipt.requestKey.length > 0 &&
+                ["pending", "succeeded"].includes(receipt.status) &&
+                (receipt.kind !== "import" ||
+                  (receipt.binding?.id === receipt.id &&
+                    receipt.binding.executionTargetId === targetId)) &&
+                (receipt.kind === "import" ||
+                  (receipt.presentation &&
+                    typeof receipt.presentation.title === "string" &&
+                    Number.isSafeInteger(receipt.presentation.sortOrder) &&
+                    receipt.presentation.sortOrder >= 0 &&
+                    ["adopted", "created"].includes(receipt.presentation.origin))),
+            ) ||
+            new Set(state.operationReceipts.map((r) => `${r.kind}\0${r.id}`)).size !==
+              state.operationReceipts.length)) ||
         ![state.archivedBindings, state.archivedWorkspaces].every(
           (ids) =>
             ids === undefined ||
@@ -127,7 +185,13 @@ export class TargetAuthorityStore {
             ),
         ) ||
         new Set(state.bindings.map((binding) => binding.id)).size !== state.bindings.length ||
-        new Set(state.workspaces.map((workspace) => workspace.id)).size !== state.workspaces.length
+        new Set(state.workspaces.map((workspace) => workspace.id)).size !==
+          state.workspaces.length ||
+        state.pendingCreations?.some(
+          (intent) =>
+            state.workspaces.some((workspace) => workspace.id === intent.workspaceId) ||
+            !state.bindings.some((binding) => binding.id === intent.bindingId),
+        )
       )
         throw new Error("Invalid target registry snapshot");
       return new TargetAuthorityStore(dataFile, leaseFile, token, state);
@@ -140,6 +204,8 @@ export class TargetAuthorityStore {
   }
 
   async assertLease(): Promise<void> {
+    if (this.durabilityFailed)
+      throw new Error("Target registry durability is unknown; restart owner");
     const lease = JSON.parse(await readFile(this.leaseFile, "utf8")) as { token: string };
     if (lease.token !== this.leaseToken) throw new Error("Target owner lease lost");
   }
@@ -158,6 +224,18 @@ export class TargetAuthorityStore {
       }
       await rename(temp, this.dataFile);
       this.state = updated;
+      // 中文：仅同步临时文件不足以保证 rename 后的意图在崩溃时存活；同步失败后禁止该 owner 继续写入/Git 效果。
+      try {
+        const directory = await open(path.dirname(this.dataFile), "r");
+        try {
+          await directory.sync();
+        } finally {
+          await directory.close();
+        }
+      } catch (error) {
+        this.durabilityFailed = true;
+        throw error;
+      }
     } finally {
       await rm(temp, { force: true });
     }

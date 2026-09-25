@@ -446,3 +446,456 @@ test("create uses stable command ID, lost ACK queries durable Host, unsupported 
   );
   transport.dispose();
 });
+
+test("scoped external question maps only a real answer, never permission approval", async () => {
+  const { transport, history, calls } = harness([spec]);
+  history.get(spec.hostSessionId)!.events.push(turn(spec.hostSessionId, 1), {
+    ...turn(spec.hostSessionId, 2),
+    turnId: "turn-1",
+    kind: "question.requested",
+    interactionId: "question",
+    prompt: "Which?",
+    freeText: true,
+    options: [{ optionId: "first", label: "First option" }],
+  });
+  await assert.rejects(
+    transport.sendCommand({
+      ...envelope(
+        "host-one",
+        "resolveInteraction",
+        { interactionId: "question", answer: { optionId: "allow" } },
+        "fake-allow",
+      ),
+      baseLogEpoch: "epoch",
+    }),
+    /question answer/,
+  );
+  await assert.rejects(
+    transport.sendCommand({
+      ...envelope(
+        "host-one",
+        "resolveInteraction",
+        { interactionId: "question", answer: { freeText: "yes" } },
+        "old",
+      ),
+      baseLogEpoch: "stale",
+    }),
+    /question answer/,
+  );
+  await transport.sendCommand({
+    ...envelope(
+      "host-one",
+      "resolveInteraction",
+      { interactionId: "question", answer: { optionId: "first" } },
+      "selected",
+    ),
+    baseLogEpoch: "epoch",
+  });
+  assert.deepEqual(
+    calls.filter((call) => call.startsWith("dispatch:")),
+    ["dispatch:host-one:answerInteraction:selected"],
+  );
+  transport.dispose();
+});
+
+test("external Host transport and SessionDataLayer page through streaming full snapshots without losing loaded prefix", async () => {
+  const { service, publish, history, transport } = harness([spec]);
+  const { SessionDataLayer } = await import("../src/v4/SessionDataLayer.js");
+  const live = history.get(spec.hostSessionId)!;
+  const make = () =>
+    projectHostConversation({ spec, runtimeEpoch: live.epoch, events: live.events, windowSize: 2 });
+  service.snapshot = async () => make();
+  let release: (() => void) | undefined;
+  let started: (() => void) | undefined;
+  const pending = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  service.rowsRange = async (_owner, request) => {
+    const result = projectHostConversation({
+      spec,
+      runtimeEpoch: live.epoch,
+      events: [...live.events],
+      rowRange: { beforeRowId: request.beforeRowId, limit: request.limit },
+    });
+    if (!release)
+      await new Promise<void>((resolve) => {
+        release = resolve;
+        started?.();
+      });
+    return {
+      rows: result.rows.window,
+      atSeq: result.seq,
+      atRevision: result.revision,
+      atLogEpoch: result.logEpoch,
+      hasMore: true,
+    };
+  };
+  for (let i = 1; i <= 8; i++) {
+    publish(spec, { ...turn(spec.hostSessionId, 2 * i - 1), turnId: `t${i}` });
+    publish(spec, {
+      ...turn(spec.hostSessionId, 2 * i),
+      turnId: `t${i}`,
+      kind: "turn.finished",
+      outcome: "success",
+    });
+  }
+  const layer = new SessionDataLayer({ transport, keepWarmMs: 0 });
+  const lease = layer.acquire(spec.hostSessionId);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(
+    lease.store.getState().snapshot?.rows.window.map((r) => r.rowId),
+    [7, 8],
+  );
+  const loading = lease.store.loadOlder(2);
+  await pending;
+  publish(spec, { ...turn(spec.hostSessionId, 17), turnId: "t9" });
+  publish(spec, {
+    ...turn(spec.hostSessionId, 18),
+    turnId: "t9",
+    kind: "text.delta",
+    messageId: "msg",
+    text: "stream",
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  release?.();
+  await loading;
+  assert.deepEqual(
+    lease.store.getState().snapshot?.rows.window.map((r) => r.rowId),
+    [5, 6, 7, 8, 9, 10],
+  );
+  publish(spec, {
+    ...turn(spec.hostSessionId, 19),
+    turnId: "t9",
+    kind: "text.delta",
+    messageId: "msg",
+    text: " more",
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(
+    lease.store.getState().snapshot?.rows.window.map((r) => r.rowId),
+    [5, 6, 7, 8, 9, 10],
+  );
+  const latestText = lease.store.getState().snapshot?.rows.window.find((row) => row.rowId === 10);
+  assert.equal(latestText?.kind, "assistantText");
+  if (latestText?.kind !== "assistantText") throw new Error("missing latest text row");
+  assert.equal(latestText.text, "stream more");
+  await lease.store.loadOlder(2);
+  assert.deepEqual(
+    lease.store
+      .getState()
+      .snapshot?.rows.window.map((r) => r.rowId)
+      .slice(0, 2),
+    [3, 4],
+  );
+  // 旧页请求跨 runtime epoch：绝不能复活旧前缀。
+  let releaseOld: (() => void) | undefined;
+  let oldRead: (() => void) | undefined;
+  const oldReading = new Promise<void>((resolve) => {
+    oldRead = resolve;
+  });
+  const oldRange = service.rowsRange.bind(service);
+  service.rowsRange = async (owner, request) => {
+    const result = await oldRange(owner, request);
+    await new Promise<void>((resolve) => {
+      releaseOld = resolve;
+      oldRead?.();
+    });
+    return result;
+  };
+  const stalePage = lease.store.loadOlder(2);
+  await oldReading;
+  live.epoch = "next-epoch";
+  live.events = [];
+  publish(spec, turn(spec.hostSessionId, 1, "next-epoch"));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  releaseOld?.();
+  await stalePage;
+  assert.equal(lease.store.getState().snapshot?.logEpoch, "next-epoch");
+  assert.deepEqual(
+    lease.store.getState().snapshot?.rows.window.map((r) => r.rowId),
+    [1],
+  );
+  assert.ok(lease.store.countProjectionRows() <= 2000);
+  lease.release();
+  layer.dispose();
+  transport.dispose();
+});
+
+test("owner lease switch closes an in-flight external page rather than adding stale rows to a new owner", async () => {
+  const { service, history, transport } = harness([spec, second]);
+  const { SessionDataLayer } = await import("../src/v4/SessionDataLayer.js");
+  for (let i = 1; i <= 4; i++) {
+    history
+      .get(spec.hostSessionId)!
+      .events.push({ ...turn(spec.hostSessionId, 2 * i - 1), turnId: `t${i}` });
+    history.get(spec.hostSessionId)!.events.push({
+      ...turn(spec.hostSessionId, 2 * i),
+      turnId: `t${i}`,
+      kind: "turn.finished",
+      outcome: "success",
+    });
+  }
+  service.snapshot = async (owner) =>
+    projectHostConversation({
+      spec: owner,
+      runtimeEpoch: "epoch",
+      events: history.get(owner.hostSessionId)!.events,
+      windowSize: 2,
+    });
+  let release: (() => void) | undefined;
+  let began: (() => void) | undefined;
+  const started = new Promise<void>((resolve) => {
+    began = resolve;
+  });
+  service.rowsRange = async () => {
+    await new Promise<void>((resolve) => {
+      release = resolve;
+      began?.();
+    });
+    const view = projectHostConversation({
+      spec,
+      runtimeEpoch: "epoch",
+      events: history.get(spec.hostSessionId)!.events,
+      rowRange: { beforeRowId: 3, limit: 2 },
+    });
+    return {
+      rows: view.rows.window,
+      atSeq: view.seq,
+      atRevision: view.revision,
+      atLogEpoch: view.logEpoch,
+      hasMore: false,
+    };
+  };
+  const first = new SessionDataLayer({ transport, keepWarmMs: 0 });
+  const old = first.acquire(spec.hostSessionId);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const loading = old.store.loadOlder(2);
+  await started;
+  old.release();
+  first.dispose();
+  const next = new SessionDataLayer({ transport, keepWarmMs: 0 });
+  const current = next.acquire(second.hostSessionId);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  release?.();
+  await loading;
+  assert.equal(old.store.getState().status, "closed");
+  assert.equal(current.store.getState().snapshot?.sessionId, second.hostSessionId);
+  assert.deepEqual(current.store.getState().snapshot?.rows.window, []);
+  current.release();
+  next.dispose();
+  transport.dispose();
+});
+
+test("external older-page view slides past multiple cache budgets and returns to live tail", async () => {
+  const { service, history, transport, publish } = harness([spec]);
+  const { SessionDataLayer } = await import("../src/v4/SessionDataLayer.js");
+  const events = history.get(spec.hostSessionId)!.events;
+  for (let i = 1; i <= 4400; i++) {
+    events.push({ ...turn(spec.hostSessionId, 2 * i - 1), turnId: `t${i}` });
+    events.push({
+      ...turn(spec.hostSessionId, 2 * i),
+      turnId: `t${i}`,
+      kind: "turn.finished",
+      outcome: "success",
+    });
+  }
+  service.snapshot = async () =>
+    projectHostConversation({ spec, runtimeEpoch: "epoch", events, windowSize: 2 });
+  service.rowsRange = async (_owner, request) => {
+    const result = projectHostConversation({
+      spec,
+      runtimeEpoch: "epoch",
+      events,
+      rowRange: { beforeRowId: request.beforeRowId, limit: request.limit },
+    });
+    return {
+      rows: result.rows.window,
+      atSeq: result.seq,
+      atRevision: result.revision,
+      atLogEpoch: result.logEpoch,
+      hasMore: true,
+    };
+  };
+  const layer = new SessionDataLayer({ transport, keepWarmMs: 0 });
+  const lease = layer.acquire(spec.hostSessionId);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  for (let i = 0; i < 11; i++) {
+    await lease.store.loadOlder(200);
+    assert.ok(lease.store.countProjectionRows() <= 2000);
+  }
+  assert.equal(lease.store.countProjectionRows(), 2000);
+  // A full cache is not a history terminus. Multiple shifts must reach the journal's first row.
+  for (let i = 0; i < 25 && lease.store.getState().snapshot?.rows.window[0]?.rowId !== 1; i++) {
+    await lease.store.loadOlder(200);
+    assert.ok(lease.store.countProjectionRows() <= 2000);
+  }
+  assert.equal(lease.store.getState().snapshot?.rows.window[0]?.rowId, 1);
+  assert.equal(lease.store.getState().snapshot?.rows.firstRowId, 1);
+  assert.equal(lease.store.getState().snapshot?.rows.window.at(-1)?.rowId, 2000);
+  // Live authoritative stream continues while the held view stays contiguous and bounded.
+  publish(spec, { ...turn(spec.hostSessionId, 8801), turnId: "live" });
+  // A real subscription notification causes the transport to read the new canonical Host snapshot.
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(lease.store.getState().snapshot?.seq, 8801);
+  assert.equal(lease.store.getState().snapshot?.rows.window.at(-1)?.rowId, 2000);
+  for (let i = 0; i < 15 && (lease.store.getState().snapshot?.rows.window.at(-1)?.rowId ?? 0) < 4400; i++) {
+    await lease.store.loadNewer(200);
+    assert.ok(lease.store.countProjectionRows() <= 2000);
+  }
+  assert.equal(lease.store.getState().snapshot?.rows.window[0]?.rowId, 2401);
+  assert.equal(lease.store.getState().snapshot?.rows.window.at(-1)?.rowId, 4400);
+  await lease.store.loadOlder(200);
+  assert.equal(lease.store.getState().snapshot?.rows.window.at(-1)?.rowId, 4200);
+  await lease.store.jumpToLatest();
+  assert.equal(lease.store.getState().snapshot?.rows.window.at(-1)?.rowId, 4401);
+  lease.release();
+  layer.dispose();
+  transport.dispose();
+});
+
+test("a real late old-child rewrite refreshes the held page through Host transport, not an immutable prefix", async () => {
+  const { service, history, transport, publish } = harness([spec]);
+  const { SessionDataLayer } = await import("../src/v4/SessionDataLayer.js");
+  const events = history.get(spec.hostSessionId)!.events;
+  events.push(turn(spec.hostSessionId, 1));
+  events.push({
+    ...turn(spec.hostSessionId, 2),
+    turnId: "turn-1",
+    kind: "subagent.updated",
+    childSessionId: "late-child",
+    status: "finished",
+    summary: "old",
+  });
+  events.push({
+    ...turn(spec.hostSessionId, 3),
+    turnId: "turn-1",
+    kind: "turn.finished",
+    outcome: "success",
+  });
+  for (let i = 2; i <= 110; i++) {
+    const seq = events.length + 1;
+    events.push({ ...turn(spec.hostSessionId, seq), turnId: `turn-${i}` });
+    events.push({
+      ...turn(spec.hostSessionId, seq + 1),
+      turnId: `turn-${i}`,
+      kind: "turn.finished",
+      outcome: "success",
+    });
+  }
+  service.snapshot = async () =>
+    projectHostConversation({ spec, runtimeEpoch: "epoch", events, windowSize: 2 });
+  let held: (() => void) | undefined;
+  let started: (() => void) | undefined;
+  const pending = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  service.rowsRange = async (_owner, request) => {
+    const page = projectHostConversation({
+      spec,
+      runtimeEpoch: "epoch",
+      events,
+      windowSize: 2,
+      rowRange: { beforeRowId: request.beforeRowId, limit: request.limit },
+    });
+    if (!held)
+      await new Promise<void>((resolve) => {
+        held = resolve;
+        started?.();
+      });
+    return {
+      rows: page.rows.window,
+      atSeq: page.seq,
+      atRevision: page.revision,
+      atLogEpoch: page.logEpoch,
+      hasMore: true,
+    };
+  };
+  const layer = new SessionDataLayer({ transport, keepWarmMs: 0 });
+  const lease = layer.acquire(spec.hostSessionId);
+  try {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const loading = lease.store.loadOlder(200);
+    await pending;
+    publish(spec, {
+      ...turn(spec.hostSessionId, events.length + 1),
+      turnId: "turn-1",
+      kind: "subagent.updated",
+      childSessionId: "late-child",
+      status: "finished",
+      summary: "new",
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    held?.();
+    await loading;
+    // Refresh + retry are read-only asynchronous work, not prompt replay.
+    for (let i = 0; i < 10 && lease.store.getState().snapshot?.rows.window[0]?.rowId !== 1; i++)
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    const snapshot = lease.store.getState().snapshot;
+    assert.equal(snapshot?.rows.window[0]?.rowId, 1);
+    const child = snapshot?.rows.window.find((row) => row.kind === "subagent");
+    assert.equal(child?.kind === "subagent" ? child.summaryText : null, "new");
+    assert.ok(lease.store.countProjectionRows() <= 2000);
+  } finally {
+    lease.release();
+    layer.dispose();
+    transport.dispose();
+  }
+});
+
+test("new subscription generation discards an older-page response from its predecessor", async () => {
+  const { service, history, transport } = harness([spec]);
+  const { SessionDataLayer } = await import("../src/v4/SessionDataLayer.js");
+  const events = history.get(spec.hostSessionId)!.events;
+  for (let i = 1; i <= 4; i++) {
+    events.push({ ...turn(spec.hostSessionId, 2 * i - 1), turnId: `t${i}` });
+    events.push({
+      ...turn(spec.hostSessionId, 2 * i),
+      turnId: `t${i}`,
+      kind: "turn.finished",
+      outcome: "success",
+    });
+  }
+  service.snapshot = async () =>
+    projectHostConversation({ spec, runtimeEpoch: "epoch", events, windowSize: 2 });
+  let release: (() => void) | undefined;
+  let began: (() => void) | undefined;
+  const started = new Promise<void>((resolve) => {
+    began = resolve;
+  });
+  service.rowsRange = async () => {
+    const result = projectHostConversation({
+      spec,
+      runtimeEpoch: "epoch",
+      events,
+      rowRange: { beforeRowId: 3, limit: 2 },
+    });
+    await new Promise<void>((resolve) => {
+      release = resolve;
+      began?.();
+    });
+    return {
+      rows: result.rows.window,
+      atSeq: result.seq,
+      atRevision: result.revision,
+      atLogEpoch: result.logEpoch,
+      hasMore: true,
+    };
+  };
+  const layer = new SessionDataLayer({ transport, keepWarmMs: 0 });
+  const lease = layer.acquire(spec.hostSessionId);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const oldId = lease.store.getState().subscriptionId;
+  const oldPage = lease.store.loadOlder(2);
+  await started;
+  await lease.store.connect({ forceSnapshot: true });
+  assert.notEqual(lease.store.getState().subscriptionId, oldId);
+  release?.();
+  await oldPage;
+  assert.deepEqual(
+    lease.store.getState().snapshot?.rows.window.map((r) => r.rowId),
+    [3, 4],
+  );
+  lease.release();
+  layer.dispose();
+  transport.dispose();
+});

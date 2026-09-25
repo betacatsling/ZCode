@@ -193,6 +193,24 @@ export interface CreateSessionInput {
   };
 }
 
+/** CLI-owned immutable original create ID; never a Core-generated mapping. */
+export interface NativeCreateReceipt {
+  commandId: string;
+  originalSessionId: SessionId;
+  workspaceScope: string;
+  intentFingerprint: string;
+  hasFirstInput: boolean;
+  status: "pending" | "completed";
+}
+
+export interface NativeCreateReceiptCommit {
+  commandId: string;
+  workspaceScope: string;
+  intentFingerprint: string;
+  hasFirstInput?: boolean;
+  session: CreateSessionInput;
+}
+
 /** V4 stable fork resolver 固定的目标 product turn segment。 */
 export interface StableForkTargetMetadata {
   productTurnId: string;
@@ -1088,6 +1106,15 @@ export interface LocalSettingStorePort {
 
 export interface SessionStorePort {
   createSession(input: CreateSessionInput): Promise<SessionInfo>;
+  /** Single transaction: session row and original create receipt. Must not overwrite a conflicting fact. */
+  commitNativeCreateReceipt?(input: NativeCreateReceiptCommit): Promise<NativeCreateReceipt>;
+  getNativeCreateReceipt?(commandId: string): Promise<NativeCreateReceipt | null>;
+  /** CLI runtime's actual draft selection/execution, atomically persisted before completed receipt. */
+  completeNativeCreateReceipt?(
+    commandId: string,
+    originalSessionId: SessionId,
+    actual?: { modelSelection?: ModelSelection; mode: CollaborationMode; planEnabled: boolean },
+  ): Promise<void>;
   /** legacy 兼容原语；V4 stable/compact-edit fork 禁止调用，统一走 commitForkBundle。 */
   createForkedSessionWithMetadata?(
     input: CreateSessionInput,

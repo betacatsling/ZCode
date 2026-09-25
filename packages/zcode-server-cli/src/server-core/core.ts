@@ -1,21 +1,29 @@
 import {
-  createLocalServices,
-  disposeServiceResourcesAndWait,
   materializeZCodeBuiltinProviderConfig,
   getAppConfigDir,
   ZCODE_BUILTIN_PROVIDER_CONFIG_FILE_ENV,
+  createServiceLogger,
 } from "@zcode/services/node";
 import { IAgentHostService, IZCodeAgentService } from "@zcode/services";
 import { coreCommandSchema, type RuntimeActivity } from "../contracts.js";
+import { resolveServerLayout } from "../runtime/paths.js";
+import { createProductionCoreAuthority, type CoreAuthorityFactory } from "./authority.js";
 import { ZCODE_VERSION } from "@zcode/shared";
 import { createCoreHttpServer } from "./http.js";
 import { installParentDisconnectHandler } from "./parentDisconnect.js";
 import { resolveCoreServerId } from "./serverIdentity.js";
+import { maintenanceBeginReply } from "./maintenanceReply.js";
 import { createTaskActivityTracker, readExternalActivity } from "./taskActivityTracker.js";
+import { CoreMaintenanceAdmission } from "./maintenanceAdmission.js";
+
+const log = createServiceLogger("server-core");
 
 declare const __ZCODE_BUILTIN_PROVIDER_CONFIG_JSON__: string | undefined;
 
-export async function runServerCore(generation: number): Promise<void> {
+export async function runServerCore(
+  generation: number,
+  createAuthority: CoreAuthorityFactory = createProductionCoreAuthority,
+): Promise<void> {
   let shutdown: ((reason: string) => Promise<void>) | undefined;
   let parentDisconnected = false;
   let disposeParentDisconnectHandler = (): void => undefined;
@@ -39,18 +47,51 @@ export async function runServerCore(generation: number): Promise<void> {
     );
   }
   const serverId = await resolveCoreServerId();
-  const services = createLocalServices({
+  if (!serverId) throw new Error("Persistent Core requires validated installation identity");
+  const authority = await createAuthority({
+    installationId: serverId,
+    profileRoot: resolveServerLayout(process.env.ZCODE_SERVER_ROOT).serverRoot,
     zcodeBuiltinProviderConfigFilePath,
-    serviceAuthorityMode: "standalone-server",
-    agentHostTargetId: serverId,
   });
+  if (
+    !authority.services ||
+    !authority.maintenance?.freezeAdmissions ||
+    !authority.maintenance.readActivity ||
+    !authority.reconcileBeforeAdmission ||
+    !authority.dispose
+  ) {
+    await authority.dispose?.();
+    throw new Error("Persistent Core authority is missing required lifecycle or maintenance ports");
+  }
+  const services = authority.services;
+  // 中文：服务装配负责保持新 admission 关闭，只有确认 Target 收据与归档策略后才打开。
+  // 失败只影响新 admission；已接纳控制、历史及恢复诊断仍可由同一 Core 提供。
+  try {
+    await authority.reconcileBeforeAdmission();
+  } catch (error) {
+    log.warn("Core authority reconciliation incomplete; new admission remains closed", error);
+  }
   const taskActivityTracker = createTaskActivityTracker(services.getOptional(IZCodeAgentService));
+  const maintenance = new CoreMaintenanceAdmission(authority.maintenance);
   // V2 Host 由集成层挂载；旧 Host 若无法报告外部活动必须视为不确定，不能假定空闲。
   const host = services.getOptional(IAgentHostService) as
     | (IAgentHostService & { getRuntimeActivity?: () => Promise<RuntimeActivity> })
     | undefined;
   const externalActivity = (): Promise<RuntimeActivity> => readExternalActivity(host);
-  const http = await createCoreHttpServer(services, { serverId });
+  let http: Awaited<ReturnType<typeof createCoreHttpServer>>;
+  try {
+    http = await createCoreHttpServer(services, { serverId });
+  } catch (error) {
+    // 中文：装配成功但 HTTP 绑定失败时不能留存单例 Catalog/Host 写入者。
+    taskActivityTracker.dispose();
+    disposeParentDisconnectHandler();
+    await authority
+      .dispose()
+      .catch((disposeError: unknown) =>
+        log.error("failed to dispose authority after Core boot failure", disposeError),
+      );
+    throw error;
+  }
   const send = (message: unknown): Promise<void> => {
     if (typeof process.send !== "function" || process.connected === false) return Promise.resolve();
     return new Promise((resolve) => {
@@ -122,7 +163,15 @@ export async function runServerCore(generation: number): Promise<void> {
     activitySubscription.dispose();
     taskActivityTracker.dispose();
     await http.close().catch(() => undefined);
-    await disposeServiceResourcesAndWait(services).catch(() => undefined);
+    // 中文：进程关闭时仅释放本代际持有的 admission lease；窗口断连不会触发此路径。
+    await maintenance
+      .releaseHeld()
+      .catch((error: unknown) =>
+        log.error("failed to release Core maintenance lease on shutdown", error),
+      );
+    await authority
+      .dispose()
+      .catch((error: unknown) => log.error("failed to dispose Core authority on shutdown", error));
     await send({ type: "shutdown-ack" });
     await send({ type: "exit", reason });
     try {
@@ -138,14 +187,26 @@ export async function runServerCore(generation: number): Promise<void> {
   process.on("message", (raw: unknown) => {
     const parsed = coreCommandSchema.safeParse(raw);
     if (!parsed.success) return;
-    if (parsed.data.command === "shutdown") {
+    const command = parsed.data;
+    if (command.command === "shutdown") {
       void shutdown("requested");
-    } else if (!shutdownStarted) {
-      const requestId = parsed.data.requestId;
+    } else if (!shutdownStarted && command.command === "maintenance-begin") {
+      void maintenance.begin().then(
+        // 中文：内部 owner 返回 native/external，而 IPC 合同要求 nativeActivity/externalActivity；
+        // 直接展开会丢掉活动字段，Supervisor 把已冻结的 Core 误判为无确认。
+        (activity) => send(maintenanceBeginReply(command.requestId, activity)),
+        () => send({ type: "maintenance", requestId: command.requestId }),
+      );
+    } else if (!shutdownStarted && command.command === "maintenance-release") {
+      void maintenance.release(command.leaseId).then(
+        () => send({ type: "maintenance", requestId: command.requestId, leaseId: command.leaseId }),
+        () => send({ type: "maintenance", requestId: command.requestId }),
+      );
+    } else if (!shutdownStarted && command.command === "activity") {
       void externalActivity().then((activity) =>
         send({
           type: "activity",
-          requestId,
+          requestId: command.requestId,
           runningTaskCount: taskActivityTracker.readRunningTaskCount(),
           externalActivity: activity,
         }),

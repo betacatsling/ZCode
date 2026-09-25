@@ -1,9 +1,11 @@
+/* eslint-disable max-lines -- Pi worker maps SDK events at the native worker boundary; split requires event state extraction. */
 import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve, join } from "node:path";
+import { isAbsolute, relative, resolve, join } from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
 import {
   createAgentSession,
+  createBashToolDefinition,
   DefaultResourceLoader,
   ModelRuntime,
   SessionManager,
@@ -27,6 +29,64 @@ const approvals = new Map<
   string,
   { turnId: string; settle: (decision: "allow" | "deny") => void }
 >();
+const brokerRequests = new Map<
+  string,
+  { resolve: (value: unknown) => void; reject: (error: Error) => void }
+>();
+const bashRequests = new Map<
+  string,
+  {
+    onData: (data: Buffer) => void;
+    resolve: (value: { exitCode: number | null }) => void;
+    reject: (error: Error) => void;
+  }
+>();
+const readPauses = new Map<string, () => void>();
+function brokerRequest(
+  call: Omit<Extract<FromPiWorker, { type: "broker.request" }>, "requestId" | "type">,
+): Promise<unknown> {
+  const requestId = randomUUID();
+  return new Promise((resolve, reject) => {
+    brokerRequests.set(requestId, { resolve, reject });
+    post({ type: "broker.request", requestId, ...call });
+  });
+}
+function bashExec(
+  command: string,
+  dir: string,
+  options: {
+    onData: (data: Buffer) => void;
+    signal?: AbortSignal;
+    timeout?: number;
+    env?: NodeJS.ProcessEnv;
+  },
+): Promise<{ exitCode: number | null }> {
+  const requestId = randomUUID();
+  return new Promise((resolve, reject) => {
+    const abort = () => post({ type: "bash.abort", requestId });
+    bashRequests.set(requestId, {
+      onData: options.onData,
+      resolve: (result) => {
+        options.signal?.removeEventListener("abort", abort);
+        resolve(result);
+      },
+      reject: (error) => {
+        options.signal?.removeEventListener("abort", abort);
+        reject(error);
+      },
+    });
+    options.signal?.addEventListener("abort", abort, { once: true });
+    post({
+      type: "bash.request",
+      requestId,
+      command,
+      cwd: dir,
+      timeout: options.timeout,
+      env: options.env ?? {},
+    });
+    if (options.signal?.aborted) abort();
+  });
+}
 const modelStreams = new Map<
   string,
   {
@@ -94,17 +154,6 @@ function modelProxy(): Model {
   } as unknown as Model;
 }
 
-async function pathWithinWorkspace(raw: unknown, allowMissing: boolean): Promise<boolean> {
-  if (typeof raw !== "string" || !raw || raw.includes("\0")) return false;
-  const root = await realpath(boot.spec.execution.worktreePath);
-  const path = isAbsolute(raw) ? resolve(raw) : resolve(cwd, raw);
-  const resolved = await realpath(path).catch(async () =>
-    allowMissing ? resolve(await realpath(dirname(path)), path.split("/").at(-1)!) : "",
-  );
-  const rel = relative(root, resolved);
-  return !!resolved && rel !== ".." && !rel.startsWith("../") && !isAbsolute(rel);
-}
-
 async function main(): Promise<void> {
   if (boot.model.options.reasoningLevel !== "off")
     throw new Error("Pi host bridge currently certifies only reasoningLevel=off");
@@ -113,8 +162,29 @@ async function main(): Promise<void> {
   const subdir = relative(root, cwd);
   if (subdir === ".." || subdir.startsWith("../") || isAbsolute(subdir))
     throw new Error("Pi cwd escapes worktree");
+  const sourceMode = import.meta.url.endsWith(".ts");
+  const { createPortablePiBoundary } = await import(
+    sourceMode ? "./piPortableFileTools.ts" : "./piPortableFileTools.js"
+  );
+  const fileBoundary = await createPortablePiBoundary(
+    root,
+    cwd,
+    () => activeTurn,
+    brokerRequest,
+    boot.pauseBeforeReadResolver
+      ? (alias: string) =>
+          new Promise<void>((resolve) => {
+            const requestId = randomUUID();
+            readPauses.set(requestId, resolve);
+            post({ type: "read.pause", requestId, alias });
+          })
+      : undefined,
+  );
   const { createPiHostProvider } = await import(
-    import.meta.url.endsWith(".ts") ? "./piModelStream.ts" : "./piModelStream.js"
+    sourceMode ? "./piModelStream.ts" : "./piModelStream.js"
+  );
+  const { measuredCanonicalUsage } = await import(
+    sourceMode ? "./piModelUsage.ts" : "./piModelUsage.js"
   );
   const modelRuntime = await ModelRuntime.create({
     authPath: join(boot.isolatedAgentDir, "auth.json"),
@@ -142,25 +212,39 @@ async function main(): Promise<void> {
           if (!activeTurn) return { block: true, reason: "No active host turn" };
           if (!(["read", "write", "edit", "bash"] as string[]).includes(call.toolName))
             return { block: true, reason: "Uncertified tool" };
-          if (
-            call.toolName !== "bash" &&
-            !(await pathWithinWorkspace(
-              (call.input as { path?: unknown }).path,
-              call.toolName === "write",
-            ))
-          ) {
-            return { block: true, reason: "Tool path outside approved worktree" };
+          const admittedTurn = activeTurn;
+          if (call.toolName !== "bash") {
+            try {
+              // 修复：pathname 检查与 SDK 默认重开文件间有 TOCTOU；审批前让隔离 broker
+              // 锚定真实目录及现有文件 inode，审批后只能用同一 call/input 的 descriptor。
+              await fileBoundary.prepare(call.toolCallId, admittedTurn, call.toolName, call.input);
+            } catch {
+              return { block: true, reason: "Pi file boundary refused preparation" };
+            }
+          }
+          if (activeTurn !== admittedTurn || ctx.signal?.aborted) {
+            await fileBoundary.release(call.toolCallId);
+            return { block: true, reason: "Pi turn ended before file preparation" };
           }
           if (call.toolName === "read") return undefined;
-          const summary =
-            call.toolName === "bash"
-              ? `Run Pi bash command: ${String((call.input as { command?: unknown }).command ?? "").slice(0, 512)}`
-              : `Allow Pi ${call.toolName} in this worktree?`;
+          let summary: string;
+          try {
+            if (call.toolName === "bash")
+              summary = `Run Pi bash command: ${String((call.input as { command?: unknown }).command ?? "").slice(0, 512)}`;
+            else {
+              const scope = fileBoundary.review(call.toolCallId);
+              summary = `Allow Pi ${scope.mode} ${scope.target} (${scope.bytes} bytes, HMAC-SHA-256 ${scope.digest})?`;
+            }
+          } catch {
+            await fileBoundary.release(call.toolCallId);
+            return { block: true, reason: "Pi file approval could not be reviewed" };
+          }
           if (
             summary.length > 700 ||
             (call.toolName === "bash" &&
               String((call.input as { command?: unknown }).command ?? "").length > 512)
           ) {
+            if (call.toolName !== "bash") await fileBoundary.release(call.toolCallId);
             return { block: true, reason: "Command too long for the approval preview" };
           }
           const decision = await new Promise<"allow" | "deny">((settle) => {
@@ -180,12 +264,15 @@ async function main(): Promise<void> {
                     interactionId: call.toolCallId,
                     decision: "deny",
                   });
+                  if (call.toolName !== "bash") void fileBoundary.release(call.toolCallId);
                   settle("deny");
                 }
               },
               { once: true },
             );
           });
+          if (decision !== "allow" && call.toolName !== "bash")
+            await fileBoundary.release(call.toolCallId);
           return decision === "allow"
             ? undefined
             : { block: true, reason: "User denied the tool before execution" };
@@ -211,11 +298,20 @@ async function main(): Promise<void> {
     settingsManager: settings,
     modelRuntime,
     model,
+    tools: ["read", "write", "edit", "bash"],
+    customTools: [
+      ...fileBoundary.tools,
+      createBashToolDefinition(cwd, { operations: { exec: bashExec } }),
+    ],
   });
+  if (session.getActiveToolNames().sort().join(",") !== "bash,edit,read,write")
+    throw new Error("Pi mounted tool registry mismatch");
   session.setThinkingLevel("off");
   session.subscribe((event: AgentSessionEvent) => {
     if (!activeTurn) return;
-    if (event.type === "message_start") activeMessageId = randomUUID();
+    if (event.type === "message_start") {
+      activeMessageId = randomUUID();
+    }
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
       activeMessageId ??= randomUUID();
       emit("text.delta", {
@@ -229,6 +325,22 @@ async function main(): Promise<void> {
       if (message.role !== "user" && message.role !== "assistant") {
         activeMessageId = undefined;
         return;
+      }
+      if (
+        message.role === "assistant" &&
+        message.stopReason !== "error" &&
+        message.stopReason !== "aborted" &&
+        Array.isArray(message.content)
+      ) {
+        message.content.forEach((part, index) => {
+          // 修复：thinking_end 也可能先于最终的 opaque/redacted 判定；仅终态
+          // assistant message 是可见性的权威来源，不把临时私有 delta 写入 journal。
+          if (part.type !== "thinking" || part.redacted || !part.thinking) return;
+          const messageId = `${(activeMessageId ??= randomUUID())}:reasoning:${index}`;
+          emit("reasoning.started", { turnId: activeTurn, messageId });
+          emit("reasoning.delta", { turnId: activeTurn, messageId, text: part.thinking });
+          emit("reasoning.finished", { turnId: activeTurn, messageId, text: part.thinking });
+        });
       }
       const text =
         typeof message.content === "string"
@@ -246,11 +358,18 @@ async function main(): Promise<void> {
         });
       }
       if (message.role === "assistant") {
-        emit("usage.reported", {
-          turnId: activeTurn,
-          inputTokens: message.usage.input,
-          outputTokens: message.usage.output,
-        });
+        // 修复：SDK 的必填 usage 初始化为零；不能将缺失指标或失败/取消
+        // 错记为测量零。仅已完成且 Model 显式上报指标的原始终态消息可入账。
+        // Pi Usage.input excludes cacheRead/cacheWrite; reasoning is a subset of output.
+        const measured = measuredCanonicalUsage(message);
+        if (measured && message.stopReason !== "error" && message.stopReason !== "aborted") {
+          emit("usage.accounted", {
+            turnId: activeTurn,
+            accounting: "delta",
+            sourceId: (activeMessageId ??= randomUUID()),
+            ...measured,
+          });
+        }
         // 修复：取消后 SDK 可能再发 error 终帧；已取消的轮次不能被迟到的失败覆盖。
         if (message.stopReason === "error" && lastAssistantOutcome !== "cancelled") {
           lastAssistantOutcome = "failed";
@@ -289,6 +408,35 @@ async function main(): Promise<void> {
   });
   post({ type: "ready", backendSessionId: manager.getSessionId() });
   port.on("message", (raw: ToPiWorker) => {
+    if (raw.type === "nodeTest.crash" && boot.enableNodeTestCrash) {
+      // Node-only fixture: exit without SDK disposal/approval resolution to test parent ownership.
+      process.exit(77);
+    }
+    if (raw.type === "broker.reply") {
+      const pending = brokerRequests.get(raw.requestId);
+      if (pending) {
+        brokerRequests.delete(raw.requestId);
+        if (raw.error) pending.reject(new Error(raw.error));
+        else pending.resolve(raw.result);
+      }
+      return;
+    }
+    if (raw.type === "bash.data" || raw.type === "bash.reply") {
+      const pending = bashRequests.get(raw.requestId);
+      if (!pending) return;
+      if (raw.type === "bash.data") pending.onData(Buffer.from(raw.data));
+      else {
+        bashRequests.delete(raw.requestId);
+        if (raw.error) pending.reject(new Error(raw.error));
+        else pending.resolve({ exitCode: raw.exitCode ?? null });
+      }
+      return;
+    }
+    if (raw.type === "read.resume") {
+      readPauses.get(raw.requestId)?.();
+      readPauses.delete(raw.requestId);
+      return;
+    }
     if (raw.type === "model.event" || raw.type === "model.done" || raw.type === "model.failure") {
       const state = modelStreams.get(raw.requestId);
       if (!state) return;
@@ -338,13 +486,15 @@ async function main(): Promise<void> {
       lastAssistantOutcome = "success";
       emit("turn.started", { turnId: raw.turnId });
       void session.prompt(raw.text).then(
-        () => {
+        async () => {
+          await fileBoundary.releaseAll();
           emit("turn.finished", { turnId: raw.turnId, outcome: lastAssistantOutcome });
           activeTurn = undefined;
           preparedTurn = undefined;
           reply(raw.commandId, "completed");
         },
-        () => {
+        async () => {
+          await fileBoundary.releaseAll();
           emit("session.error", { code: "pi-backend-failure", message: "Pi worker run failed" });
           emit("turn.finished", { turnId: raw.turnId, outcome: "failed" });
           activeTurn = undefined;
@@ -361,12 +511,18 @@ async function main(): Promise<void> {
       for (const [id, pending] of approvals) {
         approvals.delete(id);
         emit("interaction.resolved", { turnId: raw.turnId, interactionId: id, decision: "deny" });
+        void fileBoundary.release(id);
         pending.settle("deny");
       }
-      void session.abort().then(
-        () => reply(raw.commandId, "completed"),
-        () => reply(raw.commandId, "failed"),
-      );
+      // 修复：取消也可能发生在 broker 初始化/审批尚未返回时；先关闭全部
+      // 准备中的 fd/子进程再等待 SDK abort，避免等待尚未结束的审批造成死锁。
+      void fileBoundary
+        .releaseAll()
+        .then(() => session.abort())
+        .then(
+          () => reply(raw.commandId, "completed"),
+          () => reply(raw.commandId, "failed"),
+        );
     } else if (raw.type === "resolve") {
       const pending = approvals.get(raw.interactionId);
       if (!pending || pending.turnId !== raw.turnId || activeTurn !== raw.turnId) {
@@ -379,18 +535,25 @@ async function main(): Promise<void> {
         interactionId: raw.interactionId,
         decision: raw.decision,
       });
+      if (raw.decision === "deny") void fileBoundary.release(raw.interactionId);
       pending.settle(raw.decision);
       reply(raw.commandId, "completed");
     } else if (raw.type === "terminate") {
       for (const pending of approvals.values()) pending.settle("deny");
       approvals.clear();
-      void session.abort().then(
-        () => {
-          session.dispose();
-          reply(raw.commandId, "completed");
-        },
-        () => reply(raw.commandId, "failed"),
-      );
+      void fileBoundary
+        .close()
+        .then(() => session.abort())
+        .then(
+          () => {
+            session.dispose();
+            reply(raw.commandId, "completed");
+          },
+          () => {
+            session.dispose();
+            reply(raw.commandId, "failed");
+          },
+        );
     }
   });
 }

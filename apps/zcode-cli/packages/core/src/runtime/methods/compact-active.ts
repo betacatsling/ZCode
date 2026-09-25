@@ -24,6 +24,7 @@ import {
   buildPostCompactReadStateReminderEntries,
   countCompactPreservedRuntimeMessages,
   buildPostCompactRuntimeEntries,
+  assertCompactDeveloperPrefix,
   compactFailureReasonFromError,
   estimateRuntimeEntryTokens,
   getRuntimeEntriesToSummarize,
@@ -171,6 +172,11 @@ async function compactActiveConversationImpl(
   const trigger = options.trigger ?? CompactTrigger.Manual;
   const phase = options.phase ?? defaultCompactPhaseForTrigger(trigger);
   const compactReason = options.compactReason ?? defaultCompactReasonForTrigger(trigger);
+  // 修复：压缩摘要无法表达夹在历史中的 developer 指令，必须在模型调用和
+  // CompactStarted 事件之前拒绝，不能将丢指令的摘要写回唯一历史所有者。
+  assertCompactDeveloperPrefix(
+    options.activeEntries ?? this.messageHistory.borrowReadOnlyRuntimeEntries(),
+  );
   const compactModel =
     options.model ??
     createRuntimeModel(this, {

@@ -412,3 +412,86 @@ test("Pi bridge fails closed on unsupported image rather than silently dropping 
   assert.equal(events.at(-1)?.type, "error");
   assert.equal(calls, 0);
 });
+
+test("Pi Model bridge preserves empty signed thinking in native history", async () => {
+  const provider = createPiHostProvider(
+    {
+      ...model(() => {}),
+      async *streamText() {
+        yield { type: "reasoning_start", id: "signed" } as const;
+        yield { type: "reasoning_delta", id: "signed", text: "Visible thought" } as const;
+        yield {
+          type: "reasoning_end",
+          id: "signed",
+          providerMetadata: { anthropic: { signature: "" } },
+        } as const;
+        yield { type: "finish", finishReason: "stop", usage: {} } as const;
+      },
+    } as Model,
+    route,
+  );
+  const events = [];
+  for await (const event of provider.streamSimple!(
+    (await provider.getModels())[0]!,
+    normalizeContext({ messages: [{ role: "user", content: "go", timestamp: Date.now() }] }),
+  ))
+    events.push(event);
+  const terminal = events.at(-1);
+  assert.equal(terminal?.type, "done");
+  if (terminal?.type !== "done") return;
+  const part = terminal.message.content[0];
+  assert.equal(part?.type === "thinking" && part.thinking, "Visible thought");
+  assert.equal(part?.type === "thinking" && part.redacted, false);
+  assert.equal(
+    part?.type === "thinking" &&
+      JSON.parse(part.thinkingSignature!).providerMetadata.anthropic.signature,
+    "",
+  );
+});
+
+test("Pi Model bridge preserves explicit zero and empty opaque fields but not fabricated usage presence", async () => {
+  const provider = createPiHostProvider(
+    {
+      ...model(() => {}),
+      async *streamText() {
+        yield { type: "reasoning_start", id: "opaque" } as const;
+        yield { type: "reasoning_delta", id: "opaque", text: "PRIVATE-DELTA" } as const;
+        yield {
+          type: "reasoning_end",
+          id: "opaque",
+          providerMetadata: { anthropic: { redactedData: "" } },
+        } as const;
+        yield {
+          type: "finish",
+          finishReason: "stop",
+          usage: { inputTokens: 0, outputTokens: 0 },
+        } as const;
+      },
+    } as Model,
+    route,
+  );
+  const events = [];
+  for await (const event of provider.streamSimple!(
+    (await provider.getModels())[0]!,
+    normalizeContext({ messages: [{ role: "user", content: "go", timestamp: Date.now() }] }),
+  ))
+    events.push(event);
+  const terminal = events.at(-1);
+  assert.equal(terminal?.type, "done");
+  if (terminal?.type !== "done") return;
+  assert.equal(terminal.message.usage.input, 0);
+  assert.equal(
+    terminal.message.content[0]?.type === "thinking" && terminal.message.content[0].redacted,
+    true,
+  );
+  assert.equal(
+    terminal.message.content[0]?.type === "thinking" && terminal.message.content[0].thinking,
+    "PRIVATE-DELTA",
+  );
+  assert.equal(
+    terminal.message.content[0]?.type === "thinking" &&
+      JSON.parse(terminal.message.content[0].thinkingSignature!).providerMetadata.anthropic
+        .redactedData,
+    "",
+  );
+});

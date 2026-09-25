@@ -1,4 +1,5 @@
-import type { SidebarSnapshot } from "@zcode/shared/project-workspaces";
+import type { SessionSummary, SidebarSnapshot } from "@zcode/shared/project-workspaces";
+import type { IWorkspaceHierarchyService } from "@zcode/services";
 import type { HarnessCatalogEntry, ModelBindingRequest } from "@zcode/shared/agent-host";
 import type { SidebarIconAsset } from "../agent-host/harnessAssetResolver.js";
 
@@ -22,19 +23,37 @@ export interface CreateAgentInput {
   draft: string;
 }
 export interface SidebarActions {
-  onSelectSession: (sessionId: string) => void;
-  onOpenAttention: (sessionId: string) => void;
+  onImportProject?: (input: {
+    name: string;
+    targetId: string;
+    repositoryPath: string;
+  }) => Promise<void>;
+  /** Preserve the indexed workspace/target identity for authoritative owner resolution. */
+  onSelectSession: (summary: SessionSummary) => Promise<void>;
+  onOpenAttention: (summary: SessionSummary) => void;
   onCreateAgent: (input: CreateAgentInput) => Promise<void>;
   onDiscover: (repositoryBindingId: string) => Promise<void>;
   onAdopt: (repositoryBindingId: string, path: string) => Promise<void>;
   onCreateWorkspace: (input: CreateWorkspaceInput) => Promise<void>;
   onHideWorkspace: (workspaceId: string) => Promise<void>;
   onArchiveWorkspace: (workspaceId: string) => Promise<void>;
+  onUnarchiveWorkspace?: (workspaceId: string) => Promise<void>;
+  onShowWorkspace?: (workspaceId: string) => Promise<void>;
+  /** Legacy unmounted confirmation preview; no safe removal from this without server recheck. */
+  onPreviewRemove?: (workspaceId: string, expectedGeneration: string) => Promise<RemovalPreview>;
+  /** Must forward to the server hierarchy/Target; absent port fails closed. */
+  onPreviewRemoval?: (workspaceId: string, expectedGeneration: string) => ReturnType<IWorkspaceHierarchyService["previewRemoval"]>;
   onRemoveWorkspace: (workspaceId: string, expectedGeneration: string) => Promise<void>;
+}
+export interface RemovalPreview {
+  readonly allowed: boolean;
+  readonly risks: readonly string[];
 }
 export interface ProjectSidebarProps {
   snapshot: SidebarSnapshot;
   catalog: readonly HarnessCatalogEntry[];
+  /** Per-workspace availability and unsupported/experimental reasons from the Host. */
+  catalogByWorkspace?: ReadonlyMap<string, readonly HarnessCatalogEntry[]>;
   actions: SidebarActions;
   /** Labels are supplied by the target registry, not inferred from paths. */
   targetLabels: Readonly<Record<string, string>>;
@@ -45,4 +64,9 @@ export interface ProjectSidebarProps {
   discovery?: Readonly<Record<string, readonly DiscoveryCandidate[]>>;
   locale: "en" | "zh";
   modelOptions?: readonly { harnessId: string; label: string; binding: ModelBindingRequest }[];
+  /** Mounted Host-certified choices keyed by the selected workspace; never shared across targets. */
+  modelOptionsByWorkspace?: ReadonlyMap<
+    string,
+    readonly { harnessId: string; label: string; binding: ModelBindingRequest }[]
+  >;
 }

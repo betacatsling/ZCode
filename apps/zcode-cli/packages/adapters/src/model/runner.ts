@@ -64,6 +64,10 @@ export interface AiSdkModelAdapterOptions {
   logger?: Logger;
   retry?: AiSdkModelRetryOptions;
   statusSink?: ModelStatusSink;
+  /** 仅可信 Node 装配：在现有 SDK transport 前观测并限制每次实际请求。 */
+  transport?: typeof globalThis.fetch;
+  /** 仅可信 Node 装配：Model executor 调用（与 HTTP attempts 分开计数）。 */
+  onModelCall?: (kind: "generate" | "stream", providerId: string, modelId: string) => void;
   streamIdleTimeoutMs?: number;
   modelIoFullRetentionEnabled?: boolean;
 }
@@ -85,6 +89,7 @@ export class AiSdkModelAdapter {
   private readonly debugDir?: string;
   private readonly logger?: Logger;
   private readonly retry: ResolvedAiSdkModelRetryOptions;
+  private readonly onModelCall?: AiSdkModelAdapterOptions["onModelCall"];
   private statusSink?: ModelStatusSink;
   private readonly streamIdleTimeoutMs: number;
   private modelIoFullRetentionEnabled: boolean;
@@ -98,6 +103,7 @@ export class AiSdkModelAdapter {
       },
       {
         ...(options.logger ? { logger: options.logger } : {}),
+        ...(options.transport ? { transport: options.transport } : {}),
       },
     );
     this.runtime = options.runtime ?? defaultRuntime;
@@ -105,6 +111,7 @@ export class AiSdkModelAdapter {
     this.debugDir = options.debugDir;
     this.logger = options.logger;
     this.retry = resolveAiSdkModelRetryOptions(options.retry, this.env);
+    this.onModelCall = options.onModelCall;
     this.statusSink = options.statusSink;
     this.streamIdleTimeoutMs = options.streamIdleTimeoutMs ?? DEFAULT_MODEL_STREAM_IDLE_TIMEOUT_MS;
     this.modelIoFullRetentionEnabled = options.modelIoFullRetentionEnabled ?? false;
@@ -154,8 +161,16 @@ export class AiSdkModelAdapter {
     };
     const optionSpecs = options.modelConfig.optionSpecs;
     const toLegacyRequest = (request: ModelExecutionRequest): AiSdkModelTextRequest => {
-      if (resolved.providerKind !== "anthropic" && (request.temperature !== undefined || request.anthropicEffort !== undefined || request.anthropicMetadataUserId !== undefined))
-        throw new ModelProtocolError(ModelErrorCode.InvalidModelRequest, "Anthropic native options require an Anthropic model");
+      if (
+        resolved.providerKind !== "anthropic" &&
+        (request.temperature !== undefined ||
+          request.anthropicEffort !== undefined ||
+          request.anthropicMetadataUserId !== undefined)
+      )
+        throw new ModelProtocolError(
+          ModelErrorCode.InvalidModelRequest,
+          "Anthropic native options require an Anthropic model",
+        );
       const context = getCurrentModelInvocationContext();
       const {
         refreshRuntimeHeadersBeforeAttempt: contextRefreshRuntimeHeadersBeforeAttempt,
@@ -277,6 +292,7 @@ export class AiSdkModelAdapter {
       options: options.options,
       executor: {
         generateText: (request) => {
+          this.onModelCall?.("generate", options.providerId, options.modelId);
           const legacyRequest = toLegacyRequest(request);
           return this.generateTextWithResolved(
             legacyRequest,
@@ -285,6 +301,7 @@ export class AiSdkModelAdapter {
           );
         },
         streamText: (request) => {
+          this.onModelCall?.("stream", options.providerId, options.modelId);
           const legacyRequest = toLegacyRequest(request);
           return this.streamTextWithResolved(
             legacyRequest,

@@ -220,7 +220,7 @@ test("Responses SSE emits ordered stable text and two function items, complete J
   assert.deepEqual(response.usage, { input_tokens: 12, output_tokens: 5, total_tokens: 17 });
 });
 
-test("Responses maps plain live reasoning without inventing encrypted history and replays only original opaque content", async () => {
+test("Responses maps plain live reasoning without forging opaque state and rejects encrypted history replay", async () => {
   const plain = await collect([
     { type: "reasoning_start", id: "r" },
     { type: "reasoning_delta", id: "r", text: "synthetic thought" },
@@ -250,33 +250,19 @@ test("Responses maps plain live reasoning without inventing encrypted history an
   };
   assert.equal(original.item.id, "reasoning-original");
   assert.equal(original.item.encrypted_content, "synthetic-opaque");
-  const replay = decodeResponsesRequest(
+  // 修复依据：原始加密状态无法由解码器证明绑定回原 provider route，不能先接受再由 Model 丢弃。
+  assert.throws(
+    () =>
+      decodeResponsesRequest(
+        { ...base, input: [original.item, { role: "user", content: "continue" }] },
+        {},
+      ),
     {
-      ...base,
-      input: [
-        {
-          type: "reasoning",
-          id: "reasoning-original",
-          encrypted_content: "synthetic-opaque",
-          summary: [{ type: "summary_text", text: "text" }],
-        },
-        { role: "user", content: "continue" },
-      ],
+      code: "unsupported_reasoning_replay",
+      statusCode: 422,
+      field: "input[0]",
     },
-    {},
   );
-  assert.deepEqual(replay.request.messages[0], {
-    role: "assistant",
-    content: [
-      {
-        type: "reasoning",
-        text: "text",
-        providerOptions: {
-          openai: { itemId: "reasoning-original", reasoningEncryptedContent: "synthetic-opaque" },
-        },
-      },
-    ],
-  });
   assert.throws(
     () =>
       decodeResponsesRequest(

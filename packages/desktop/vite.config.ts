@@ -227,6 +227,10 @@ export default defineConfig(({ mode }) => {
         // 多入口：主窗口 + 进程监控 + CUA 权限拖拽浮窗
         input: {
           index: resolve(__dirname, "src/renderer/index.html"),
+          // Test-only actual Core→preload→Shell entry; default packaged renderer excludes it.
+          ...(process.env.ZCODE_ACTUAL_SHELL_FIXTURE_BUILD === "1"
+            ? { "actual-shell-mount": resolve(__dirname, "src/renderer/actual-shell-mount.html") }
+            : {}),
           "resource-manager": resolve(__dirname, "src/renderer/resource-manager.html"),
           "cua-permission-panel": resolve(__dirname, "src/renderer/cua-permission-panel.html"),
         },

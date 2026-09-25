@@ -1,6 +1,9 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { IWorkspaceHierarchyService } from "@zcode/services";
 import type { WorktreeWorkspace } from "@zcode/shared/project-workspaces";
 import { ProjectNode } from "./ProjectNode.js";
+import { Button } from "../components/ui/button.js";
+import { ProjectImportDialog } from "./ProjectImportDialog.js";
 import {
   AgentCreationDialog,
   ConfirmationDialog,
@@ -14,13 +17,104 @@ function byOrder<T extends { sortOrder: number; id: string }>(left: T, right: T)
   return left.sortOrder - right.sortOrder || left.id.localeCompare(right.id);
 }
 
+type RemovalPreview = Awaited<ReturnType<IWorkspaceHierarchyService["previewRemoval"]>>;
+
+function RemovalConfirmation({
+  workspace,
+  props,
+  onClose,
+}: {
+  workspace: WorktreeWorkspace;
+  props: ProjectSidebarProps;
+  onClose: () => void;
+}) {
+  const [preview, setPreview] = useState<RemovalPreview>();
+  const [error, setError] = useState("");
+  const previewRemoval = props.actions.onPreviewRemoval;
+  useEffect(() => {
+    let active = true;
+    if (!previewRemoval) {
+      setError("Target removal preview unavailable");
+    } else {
+      void previewRemoval(workspace.id, workspace.worktreeGeneration).then(
+        (value) => {
+          if (active) setPreview(value);
+        },
+        (cause: unknown) => {
+          if (active) setError(cause instanceof Error ? cause.message : String(cause));
+        },
+      );
+    }
+    return () => {
+      active = false;
+    };
+  }, [previewRemoval, workspace.id, workspace.worktreeGeneration]);
+  const valid =
+    preview?.workspaceId === workspace.id && preview.generation === workspace.worktreeGeneration;
+  const git = valid ? preview.git : null;
+  const activity = valid ? preview.activity : null;
+  const risks = [
+    git?.isMain && "main worktree",
+    git?.dirty && "dirty changes",
+    git?.untracked && "untracked files",
+    git?.submodules && "submodules",
+    git?.locked && "worktree locked",
+    git?.gitLocks && "Git locks",
+    git?.prunable && "prunable worktree",
+    activity?.offline && "target offline",
+    activity && activity.running > 0 && `running: ${activity.running}`,
+    activity && activity.waiting > 0 && `waiting: ${activity.waiting}`,
+    activity && activity.tools > 0 && `tools: ${activity.tools}`,
+    activity && activity.uncertain > 0 && `uncertain: ${activity.uncertain}`,
+    (!valid || preview?.unknown || !git || !activity) && "Unknown target or activity facts",
+  ]
+    .filter(Boolean)
+    .join(", ");
+  // 中文：即便服务返回 safe，也不能把缺失或不合法的活动计数当作空闲确认。
+  const validActivity =
+    !!activity &&
+    !activity.offline &&
+    [activity.running, activity.waiting, activity.tools, activity.uncertain].every(
+      (count) => Number.isSafeInteger(count) && count === 0,
+    );
+  const safe =
+    valid &&
+    !!preview?.safe &&
+    !preview.unknown &&
+    !!git &&
+    !git.isMain &&
+    !git.dirty &&
+    !git.untracked &&
+    !git.submodules &&
+    !git.locked &&
+    !git.gitLocks &&
+    !git.prunable &&
+    validActivity;
+  const warning =
+    props.locale === "zh"
+      ? "外部进程可能在预检后竞态修改文件；确认时宿主重新冻结并检查，拒绝时保持此对话框。"
+      : "External processes may race after this preview. The host freezes and checks again on confirmation; rejection keeps this dialog open.";
+  return (
+    <ConfirmationDialog
+      title={`${props.locale === "zh" ? "移除" : "Remove"} ${workspace.title}?`}
+      description={`${error || (!preview ? "Checking target…" : risks || "No detected risks.")} ${warning}`}
+      confirmLabel={props.locale === "zh" ? "确认移除" : "Confirm remove"}
+      cancelLabel={props.locale === "zh" ? "取消" : "Cancel"}
+      disabled={!safe}
+      onClose={onClose}
+      onConfirm={() => props.actions.onRemoveWorkspace(workspace.id, workspace.worktreeGeneration)}
+    />
+  );
+}
+
 type Modal =
   | {
       kind: "agent" | "confirmation";
       workspace: WorktreeWorkspace;
-      action?: "hide" | "archive" | "remove";
+      action?: "hide" | "show" | "archive" | "unarchive" | "remove";
     }
-  | { kind: "workspace" | "discovered"; bindingId: string };
+  | { kind: "workspace" | "discovered"; bindingId: string }
+  | { kind: "import" };
 
 /** Immutable host facts in; only explicit user actions out. Mount this component with host-backed callbacks. */
 export function ProjectSidebar(props: ProjectSidebarProps) {
@@ -44,21 +138,51 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
     () => new Map(projectSummaries.map((value) => [value.projectId, value])),
     [projectSummaries],
   );
-  function confirmWorkspace(workspace: WorktreeWorkspace, action: "hide" | "archive" | "remove") {
+  function confirmWorkspace(
+    workspace: WorktreeWorkspace,
+    action: "hide" | "show" | "archive" | "unarchive" | "remove",
+  ) {
     if (action === "hide") return props.actions.onHideWorkspace(workspace.id);
+    if (action === "show")
+      return (
+        props.actions.onShowWorkspace?.(workspace.id) ??
+        Promise.reject(new Error("Show unavailable"))
+      );
     if (action === "archive") return props.actions.onArchiveWorkspace(workspace.id);
+    if (action === "unarchive")
+      return (
+        props.actions.onUnarchiveWorkspace?.(workspace.id) ??
+        Promise.reject(new Error("Unarchive unavailable"))
+      );
     return props.actions.onRemoveWorkspace(workspace.id, workspace.worktreeGeneration);
   }
+  const previewWorkspaceId = modal?.kind === "confirmation" ? modal.workspace.id : undefined;
+  const previewGeneration =
+    modal?.kind === "confirmation" ? modal.workspace.worktreeGeneration : undefined;
+  const previewRemove = useCallback(async () => {
+    // 修复旧确认框只展示静态风险文案却允许未预检删除：无服务预览时必须拒绝操作。
+    if (!previewWorkspaceId || !previewGeneration || !props.actions.onPreviewRemove)
+      throw new Error(
+        props.locale === "zh"
+          ? "目标预检不可用，无法移除工作区"
+          : "Target removal preview unavailable",
+      );
+    return props.actions.onPreviewRemove(previewWorkspaceId, previewGeneration);
+  }, [previewWorkspaceId, previewGeneration, props.actions.onPreviewRemove, props.locale]);
   const confirmationText =
     props.locale === "zh"
       ? {
           hide: "仅隐藏显示；Agent 继续运行，项目待处理入口仍可访问。",
+          show: "重新显示工作区，不改变运行中的 Agent。",
+          unarchive: "取消归档后恢复新会话准入，须由宿主重新验证工作区。",
           archive: "归档改变目录展示与新会话准入，不会停止运行中的会话。请先检查活动状态。",
           remove:
             "移除 linked worktree 可能丢失修改或未跟踪文件。外部进程、锁和活动可能无法全部检测；宿主必须重新检查 Git 和活动。历史保留，不删除分支。",
         }
       : {
           hide: "Hide only changes visibility; agents keep running and attention stays accessible.",
+          show: "Show this workspace again; running agents are unaffected.",
+          unarchive: "Unarchive restores new-session admission only after Host verification.",
           archive:
             "Archive changes catalog display and admission, not running sessions. Check active work before continuing.",
           remove:
@@ -66,8 +190,14 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
         };
   const actionLabels =
     props.locale === "zh"
-      ? { hide: "隐藏", archive: "归档", remove: "移除" }
-      : { hide: "hide", archive: "archive", remove: "remove" };
+      ? { hide: "隐藏", show: "显示", archive: "归档", unarchive: "取消归档", remove: "移除" }
+      : {
+          hide: "hide",
+          show: "show",
+          archive: "archive",
+          unarchive: "unarchive",
+          remove: "remove",
+        };
   async function discover(bindingId: string) {
     setDiscoveryError("");
     try {
@@ -90,6 +220,16 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
           }
         }}
       >
+        {props.actions.onImportProject ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setModal({ kind: "import" })}
+          >
+            {props.locale === "zh" ? "导入项目" : "Import project"}
+          </Button>
+        ) : null}
         {discoveryError ? (
           <p role="alert" className="text-ui-sm text-destructive">
             {discoveryError}
@@ -122,6 +262,13 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
           );
         })}
       </nav>
+      {modal?.kind === "import" && props.actions.onImportProject ? (
+        <ProjectImportDialog
+          onImport={props.actions.onImportProject}
+          locale={props.locale}
+          onClose={() => setModal(undefined)}
+        />
+      ) : null}
       {modal?.kind === "agent" ? (
         <AgentCreationDialog
           workspaceId={modal.workspace.id}
@@ -145,7 +292,14 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
           onClose={() => setModal(undefined)}
         />
       ) : null}
-      {modal?.kind === "confirmation" && modal.action ? (
+      {modal?.kind === "confirmation" && modal.action === "remove" ? (
+        <RemovalConfirmation
+          key={`${modal.workspace.id}:${modal.workspace.worktreeGeneration}`}
+          workspace={modal.workspace}
+          props={props}
+          onClose={() => setModal(undefined)}
+        />
+      ) : modal?.kind === "confirmation" && modal.action ? (
         <ConfirmationDialog
           title={`${props.locale === "zh" ? actionLabels[modal.action] : `${modal.action.charAt(0).toUpperCase()}${modal.action.slice(1)}`} ${modal.workspace.title}?`}
           description={confirmationText[modal.action]}
@@ -155,6 +309,7 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
           cancelLabel={props.locale === "zh" ? "取消" : "Cancel"}
           onClose={() => setModal(undefined)}
           onConfirm={() => confirmWorkspace(modal.workspace, modal.action!)}
+          onPreview={modal.action === "remove" ? previewRemove : undefined}
         />
       ) : null}
     </>

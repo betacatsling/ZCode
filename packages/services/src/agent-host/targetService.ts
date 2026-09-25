@@ -5,6 +5,7 @@ import { HarnessRegistry } from "./harnessRegistry.js";
 import { CreationJournal, type CreationCommand } from "./creationJournal.js";
 import { SessionHost } from "./sessionHost.js";
 import type { ModelCatalogPort } from "./modelBindingPlanner.js";
+import type { HostSessionReadModel } from "./serviceContract.js";
 
 export interface TargetHostEvent { spec: SessionSpecV2; event: AgentEvent }
 
@@ -61,7 +62,7 @@ export class AgentHostTargetService {
       text: unsupported, tools: unsupported, approvals: unsupported, cancelTurn: unsupported,
       resumeExecution: unsupported, history, images: unsupported, modelSwitch: unsupported,
       detach: unsupported, terminateSession: unsupported, viewHistory: history,
-      hostManagedModel: unsupported, fork: unsupported, subagents: unsupported,
+      hostManagedModel: unsupported, fork: unsupported, subagents: unsupported, questions: unsupported,
     };
     if (!stored || stored.state !== "running" || spec.schemaVersion !== 2 || !this.#target.available) return historyOnly;
     try { await this.#verify(spec); } catch { return historyOnly; }
@@ -85,7 +86,15 @@ export class AgentHostTargetService {
       images: notImplemented, modelSwitch: notImplemented, resumeExecution: notImplemented,
       terminateSession: "terminateSession" in report ? report.terminateSession : unverified,
       hostManagedModel, fork: notImplemented, subagents: notImplemented,
+      questions: "questions" in report && report.questions?.support === "supported" && adapter.answerInteraction ? report.questions : notImplemented,
     });
+  }
+  async getSessionReadModel(raw: SessionSpecV2 | LegacySessionSpec): Promise<HostSessionReadModel> {
+    const spec = this.#readScope(raw);
+    const host = spec.schemaVersion === 2 ? this.#hosts.get(this.#key(spec)) : undefined;
+    if (host) { await host.whenEventsRecorded(); return host.getReadModel(); }
+    try { return await SessionHost.readModelHistory(this.#root, spec); }
+    catch { return { runtimeEpoch: null, seq: 0, activity: "uncertain" }; } // 损坏记录只可呈现未知，不能暗示空闲。
   }
   async getRuntimeActivity(workspaceId?: string): Promise<{ running: number; waiting: number; uncertain: number }> {
     const records = await SessionHost.listStoredSessions(this.#root, { targetId: this.#target.id, ...(workspaceId === undefined ? {} : { workspaceId }) });
@@ -97,7 +106,9 @@ export class AgentHostTargetService {
       if (record.state === "terminated") continue;
       const host = this.#hosts.get(this.#key(record.spec));
       // 修复离线历史被一律视为未知：只有未确认创建、未完成命令或未解决的工具门禁才阻止维护。
-      const activity = pendingCreates.has(record.spec.hostSessionId) ? "uncertain" : host?.getActivity() ?? await SessionHost.historyActivity(this.#root, record.spec);
+      let activity: "running" | "waiting" | "uncertain" | "idle";
+      try { activity = pendingCreates.has(record.spec.hostSessionId) ? "uncertain" : host?.getActivity() ?? await SessionHost.historyActivity(this.#root, record.spec); }
+      catch { activity = "uncertain"; } // 损坏或不完整的只读日志不能被当作空闲以放行维护。
       if (activity !== "idle") counts[activity]++;
     }
     return counts;
@@ -163,16 +174,21 @@ export class AgentHostTargetService {
   }
   async dispatch(raw: SessionSpecV2, command: AgentCommand): Promise<AgentCommandReceipt> {
     const spec = writableSessionSpecV2Schema.parse(raw);
-    if (command.type === "send" || command.type === "resumeExecution")
-      return this.#admit(spec, (key) => this.#require(key).dispatch(command));
-    if (command.type === "detach" || command.type === "viewHistory" || command.type === "terminateSession") {
-      this.#readScope(spec);
-      const stored = await SessionHost.listStoredSessions(this.#root, { targetId: this.#target.id });
-      if (!stored.some((row) => JSON.stringify(row.spec) === JSON.stringify(spec))) throw new Error("session identity or configuration mismatch");
-      return this.#require(this.#key(spec)).dispatch(command);
-    }
-    const key = await this.#verify(spec);
-    return this.#require(key).dispatch(command);
+    const control = command.type === "detach" || command.type === "viewHistory" || command.type === "terminateSession" ||
+      command.type === "cancelTurn" || (command.type === "resolveInteraction" && command.decision === "deny");
+    if (control) return this.#dispatchMounted(spec, command);
+    // 修复归档后已接受命令的重复投递被新执行门禁阻断：仅已有 ID 可进 Host 的持久 payload 碰撞校验。
+    // 查询本身不能成为执行许可；没有 ID 的请求仍须持有 workspace admission lease。
+    const mounted = this.#hosts.get(this.#key(spec));
+    if (mounted?.queryCommand(command.commandId)) return this.#dispatchMounted(spec, command);
+    // allow 可能实际执行工具；与新 send 一样必须持有实时 Git generation/cwd 和归档 admission 门禁直到交付。
+    return this.#admit(spec, (key) => this.#require(key).dispatch(command));
+  }
+  async #dispatchMounted(spec: SessionSpecV2, command: AgentCommand): Promise<AgentCommandReceipt> {
+    this.#readScope(spec);
+    const stored = await SessionHost.listStoredSessions(this.#root, { targetId: this.#target.id });
+    if (!stored.some((row) => JSON.stringify(row.spec) === JSON.stringify(spec))) throw new Error("session identity or configuration mismatch");
+    return this.#require(this.#key(spec)).dispatch(command);
   }
   async snapshot(raw: SessionSpecV2 | LegacySessionSpec): Promise<ConversationSnapshot> {
     const spec = this.#readScope(raw);

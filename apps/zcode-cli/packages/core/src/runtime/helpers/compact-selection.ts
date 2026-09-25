@@ -7,7 +7,7 @@ import {
   modelMessageContentToText,
   traceContextToLogContext,
 } from "../deps.js";
-import type { TraceContext } from "../deps.js";
+import type { TraceContext, ModelInputMessage } from "../deps.js";
 import {
   cloneRuntimeMessageEntry,
   isRuntimeAttachmentEntry,
@@ -338,7 +338,7 @@ function isRuntimeContextPrefixEntry(entry: RuntimeMessageEntry): boolean {
   if (isRuntimeAttachmentEntry(entry)) {
     return entry.metadata.source === "context_prefix" || entry.metadata.source === "skills_listing";
   }
-  if (entry.message.role === "system") return true;
+  if (entry.message.role === "system" || entry.message.role === "developer") return true;
   if (entry.message.role !== "user") return false;
   if (entry.metadata) {
     return entry.metadata.source === "context_prefix" || entry.metadata.source === "skills_listing";
@@ -413,7 +413,7 @@ function cloneRuntimeEntry(entry: RuntimeMessageEntry): RuntimeMessageEntry {
   return cloneRuntimeMessageEntry(entry);
 }
 
-function runtimeEntryRole(entry: RuntimeMessageEntry): "system" | "user" | "assistant" | "tool" {
+function runtimeEntryRole(entry: RuntimeMessageEntry): ModelInputMessage["role"] {
   if (isRuntimeAttachmentEntry(entry)) return "user";
   return entry.message.role;
 }

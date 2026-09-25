@@ -34,6 +34,7 @@ import { uiMemoryDiagnosticsRegistry } from "@/lib/memoryDiagnostics.js";
  * 所以这里按 sessionsIndexStore 的既定模式做有界退避。
  */
 const RUNTIME_RECYCLE_RETRY_DELAYS_MS = [250, 1_000, 3_000] as const;
+export const EXTERNAL_ROWS_CACHE_LIMIT = 2000;
 
 /**
  * accepted ACK 后等待权威输入投影的宽限期。
@@ -116,6 +117,8 @@ export interface ConversationStoreState {
   optimisticCommands: readonly OptimisticCommand[];
   /** loadOlder 在途标记（自动预取防重入）。 */
   loadingOlder: boolean;
+  /** 外部历史窗口与 live tail 分离；仅是客户端阅读位置，不是历史事实。 */
+  externalHistoryBrowsing: boolean;
   /** CLI 完整有效 projection 返回的终态计划目录。 */
   sessionPlans: readonly ToolCallRow[];
   /** 只用于触发计划目录只读 query，不属于 conversation 协议事实。 */
@@ -146,6 +149,7 @@ const INITIAL_STATE: ConversationStoreState = {
   rendererTiming: undefined,
   optimisticCommands: [],
   loadingOlder: false,
+  externalHistoryBrowsing: false,
   sessionPlans: [],
   planDirectoryRevision: 0,
   plansLoading: false,
@@ -231,6 +235,18 @@ export function hasOlderRows(snapshot: ConversationSnapshot | null): boolean {
   return first.rowId > snapshot.rows.firstRowId;
 }
 
+/** Cache capacity is not an end-of-history cursor. Older pages slide a contiguous window. */
+export function canLoadExternalOlder(snapshot: ConversationSnapshot | null): boolean {
+  return hasOlderRows(snapshot);
+}
+
+/** Host row IDs are a contiguous journal-derived sequence; totalCount is its latest ID. */
+export function canLoadExternalNewer(snapshot: ConversationSnapshot | null): boolean {
+  return (
+    !!snapshot?.agentHost && (snapshot.rows.window.at(-1)?.rowId ?? 0) < snapshot.rows.totalCount
+  );
+}
+
 /**
  * 冷快照尾窗是否从一个 turn 的中间截断。turnHeader 是完整 turn 的权威起点；首行允许是
  * lightBoundary，因此不能只判断首行 kind，必须检查首个 turn 在当前窗口里是否已有 header。
@@ -252,14 +268,38 @@ export function shouldAutoLoadIncompleteLeadingTurn(
  * 窗口首行之前的行、去重后前插；顺序键 = rowId 升序（全序保证）。
  * 返回 null 表示无可并入行（窗口无变化，调用方不换引用）。
  */
-function mergeOlderRows(
+export function mergeOlderRows(
   window: readonly ConversationRow[],
   fetched: readonly ConversationRow[],
 ): ConversationRow[] | null {
   const firstRowId = window[0]?.rowId ?? Number.POSITIVE_INFINITY;
-  const older = fetched.filter((row) => row.rowId < firstRowId);
-  if (older.length === 0) return null;
-  return [...older, ...window];
+  // Bug 原因：分页服务在重试/跨页边界可能重复返回同一 rowId；只有
+  // 窗口之前的行可前插，按 rowId 去重，不能覆盖 live 修订后的现有行。
+  const older = new Map<number, ConversationRow>();
+  for (const row of fetched) if (row.rowId < firstRowId) older.set(row.rowId, row);
+  if (older.size === 0) return null;
+  return [...older.values()].sort((a, b) => a.rowId - b.rowId).concat(window);
+}
+
+/** A range read belongs to exactly one projection generation and directory revision. */
+export function canMergeOlderPage(input: {
+  requestedGeneration: number;
+  currentGeneration: number;
+  requestedRevision: number;
+  currentRevision: number;
+  requestedEpoch: string;
+  resultEpoch: string;
+  currentEpoch: string;
+  requestedBeforeRowId: number;
+  currentBeforeRowId: number | undefined;
+}): boolean {
+  return (
+    input.requestedGeneration === input.currentGeneration &&
+    input.requestedRevision === input.currentRevision &&
+    input.requestedEpoch === input.resultEpoch &&
+    input.requestedEpoch === input.currentEpoch &&
+    input.requestedBeforeRowId === input.currentBeforeRowId
+  );
 }
 
 /**
@@ -330,6 +370,11 @@ export class ConversationProjectionStore {
       > & { directoryRevision: number })
     | null = null;
   private closed = false;
+  private historyRefreshRequested = false;
+  private historyRefreshInFlight = false;
+  private historyRetryOlderLimit: number | null = null;
+  /** Only the authoritative Host tail, bounded by its wire window; never another transcript cache. */
+  private externalTailRows: readonly ConversationRow[] = [];
 
   constructor(
     readonly topic: string,
@@ -419,6 +464,12 @@ export class ConversationProjectionStore {
     };
     this.initialSubscribeAckAt = null;
     this.connectInFlight += 1;
+    if (options.forceSnapshot) {
+      this.externalTailRows = [];
+      this.historyRefreshRequested = false;
+      this.historyRetryOlderLimit = null;
+      this.setState({ externalHistoryBrowsing: false });
+    }
     this.setState({ status: "connecting", rendererTiming: this.sessionOpenRendererTiming });
     try {
       const result = await this.transport.subscribe({
@@ -662,13 +713,91 @@ export class ConversationProjectionStore {
         frame.payload.snapshot,
         "snapshot",
       );
-      // 规则 1：整体替换，扔掉手里的一切换新的。
+      // Bug 原因：外部 Host 每个 token 都发布完整尾窗；直接替换会抹掉已分页前缀。
+      // 仅对同一订阅/纪元、Host append-only rowId 连续且首行不变的投影保留有界缓存。
+      // Native 的 snapshot 重置语义保持不变。
+      const incoming = frame.payload.snapshot;
+      const previous = this.state.snapshot;
+      this.externalTailRows = incoming.agentHost ? incoming.rows.window : [];
+      let projected = incoming;
+      let browsing = this.state.externalHistoryBrowsing;
+      if (
+        context.subscribeMode === null &&
+        browsing &&
+        hadAppliedBase &&
+        previous?.agentHost &&
+        incoming.agentHost &&
+        previous.agentHost.targetId === incoming.agentHost.targetId &&
+        previous.agentHost.hostSessionId === incoming.agentHost.hostSessionId &&
+        previous.sessionId === incoming.sessionId &&
+        previous.logEpoch === incoming.logEpoch &&
+        incoming.seq >= previous.seq &&
+        previous.rows.firstRowId === incoming.rows.firstRowId &&
+        incoming.rows.totalCount >= previous.rows.totalCount
+      ) {
+        // Bug 原因：live tail 不得挤掉正在阅读的旧窗口，也不能把不相邻的两窗伪装连续。
+        // 尾窗与阅读窗口相交时，以 Host 最新值覆盖交集中的旧行。
+        const latest = new Map(incoming.rows.window.map((row) => [row.rowId, row]));
+        const held = previous.rows.window.map((row) => latest.get(row.rowId) ?? row);
+        const contiguousTail =
+          incoming.rows.window[0]?.rowId !== undefined &&
+          incoming.rows.window[0].rowId <= (held.at(-1)?.rowId ?? 0) + 1;
+        const extended = contiguousTail
+          ? held.concat(incoming.rows.window.filter((row) => row.rowId > (held.at(-1)?.rowId ?? 0)))
+          : held;
+        projected = {
+          ...incoming,
+          rows: { ...incoming.rows, window: extended.slice(0, EXTERNAL_ROWS_CACHE_LIMIT) },
+        };
+      } else if (
+        context.subscribeMode === null &&
+        hadAppliedBase &&
+        previous?.agentHost &&
+        incoming.agentHost &&
+        previous.agentHost.targetId === incoming.agentHost.targetId &&
+        previous.agentHost.hostSessionId === incoming.agentHost.hostSessionId &&
+        previous.sessionId === incoming.sessionId &&
+        previous.logEpoch === incoming.logEpoch &&
+        incoming.seq >= previous.seq &&
+        incoming.rows.firstRowId === previous.rows.firstRowId &&
+        incoming.rows.totalCount >= previous.rows.totalCount
+      ) {
+        const oldRows = previous.rows.window;
+        const newRows = incoming.rows.window;
+        const oldLast = oldRows.at(-1)?.rowId;
+        const newFirst = newRows[0]?.rowId;
+        if (
+          oldLast !== undefined &&
+          newFirst !== undefined &&
+          (newRows.some((row) => row.rowId === oldLast) || newFirst === oldLast + 1)
+        ) {
+          const prefix = oldRows.filter((row) => row.rowId < newFirst!);
+          projected = {
+            ...incoming,
+            rows: {
+              ...incoming.rows,
+              window: [...prefix, ...newRows].slice(-EXTERNAL_ROWS_CACHE_LIMIT),
+            },
+          };
+        }
+      }
+      if (projected === incoming) browsing = false;
+      const historyChanged =
+        browsing &&
+        !!previous?.agentHost &&
+        (incoming.rows.historicalRevision ?? 0) > (previous.rows.historicalRevision ?? 0);
       this.setState({
-        snapshot: frame.payload.snapshot,
+        snapshot: projected,
+        externalHistoryBrowsing: browsing,
         planDirectoryRevision: this.state.planDirectoryRevision + 1,
         // snapshot 整体替换后 real-user query 集合可能已变，终态缓存必须失效。
         turnNavigatorDirectoryRevision: this.state.turnNavigatorDirectoryRevision + 1,
       });
+      if (historyChanged) {
+        this.historyRefreshRequested = true;
+        void this.refreshHeldHistory();
+      }
+      if (!browsing) this.historyRefreshRequested = false;
       this.subscriptionHasAppliedBase = true;
       this.reconcileOptimistic(frame.payload.snapshot);
       this.reconcileAcceptedInputProjection(frame.payload.snapshot);
@@ -987,19 +1116,29 @@ export class ConversationProjectionStore {
   async loadOlder(limit: number = PROTOCOL_V4_LIMITS.snapshotTailWindowRows): Promise<void> {
     if (this.closed || this.state.loadingOlder) return;
     const snapshot = this.state.snapshot;
-    if (!hasOlderRows(snapshot) || !snapshot) return;
+    if (
+      !snapshot ||
+      (snapshot.agentHost ? !canLoadExternalOlder(snapshot) : !hasOlderRows(snapshot))
+    )
+      return;
     const sessionId = parseConversationTopic(this.topic);
     if (!sessionId) return;
     const beforeRowId = snapshot.rows.window[0]?.rowId;
     if (beforeRowId === undefined) return;
-    this.setState({ loadingOlder: true });
+    const requestedGeneration = this.generation;
+    const requestedRevision = this.state.turnNavigatorDirectoryRevision;
+    // Bug 原因：在途期间若仍追随尾窗，快速 stream 会换掉游标并无限饿死旧页。
+    this.setState({
+      loadingOlder: true,
+      externalHistoryBrowsing: !!snapshot.agentHost || this.state.externalHistoryBrowsing,
+    });
     try {
       const result = await this.transport.rowsRange({
         sessionId,
         beforeRowId,
         limit,
       });
-      if (this.closed) return;
+      if (this.closed || requestedGeneration !== this.generation) return;
       const current = this.state.snapshot;
       if (!current || result.atLogEpoch !== current.logEpoch) {
         logger.warn(
@@ -1009,17 +1148,181 @@ export class ConversationProjectionStore {
       }
       // 在途期间游标失效（row.removed 截断 / snapshot resync 整体替换）→ 结果作废，
       // 防止把权威侧已移除的历史行复活；下次触发按新窗口重新拉。
-      if (current.rows.window[0]?.rowId !== beforeRowId) return;
+      if (
+        !canMergeOlderPage({
+          requestedGeneration,
+          currentGeneration: this.generation,
+          requestedRevision,
+          currentRevision: current.agentHost
+            ? requestedRevision
+            : this.state.turnNavigatorDirectoryRevision,
+          requestedEpoch: snapshot.logEpoch,
+          resultEpoch: result.atLogEpoch,
+          currentEpoch: current.logEpoch,
+          requestedBeforeRowId: beforeRowId,
+          currentBeforeRowId: current.rows.window[0]?.rowId,
+        })
+      )
+        return;
+      // Bug 原因：同纪元可更新早期行；比修订水位旧的 held page 不能恢复过期正文。
+      // 待当前有界窗口刷新后用相同游标重新请求，而不是把旧行偷偷合并进去。
+      if (current.agentHost && result.atSeq < (current.rows.historicalRevision ?? 0)) {
+        this.historyRetryOlderLimit = limit;
+        this.historyRefreshRequested = true;
+        return;
+      }
+      // Host 同纪元 append-only 投影可跨在线完整快照合并；只接受旧水位的页。
+      if (
+        current.agentHost &&
+        (result.atSeq < snapshot.seq ||
+          result.atSeq > current.seq ||
+          result.atRevision > current.revision ||
+          current.rows.firstRowId !== snapshot.rows.firstRowId)
+      )
+        return;
       const window = mergeOlderRows(current.rows.window, result.rows);
       if (window === null) return;
+      const browsing = !!current.agentHost && window.length > EXTERNAL_ROWS_CACHE_LIMIT;
       this.setState({
-        snapshot: { ...current, rows: { ...current.rows, window } },
+        externalHistoryBrowsing: this.state.externalHistoryBrowsing || browsing,
+        snapshot: {
+          ...current,
+          rows: {
+            ...current.rows,
+            // Bug 原因：从尾部截取会在缓存满时丢弃刚取到的更早页，永远无法到达历史起点。
+            // 向前滑动时只裁掉末端，保证窗口连续并保留正在阅读的锚点。
+            window: browsing ? window.slice(0, EXTERNAL_ROWS_CACHE_LIMIT) : window,
+          },
+        },
       });
     } catch (error) {
       // query 只读且可重发：失败不进 error 态，留给下次触发重试。
       logger.warn(
         `[v4-store] rowsRange ${this.topic} 失败: ${error instanceof Error ? error.message : String(error)}`,
       );
+    } finally {
+      if (!this.closed) {
+        this.setState({ loadingOlder: false });
+        if (this.historyRefreshRequested) void this.refreshHeldHistory();
+      }
+    }
+  }
+
+  /** Revalidate the *held* bounded range after canonical out-of-tail row mutation. */
+  private async refreshHeldHistory(): Promise<void> {
+    if (
+      !this.historyRefreshRequested ||
+      this.historyRefreshInFlight ||
+      this.state.loadingOlder ||
+      this.closed
+    )
+      return;
+    const snapshot = this.state.snapshot;
+    const sessionId = parseConversationTopic(this.topic);
+    if (!snapshot?.agentHost || !sessionId || !this.state.externalHistoryBrowsing) return;
+    const first = snapshot.rows.window[0]?.rowId;
+    const last = snapshot.rows.window.at(-1)?.rowId;
+    if (first === undefined || last === undefined) return;
+    const generation = this.generation;
+    this.historyRefreshInFlight = true;
+    this.historyRefreshRequested = false;
+    let refreshed = false;
+    try {
+      const chunks: ConversationRow[] = [];
+      let before = last + 1;
+      while (before > first) {
+        const result = await this.transport.rowsRange({
+          sessionId,
+          beforeRowId: before,
+          limit: Math.min(PROTOCOL_V4_LIMITS.rowsRangeMaxLimit, before - first),
+        });
+        if (
+          this.closed ||
+          generation !== this.generation ||
+          result.atLogEpoch !== snapshot.logEpoch ||
+          result.atSeq < (this.state.snapshot?.rows.historicalRevision ?? 0) ||
+          result.rows.length === 0 ||
+          result.rows.at(-1)!.rowId >= before
+        )
+          return;
+        chunks.unshift(...result.rows);
+        before = result.rows[0]!.rowId;
+      }
+      const current = this.state.snapshot;
+      if (
+        !current ||
+        current.logEpoch !== snapshot.logEpoch ||
+        current.rows.firstRowId !== snapshot.rows.firstRowId ||
+        current.rows.window[0]?.rowId !== first ||
+        current.rows.window.at(-1)?.rowId !== last ||
+        current.rows.historicalRevision !== snapshot.rows.historicalRevision ||
+        chunks[0]?.rowId !== first ||
+        chunks.at(-1)?.rowId !== last
+      )
+        return;
+      // Bug 原因：刷新早期范围时尾窗可能继续流式改写交集；旧页不能盖掉新尾窗。
+      const latestTail = new Map(this.externalTailRows.map((row) => [row.rowId, row]));
+      this.setState({ snapshot: { ...current, rows: { ...current.rows,
+        window: chunks.map((row) => latestTail.get(row.rowId) ?? row) } } });
+      refreshed = true;
+    } catch (error) {
+      logger.warn(
+        `[v4-store] historical range refresh failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      this.historyRefreshInFlight = false;
+      if (this.historyRefreshRequested && !this.closed) void this.refreshHeldHistory();
+      else if (this.historyRetryOlderLimit !== null && !this.closed) {
+        const limit = this.historyRetryOlderLimit;
+        this.historyRetryOlderLimit = null;
+        if (refreshed) void this.loadOlder(limit);
+      }
+    }
+  }
+
+  /** 回到 live tail：重新订阅权威完整快照，不重放用户输入。 */
+  async jumpToLatest(): Promise<void> {
+    if (!this.state.snapshot?.agentHost) return;
+    await this.connect({ forceSnapshot: true });
+  }
+
+  /** 向新方向按 Host 游标取连续行；只移动有界阅读窗口，不改 Host 执行。 */
+  async loadNewer(limit: number = PROTOCOL_V4_LIMITS.snapshotTailWindowRows): Promise<void> {
+    if (this.closed || this.state.loadingOlder) return;
+    const snapshot = this.state.snapshot;
+    if (!canLoadExternalNewer(snapshot) || !snapshot) return;
+    const sessionId = parseConversationTopic(this.topic);
+    const last = snapshot.rows.window.at(-1)?.rowId;
+    if (!sessionId || last === undefined) return;
+    const pageSize = Math.min(Math.max(1, limit), PROTOCOL_V4_LIMITS.rowsRangeMaxLimit);
+    const generation = this.generation;
+    this.setState({ loadingOlder: true });
+    try {
+      const result = await this.transport.rowsRange({
+        sessionId,
+        beforeRowId: last + pageSize + 1,
+        limit: pageSize,
+      });
+      const current = this.state.snapshot;
+      if (
+        this.closed ||
+        generation !== this.generation ||
+        !current ||
+        current.logEpoch !== snapshot.logEpoch ||
+        result.atLogEpoch !== current.logEpoch ||
+        current.rows.firstRowId !== snapshot.rows.firstRowId ||
+        current.rows.window.at(-1)?.rowId !== last ||
+        result.atSeq < snapshot.seq ||
+        result.atSeq > current.seq
+      )
+        return;
+      const newer = result.rows.filter((row) => row.rowId > last);
+      if (!newer.length || newer[0]?.rowId !== last + 1) return;
+      const window = [...current.rows.window, ...newer].slice(-EXTERNAL_ROWS_CACHE_LIMIT);
+      this.setState({
+        snapshot: { ...current, rows: { ...current.rows, window } },
+        externalHistoryBrowsing: window.at(-1)?.rowId !== current.rows.totalCount,
+      });
     } finally {
       if (!this.closed) this.setState({ loadingOlder: false });
     }
@@ -1055,6 +1358,7 @@ export class ConversationProjectionStore {
     if (!sessionId || initialBeforeRowId === undefined) return stale(snapshot.logEpoch);
 
     const initialLogEpoch = snapshot.logEpoch;
+    const requestedGeneration = this.generation;
     const preserveIncompleteLeadingTurn = shouldAutoLoadIncompleteLeadingTurn(snapshot, false);
     const pages: ConversationRow[][] = [];
     let beforeRowId = initialBeforeRowId;
@@ -1074,13 +1378,14 @@ export class ConversationProjectionStore {
           beforeRowId,
           limit: PROTOCOL_V4_LIMITS.rowsRangeMaxLimit,
         });
-        if (this.closed) return stale(initialLogEpoch);
+        if (this.closed || requestedGeneration !== this.generation) return stale(initialLogEpoch);
         const current = this.state.snapshot;
         if (
           !current ||
           result.atLogEpoch !== initialLogEpoch ||
           current.logEpoch !== initialLogEpoch ||
-          current.rows.window[0]?.rowId !== initialBeforeRowId
+          current.rows.window[0]?.rowId !== initialBeforeRowId ||
+          this.state.turnNavigatorDirectoryRevision !== directoryRevision
         ) {
           logger.warn("[v4-store] 完整问题目录补拉期间投影游标失效，整批丢弃", {
             currentBeforeRowId: current?.rows.window[0]?.rowId,
@@ -1110,7 +1415,9 @@ export class ConversationProjectionStore {
       if (
         !current ||
         current.logEpoch !== initialLogEpoch ||
-        current.rows.window[0]?.rowId !== initialBeforeRowId
+        current.rows.window[0]?.rowId !== initialBeforeRowId ||
+        this.state.turnNavigatorDirectoryRevision !== directoryRevision ||
+        requestedGeneration !== this.generation
       ) {
         return stale(initialLogEpoch);
       }

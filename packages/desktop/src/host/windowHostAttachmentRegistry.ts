@@ -115,6 +115,14 @@ export function createWindowHostAttachmentRegistry<
     }
   }
 
+  function detachLocalAttachments(): void {
+    for (const [attachmentId, tracked] of attachments) {
+      if (tracked.params.scope.kind !== "local") continue;
+      attachments.delete(attachmentId);
+      disposeTracked(tracked);
+    }
+  }
+
   function detachRemoteSessionAttachments(remoteSessionId: string): void {
     for (const [attachmentId, tracked] of attachments) {
       if (
@@ -131,6 +139,7 @@ export function createWindowHostAttachmentRegistry<
   return {
     attach,
     detach,
+    detachLocalAttachments,
     detachRemoteSessionAttachments,
     detachStaleRemoteSessionAttachments,
     size: () => attachments.size,

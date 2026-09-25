@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
-import { createWriteStream } from "node:fs";
-import { access, chmod, mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { createReadStream, createWriteStream } from "node:fs";
+import { access, chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { Readable } from "node:stream";
@@ -62,25 +63,18 @@ async function downloadFile(url: string, destinationPath: string): Promise<void>
 }
 
 /**
- * 准备目标平台的 Node 二进制（固定 v22.16.0）。查找顺序：
- * 1. 现有远端资产链的 mock-cdn 缓存（避免重复下载）；
- * 2. 本包自有缓存；
- * 3. 从 Node dist 镜像（见 resolveNodeDistBase）下载 tar.xz 并解出 bin/node 后写入自有缓存。
+ * 准备目标平台的 Node 二进制（固定 v24.14.0）。查找顺序：
+ * 1. 本包按版本和目标平台隔离、由官方归档 checksum 生成的本地完整性记录；
+ * 2. 从 Node dist 镜像（见 resolveNodeDistBase）下载 tar.xz，验证 SHASUMS256 再解出 bin/node。
+ * 旧 mock-cdn 的二进制没有目标 Node 版本声明，不能按文件存在误用为新发行物。
  */
-async function ensureNodeBinary(repoRoot: string, target: ServerTarget): Promise<string> {
-  const mockCdnReleasesDir = join(repoRoot, "packages/desktop/mock-cdn/releases");
-  if (await pathExists(mockCdnReleasesDir)) {
-    for (const entry of (await readdir(mockCdnReleasesDir)).sort().reverse()) {
-      for (const binaryName of target.startsWith("win32-") ? ["node.exe", "node"] : ["node"]) {
-        const candidate = join(mockCdnReleasesDir, entry, "node", target, binaryName);
-        if (await pathExists(candidate)) {
-          log(`reuse mock-cdn node runtime: ${candidate}`);
-          return candidate;
-        }
-      }
-    }
-  }
+async function hashFile(file: string): Promise<string> {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(file)) hash.update(chunk);
+  return hash.digest("hex");
+}
 
+async function ensureNodeBinary(repoRoot: string, target: ServerTarget): Promise<string> {
   const nodeVersion = `v${SERVER_RUNTIME_NODE_VERSION}`;
   const isWindows = target.startsWith("win32-");
   const nodeTarget = isWindows ? target.replace(/^win32-/u, "win-") : target;
@@ -90,18 +84,47 @@ async function ensureNodeBinary(repoRoot: string, target: ServerTarget): Promise
     `node-${nodeVersion}-${target}`,
   );
   const cachedBinaryPath = join(cacheDir, isWindows ? "node.exe" : "node");
-  if (await pathExists(cachedBinaryPath)) {
-    log(`reuse cached node runtime: ${cachedBinaryPath}`);
-    return cachedBinaryPath;
+  const archiveName = `node-${nodeVersion}-${nodeTarget}.${isWindows ? "zip" : "tar.xz"}`;
+  const integrityPath = join(cacheDir, "integrity.json");
+  if ((await pathExists(cachedBinaryPath)) && (await pathExists(integrityPath))) {
+    try {
+      const saved = JSON.parse(await readFile(integrityPath, "utf8")) as {
+        archive: string;
+        archiveSha256: string;
+        binarySha256: string;
+      };
+      if (
+        saved.archive === archiveName &&
+        /^[a-f0-9]{64}$/u.test(saved.archiveSha256) &&
+        saved.binarySha256 === (await hashFile(cachedBinaryPath))
+      ) {
+        log(`reuse verified cached node runtime: ${cachedBinaryPath}`);
+        return cachedBinaryPath;
+      }
+    } catch {
+      /* stale or incomplete local cache: fetch and validate from official distribution */
+    }
   }
 
-  const archiveName = `node-${nodeVersion}-${nodeTarget}.${isWindows ? "zip" : "tar.xz"}`;
   const url = `${resolveNodeDistBase()}/${nodeVersion}/${archiveName}`;
   log(`download node runtime: ${url}`);
   const tempDir = await mkdtemp(join(tmpdir(), "zcode-server-node-"));
   try {
     const archivePath = join(tempDir, archiveName);
+    const shasumsResponse = await fetch(`${resolveNodeDistBase()}/${nodeVersion}/SHASUMS256.txt`);
+    if (!shasumsResponse.ok) throw new Error(`Unable to fetch Node ${nodeVersion} checksums`);
+    const shasums = await shasumsResponse.text();
+    const expectedHash = shasums
+      .split("\n")
+      .map((line) => line.trim().split(/\s+/u))
+      .find(([, file]) => file === archiveName)?.[0];
+    if (!expectedHash || !/^[a-f0-9]{64}$/iu.test(expectedHash)) {
+      throw new Error(`Missing official checksum for ${archiveName}`);
+    }
     await downloadFile(url, archivePath);
+    if ((await hashFile(archivePath)) !== expectedHash.toLowerCase()) {
+      throw new Error(`Node distribution checksum mismatch: ${archiveName}`);
+    }
     await mkdir(cacheDir, { recursive: true });
     if (isWindows) {
       await runCommand(
@@ -131,6 +154,14 @@ async function ensureNodeBinary(repoRoot: string, target: ServerTarget): Promise
       );
     }
     await chmod(cachedBinaryPath, 0o755);
+    await writeFile(
+      integrityPath,
+      JSON.stringify({
+        archive: archiveName,
+        archiveSha256: expectedHash.toLowerCase(),
+        binarySha256: await hashFile(cachedBinaryPath),
+      }),
+    );
     return cachedBinaryPath;
   } finally {
     await rm(tempDir, { force: true, recursive: true });
@@ -265,6 +296,15 @@ async function main(): Promise<void> {
     archive: !argv.includes("--no-archive"),
   });
 
+  if (target.startsWith("linux-")) {
+    // 修复原因：stage 的依赖扫描只是构建时推断；独立闭包必须在输出端核对全部入口、组件和链接，
+    // 否则一个逃逸 pnpm symlink 会在远端隐式依赖上传机的 node_modules。
+    await runCommand(
+      process.execPath,
+      [join(packageRoot, "scripts/verify-linux-closure.mjs"), staged.releaseDir],
+      repoRoot,
+    );
+  }
   log(`release dir: ${staged.releaseDir}`);
   if (staged.archivePath) log(`archive: ${staged.archivePath}`);
   log(`packaged dependencies: ${staged.packagedDependencies.join(", ")}`);

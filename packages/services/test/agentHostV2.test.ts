@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, mkdir, readFile, readdir, rename, rm, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -9,6 +9,7 @@ import { MockHarness } from "../src/agent-host/mockHarness.js";
 import { AgentHostTargetService, type WorkspaceAdmissionPort } from "../src/agent-host/targetService.js";
 import { createRpcAgentHostService } from "../src/agent-host/rpcTargetService.js";
 import { CommandJournal } from "../src/agent-host/commandJournal.js";
+import { EventJournal } from "../src/agent-host/eventJournal.js";
 import { CreationJournal } from "../src/agent-host/creationJournal.js";
 import { manifestPath } from "../src/agent-host/sessionManifest.js";
 import { journalPath } from "../src/agent-host/journalStorage.js";
@@ -58,6 +59,7 @@ test("v2 admission rejects legacy, foreign generation and duplicate IDs across s
   assert.deepEqual(await service.getSessionSpec({ targetId: "local", workspaceId: "workspace", hostSessionId: "a" }), a);
   assert.equal(await service.getSessionSpec({ targetId: "foreign", workspaceId: "workspace", hostSessionId: "a" }), undefined);
   assert.deepEqual(await service.getRuntimeActivity(), { running: 0, waiting: 0, uncertain: 0 });
+  assert.deepEqual(await service.getSessionReadModel(a), { runtimeEpoch: (await service.snapshot(a)).logEpoch, seq: 0, activity: "idle" });
   assert.equal((await service.queryCreationCommand("create-a"))?.receipt.status, "completed");
   assert.deepEqual(await service.create(a, "create-a"), await service.snapshot(a));
   await assert.rejects(service.create(spec(path, "different"), "create-a"), /collision|different|conflict/);
@@ -100,11 +102,60 @@ test("desktop continuous events, mobile replay/rows, immutable turn route and sc
   assert.equal((await history.getSessionCapabilities(a)).viewHistory.support, "supported");
   assert.equal((await history.getSessionCapabilities(a)).text.support, "unsupported");
   assert.deepEqual(await history.getRuntimeActivity("workspace"), { running: 0, waiting: 0, uncertain: 0 });
+  assert.equal((await history.getSessionReadModel(a)).lastOutcome, "success");
   assert.equal((await history.queryCreationCommand("create-a"))?.receipt.status, "completed");
   assert.equal((await history.rowsRange(a, { sessionId: "a", limit: 1 })).rows.length, 1);
   assert.equal((await history.queryCommand(a, "turn-1"))?.status, "completed");
   await assert.rejects(history.attach(a), /removed generation/);
   await history.close();
+}));
+
+test("cold rows use one committed view while an append has an incomplete tail", async () => fixture(async (root, path, service) => {
+  const a = spec(path, "race");
+  const created = await service.create(a, "create-race");
+  await service.close();
+  const identity = { targetId: "local", workspaceIdentity: "identity", harnessId: "mock", hostSessionId: "race", runtimeEpoch: created.logEpoch };
+  const journal = await EventJournal.open(join(root, "sessions"), identity);
+  await journal.append({ hostSessionId: "race", runtimeEpoch: created.logEpoch, eventId: "start-race", sequence: 1, at: 1,
+    kind: "turn.started", turnId: "turn-race" });
+  const file = journalPath(join(root, "sessions"), identity, "events");
+  const committed = (await readFile(file)).length;
+  await appendFile(file, '{"eventId":"unfinished"');
+  const cold = new AgentHostTargetService({ root: join(root, "sessions"), target, catalog, registry: new HarnessRegistry(),
+    admission: { verify: async () => { throw new Error("read-only"); }, withAdmission: async () => { throw new Error("read-only"); } } });
+  const old = await cold.rowsRange(a, { sessionId: "race", limit: 1 });
+  assert.deepEqual([old.atSeq, old.atRevision, old.rows.map((row) => row.rowId)], [1, 1, [1]]);
+  await journal.close();
+  await truncate(file, committed); // test-only rollback of the controlled uncommitted write
+  const resumed = await EventJournal.open(join(root, "sessions"), identity);
+  await resumed.append({ hostSessionId: "race", runtimeEpoch: created.logEpoch, eventId: "message-race", sequence: 2, at: 2,
+    kind: "message.finished", turnId: "turn-race", messageId: "msg-race", role: "user", text: "hi" });
+  const recent = await cold.rowsRange(a, { sessionId: "race", limit: 1 });
+  assert.deepEqual([recent.atSeq, recent.atRevision, recent.rows.map((row) => row.rowId)], [2, 2, [2]]);
+  await resumed.close();
+  await cold.close();
+}));
+
+test("cold summary rejects same-length event corruption rather than fabricating idle", async () => fixture(async (root, path, service, mock) => {
+  const a = spec(path, "corrupt");
+  await service.create(a, "create-corrupt");
+  await service.dispatch(a, send("corrupt", "turn-corrupt"));
+  await mock.waitForInteraction("corrupt");
+  const epoch = (await service.snapshot(a)).logEpoch;
+  await service.dispatch(a, { type: "resolveInteraction", commandId: "deny-corrupt", hostSessionId: "corrupt", turnId: "turn-corrupt",
+    runtimeEpoch: epoch, interactionId: "approval-1", decision: "deny" });
+  await service.waitForIdle(a);
+  await service.close();
+  const cold = new AgentHostTargetService({ root: join(root, "sessions"), target, catalog, registry: new HarnessRegistry(),
+    admission: { verify: async () => { throw new Error("read-only"); }, withAdmission: async () => { throw new Error("read-only"); } } });
+  assert.deepEqual(await cold.getRuntimeActivity("workspace"), { running: 0, waiting: 0, uncertain: 0 });
+  assert.deepEqual(await cold.getRuntimeActivity("workspace"), { running: 0, waiting: 0, uncertain: 0 });
+  const journal = journalPath(join(root, "sessions"), { targetId: "local", workspaceIdentity: "identity", harnessId: "mock", hostSessionId: "corrupt", runtimeEpoch: epoch }, "events");
+  const original = await readFile(journal, "utf8");
+  assert.ok(original.includes("turn.finished"));
+  await writeFile(journal, original.replace("turn.finished", "turn.started "));
+  assert.deepEqual(await cold.getRuntimeActivity("workspace"), { running: 0, waiting: 0, uncertain: 1 });
+  await cold.close();
 }));
 
 test("RPC creation uses one command-ID allocator while feature-off keeps durable queries and target activity", async () => fixture(async (_root, path, targetService) => {
@@ -116,6 +167,7 @@ test("RPC creation uses one command-ID allocator while feature-off keeps durable
     enabled = false;
     assert.equal((await rpc.service.queryCreationCommand("rpc-create"))?.receipt.status, "completed");
     assert.deepEqual(await rpc.service.getRuntimeActivity(), { running: 0, waiting: 0, uncertain: 0 });
+    assert.equal((await rpc.service.getSessionReadModel(a)).activity, "idle");
     assert.equal((await rpc.service.snapshot(a)).sessionId, "rpc");
     assert.deepEqual(await rpc.service.create(a, "rpc-create"), await rpc.service.snapshot(a));
     await assert.rejects(rpc.service.create(spec(path, "blocked"), "blocked-create"), /disabled/);

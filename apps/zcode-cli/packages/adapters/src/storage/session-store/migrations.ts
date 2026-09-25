@@ -925,6 +925,20 @@ export const SQLITE_MIGRATIONS: readonly SqliteMigration[] = [
     id: "0022_backfilled_session_reasoning",
     sql: BACKFILLED_SESSION_REASONING_MIGRATION_SQL,
   },
+  {
+    appVersion: "0.16.5",
+    id: "0023_native_create_receipt",
+    sql: `
+      create table native_create_receipt (
+        command_id text primary key,
+        session_id text not null unique references session(id),
+        workspace_scope text not null,
+        intent_fingerprint text not null,
+        has_first_input integer not null check(has_first_input in (0, 1)),
+        status text not null check(status in ('pending', 'completed'))
+      );
+    `,
+  },
 ];
 import { OFFICIAL_GLM_SELECTION_MIGRATION_SQL } from "./migrations/0021-official-glm-selection.js";
 import { BACKFILLED_SESSION_REASONING_MIGRATION_SQL } from "./migrations/0022-backfilled-session-reasoning.js";

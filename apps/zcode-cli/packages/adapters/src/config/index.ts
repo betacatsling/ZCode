@@ -489,3 +489,5 @@ export {
   type ConfigFactoryOptions,
   type ConfigResult,
 } from "./config-factory.js";
+
+export { resolveConfiguredSessionDbPath, resolveNativeSessionDbPath } from "./native-session-db-path.js";

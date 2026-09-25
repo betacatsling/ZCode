@@ -229,6 +229,19 @@ export interface V4CommandCoreHost {
    * v4 自持会话注册表后由原生实现取代本钩子。
    * 语义决策（draft persistence / firstInput 提交）留在原生 handler，不进钩子。
    */
+  /** Atomic CLI-owned original ID + intent receipt, before config/firstInput/ACK. */
+  commitNativeCreateReceipt?(envelope: CommandEnvelope, sessionId: string): Promise<string>;
+  completeNativeCreateReceipt?(
+    commandId: string,
+    sessionId: string,
+    actual: {
+      modelSelection?: ReturnType<
+        V4SessionRecordView["app"]["runtime"]["getSessionModelSelection"]
+      >;
+      mode: ReturnType<V4SessionRecordView["app"]["getMode"]>;
+      planEnabled: boolean;
+    },
+  ): Promise<void>;
   createSessionRecord?(params: {
     workspaceId: string;
     mcpServers?: CommandPayloadMap["createSession"]["mcpServers"];

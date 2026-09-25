@@ -40,6 +40,8 @@ export const mappingSchema = z.strictObject({
   workspaceId: z.string().min(1),
   targetId: z.string().min(1),
   worktreeGeneration: z.string().min(1),
+  /** Older sidecars without binding provenance remain history-only. */
+  repositoryBindingId: z.string().min(1).optional(),
   cwdRelativeToWorktree: cwdRelativeToWorktreeSchema,
   modelBinding: modelBindingRequestSchema,
 });

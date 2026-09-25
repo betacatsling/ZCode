@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "../components/ui/button.js";
 import { Input } from "../components/ui/input.js";
 import {
@@ -13,7 +13,7 @@ import { HarnessSelector } from "../agent-host/HarnessSelector.js";
 import { ModelBindingSelector } from "../agent-host/ModelBindingSelector.js";
 import { labels } from "../agent-host/labels.js";
 import { useProjectSidebarViewStore } from "../store/projectSidebarViewStore.js";
-import type { ProjectSidebarProps, DiscoveryCandidate } from "./types.js";
+import type { ProjectSidebarProps, DiscoveryCandidate, RemovalPreview } from "./types.js";
 
 export function ConfirmationDialog({
   title,
@@ -22,6 +22,8 @@ export function ConfirmationDialog({
   cancelLabel,
   onConfirm,
   onClose,
+  onPreview,
+  disabled = false,
 }: {
   title: string;
   description: string;
@@ -29,10 +31,29 @@ export function ConfirmationDialog({
   cancelLabel: string;
   onConfirm: () => Promise<void>;
   onClose: () => void;
+  onPreview?: () => Promise<RemovalPreview>;
+  disabled?: boolean;
 }) {
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  const [preview, setPreview] = useState<RemovalPreview>();
+  useEffect(() => {
+    if (!onPreview) return;
+    let active = true;
+    void onPreview().then(
+      (value) => {
+        if (active) setPreview(value);
+      },
+      (cause) => {
+        if (active) setError(cause instanceof Error ? cause.message : String(cause));
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [onPreview]);
   async function submit() {
+    if (disabled || pending || (onPreview && !preview?.allowed)) return;
     setPending(true);
     try {
       await onConfirm();
@@ -55,6 +76,23 @@ export function ConfirmationDialog({
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
+        {onPreview ? (
+          <div className="text-ui-sm text-foreground-subtle" aria-live="polite">
+            {preview ? (
+              preview.risks.length ? (
+                <ul className="list-inside list-disc">
+                  {preview.risks.map((risk) => (
+                    <li key={risk}>{risk}</li>
+                  ))}
+                </ul>
+              ) : (
+                "No target-reported risks"
+              )
+            ) : (
+              "Checking target Git and activity…"
+            )}
+          </div>
+        ) : null}
         {error ? (
           <p role="alert" className="text-ui-sm text-destructive">
             {error}
@@ -64,7 +102,12 @@ export function ConfirmationDialog({
           <Button type="button" variant="outline" onClick={onClose} disabled={pending}>
             {cancelLabel}
           </Button>
-          <Button type="button" variant="destructive" onClick={submit} disabled={pending}>
+          <Button
+            type="button"
+            variant="destructive"
+            onClick={submit}
+            disabled={pending || disabled || Boolean(onPreview && !preview?.allowed)}
+          >
             {confirmLabel}
           </Button>
         </DialogFooter>
@@ -84,14 +127,21 @@ export function AgentCreationDialog({
   props: ProjectSidebarProps;
   onClose: () => void;
 }) {
-  const available = props.catalog.filter((entry) => entry.availability === "supported");
+  const catalog = props.catalogByWorkspace
+    ? (props.catalogByWorkspace.get(workspaceId) ?? [])
+    : props.catalog;
+  const available = catalog.filter((entry) => entry.availability === "supported");
   const [harnessId, setHarnessId] = useState(available[0]?.manifest.id ?? "");
   const [modelIndex, setModelIndex] = useState(0);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
   const draft = useProjectSidebarViewStore((state) => state.drafts[workspaceId] ?? "");
   const setDraft = useProjectSidebarViewStore((state) => state.setDraft);
-  const options = props.modelOptions?.filter((option) => option.harnessId === harnessId) ?? [];
+  const options =
+    (props.modelOptionsByWorkspace
+      ? props.modelOptionsByWorkspace.get(workspaceId)
+      : props.modelOptions
+    )?.filter((option) => option.harnessId === harnessId) ?? [];
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     const binding = options[modelIndex]?.binding;
@@ -127,7 +177,7 @@ export function AgentCreationDialog({
         <form onSubmit={submit} className="space-y-3">
           <p className="text-ui-sm text-foreground-subtle">{workspaceId}</p>
           <HarnessSelector
-            catalog={props.catalog}
+            catalog={catalog}
             value={harnessId}
             onChange={(id) => {
               setHarnessId(id);

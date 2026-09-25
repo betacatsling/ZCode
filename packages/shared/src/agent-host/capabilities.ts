@@ -37,6 +37,7 @@ export const harnessCapabilitiesV2Schema = harnessCapabilitiesSchema.extend({
   hostManagedModel: capabilityReportSchema,
   fork: capabilityReportSchema,
   subagents: capabilityReportSchema,
+  questions: capabilityReportSchema.optional(),
 });
 export type HarnessCapabilitiesV2 = z.infer<typeof harnessCapabilitiesV2Schema>;
 

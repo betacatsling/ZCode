@@ -6,16 +6,21 @@
     "#src/*": "./src/*"
   },
   "exports": {
+    "./native-maintenance": "./src/zcode-agent/zcodeAgentService.ts",
     "./storage-startup": "./src/storage-startup.ts",
     ".": "./src/index.ts",
     "./cua-permission-broker": "./src/cua-permission-broker/index.ts",
     "./process/processTreeTerminator": "./src/process/processTreeTerminator.ts",
     "./node": "./src/node.ts",
+    "./agent-host/codex": "./src/agent-adapters/codex/index.ts",
+    "./agent-host/claude": "./src/agent-adapters/claude-code/index.ts",
     "./agent-host/pi": "./src/agent-adapters/pi/createPiHarness.ts",
     "./session/native-index": "./src/session/nativePersistentSessionIndex.ts",
     "./session/native-directory": "./src/session/nativeSessionDirectory.ts",
+    "./session/native-composition": "./src/session/nativeComposition.ts",
     "./project-workspaces/migration": "./src/project-workspaces/legacyWorkspaceMigration.ts",
-    "./project-workspaces/migration-contract": "./src/project-workspaces/migrationContract.ts"
+    "./project-workspaces/migration-contract": "./src/project-workspaces/migrationContract.ts",
+    "./maintenance-lease": "./src/maintenance-lease.ts"
   },
   "scripts": {
     "lint": "oxlint",

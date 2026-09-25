@@ -8,6 +8,7 @@ import {
   type ModelCacheControl,
   type ModelMessageContent,
   type ModelMessageContentBlock,
+  type ModelMessageRole,
   type Model,
   type ModelReasoningContentBlock,
   type TokenUsageInfo,
@@ -24,7 +25,7 @@ export interface ToolCallInput {
 export type ReasoningContentInput = ModelReasoningContentBlock;
 
 export interface ModelInputMessage {
-  role: "system" | "user" | "assistant" | "tool";
+  role: ModelMessageRole;
   content: ModelMessageContent;
   cacheControl?: ModelCacheControl;
   toolCalls?: ToolCallInput[];
@@ -280,7 +281,7 @@ export function countContextPrefixMessages(
     }
     const message = messageFromEntryInput(item);
     const metadata = metadataFromEntryInput(item);
-    if (message.role === "system") {
+    if (message.role === "system" || message.role === "developer") {
       count++;
       continue;
     }

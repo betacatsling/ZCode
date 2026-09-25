@@ -2,6 +2,7 @@
 import { Client as SSHClient } from "ssh2";
 import type { ConnectConfig } from "ssh2";
 import { createReadStream } from "node:fs";
+import { createServer, type Socket } from "node:net";
 import { posix } from "node:path";
 import { Emitter } from "@zcode/rpc";
 import { resolveZCodeRuntimeEnv } from "@zcode/shared";
@@ -98,6 +99,7 @@ export class SSHBackend implements IRemoteBackend {
   private disposed = false;
   private hasEverConnected = false;
   private disconnectReported = false;
+  private readonly tunnels = new Set<() => void>();
   private readonly disconnectEmitter = new Emitter<RemoteDisconnectEvent>();
   readonly onDidDisconnect = this.disconnectEmitter.event;
 
@@ -206,6 +208,7 @@ export class SSHBackend implements IRemoteBackend {
 
     this.connected = false;
     this.homeDirPromise = null;
+    for (const close of [...this.tunnels]) close();
 
     if (!shouldReport) {
       return;
@@ -314,6 +317,61 @@ export class SSHBackend implements IRemoteBackend {
         });
       });
     });
+  }
+
+  /** Temporary local-loopback forwarding to an already running target Core. Never owns its lifecycle. */
+  async openLoopbackTunnel(remotePort: number): Promise<{ endpoint: string; dispose(): void }> {
+    if (!Number.isInteger(remotePort) || remotePort < 1 || remotePort > 65535) {
+      throw new Error("Invalid SSH tunnel target port");
+    }
+    await this.ensureConnected();
+    this.assertNotDisposed();
+    const sockets = new Set<Socket>();
+    let closed = false;
+    const server = createServer((socket) => {
+      socket.pause();
+      sockets.add(socket);
+      socket.once("close", () => sockets.delete(socket));
+      const sourcePort = socket.remotePort ?? 0;
+      this.client.forwardOut("127.0.0.1", sourcePort, "127.0.0.1", remotePort, (error, channel) => {
+        if (error || closed || this.disposed || !channel) {
+          channel?.destroy();
+          socket.destroy();
+          return;
+        }
+        socket.once("close", () => channel.destroy());
+        channel.once("close", () => socket.destroy());
+        socket.pipe(channel).pipe(socket);
+        socket.resume();
+      });
+    });
+    const dispose = () => {
+      if (closed) return;
+      closed = true;
+      this.tunnels.delete(dispose);
+      server.close();
+      for (const socket of sockets) socket.destroy();
+    };
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => {
+          server.off("error", reject);
+          resolve();
+        });
+      });
+      this.assertNotDisposed();
+      // 修复原因：监听成功后的 socket/server 异常若无人监听会终止窗口 Host；
+      // 退役本次 tunnel 而非停止持久 Core 或影响其它 workspace。
+      server.on("error", dispose);
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("SSH tunnel has no local port");
+      this.tunnels.add(dispose);
+      return { endpoint: `http://127.0.0.1:${address.port}`, dispose };
+    } catch (error) {
+      dispose();
+      throw error;
+    }
   }
 
   async exists(remotePath: string): Promise<boolean> {
@@ -600,6 +658,7 @@ export class SSHBackend implements IRemoteBackend {
       return;
     }
     this.disposed = true;
+    for (const close of [...this.tunnels]) close();
     // 首次握手失败后，ssh2 可能在 socket end/close 之后继续发出 error。
     // dispose 后保留 onClientError 作为 no-op sink，不能按 end/close 事件时序提前移除，
     // 否则迟到事件会逃逸为 uncaughtException，让共享 Window Host 连带退出其它 workspace。

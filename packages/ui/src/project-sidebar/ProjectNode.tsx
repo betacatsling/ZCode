@@ -36,7 +36,10 @@ export function ProjectNode({
   sessions: readonly SessionSummary[];
   props: ProjectSidebarProps;
   onCreateAgent: (workspace: WorktreeWorkspace) => void;
-  onConfirm: (workspace: WorktreeWorkspace, action: "hide" | "archive" | "remove") => void;
+  onConfirm: (
+    workspace: WorktreeWorkspace,
+    action: "hide" | "show" | "archive" | "unarchive" | "remove",
+  ) => void;
   onCreateWorkspace: (bindingId: string) => void;
   onDiscover: (bindingId: string) => void;
 }) {
@@ -134,7 +137,10 @@ export function ProjectNode({
                 size="sm"
                 variant="outline"
                 aria-label={`${props.locale === "zh" ? "待处理" : "Attention"}: ${session?.session.title ?? id}`}
-                onClick={() => props.actions.onOpenAttention(id)}
+                onClick={() => {
+                  if (session) props.actions.onOpenAttention(session);
+                }}
+                disabled={!session}
               >
                 {l.waiting}: {session?.session.title ?? id}
               </Button>

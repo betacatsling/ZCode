@@ -69,6 +69,9 @@ export class Supervisor {
     | { kind: LifecycleOperationKind; promise: Promise<unknown> }
     | undefined;
   private activeRelease: ReleaseManifest | null = null;
+  private fallbackMaintenance: { release(): Promise<void> } | undefined;
+  private maintenanceInFlight = false;
+  private maintenanceHeld = false;
 
   public constructor(private readonly options: SupervisorOptions) {
     this.layout = options.layout ?? resolveServerLayout();
@@ -270,9 +273,19 @@ export class Supervisor {
   private async applyUpdate(force: boolean): Promise<unknown> {
     const pending = await this.releaseManager.readPending();
     if (!pending) throw new Error("No pending release is prepared");
-    if (!force && (await this.readUnsafeActivityCount()) > 0) {
+    const maintenance = await this.beginMaintenance();
+    if (!force && maintenance.unsafeCount > 0) {
+      await maintenance.release();
       throw new Error("Active or uncertain tasks require --force for update");
     }
+    try {
+      return await this.applyUpdateWithLease(pending, force);
+    } finally {
+      await maintenance.release();
+    }
+  }
+
+  private async applyUpdateWithLease(pending: ReleaseManifest, force: boolean): Promise<unknown> {
     const previous = await this.releaseManager.readCurrent();
     log.info("applying pending release", { version: pending.version, force });
     await this.stopCore("update");
@@ -469,12 +482,132 @@ export class Supervisor {
   }
 
   private clearCoreScopedStatus(): void {
+    this.fallbackMaintenance = undefined;
+    this.maintenanceHeld = false;
     this.host = null;
     this.port = null;
     this.startedAt = null;
     this.runningTaskCount = 0;
     // Core 代际死亡不是会话终态；新 Core 恢复/journal 核验之前不能声明 idle。
     this.externalActivity = { running: 0, waiting: 0, uncertain: 1 };
+  }
+
+  /** Freeze admissions before reading fresh native + external activity; a snapshot alone races new commands. */
+  private async beginMaintenance(): Promise<{ unsafeCount: number; release(): Promise<void> }> {
+    // 中文：两条控制连接可同时进入 begin；直到 IPC 回应前都必须预留单个冻结请求。
+    // fallback 持有期间 update/uninstall 也不能共用或偷释放它的 lease。
+    if (this.maintenanceInFlight || this.maintenanceHeld)
+      throw new Error("Core maintenance operation already in progress");
+    this.maintenanceInFlight = true;
+    try {
+      const lease = await this.requestMaintenance();
+      this.maintenanceHeld = true;
+      return {
+        unsafeCount: lease.unsafeCount,
+        release: async () => {
+          await lease.release();
+          this.maintenanceHeld = false;
+        },
+      };
+    } finally {
+      this.maintenanceInFlight = false;
+    }
+  }
+
+  private async requestMaintenance(): Promise<{ unsafeCount: number; release(): Promise<void> }> {
+    const core = this.core;
+    if (!core || this.state !== "ready") throw new Error("Core unavailable for maintenance");
+    const requestId = randomUUID();
+    const reply = await new Promise<
+      Extract<ReturnType<typeof coreMessageSchema.parse>, { type: "maintenance" }> | undefined
+    >((resolve) => {
+      let settled = false;
+      const finish = (
+        result?: Extract<ReturnType<typeof coreMessageSchema.parse>, { type: "maintenance" }>,
+      ): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        core.off("message", onMessage);
+        core.off("exit", onExit);
+        core.off("close", onExit);
+        resolve(result);
+      };
+      const onExit = (): void => finish();
+      const onMessage = (raw: unknown): void => {
+        const parsed = coreMessageSchema.safeParse(raw);
+        if (
+          parsed.success &&
+          parsed.data.type === "maintenance" &&
+          parsed.data.requestId === requestId
+        )
+          finish(parsed.data);
+      };
+      const timer = setTimeout(() => finish(), 2_000);
+      core.on("message", onMessage);
+      core.once("exit", onExit);
+      core.once("close", onExit);
+      try {
+        core.send({ command: "maintenance-begin", requestId }, (error) => {
+          if (error) finish();
+        });
+      } catch {
+        finish();
+      }
+    });
+    if (
+      !reply?.leaseId ||
+      !reply.nativeActivity ||
+      !reply.externalActivity ||
+      this.core !== core ||
+      this.state !== "ready"
+    ) {
+      throw new Error("Cannot confirm maintenance admission fence; Core remains unsafe");
+    }
+    const leaseId = reply.leaseId;
+    return {
+      unsafeCount:
+        unsafeActivityCount(0, reply.nativeActivity) +
+        unsafeActivityCount(0, reply.externalActivity),
+      release: async () => {
+        if (this.core !== core) return; // old Core exited; its fence cannot affect the next generation.
+        const releaseRequestId = randomUUID();
+        const acknowledged = await new Promise<boolean>((resolve) => {
+          const finish = (ok: boolean): void => {
+            clearTimeout(timer);
+            core.off("message", onMessage);
+            core.off("exit", onExit);
+            core.off("close", onExit);
+            resolve(ok);
+          };
+          const onExit = (): void => finish(false);
+          const onMessage = (raw: unknown): void => {
+            const parsed = coreMessageSchema.safeParse(raw);
+            if (
+              parsed.success &&
+              parsed.data.type === "maintenance" &&
+              parsed.data.requestId === releaseRequestId
+            )
+              finish(parsed.data.leaseId === leaseId);
+          };
+          const timer = setTimeout(() => finish(false), 2_000);
+          core.on("message", onMessage);
+          core.once("exit", onExit);
+          core.once("close", onExit);
+          try {
+            core.send(
+              { command: "maintenance-release", requestId: releaseRequestId, leaseId },
+              (error) => {
+                if (error) finish(false);
+              },
+            );
+          } catch {
+            finish(false);
+          }
+        });
+        if (!acknowledged) throw new Error("Cannot verify maintenance admission release");
+      },
+    };
   }
 
   /** Fresh Core roundtrip closes the heartbeat-to-update race after a command was admitted. */
@@ -554,6 +687,25 @@ export class Supervisor {
           status: (await this.readUnsafeActivityCount()) ? "blocked" : "ready",
           runningTaskCount: this.runningTaskCount,
         };
+      case "begin-fallback-migration": {
+        if (this.fallbackMaintenance) throw new Error("Fallback migration already fenced");
+        const lease = await this.beginMaintenance();
+        if (lease.unsafeCount > 0) {
+          await lease.release();
+          throw new Error(
+            "Cannot migrate fallback server while tasks are active, waiting or uncertain",
+          );
+        }
+        this.fallbackMaintenance = lease;
+        return { ready: true };
+      }
+      case "end-fallback-migration": {
+        const lease = this.fallbackMaintenance;
+        if (!lease) throw new Error("No fallback migration lease");
+        await lease.release();
+        if (this.fallbackMaintenance === lease) this.fallbackMaintenance = undefined;
+        return { released: true };
+      }
       case "confirm-uninstall":
         if (request.confirmation !== "DELETE")
           throw new Error("Uninstall confirmation must be DELETE");
@@ -561,13 +713,28 @@ export class Supervisor {
         // prepare-uninstall 会返回 blocked 却没有任何调用方消费它，confirm-uninstall
         // 直接停 Core 删数据，运行中的任务会被无提示中断。这里在最后防线上强制 guard，
         // 有运行任务时返回结构化错误并保持原状态。
-        if ((await this.readUnsafeActivityCount()) > 0) {
+        const maintenance = await this.beginMaintenance();
+        if (maintenance.unsafeCount > 0) {
+          await maintenance.release();
           throw new Error(
             "Cannot uninstall while tasks are active, waiting or uncertain; stop the server first",
           );
         }
         log.info("uninstall confirmed, stopping server");
-        this.startAcknowledgedLifecycleOperation("uninstall", () => this.stopInternal("uninstall"));
+        try {
+          this.startAcknowledgedLifecycleOperation("uninstall", async () => {
+            try {
+              await this.stopInternal("uninstall");
+            } finally {
+              // 中文：停止失败且 Core 仍存活时释放原 lease，避免冻结永久遗留；
+              // Core 已终止则旧代际 lease 不可触及下一代。
+              await maintenance.release();
+            }
+          });
+        } catch (error) {
+          await maintenance.release();
+          throw error;
+        }
         return { uninstalled: true };
     }
   }

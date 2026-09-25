@@ -1,0 +1,769 @@
+diff --git a/.tmp/sup-compat/after/apps/zcode-cli/packages/bootstrap/src/zcode-protocol/native-boot-fence.test.ts b/apps/zcode-cli/packages/bootstrap/src/zcode-protocol/native-boot-fence.test.ts
+new file mode 100644
+index 0000000..39889ca
+--- /dev/null
++++ b/apps/zcode-cli/packages/bootstrap/src/zcode-protocol/native-boot-fence.test.ts
+@@ -0,0 +1,57 @@
++import assert from "node:assert/strict";
++import { test } from "node:test";
++import { zcodeProtocolMethods } from "@zcode/shared";
++import { ZCodeProtocolAgentServer } from "./server.js";
++
++test("boot-held CLI freezes Inbox in constructor before any protocol mutation and only releases exact claimed lease", async () => {
++  const server = new ZCodeProtocolAgentServer({
++    env: { ZCODE_CORE_BOOT_ADMISSION: "held" },
++    createZCodeApp: () => {
++      throw new Error("unexpected agent");
++    },
++  });
++  try {
++    const denied = await server.handleMessage({
++      id: 1,
++      method: zcodeProtocolMethods.pluginsInstall,
++      params: {},
++    });
++    assert.match(JSON.stringify(denied), /guard.nativeMaintenanceFrozen/);
++    const claim = await server.handleMessage({
++      id: 2,
++      method: zcodeProtocolMethods.nativeMaintenanceClaimBoot,
++      params: {},
++    });
++    assert.ok(claim && "result" in claim);
++    const { lease } = claim.result as { lease: { epoch: string; leaseId: string } };
++    assert.match(
++      JSON.stringify(
++        await server.handleMessage({
++          id: 3,
++          method: zcodeProtocolMethods.nativeMaintenanceFreeze,
++          params: {},
++        }),
++      ),
++      /already frozen/,
++    );
++    const released = await server.handleMessage({
++      id: 4,
++      method: zcodeProtocolMethods.nativeMaintenanceRelease,
++      params: lease,
++    });
++    assert.match(JSON.stringify(released), /"released":true/);
++    assert.match(
++      JSON.stringify(
++        await server.handleMessage({
++          id: 5,
++          method: zcodeProtocolMethods.nativeMaintenanceClaimBoot,
++          params: {},
++        }),
++      ),
++      /boot lease unavailable/,
++    );
++  } finally {
++    await server.shutdown();
++    server.disposeProjections();
++  }
++});
+diff --git a/apps/zcode-cli/packages/bootstrap/src/zcode-protocol/server.ts b/apps/zcode-cli/packages/bootstrap/src/zcode-protocol/server.ts
+index f41d96d..8027b81 100644
+--- a/apps/zcode-cli/packages/bootstrap/src/zcode-protocol/server.ts
++++ b/apps/zcode-cli/packages/bootstrap/src/zcode-protocol/server.ts
+@@ -246,18 +246,29 @@ export class ZCodeProtocolAgentServer {
+ 
+   private nativeActivity(): NativeMaintenanceActivity {
+     const v4 = this.requireV4Gateway().getNativeActivity();
+-    let active = v4.active, tools = v4.tools;
++    let active = v4.active,
++      tools = v4.tools;
+     const approvals = v4.approvals + this.context.v4Interactions.pendingCount;
+     let unknown = v4.unknown;
+     for (const record of this.context.sessions.values()) {
+       if (record.activeAbortController || record.residencyFinalizationCount) active++;
+-      if (record.protocolToolInputTransmissions.size) tools += record.protocolToolInputTransmissions.size;
++      if (record.protocolToolInputTransmissions.size)
++        tools += record.protocolToolInputTransmissions.size;
+       if (!this.context.v4Gateway?.hasNativeSnapshot(record.app.sessionId)) unknown = true;
+     }
+-    return { ...v4, frozen: this.nativeLease !== null,
+-      active, tools, approvals,
+-      pending: v4.pending + this.protocolMutationInFlight + this.workspaceGenerateTextControllers.size + this.pendingClientRequests.size,
+-      unknown };
++    return {
++      ...v4,
++      frozen: this.nativeLease !== null,
++      active,
++      tools,
++      approvals,
++      pending:
++        v4.pending +
++        this.protocolMutationInFlight +
++        this.workspaceGenerateTextControllers.size +
++        this.pendingClientRequests.size,
++      unknown,
++    };
+   }
+ 
+   readonly browserControlPort: BrowserControlPort;
+@@ -322,6 +333,10 @@ export class ZCodeProtocolAgentServer {
+     };
+     // v4 通道：gateway 闭包持有 context 做帧出口与命令副作用，构造完立即挂回。
+     this.context.v4Gateway = createConversationV4Gateway(this.context);
++    // 中文：启动持有必须在 resident 池、恢复回调或首个 stdio 请求之前进入唯一 Inbox。
++    // 旧 CLI 不实现 claimBoot，Core 因而不能误把普通 freeze 当作启动前屏障。
++    if (resolvedDeps.env?.ZCODE_CORE_BOOT_ADMISSION === "held")
++      this.nativeLease = this.context.v4Gateway.freezeNativeAdmission();
+     this.browserControlPort = createProtocolBrowserControlBroker(this.context);
+     const sessionResidentTargetCount =
+       deps.sessionResidentPoolOptions?.targetCount ?? deps.sessionResidentTargetCount;
+@@ -495,8 +510,10 @@ export class ZCodeProtocolAgentServer {
+     // request id 可在前一请求完成后复用；新请求不能继承未消费的旧 outbox。
+     this.postResponseOutbox.delete(request.id);
+     let releaseResidencyOperation: (() => void) | undefined;
+-    const protocolMutation = !MAINTENANCE_READ_METHODS.has(request.method) &&
++    const protocolMutation =
++      !MAINTENANCE_READ_METHODS.has(request.method) &&
+       !MAINTENANCE_ACCEPTED_CONTROLS.has(request.method) &&
++      request.method !== zcodeProtocolMethods.nativeMaintenanceClaimBoot &&
+       request.method !== zcodeProtocolMethods.nativeMaintenanceFreeze &&
+       request.method !== zcodeProtocolMethods.nativeMaintenanceGetActivity &&
+       request.method !== zcodeProtocolMethods.nativeMaintenanceRelease;
+@@ -504,6 +521,12 @@ export class ZCodeProtocolAgentServer {
+     // lease 的 trust/config/attachment/v4 command 写请求误判为空闲。
+     if (protocolMutation) this.protocolMutationInFlight++;
+     try {
++      if (request.method === zcodeProtocolMethods.nativeMaintenanceClaimBoot) {
++        zcodeProtocolEmptyResultSchema.parse(request.params);
++        if (!this.nativeLease || this.context.deps.env?.ZCODE_CORE_BOOT_ADMISSION !== "held")
++          throw new Error("native boot lease unavailable");
++        return this.ok(request.id, { lease: this.nativeLease, activity: this.nativeActivity() });
++      }
+       if (request.method === zcodeProtocolMethods.nativeMaintenanceFreeze) {
+         zcodeProtocolEmptyResultSchema.parse(request.params);
+         if (this.nativeLease) throw new Error("native maintenance already frozen");
+@@ -514,14 +537,22 @@ export class ZCodeProtocolAgentServer {
+       }
+       if (request.method === zcodeProtocolMethods.nativeMaintenanceGetActivity) {
+         const lease = nativeMaintenanceLeaseSchema.parse(request.params);
+-        if (!this.nativeLease || lease.epoch !== this.nativeLease.epoch || lease.leaseId !== this.nativeLease.leaseId)
++        if (
++          !this.nativeLease ||
++          lease.epoch !== this.nativeLease.epoch ||
++          lease.leaseId !== this.nativeLease.leaseId
++        )
+           throw new Error("native maintenance lease mismatch");
+         return this.ok(request.id, this.nativeActivity());
+       }
+       if (request.method === zcodeProtocolMethods.nativeMaintenanceRelease) {
+         const lease = nativeMaintenanceLeaseSchema.parse(request.params);
+-        if (!this.nativeLease || lease.epoch !== this.nativeLease.epoch || lease.leaseId !== this.nativeLease.leaseId ||
+-            !this.requireV4Gateway().releaseNativeAdmission(lease))
++        if (
++          !this.nativeLease ||
++          lease.epoch !== this.nativeLease.epoch ||
++          lease.leaseId !== this.nativeLease.leaseId ||
++          !this.requireV4Gateway().releaseNativeAdmission(lease)
++        )
+           throw new Error("native maintenance lease mismatch");
+         this.nativeLease = null;
+         return this.ok(request.id, { released: true });
+diff --git a/packages/services/src/coreAuthority.ts b/packages/services/src/coreAuthority.ts
+index 62c016c..5c5c3dc 100644
+--- a/packages/services/src/coreAuthority.ts
++++ b/packages/services/src/coreAuthority.ts
+@@ -15,7 +15,7 @@ import {
+   createNativeProductionBridge,
+ } from "./workspace-hierarchy/nativeProductionBridge.js";
+ import type { NativeRuntimeFactsPort } from "./workspace-hierarchy/nativeProductionBridge.js";
+-import { getNativeProcessControlPort } from "./zcode-agent/zcodeAgentService.js";
++import { getNativeProcessControlPort, getNativeMaintenanceControlPort } from "./zcode-agent/zcodeAgentService.js";
+ import { IZCodeAgentService } from "./zcode-agent/zcodeAgent.js";
+ import type { ServiceCollection } from "./collection.js";
+ import {
+@@ -30,6 +30,7 @@ export interface CoreAuthorityOptions {
+   /** Installation/runtime layout, not the writable profile root. */
+   profileRoot: string;
+   zcodeBuiltinProviderConfigFilePath: string;
++  admissionFence?: "open" | "held";
+ }
+ export interface CoreAuthorityResult {
+   services: ServiceCollection;
+@@ -41,6 +42,7 @@ export interface CoreAuthorityResult {
+     }>;
+   };
+   reconcileBeforeAdmission(): Promise<void>;
++  bootAdmissionLease?: { release(): Promise<void> };
+   dispose(): Promise<void>;
+ }
+ 
+@@ -132,6 +134,8 @@ export async function createCoreAuthority(
+       agentHostTargetId: options.installationId,
+       workspaceCompositionRoot: join(configRoot, "workspace-hierarchy"),
+       workspaceComposition: bridge,
++      initiallyHeld: options.admissionFence === "held",
++      bootAdmissionHeld: options.admissionFence === "held",
+     });
+     const nativeService = services.get(IZCodeAgentService);
+     live = getNativeProcessControlPort(nativeService);
+@@ -149,7 +153,34 @@ export async function createCoreAuthority(
+     const collection = services;
+     const coordinator = getWorkspaceMaintenanceCoordination(collection);
+     if (!coordinator) throw new Error("Core maintenance coordinator missing");
++    if (options.admissionFence === "held") {
++      const control = getNativeMaintenanceControlPort(nativeService);
++      const target = { workspacePath: process.cwd() };
++      // 中文：claim 只认 CLI 构造时已冻结的真实 Inbox，不能存储启动后才做 late freeze。
++      const { lease, activity } = await control.claimBoot(target);
++      if (activity.epoch !== lease.epoch || !activity.frozen || activity.unknown)
++        throw new Error("Core boot worker lease uncertain");
++      coordinator.attachBootFence({
++        verify: async () => {
++          const current = await control.getActivity(target, lease);
++          if (current.epoch !== lease.epoch || !current.frozen || current.unknown)
++            throw new Error("Core boot worker changed");
++          return [current.active, current.accepted, current.pending, current.tools, current.approvals]
++            .every((count) => Number.isSafeInteger(count) && count === 0);
++        },
++        release: () => control.releaseBoot(target, lease),
++      });
++    }
+     let disposing: Promise<void> | undefined;
++    let disposed = false;
++    const bootAdmissionLease = options.admissionFence === "held"
++      ? { async release() {
++          if (disposed) throw new Error("Core boot admission owner disposed");
++          await getWorkspaceCompositionReady(collection);
++          if (disposed) throw new Error("Core boot admission owner disposed");
++          await coordinator.releaseInitialHold();
++        } }
++      : undefined;
+     return {
+       services: collection,
+       maintenance: {
+@@ -172,7 +203,9 @@ export async function createCoreAuthority(
+         },
+       },
+       reconcileBeforeAdmission: () => getWorkspaceCompositionReady(collection),
++      ...(bootAdmissionLease ? { bootAdmissionLease } : {}),
+       dispose() {
++        disposed = true;
+         return (disposing ??= (async () => {
+           try {
+             await disposeServiceResourcesAndWait(collection);
+diff --git a/packages/services/src/node.ts b/packages/services/src/node.ts
+index 3e47656..535f33a 100644
+--- a/packages/services/src/node.ts
++++ b/packages/services/src/node.ts
+@@ -1414,6 +1414,10 @@ export function createLocalServices(options: {
+   agentHostTargetId?: string;
+   /** Core supplies an isolated, persistent profile root; windows never open this writer. */
+   workspaceCompositionRoot?: string;
++  /** Core's initial workspace hold is independent of ordinary maintenance. */
++  initiallyHeld?: boolean;
++  /** Core-only native worker/Inbox hold before storage preparation. */
++  bootAdmissionHeld?: boolean;
+   /** Core's authenticated target; OS platform is not proof that a target is remote. */
+   workspaceCompositionTarget?: CompositionOptions["target"];
+   /** Required live native bridge, including the configured-path complete index and real CLI fence. */
+@@ -2193,6 +2197,7 @@ export function createLocalServices(options: {
+           resolveOffPeakTaskService: () => offPeakTaskServiceForAgent,
+         };
+   const zcodeAgentService = createZCodeAgentService({
++    bootAdmissionHeld: options?.bootAdmissionHeld,
+     ...(agentAccountProviderConfigSource
+       ? { accountProviderConfigSource: agentAccountProviderConfigSource }
+       : {}),
+@@ -2757,6 +2762,7 @@ export function createLocalServices(options: {
+       native: composition.native,
+       nativeActivity: composition.nativeActivity,
+       nativeAdmissionFence: composition.nativeAdmissionFence,
++      initiallyHeld: options.initiallyHeld,
+       resolveRemoteSession: composition.resolveRemoteSession,
+       reconcileBoot: async (catalog) => {
+         await catalog.reconcilePending();
+diff --git a/packages/services/src/workspace-hierarchy/SPEC.md b/packages/services/src/workspace-hierarchy/SPEC.md
+index ee78e2a..b50eb5c 100644
+--- a/packages/services/src/workspace-hierarchy/SPEC.md
++++ b/packages/services/src/workspace-hierarchy/SPEC.md
+@@ -57,3 +57,5 @@ New native create is fail-closed unless its injected live owner explicitly certi
+ Operator recovery inspection reads current Target receipt/pending intent under Target owner instead of always claiming receipts unavailable. It returns confirmed receipt facts only after Target validates the instance; pending/uncertain remains unresolved and inspect-only. No automatic adoption, retry of Git, or Catalog-local reconstruction is allowed. An ID absent from both Catalog and Target is unknown, not a recoverable workspace.
+ 
+ Native bridge's maintenance interface requires a verifiable same-worker lease (`verify` + `release`); the old release-only callback is not a production port. Controlled test fixtures may return a verified lease, never stand in for global process enumeration or a real CLI epoch.
++
++Core native boot admission (opt-in, disabled by default): the Core owns the initial hold before any asynchronous initialization; the Node spawn gate allows only its first storage worker. The paired CLI constructor synchronously freezes its existing CommandInbox before resident callbacks or any protocol command. A configured custom CLI is refused **before spawn** unless its trusted deployment declares both storage startup and constructor-held fence capability; a declaration is not proof and Core must claim the exact live worker/lease. After storage readiness and Catalog/Target reconciliation, Core exposes a one-shot `bootAdmissionLease.release()` that checks the same CLI epoch/frozen activity and releases the CLI lease before reopening workspace admission. Ordinary maintenance is a distinct lease; its verification can reuse the held boot fence, and its release cannot clear the initial hold. Wrong worker, busy/unknown status, lost release acknowledgement or concurrent maintenance fails closed. Production native creation stays disabled; Desktop's authenticated registry and Supervisor's generation/rollback handoff remain separate requirements. Tests require constructor-held denial and claim, prelaunch refusal, same-worker release, nested maintenance, worker rotation and real DB/Target lifecycle; an in-memory fixture alone is not full acceptance.
+diff --git a/.tmp/sup-compat/after/packages/services/src/workspace-hierarchy/bootAdmissionFence.test.ts b/packages/services/src/workspace-hierarchy/bootAdmissionFence.test.ts
+new file mode 100644
+index 0000000..355e625
+--- /dev/null
++++ b/packages/services/src/workspace-hierarchy/bootAdmissionFence.test.ts
+@@ -0,0 +1,47 @@
++import assert from "node:assert/strict";
++import { test } from "node:test";
++import { createMaintenanceCoordination } from "./maintenance.js";
++
++test("initial boot hold predates native startup, composes with maintenance and releases only once", async () => {
++  let nativeFences = 0;
++  const coordinator = createMaintenanceCoordination({
++    initiallyHeld: true,
++    nativeFence: async () => {
++      nativeFences++;
++      return { verify: async () => true, release: async () => {} };
++    },
++    activity: async () => ({ running: 0, waiting: 0, tools: 0, uncertain: 0, offline: false }),
++  });
++  coordinator.attachBootFence({ verify: async () => true, release: async () => {} });
++  assert.equal(nativeFences, 0);
++  assert.equal(coordinator.admissionEnabled(), false);
++  await assert.rejects(
++    coordinator.withAdmission(async () => {}),
++    /frozen/,
++  );
++  const maintenance = await coordinator.freezeAdmissions();
++  await coordinator.releaseAdmissions(maintenance);
++  assert.equal(coordinator.admissionEnabled(), false);
++  await coordinator.releaseInitialHold();
++  await coordinator.releaseInitialHold();
++  assert.equal(coordinator.admissionEnabled(), true);
++  const next = await coordinator.freezeAdmissions();
++  assert.equal(coordinator.admissionEnabled(), false);
++  await coordinator.releaseAdmissions(next);
++  assert.equal(coordinator.admissionEnabled(), true);
++});
++
++test("release during another held maintenance lease does not reopen admission", async () => {
++  const coordinator = createMaintenanceCoordination({
++    initiallyHeld: true,
++    nativeFence: async () => ({ verify: async () => true, release: async () => {} }),
++    activity: async () => ({ running: 0, waiting: 0, tools: 0, uncertain: 0, offline: false }),
++  });
++  coordinator.attachBootFence({ verify: async () => true, release: async () => {} });
++  const lease = await coordinator.freezeAdmissions();
++  await assert.rejects(coordinator.releaseInitialHold(), /maintenance in progress/);
++  assert.equal(coordinator.admissionEnabled(), false);
++  await coordinator.releaseAdmissions(lease);
++  await coordinator.releaseInitialHold();
++  assert.equal(coordinator.admissionEnabled(), true);
++});
+diff --git a/packages/services/src/workspace-hierarchy/lazyComposition.ts b/packages/services/src/workspace-hierarchy/lazyComposition.ts
+index 8f52459..396d97e 100644
+--- a/packages/services/src/workspace-hierarchy/lazyComposition.ts
++++ b/packages/services/src/workspace-hierarchy/lazyComposition.ts
+@@ -39,6 +39,7 @@ export interface CompositionOptions {
+   nativeActivity: (workspaceId?: string) => Promise<TargetRuntimeActivity>;
+   newAdmissionsEnabled: () => boolean;
+   nativeAdmissionFence: () => Promise<NativeAdmissionFence>;
++  initiallyHeld?: boolean;
+   /** Core binds the real Catalog receipt/archive reconciliation, not a window-local fallback. */
+   reconcileBoot: (catalog: ProjectCatalog) => Promise<void>;
+   resolveRemoteSession?: (workspaceIdentity: string) => Promise<string | undefined>;
+@@ -69,6 +70,7 @@ export function createLazyWorkspaceComposition(options: CompositionOptions): {
+   let host: IAgentHostService;
+   const maintenance = createMaintenanceCoordination({
+     nativeFence: options.nativeAdmissionFence,
++    initiallyHeld: options.initiallyHeld,
+     activity: async () => {
+       const [native, external] = await Promise.all([
+         options.nativeActivity(),
+diff --git a/packages/services/src/workspace-hierarchy/maintenance.ts b/packages/services/src/workspace-hierarchy/maintenance.ts
+index e86f2ba..e242afb 100644
+--- a/packages/services/src/workspace-hierarchy/maintenance.ts
++++ b/packages/services/src/workspace-hierarchy/maintenance.ts
+@@ -27,6 +27,10 @@ export interface MaintenanceCoordination extends MaintenanceLeasePort {
+   /** Local-only convenience; do not serialize callbacks across RPC. */
+   withMaintenance<T>(action: () => Promise<T>): Promise<T>;
+   admissionEnabled(): boolean;
++  /** Instance-local initial hold, independent of ordinary maintenance leases. */
++  releaseInitialHold(): Promise<void>;
++  /** Attach the already-frozen boot worker, never perform an idle-gated late freeze. */
++  attachBootFence(fence: NativeAdmissionFence): void;
+   withAdmission<T>(action: () => Promise<T>): Promise<T>;
+ }
+ 
+@@ -34,7 +38,10 @@ export interface MaintenanceCoordination extends MaintenanceLeasePort {
+ export function createMaintenanceCoordination(input: {
+   nativeFence: () => Promise<NativeAdmissionFence | (() => Promise<void>)>;
+   activity: () => Promise<MaintenanceActivity>;
++  initiallyHeld?: boolean;
+ }): MaintenanceCoordination {
++  let initialHold = input.initiallyHeld === true;
++  let bootFence: NativeAdmissionFence | undefined;
+   let phase: "open" | "acquiring" | "held" | "releasing" | "poisoned" = "open";
+   let epoch = 0;
+   let held: MaintenanceLease | undefined;
+@@ -55,9 +62,29 @@ export function createMaintenanceCoordination(input: {
+     phase = "open";
+   };
+   const port: MaintenanceCoordination = {
+-    admissionEnabled: () => phase === "open",
++    admissionEnabled: () => phase === "open" && !initialHold,
++    attachBootFence(fence) {
++      if (!initialHold || bootFence) throw new Error("Invalid boot fence owner");
++      bootFence = fence;
++    },
++    async releaseInitialHold() {
++      if (!initialHold) return;
++      if (phase !== "open" || !bootFence)
++        throw new Error("Boot fence missing or maintenance in progress");
++      // 中文：先解除同代 CLI 的实际 Inbox；丢 ACK 后保持 workspace 关闭，不能重发解除并回滚。
++      phase = "releasing";
++      try {
++        await bootFence.release();
++      } catch (error) {
++        phase = "poisoned";
++        throw error;
++      }
++      bootFence = undefined;
++      initialHold = false;
++      phase = "open";
++    },
+     async withAdmission(action) {
+-      if (phase !== "open") throw new Error("New admission frozen for maintenance");
++      if (phase !== "open" || initialHold) throw new Error("New admission frozen for maintenance");
+       inflight++;
+       try {
+         return await action();
+@@ -72,12 +99,19 @@ export function createMaintenanceCoordination(input: {
+       phase = "acquiring";
+       const nextEpoch = ++epoch;
+       try {
+-        const acquired = await input.nativeFence();
+-        native = typeof acquired === "function" ? {
+-          release: acquired,
+-          // 中文：旧回调只有解除能力，无法确认 CLI epoch；拒绝发放可停机的 lease。
+-          verify: async () => { throw new Error("Unverifiable native maintenance fence"); },
+-        } : acquired;
++        const acquired = bootFence
++          ? { verify: () => bootFence!.verify(), release: async () => {} }
++          : await input.nativeFence();
++        native =
++          typeof acquired === "function"
++            ? {
++                release: acquired,
++                // 中文：旧回调只有解除能力，无法确认 CLI epoch；拒绝发放可停机的 lease。
++                verify: async () => {
++                  throw new Error("Unverifiable native maintenance fence");
++                },
++              }
++            : acquired;
+         if (!native || typeof native.release !== "function" || typeof native.verify !== "function")
+           throw new Error("Native CLI fence did not provide a verifiable release capability");
+       } catch (error) {
+diff --git a/packages/services/src/zcode-agent/zcodeAgentProcessManager.ts b/packages/services/src/zcode-agent/zcodeAgentProcessManager.ts
+index aa8581f..65d56f8 100644
+--- a/packages/services/src/zcode-agent/zcodeAgentProcessManager.ts
++++ b/packages/services/src/zcode-agent/zcodeAgentProcessManager.ts
+@@ -41,6 +41,8 @@ export interface ZCodeAgentCommand {
+   storagePreparationEntry?: string;
+   /** 本次部署的 Agent 支持迁移前的启动通知；旧自定义命令保持原协议。 */
+   supportsStorageStartup?: boolean;
++  /** Deployment-attested paired CLI implements constructor-held Inbox + claimBoot. Not a renderer capability. */
++  supportsBootAdmissionFence?: boolean;
+   command: string;
+   args?: string[];
+   cwd?: string;
+@@ -59,6 +61,8 @@ export type ZCodeAgentCommandResolver = (
+ ) => Promise<ZCodeAgentCommand | null> | ZCodeAgentCommand | null;
+ 
+ export interface ZCodeAgentProcessManagerOptions {
++  /** Node Core-only: CLI constructor installs its CommandInbox hold before serving requests. */
++  bootAdmissionHeld?: () => boolean;
+   commandResolver?: ZCodeAgentCommandResolver;
+   presentationSurface?: ZCodeAgentPresentationSurface;
+   requestTimeoutMs?: number;
+@@ -445,6 +449,9 @@ export function resolveDefaultZCodeAgentCommand(
+         command,
+         args: parseArgsJson(process.env.ZCODE_AGENT_SERVER_ARGS_JSON) ?? ["app-server", "--stdio"],
+         cwd: process.env.ZCODE_AGENT_SERVER_CWD?.trim() || context.workspacePath,
++        // Sup's already-approved storage-startup wiring is retained; neither flag is proof alone.
++        supportsStorageStartup: process.env.ZCODE_AGENT_SERVER_REQUIRES_STORAGE_STARTUP === "1",
++        supportsBootAdmissionFence: process.env.ZCODE_AGENT_SERVER_BOOT_FENCE_V1 === "1",
+       },
+       context.presentationSurface,
+     );
+@@ -457,7 +464,7 @@ export function resolveDefaultZCodeAgentCommand(
+     resolveElectronRuntimeZCodeAgentCommand(context);
+   return applyPresentationSurfaceToCommand(
+     bundled
+-      ? { ...bundled, supportsStorageStartup: true }
++      ? { ...bundled, supportsStorageStartup: true, supportsBootAdmissionFence: true }
+       : resolveDeployedZCodeAgentBinaryCommand(context),
+     context.presentationSurface,
+   );
+@@ -516,6 +523,7 @@ function wrapZCodeAgentCommandWithStdioTapDevProxy(
+   // 这里只在显式开关打开时用旁路 proxy 写盘，生产构建和默认开发路径都不受影响。
+   return {
+     supportsStorageStartup: command.supportsStorageStartup,
++    supportsBootAdmissionFence: command.supportsBootAdmissionFence,
+     command: process.execPath,
+     args: [
+       tapScript,
+@@ -585,6 +593,7 @@ export class ZCodeAgentProcessManager {
+   readonly onRuntimeLifecycle = this.runtimeLifecycleEmitter.event;
+ 
+   constructor(options?: ZCodeAgentProcessManagerOptions) {
++    this.bootAdmissionHeld = options?.bootAdmissionHeld;
+     this.commandResolver = options?.commandResolver ?? resolveDefaultZCodeAgentCommand;
+     this.presentationSurface = options?.presentationSurface;
+     this.requestTimeoutMs = options?.requestTimeoutMs;
+@@ -597,6 +606,8 @@ export class ZCodeAgentProcessManager {
+       options?.idleTimeoutMs && options.idleTimeoutMs > 0 ? options.idleTimeoutMs : undefined;
+   }
+ 
++  private readonly bootAdmissionHeld?: () => boolean;
++
+   private reportProcessLifecycle(
+     callback: (reporter: RuntimeProcessLifecycleReporter) => void,
+   ): void {
+@@ -975,6 +986,13 @@ export class ZCodeAgentProcessManager {
+       throw admissionSignal.reason ?? new Error("ZCode agent process start was cancelled.");
+     }
+     const effectiveCommand = wrapZCodeAgentCommandWithStdioTapDevProxy(command, workspaceKey);
++    // 中文：旧自定义 CLI 忽略启动模式 env 可能自行恢复业务。必须在 spawn 前拒绝，
++    // 运行时 claimBoot 仍核实真实 Inbox lease，而不信此声明本身。
++    if (
++      this.bootAdmissionHeld?.() &&
++      (!effectiveCommand.supportsStorageStartup || !effectiveCommand.supportsBootAdmissionFence)
++    )
++      throw new Error("Core boot CLI lacks pre-initialization admission fence capability");
+     log("ZCode agent command resolved", {
+       workspaceKey,
+       command: command.command,
+@@ -1036,6 +1054,8 @@ export class ZCodeAgentProcessManager {
+         // 身份/隔离语义使用 workspaceIdentity；cwd 继续使用 workspacePath。
+         ...buildAgentWorkspaceIdentityEnv(params.workspaceIdentity),
+         ...buildE2EAgentCoverageEnv(),
++        // 中文：最后写入受信 Core 的启动模式；自定义 command.env 不得覆盖门禁。
++        ZCODE_CORE_BOOT_ADMISSION: this.bootAdmissionHeld?.() ? "held" : "open",
+       },
+       stdio: ["pipe", "pipe", "pipe"],
+     });
+diff --git a/packages/services/src/zcode-agent/zcodeAgentService.ts b/packages/services/src/zcode-agent/zcodeAgentService.ts
+index b2ac0cd..90b3a88 100644
+--- a/packages/services/src/zcode-agent/zcodeAgentService.ts
++++ b/packages/services/src/zcode-agent/zcodeAgentService.ts
+@@ -864,8 +864,10 @@ function createRuntimeUnavailableError(params: ZCodeAgentWorkspaceTarget): Error
+ 
+ interface CreateZCodeAgentServiceOptions extends Omit<
+   ZCodeAgentProcessManagerOptions,
+-  "idleTimeoutMs"
++  "idleTimeoutMs" | "bootAdmissionHeld"
+ > {
++  /** Core instance-owned boot mode; only its first storage worker receives constructor hold. */
++  bootAdmissionHeld?: boolean;
+   /** 仅供 MCP 状态探测进程使用，不能把空闲回收传给 chat。 */
+   mcpStatusIdleTimeoutMs?: number;
+   accountProviderConfigSource?: ProviderSource<AccountProviderConfigSnapshot>;
+@@ -1060,6 +1062,14 @@ function resolveOffPeakToolSelection(
+ }
+ /** Node-local only: not registered as an RPC service or exposed to renderer. */
+ export interface NativeMaintenanceControlPort {
++  /** Claim the constructor-installed CLI Inbox lease; never initiates a late freeze. */
++  claimBoot(
++    target: ZCodeAgentWorkspaceTarget,
++  ): Promise<import("@zcode/shared").NativeMaintenanceFreezeResult>;
++  releaseBoot(
++    target: ZCodeAgentWorkspaceTarget,
++    lease: import("@zcode/shared").NativeMaintenanceLease,
++  ): Promise<void>;
+   freeze(
+     target: ZCodeAgentWorkspaceTarget,
+   ): Promise<import("@zcode/shared").NativeMaintenanceFreezeResult>;
+@@ -1102,16 +1112,31 @@ export function getNativeProcessControlPort(service: IZCodeAgentService): Native
+ export function createZCodeAgentService(
+   options?: CreateZCodeAgentServiceOptions,
+ ): IZCodeAgentService & { disposeAllAndWait(): Promise<void> } {
+-  let spawnFrozen = false;
++  let spawnFrozen = options?.bootAdmissionHeld === true;
++  let bootPreparing = false;
++  let bootWorkspaceKey: string | undefined;
+   const waitForSpawnAdmission: NonNullable<
+     CreateZCodeAgentServiceOptions["waitForSpawnAdmission"]
+   > = async (context) => {
+     // 中文：spawn 前后均检查冻结位；旧异步 env/preflight 回调不能穿过维护边界。
++    const allowed = () =>
++      !spawnFrozen || (bootPreparing && context.workspaceKey === bootWorkspaceKey);
++    if (!allowed()) throw new Error("native process admission frozen");
++    await options?.waitForSpawnAdmission?.(context);
++    if (!allowed()) throw new Error("native process admission frozen");
++  };
++  const processManager = new ZCodeAgentProcessManager({
++    ...options,
++    waitForSpawnAdmission,
++    // 中文：旧实现把 held env 固定给所有后续 worker；开门后新 workspace 仍永久 frozen。
++    // 标记仅授予启动 storage worker，后续 worker 由常规进程/Workspace 门禁管理。
++    bootAdmissionHeld: () => bootPreparing && spawnFrozen,
++  });
++  const otherLaneSpawnAdmission: typeof waitForSpawnAdmission = async (context) => {
+     if (spawnFrozen) throw new Error("native process admission frozen");
+     await options?.waitForSpawnAdmission?.(context);
+     if (spawnFrozen) throw new Error("native process admission frozen");
+   };
+-  const processManager = new ZCodeAgentProcessManager({ ...options, waitForSpawnAdmission });
+   // Windows indicator 与 macOS producer lifecycle client 共用已校验、去重的 sideband facts。
+   const cuaOperationTurnTracker =
+     options?.cuaOperationStateReporter || options?.onCuaPipSessionLifecycle
+@@ -1138,7 +1163,7 @@ export function createZCodeAgentService(
+     presentationSurface: options?.presentationSurface,
+     requestTimeoutMs: options?.requestTimeoutMs,
+     resolveSpawnEnv: options?.resolveSpawnEnv,
+-    waitForSpawnAdmission,
++    waitForSpawnAdmission: otherLaneSpawnAdmission,
+   });
+   // 合并时误删了独立进程：mcp/list 的慢握手会堵住串行 stdio 队列，连带卡住插件卸载。
+   // 恢复专用控制面进程及空闲回收；共享 workspace 路径，不共享请求队列或 watchdog。
+@@ -1148,7 +1173,7 @@ export function createZCodeAgentService(
+     processLifecycleReporter: options?.processLifecycleReporter,
+     requestTimeoutMs: options?.requestTimeoutMs,
+     resolveSpawnEnv: options?.resolveSpawnEnv,
+-    waitForSpawnAdmission,
++    waitForSpawnAdmission: otherLaneSpawnAdmission,
+     lane: "mcp-status",
+     idleTimeoutMs: options?.mcpStatusIdleTimeoutMs ?? MCP_STATUS_LANE_IDLE_TIMEOUT_MS,
+   });
+@@ -3386,9 +3411,20 @@ export function createZCodeAgentService(
+ 
+   const service: IZCodeAgentService & { disposeAllAndWait(): Promise<void> } = {
+     async prepareStorage(params) {
+-      const client = await processManager.getClient(params);
+-      wireClient(client, params, "chat");
+-      await client.storageStartup.wait();
++      if (options?.bootAdmissionHeld) {
++        if (bootPreparing || bootWorkspaceKey)
++          throw new Error("boot storage worker already selected");
++        bootWorkspaceKey = resolveWorkspaceKey(params);
++        bootPreparing = true;
++      }
++      try {
++        const client = await processManager.getClient(params);
++        wireClient(client, params, "chat");
++        await client.storageStartup.wait();
++      } finally {
++        // 中文：只有启动 storage worker 可穿过进程闸门；失败不开放其它 spawn。
++        bootPreparing = false;
++      }
+     },
+     async getStorageStartupState(params) {
+       return processManager.getStorageStartupState(params);
+@@ -5730,6 +5766,13 @@ export function createZCodeAgentService(
+   }
+   const nativeManagers = [processManager, pluginProcessManager, mcpStatusProcessManager];
+   let frozenFacts: NativeProcessActivity | undefined;
++  let bootWorker:
++    | {
++        key: string;
++        client: ZCodeProtocolClient;
++        lease: import("@zcode/shared").NativeMaintenanceLease;
++      }
++    | undefined;
+   let frozenClients: readonly ZCodeProtocolClient[] | undefined;
+   nativeProcessPorts.set(service, {
+     async activity() {
+@@ -5738,6 +5781,41 @@ export function createZCodeAgentService(
+         0,
+       );
+       const workers = nativeManagers.flatMap((manager) => manager.listManagedProcesses());
++      if (bootWorker && spawnFrozen) {
++        const { key, client, lease } = bootWorker;
++        if (
++          unresolved ||
++          workers.length !== 1 ||
++          workers[0]?.client !== client ||
++          client.isDisposed ||
++          activeClientsByWorkspaceKey.get(key)?.client !== client
++        )
++          return { running: 0, waiting: 0, uncertain: 1, offline: false };
++        try {
++          const snapshot = await client.request(
++            zcodeProtocolMethods.nativeMaintenanceGetActivity,
++            lease,
++            nativeMaintenanceActivitySchema,
++            { lifecycle: "observation" },
++          );
++          if (
++            client.isDisposed ||
++            activeClientsByWorkspaceKey.get(key)?.client !== client ||
++            snapshot.epoch !== lease.epoch ||
++            !snapshot.frozen ||
++            snapshot.unknown
++          )
++            throw new Error("boot worker changed");
++          return {
++            running: snapshot.active + snapshot.tools,
++            waiting: snapshot.accepted + snapshot.pending + snapshot.approvals,
++            uncertain: 0,
++            offline: false,
++          };
++        } catch {
++          return { running: 0, waiting: 0, uncertain: 1, offline: false };
++        }
++      }
+       // 中文：旧实现只看 frozenFacts；CLI 退出后 workers 为空仍返回缓存的 0，
+       // 把失效租约错报成可停机。必须每次验证同代 client 仍归本进程管理。
+       if (
+@@ -5858,6 +5936,57 @@ export function createZCodeAgentService(
+     },
+   });
+   nativeMaintenancePorts.set(service, {
++    async claimBoot(target) {
++      if (
++        !options?.bootAdmissionHeld ||
++        bootPreparing ||
++        !spawnFrozen ||
++        resolveWorkspaceKey(target) !== bootWorkspaceKey ||
++        nativeManagers.some((manager) => manager.countUnresolvedWorkers() > 0)
++      )
++        throw new Error("native boot worker unavailable");
++      const workers = nativeManagers.flatMap((manager) => manager.listManagedProcesses());
++      const { key, client } = await currentClient(target);
++      if (workers.length !== 1 || workers[0]?.client !== client)
++        throw new Error("native boot worker changed");
++      const result = await client.request(
++        zcodeProtocolMethods.nativeMaintenanceClaimBoot,
++        {},
++        nativeMaintenanceFreezeResultSchema,
++        { lifecycle: "observation" },
++      );
++      assertCurrent(key, client);
++      if (!result.activity.frozen || result.activity.epoch !== result.lease.epoch)
++        throw new Error("native boot lease uncertain");
++      bootWorker = { key, client, lease: result.lease };
++      return result;
++    },
++    async releaseBoot(target, lease) {
++      if (
++        !options?.bootAdmissionHeld ||
++        !spawnFrozen ||
++        bootPreparing ||
++        resolveWorkspaceKey(target) !== bootWorkspaceKey
++      )
++        throw new Error("native boot owner changed");
++      const { key, client } = await currentClient(target);
++      const workers = nativeManagers.flatMap((manager) => manager.listManagedProcesses());
++      if (
++        workers.length !== 1 ||
++        workers[0]?.client !== client ||
++        nativeManagers.some((manager) => manager.countUnresolvedWorkers() > 0)
++      )
++        throw new Error("native boot worker changed");
++      const result = await client.request(
++        zcodeProtocolMethods.nativeMaintenanceRelease,
++        nativeMaintenanceLeaseSchema.parse(lease),
++        nativeMaintenanceReleaseResultSchema,
++      );
++      assertCurrent(key, client);
++      if (!result.released) throw new Error("native boot release uncertain");
++      bootWorker = undefined;
++      spawnFrozen = false;
++    },
+     async freeze(target) {
+       const { key, client } = await currentClient(target);
+       const result = await client.request(
+diff --git a/packages/shared/src/zcode-protocol/index.ts b/packages/shared/src/zcode-protocol/index.ts
+index 9b88c00..1039b40 100644
+--- a/packages/shared/src/zcode-protocol/index.ts
++++ b/packages/shared/src/zcode-protocol/index.ts
+@@ -3588,6 +3588,8 @@ export type NativeMaintenanceFreezeResult = z.infer<typeof nativeMaintenanceFree
+ export const nativeMaintenanceReleaseResultSchema = z.object({ released: z.boolean() }).strict();
+ 
+ export const zcodeProtocolMethods = {
++  /** Read-only claim of the lease installed by this worker before its protocol server starts. */
++  nativeMaintenanceClaimBoot: "native/maintenance/claimBoot",
+   nativeMaintenanceFreeze: "native/maintenance/freeze",
+   nativeMaintenanceGetActivity: "native/maintenance/getActivity",
+   nativeMaintenanceRelease: "native/maintenance/release",

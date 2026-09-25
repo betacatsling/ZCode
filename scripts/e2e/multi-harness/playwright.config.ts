@@ -38,7 +38,7 @@ export default defineConfig({
   ],
   webServer: {
     command:
-      "mise exec -- node scripts/mise-run.mjs pnpm --filter @zcode/web exec vite --config ../../scripts/e2e/multi-harness/vite.config.mjs",
+      "pnpm --filter @zcode/web exec vite --config ../../scripts/e2e/multi-harness/vite.config.mjs",
     cwd: resolve(import.meta.dirname, "../../.."),
     url: "http://127.0.0.1:4179",
     reuseExistingServer: false,

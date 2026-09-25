@@ -1,4 +1,5 @@
 import { getDatabaseStartupPortPayload } from "./databaseStartupRelay.js";
+import { prepareWindowLocalCore, type LocalCoreEndpoint } from "./localCoreAttachment.js";
 import { randomUUID } from "node:crypto";
 import { app, BrowserWindow, Menu, MessageChannelMain } from "electron";
 import type { UtilityProcess as ElectronUtilityProcess } from "electron";
@@ -28,10 +29,13 @@ export function createWindow(options: {
   forceQuitRef: { current: boolean };
   handleBeforeClose?: (win: BrowserWindow, label: string) => boolean;
   windowHostProcessMap: Map<number, ElectronUtilityProcess>;
+  /** Production Core attach is resolved before any window Host is forked. Failure is closed. */
+  prepareLocalCore?: () => Promise<LocalCoreEndpoint>;
   spawnHostProcess: (
     win: BrowserWindow,
     label: string,
     initMessage: HostInitMessage,
+    localCoreEndpoint?: LocalCoreEndpoint,
   ) => ElectronUtilityProcess;
   disposeHostProcess: (
     child: ElectronUtilityProcess,
@@ -176,6 +180,7 @@ export function createWindow(options: {
         `[createWindow] killing previous host process for (${label}), pid=${oldChild.pid ?? "unknown"}`,
       );
       options.disposeHostProcess(oldChild, `${label}:reload`, 150);
+      options.windowHostProcessMap.delete(wcId);
     }
 
     // 首个 Local Host 创建前的有界灰度裁决门。用 `if` 守卫而非 `await cb?.()`——
@@ -185,24 +190,49 @@ export function createWindow(options: {
       await options.awaitFirstHostSpawnDecision();
     }
 
+    // 灰度裁决可跨 renderer reload；过期回调不能重新启动 Core 或创建旧窗口 Host。
+    if (currentDomReadyGeneration !== domReadyGeneration || win.isDestroyed()) return;
+
+    let localCoreEndpoint: LocalCoreEndpoint | undefined;
+    if (options.prepareLocalCore) {
+      try {
+        localCoreEndpoint = await prepareWindowLocalCore(
+          options.prepareLocalCore,
+          () => currentDomReadyGeneration === domReadyGeneration && !win.isDestroyed(),
+        );
+        if (!localCoreEndpoint) return;
+      } catch (error) {
+        options.logger.warn(
+          `[createWindow] persistent Core unavailable (${label}); refusing a second local owner`,
+          error,
+        );
+        return;
+      }
+    }
+
     const spawnLocalHost = (runtimeProcessEnvPatch: Record<string, string>) => {
       if (currentDomReadyGeneration !== domReadyGeneration || win.isDestroyed()) {
         return;
       }
       const primaryWarmupTarget = options.agentWarmupTargets?.[0];
-      const child = options.spawnHostProcess(win, label, {
-        type: HostMessageTypes.InitLocal,
-        deviceMid: options.deviceMid,
-        workspacePath: primaryWarmupTarget?.workspacePath,
-        workspaceIdentity: primaryWarmupTarget?.workspaceIdentity,
-        ...(options.agentWarmupTargets && options.agentWarmupTargets.length > 0
-          ? { agentWarmupTargets: [...options.agentWarmupTargets] }
-          : {}),
-        runtimeProcessEnvPatch,
-        // 同一窗口会后台索引所有已恢复 workspace，不只索引启动时的 active workspace。
-        // fallback 必须跟随 local Host 生命周期常驻，否则非 active 历史目录被删除后会用失效 cwd 反复 spawn。
-        agentSpawnFallbackCwd: options.agentSpawnFallbackCwd,
-      });
+      const child = options.spawnHostProcess(
+        win,
+        label,
+        {
+          type: HostMessageTypes.InitLocal,
+          deviceMid: options.deviceMid,
+          workspacePath: primaryWarmupTarget?.workspacePath,
+          workspaceIdentity: primaryWarmupTarget?.workspaceIdentity,
+          ...(options.agentWarmupTargets && options.agentWarmupTargets.length > 0
+            ? { agentWarmupTargets: [...options.agentWarmupTargets] }
+            : {}),
+          runtimeProcessEnvPatch,
+          // 同一窗口会后台索引所有已恢复 workspace，不只索引启动时的 active workspace。
+          // fallback 必须跟随 local Host 生命周期常驻，否则非 active 历史目录被删除后会用失效 cwd 反复 spawn。
+          agentSpawnFallbackCwd: options.agentSpawnFallbackCwd,
+        },
+        localCoreEndpoint,
+      );
       options.windowHostProcessMap.set(wcId, child);
       options.onHostProcessReady?.(wcId);
       options.syncAutoUpdaterStateToWindow(win);

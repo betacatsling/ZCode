@@ -23,8 +23,13 @@ export function AgentSessionRow({
       aria-current={selected ? "page" : undefined}
       className={`flex min-h-8 w-full items-center gap-2 rounded-md px-2 text-left text-ui-base hover:bg-hover focus-visible:outline-2 focus-visible:outline-primary ${selected ? "bg-selected" : ""}`}
       onClick={() => {
-        select(id);
-        props.actions.onSelectSession(id);
+        // 修复未获 owner 时树行先变为已选中：只有解析并导航成功才能提交 UI 焦点。
+        void props.actions
+          .onSelectSession(summary)
+          .then(() => select(id))
+          .catch(() => {
+            // 服务 hook 已展示失败原因，保持当前选择。
+          });
       }}
     >
       <SessionStatusIcon summary={summary} locale={props.locale} />

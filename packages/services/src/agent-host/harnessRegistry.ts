@@ -37,6 +37,8 @@ export interface HarnessAdapter {
   send(command: Extract<AgentCommand, { type: "send" }>): Promise<void>;
   cancelTurn(command: Extract<AgentCommand, { type: "cancelTurn" }>): Promise<void>;
   resolveInteraction(command: Extract<AgentCommand, { type: "resolveInteraction" }>): Promise<void>;
+  /** Optional native question gate; no adapter is required to implement a fake approval. */
+  answerInteraction?(command: Extract<AgentCommand, { type: "answerInteraction" }>): Promise<void>;
   terminate(hostSessionId: string): Promise<void>;
   /** Target process shutdown only, never renderer detach. Interrupted sends become uncertain. */
   shutdown?(): Promise<void>;

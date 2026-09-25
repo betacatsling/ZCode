@@ -282,6 +282,7 @@ export class AiSdkModelExecution {
         ? createModelOptionMapFetch({
             capture: rawRequestBodyCapture,
             fetch,
+            anthropicNoThinkingWhenOff: providerConfig.kind === "anthropic",
             maps: optionMaps,
             values: optionValues,
           })

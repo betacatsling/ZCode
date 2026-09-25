@@ -27,6 +27,7 @@ export const agentCommandSchema = z.discriminatedUnion("type", [
     decision: z.enum(["allow", "deny"]),
     answer: z.string().optional(),
   }),
+  z.strictObject({ ...turnCommand, type: z.literal("answerInteraction"), interactionId: z.string().min(1), answer: z.string().min(1).max(4096) }),
   z.strictObject({ ...commandBase, type: z.literal("detach") }),
   z.strictObject({ ...commandBase, type: z.literal("terminateSession") }),
   z.strictObject({

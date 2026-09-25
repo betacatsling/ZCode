@@ -29,6 +29,12 @@ import {
   selectWorkbenchSession,
 } from "@/v4/workbenchSessionPlacement.js";
 import { usePaneSessionPersistence } from "@/v4/usePaneSessionPersistence.js";
+import { isRendererReloadNavigation } from "@/lib/rendererNavigation.js";
+import {
+  readMountedViewBinding,
+  persistMountedViewBinding,
+  matchesMountedViewBinding,
+} from "@/v4/mountedViewBinding.js";
 import { requestV4ComposerDraftWorkspaceTransfer } from "@/v4/composer/composerDraftWorkspaceTransfer.js";
 import { ChatEmptyWorkspacePreviewMenu } from "@/ChatEmptyState.js";
 import { DesktopTopOverlay } from "@/DesktopTopOverlay.js";
@@ -49,6 +55,9 @@ import { PluginStorePage } from "@/settings/PluginStorePage.js";
 import { TaskFindDialog } from "@/quickpick/TaskFindDialog.js";
 import { WorkspaceHeader } from "@/WorkspaceHeader.js";
 import { WorkspaceSidebar, type SidebarFileTreeOpenRequest } from "@/WorkspaceSidebar.js";
+import { MountedProjectSidebar } from "@/project-sidebar/MountedProjectSidebar.js";
+import { hasMountedHierarchy } from "@/hooks/useMountedProjectSidebar.js";
+import { matchesMountedSessionOwner, type MountedSessionOwner } from "@/v4/mountedSessionOwner.js";
 import { AnimatedSidePanePanel } from "@/app-shell/AnimatedSidePanePanel.js";
 import {
   findScreenshotSurfaceTabForRender,
@@ -333,7 +342,7 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
   setGitSelectedSourceId,
   taskFindDialogProps,
 }: WorkspaceShellLayoutProps) {
-  const { intl } = useZCodeIntl();
+  const { intl, locale } = useZCodeIntl();
   const isOfficeMode = useIsOfficeMode();
   const baseServices = useBaseWorkspaceServices();
   const tabStoreApi = useTabStoreApi();
@@ -360,6 +369,26 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
   );
   const [isSidebarFileTreeOpen, setIsSidebarFileTreeOpen] = useState(false);
   const workspaceKey = workspaceIdentity?.trim() || workspaceAbsPath;
+  const mountedHierarchyEnabled = hasMountedHierarchy(baseServices);
+  // Only proofs returned by resolveOwner enter this renderer-local view selection; Host/Catalog own facts.
+  const [mountedOwners, setMountedOwners] = useState<readonly MountedSessionOwner[]>([]);
+  const [selectedMountedOwner, setSelectedMountedOwner] = useState<MountedSessionOwner | null>(
+    null,
+  );
+  const [unresolvedRestoredSessionId, setUnresolvedRestoredSessionId] = useState<string | null>(
+    null,
+  );
+  const restoreSequence = useRef(0);
+  const restoreAvailable = useRef(isRendererReloadNavigation());
+  const selectedExternalId =
+    selectedMountedOwner?.kind === "external" &&
+    matchesMountedSessionOwner(selectedMountedOwner, selectedMountedOwner.spec.hostSessionId, {
+      workspacePath: workspaceAbsPath,
+      workspaceIdentity,
+      remoteSessionId: workspaceRemoteSessionId,
+    })
+      ? selectedMountedOwner.spec.hostSessionId
+      : null;
   const screenshotSurfaceRequest = useBrowserScreenshotSurfaceRequest(sidePaneState?.tabs ?? []);
   const screenshotSurfaceTab = screenshotSurfaceRequest
     ? findScreenshotSurfaceTabForRender(sidePaneState?.tabs ?? [], screenshotSurfaceRequest)
@@ -368,6 +397,7 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
   // session；CLI/host 进程未死，pane 重订阅即拿 snapshot+续流。
   usePaneSessionPersistence({
     workspaceKey,
+    enabled: !mountedHierarchyEnabled,
     activeSessionId: activeTaskId,
     draftFocusVersion: workspaceShellZCodeState.draftFocusVersion,
     selectSession: (sessionId) => handleSelectTask(workspaceAbsPath, sessionId, workspaceIdentity),
@@ -837,20 +867,25 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
     },
     [onCreateTask, showChatMainView, workspaceReadOnlyReason],
   );
-  const shellWorkbenchBinding = useMemo<WorkbenchSessionBinding | null>(
-    () =>
-      activeTaskId
-        ? {
-            workspaceScope: {
-              workspacePath: workspaceAbsPath,
-              ...(workspaceIdentity?.trim() ? { workspaceIdentity } : {}),
-              ...(workspaceRemoteSessionId ? { remoteSessionId: workspaceRemoteSessionId } : {}),
-            },
-            sessionId: activeTaskId,
-          }
-        : null,
-    [activeTaskId, workspaceAbsPath, workspaceIdentity, workspaceRemoteSessionId],
-  );
+  const shellWorkbenchBinding = useMemo<WorkbenchSessionBinding | null>(() => {
+    const selectedId = selectedExternalId ?? activeTaskId;
+    return selectedId
+      ? {
+          workspaceScope: {
+            workspacePath: workspaceAbsPath,
+            ...(workspaceIdentity?.trim() ? { workspaceIdentity } : {}),
+            ...(workspaceRemoteSessionId ? { remoteSessionId: workspaceRemoteSessionId } : {}),
+          },
+          sessionId: selectedId,
+        }
+      : null;
+  }, [
+    activeTaskId,
+    selectedExternalId,
+    workspaceAbsPath,
+    workspaceIdentity,
+    workspaceRemoteSessionId,
+  ]);
   const handleCreateAutomationInChat = useCallback(
     (prompt: string, targetWorkspace?: { workspacePath: string; workspaceIdentity?: string }) => {
       // 带 target 时跳过活动 workspace 只读检查，交由 handleCreateTaskInChat / root 动作在
@@ -874,6 +909,7 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
       expectedUnreadAt?: number,
     ) => {
       {
+        setSelectedMountedOwner(null);
         const workspaceResult = ensureTaskNavigationWorkspace({
           workspacePath: targetWorkspacePath,
           workspaceIdentity: targetWorkspaceIdentity,
@@ -1043,6 +1079,176 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
       workspaceTabs,
     ],
   );
+  const handleNavigateMountedOwner = useCallback(
+    (owner: MountedSessionOwner) => {
+      const sessionId =
+        owner.kind === "external" ? owner.spec.hostSessionId : owner.originalSessionId;
+      // Bug 原因：Catalog workspace 是目标事实，不能以 workspacePath 补开 tab 或让
+      // Host ID 进入 handleSelectTask 的 native task 状态。仅当前真实 attachment 可选中。
+      if (
+        !matchesMountedSessionOwner(owner, sessionId, {
+          workspacePath: workspaceAbsPath,
+          workspaceIdentity,
+          remoteSessionId: workspaceRemoteSessionId,
+        })
+      ) {
+        toast(locale === "zh-CN" ? "目标工作区尚未连接" : "Target workspace is not attached");
+        return;
+      }
+      setMountedOwners((previous) => [
+        // Bug 原因：同 attachment 的 Catalog workspace 重新建立后，旧证明若排在前面，
+        // pane 查找会命中已失效的 workspaceId。新 resolveOwner 结果替换它，而非并存。
+        ...previous.filter(
+          (entry) =>
+            !matchesMountedSessionOwner(entry, sessionId, {
+              workspacePath: owner.scope.workspacePath,
+              workspaceIdentity: owner.scope.workspaceIdentity,
+              remoteSessionId: owner.scope.remoteSessionId,
+            }),
+        ),
+        owner,
+      ]);
+      restoreSequence.current += 1;
+      setUnresolvedRestoredSessionId(null);
+      persistMountedViewBinding(workspaceKey, owner);
+      setSelectedMountedOwner(owner);
+      showChatMainView();
+      if (owner.kind === "native") {
+        handleSelectTaskInChat(
+          owner.scope.workspacePath,
+          owner.originalSessionId,
+          owner.scope.workspaceIdentity,
+          owner.scope.remoteSessionId,
+        );
+        setSelectedMountedOwner(owner);
+      } else {
+        selectWorkbenchSession(shellWorkbenchBinding, {
+          workspacePath: owner.scope.workspacePath,
+          workspaceIdentity: owner.scope.workspaceIdentity,
+          ...(owner.scope.remoteSessionId ? { remoteSessionId: owner.scope.remoteSessionId } : {}),
+          sessionId,
+        });
+      }
+    },
+    [
+      handleSelectTaskInChat,
+      locale,
+      shellWorkbenchBinding,
+      showChatMainView,
+      workspaceAbsPath,
+      workspaceIdentity,
+      workspaceRemoteSessionId,
+      workspaceKey,
+    ],
+  );
+
+  useEffect(() => {
+    const request = ++restoreSequence.current;
+    setUnresolvedRestoredSessionId(null);
+    if (!restoreAvailable.current) return;
+    restoreAvailable.current = false;
+    if (!mountedHierarchyEnabled || activeTaskId !== null) return;
+    const saved = readMountedViewBinding(workspaceKey);
+    if (
+      !saved ||
+      saved.workspacePath !== workspaceAbsPath ||
+      saved.workspaceIdentity !== (workspaceIdentity?.trim() || workspaceAbsPath) ||
+      (saved.remoteSessionId ?? null) !== (workspaceRemoteSessionId ?? null)
+    )
+      return;
+    // Bug 原因：renderer reload 后内存 owner 为空；bookmark 只能作为重查路由键，
+    // 不能直接挂 native 或根据同路径猜测 Host 的可写证明。
+    const hierarchy = baseServices.workspaceHierarchyService;
+    const catalog = baseServices.projectCatalogService;
+    if (!hierarchy || !catalog) return;
+    void Promise.all([
+      hierarchy.resolveOwner({
+        targetId: saved.targetId,
+        workspaceId: saved.workspaceId,
+        sessionId: saved.sessionId,
+      }),
+      catalog.sidebarSnapshot(),
+    ])
+      .then(([owner, snapshot]) => {
+        if (request !== restoreSequence.current) return;
+        const workspace = snapshot.workspaces.find((row) => row.id === saved.workspaceId);
+        const binding = snapshot.bindings.find((row) => row.id === workspace?.repositoryBindingId);
+        if (
+          owner &&
+          matchesMountedViewBinding(owner, saved) &&
+          (saved.kind === "native" || workspace?.worktreeGeneration === saved.worktreeGeneration) &&
+          binding?.executionTargetId === saved.targetId
+        ) {
+          handleNavigateMountedOwner(owner);
+        } else setUnresolvedRestoredSessionId(saved.sessionId);
+      })
+      .catch(() => {
+        if (request === restoreSequence.current) setUnresolvedRestoredSessionId(saved.sessionId);
+      });
+    return () => {
+      restoreSequence.current += 1;
+    };
+    // Restore is one-shot for the first workspace on a renderer reload; later workspace mounts
+    // are draft entries. The callback is read at the time of this initial mount only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceKey]);
+
+  const handleResolveRestoredOwner = useCallback(
+    async (
+      sessionId: string,
+      scope: {
+        workspacePath: string;
+        workspaceIdentity?: string;
+        remoteSessionId?: string;
+      },
+    ): Promise<MountedSessionOwner | undefined> => {
+      if (!mountedHierarchyEnabled) return undefined;
+      const catalog = baseServices.projectCatalogService;
+      const hierarchy = baseServices.workspaceHierarchyService;
+      if (!catalog || !hierarchy) return undefined;
+      const snapshot = await catalog.sidebarSnapshot();
+      const key = scope.workspaceIdentity?.trim() || scope.workspacePath;
+      const candidates = snapshot.workspaces.filter(
+        (row) =>
+          row.worktreePath === scope.workspacePath &&
+          row.workspaceIdentity === key &&
+          row.lifecycle === "active",
+      );
+      if (candidates.length !== 1) return undefined;
+      const workspace = candidates[0]!;
+      const binding = snapshot.bindings.find((row) => row.id === workspace.repositoryBindingId);
+      if (!binding) return undefined;
+      const trustedScope = await hierarchy.resolveWorkspace({
+        targetId: binding.executionTargetId,
+        workspacePath: scope.workspacePath,
+        workspaceIdentity: key,
+        ...(scope.remoteSessionId ? { remoteSessionId: scope.remoteSessionId } : {}),
+      });
+      if (!trustedScope || trustedScope.workspaceId !== workspace.id) return undefined;
+      const owner = await hierarchy.resolveOwner({
+        targetId: trustedScope.targetId,
+        workspaceId: workspace.id,
+        sessionId,
+      });
+      if (
+        !owner ||
+        !matchesMountedSessionOwner(owner, sessionId, scope) ||
+        (owner.kind === "external" &&
+          owner.spec.execution.worktreeGeneration !== workspace.worktreeGeneration)
+      )
+        return undefined;
+      return owner;
+    },
+    [baseServices, mountedHierarchyEnabled],
+  );
+  const handleRestoredOwner = useCallback((owner: MountedSessionOwner) => {
+    const id = owner.kind === "native" ? owner.originalSessionId : owner.spec.hostSessionId;
+    setMountedOwners((previous) => [
+      ...previous.filter((row) => !matchesMountedSessionOwner(row, id, owner.scope)),
+      owner,
+    ]);
+  }, []);
+
   const handlePaneActiveSessionChange = useCallback(
     (
       scope: {
@@ -1052,6 +1258,25 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
       },
       sessionId: string,
     ) => {
+      if (mountedHierarchyEnabled) {
+        const owner = mountedOwners.find((entry) =>
+          matchesMountedSessionOwner(entry, sessionId, scope),
+        );
+        // Bug 原因：恢复的无证明 binding 不能经 focus/split 回写 native；Host ID 同理。
+        if (!owner) return;
+        if (owner.kind === "external") {
+          setSelectedMountedOwner(owner);
+          return;
+        }
+        handleSelectTaskInChat(
+          owner.scope.workspacePath,
+          owner.originalSessionId,
+          owner.scope.workspaceIdentity,
+          owner.scope.remoteSessionId,
+        );
+        setSelectedMountedOwner(owner);
+        return;
+      }
       handleSelectTaskInChat(
         scope.workspacePath,
         sessionId,
@@ -1059,30 +1284,55 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
         scope.remoteSessionId,
       );
     },
-    [handleSelectTaskInChat],
+    [handleSelectTaskInChat, mountedHierarchyEnabled, mountedOwners],
   );
 
   const canOpenSessionInSplitPane = useCallback(
     (target: V4SplitPaneSessionTarget) => {
-      return canPlaceWorkbenchSessionInSplit(shellWorkbenchBinding, target, {
-        mode: "context-menu",
-        side: "right",
-      });
+      return (
+        (!mountedHierarchyEnabled ||
+          mountedOwners.some((owner) =>
+            matchesMountedSessionOwner(owner, target.sessionId, target),
+          )) &&
+        canPlaceWorkbenchSessionInSplit(shellWorkbenchBinding, target, {
+          mode: "context-menu",
+          side: "right",
+        })
+      );
     },
-    [shellWorkbenchBinding],
+    [mountedHierarchyEnabled, mountedOwners, shellWorkbenchBinding],
   );
   const handleOpenSessionInSplitPane = useCallback(
     (target: V4SplitPaneSessionTarget) => {
+      const owner = mountedHierarchyEnabled
+        ? mountedOwners.find((entry) => matchesMountedSessionOwner(entry, target.sessionId, target))
+        : undefined;
+      // Bug 原因：split context menu 可绕过普通 sidebar owner 验证并将 Host ID 发往 native。
+      if (mountedHierarchyEnabled && !owner) return;
       showChatMainView();
       const shouldSelectTarget = placeWorkbenchSessionInSplit(shellWorkbenchBinding, target, {
         mode: "context-menu",
         side: "right",
       });
       if (shouldSelectTarget) {
-        handleSelectTask(target.workspacePath, target.sessionId, target.workspaceIdentity);
+        if (owner?.kind === "external") setSelectedMountedOwner(owner);
+        else if (owner?.kind === "native") {
+          handleSelectTask(
+            owner.scope.workspacePath,
+            owner.originalSessionId,
+            owner.scope.workspaceIdentity,
+          );
+          setSelectedMountedOwner(owner);
+        } else handleSelectTask(target.workspacePath, target.sessionId, target.workspaceIdentity);
       }
     },
-    [handleSelectTask, shellWorkbenchBinding, showChatMainView],
+    [
+      handleSelectTask,
+      mountedHierarchyEnabled,
+      mountedOwners,
+      shellWorkbenchBinding,
+      showChatMainView,
+    ],
   );
   const handleStartDraftInWorkspaceInChat = useCallback(
     (
@@ -1091,6 +1341,10 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
       targetWorkspacePurpose?: import("@zcode/shared").WorkspacePurpose,
       createSource?: import("@zcode/shared").SessionCreateSource,
     ) => {
+      restoreSequence.current += 1;
+      setUnresolvedRestoredSessionId(null);
+      setSelectedMountedOwner(null);
+      persistMountedViewBinding(workspaceKey, null);
       showChatMainView();
       handleStartDraftInWorkspace(
         targetWorkspacePath,
@@ -1099,7 +1353,7 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
         createSource,
       );
     },
-    [handleStartDraftInWorkspace, showChatMainView],
+    [handleStartDraftInWorkspace, showChatMainView, workspaceKey],
   );
   const handleCreateProjectDraft = useCallback(
     (path: string, identity?: string) =>
@@ -1557,51 +1811,71 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
                 onOpenSession={handleOpenSessionInSplitPane}
               >
                 <WorkflowRunOpenProvider onOpenRun={handleOpenSidebarWorkflowRun}>
-                  <WorkspaceSidebar
-                    workspacePath={workspaceAbsPath}
-                    workspaceRemoteSessionId={workspaceRemoteSessionId}
-                    activePreviewPath={activePreviewPath}
-                    onSelectTask={handleSelectTaskInChat}
-                    onStartDraftInWorkspace={handleCreateProjectDraft}
-                    onOpenCodeViewer={handleOpenCodeViewer}
-                    onOpenBrowserUrl={handleOpenBrowserUrl}
-                    fileTreeOpenRequest={fileTreeOpenRequest}
-                    onCreateTask={handleCreateTaskInChat}
-                    onCreateConversationTask={onCreateConversationTask ?? handleCreateTaskInChat}
-                    onOpenFolderFromWorkspaceMenu={onOpenFolderFromWorkspaceMenu}
-                    onOpenRemoteWorkspace={onOpenRemoteWorkspace}
-                    theme={theme}
-                    onConnectRemote={onConnectRemote}
-                    onSelectRemoteProject={onSelectRemoteProject}
-                    onCancelRemoteProject={onCancelRemoteProject}
-                    onReconnectRemoteWorkspace={onReconnectRemoteWorkspace}
-                    reconnectingRemoteWorkspaceKeys={reconnectingRemoteWorkspaceKeys}
-                    remoteWorkspaceErrorByWorkspaceKey={remoteWorkspaceErrorByWorkspaceKey}
-                    reconnectingRemoteWorkspaceLogsByWorkspaceKey={
-                      reconnectingRemoteWorkspaceLogsByWorkspaceKey
-                    }
-                    onLogout={onLogout}
-                    onLogin={onLogin}
-                    user={user}
-                    isDesktop={isDesktop}
-                    isMacDesktop={isMacDesktop}
-                    isWindowsDesktop={isWindowsDesktop}
-                    isSidebarVisible={isSidebarVisible}
-                    onToggleSidebar={handleToggleSidebar}
-                    toggleSidebarShortcutLabel={toggleSidebarShortcutLabel}
-                    canGoBack={canPrimaryNavigationBack}
-                    canGoForward={canTaskNavForward}
-                    onGoBack={primaryNavigationBack}
-                    onGoForward={handleTaskNavForward}
-                    goBackShortcutLabel={goBackShortcutLabel}
-                    goForwardShortcutLabel={goForwardShortcutLabel}
-                    onOpenCommandCenter={handleOpenCommandCenter}
-                    onOpenAutomations={handleOpenAutomations}
-                    automationsActive={workspaceMainView === "automations"}
-                    onOpenPluginStore={handleOpenPluginStore}
-                    pluginStoreActive={workspaceMainView === "plugin-store"}
-                    onFileTreeOpenChange={setIsSidebarFileTreeOpen}
-                  />
+                  <div className="flex h-full min-h-0 flex-col">
+                    {mountedHierarchyEnabled ? (
+                      <div className="max-h-[50%] min-h-0 shrink-0 overflow-auto">
+                        <MountedProjectSidebar
+                          services={baseServices}
+                          locale={locale === "zh-CN" ? "zh" : "en"}
+                          onNavigate={handleNavigateMountedOwner}
+                          navigationScope={JSON.stringify([
+                            workspaceKey,
+                            workspaceAbsPath,
+                            workspaceRemoteSessionId ?? null,
+                          ])}
+                        />
+                      </div>
+                    ) : null}
+                    <div className="min-h-0 flex-1 overflow-hidden">
+                      <WorkspaceSidebar
+                        workspacePath={workspaceAbsPath}
+                        workspaceRemoteSessionId={workspaceRemoteSessionId}
+                        activePreviewPath={activePreviewPath}
+                        onSelectTask={handleSelectTaskInChat}
+                        onStartDraftInWorkspace={handleCreateProjectDraft}
+                        onOpenCodeViewer={handleOpenCodeViewer}
+                        onOpenBrowserUrl={handleOpenBrowserUrl}
+                        fileTreeOpenRequest={fileTreeOpenRequest}
+                        onCreateTask={handleCreateTaskInChat}
+                        onCreateConversationTask={
+                          onCreateConversationTask ?? handleCreateTaskInChat
+                        }
+                        onOpenFolderFromWorkspaceMenu={onOpenFolderFromWorkspaceMenu}
+                        onOpenRemoteWorkspace={onOpenRemoteWorkspace}
+                        theme={theme}
+                        onConnectRemote={onConnectRemote}
+                        onSelectRemoteProject={onSelectRemoteProject}
+                        onCancelRemoteProject={onCancelRemoteProject}
+                        onReconnectRemoteWorkspace={onReconnectRemoteWorkspace}
+                        reconnectingRemoteWorkspaceKeys={reconnectingRemoteWorkspaceKeys}
+                        remoteWorkspaceErrorByWorkspaceKey={remoteWorkspaceErrorByWorkspaceKey}
+                        reconnectingRemoteWorkspaceLogsByWorkspaceKey={
+                          reconnectingRemoteWorkspaceLogsByWorkspaceKey
+                        }
+                        onLogout={onLogout}
+                        onLogin={onLogin}
+                        user={user}
+                        isDesktop={isDesktop}
+                        isMacDesktop={isMacDesktop}
+                        isWindowsDesktop={isWindowsDesktop}
+                        isSidebarVisible={isSidebarVisible}
+                        onToggleSidebar={handleToggleSidebar}
+                        toggleSidebarShortcutLabel={toggleSidebarShortcutLabel}
+                        canGoBack={canPrimaryNavigationBack}
+                        canGoForward={canTaskNavForward}
+                        onGoBack={primaryNavigationBack}
+                        onGoForward={handleTaskNavForward}
+                        goBackShortcutLabel={goBackShortcutLabel}
+                        goForwardShortcutLabel={goForwardShortcutLabel}
+                        onOpenCommandCenter={handleOpenCommandCenter}
+                        onOpenAutomations={handleOpenAutomations}
+                        automationsActive={workspaceMainView === "automations"}
+                        onOpenPluginStore={handleOpenPluginStore}
+                        pluginStoreActive={workspaceMainView === "plugin-store"}
+                        onFileTreeOpenChange={setIsSidebarFileTreeOpen}
+                      />
+                    </div>
+                  </div>
                 </WorkflowRunOpenProvider>
               </V4SplitPaneEntryProvider>
             </ScopedErrorBoundary>
@@ -1837,13 +2111,19 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
                                   桌面主区升级为分屏宿主（Layout/Focus 两层）；primary pane
                                   绑定语义与 testid 契约（paneId=workspace-main）不变。 */}
                             <V4WorkspaceChatArea
+                              mountedSessionRouting={mountedHierarchyEnabled ? "scoped" : "native"}
+                              mountedOwners={mountedHierarchyEnabled ? mountedOwners : []}
+                              onResolveRestoredOwner={handleResolveRestoredOwner}
+                              onRestoredOwner={handleRestoredOwner}
                               readOnly={Boolean(workspaceReadOnlyReason)}
                               foregroundEnabled={isWorkspaceVisible}
                               workspacePath={workspaceAbsPath}
                               workspaceIdentity={workspaceIdentity}
                               isDesktop={isDesktop === true}
                               remoteSessionId={workspaceRemoteSessionId}
-                              sessionId={activeTaskId}
+                              sessionId={
+                                selectedExternalId ?? unresolvedRestoredSessionId ?? activeTaskId
+                              }
                               activeSelectionSideChatSessionId={activeSelectionSideChatSessionId}
                               provider={activeTaskProvider ?? undefined}
                               onSessionCreated={handleV4SessionCreated}

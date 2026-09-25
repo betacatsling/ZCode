@@ -228,6 +228,13 @@ import {
 } from "@/v4/slashCommands.js";
 import { useSlashCommands } from "@/hooks/useSlashCommands.js";
 import { useV4Conversation } from "@/v4/V4ConversationContext.js";
+import { MountedExternalConversationProvider } from "@/v4/MountedExternalConversationProvider.js";
+import { ExternalSessionPane } from "@/v4/ExternalSessionPane.js";
+import {
+  matchesMountedSessionOwner,
+  mountedSessionReadOnly,
+  type MountedSessionOwner,
+} from "@/v4/mountedSessionOwner.js";
 import { useConversationProjection } from "@/v4/useConversationProjection.js";
 import { usePendingCommandRecovery } from "@/v4/usePendingCommandRecovery.js";
 import { useV4SessionQuotaBanner } from "@/v4/useV4SessionQuotaBanner.js";
@@ -285,6 +292,10 @@ import {
 export interface SessionPaneProps {
   paneId: string;
   sessionId: string | null;
+  /** Target-scoped owner issued by the hierarchy; absent keeps the original native UI. */
+  mountedOwner?: MountedSessionOwner;
+  /** Feature-on navigation must set scoped even while owner lookup is pending. Feature-off is native. */
+  mountedSessionRouting?: "native" | "scoped";
   /** 低基数打开入口，由 pane 宿主提供；缺省仅用于兼容旧调用。 */
   openTrigger?: SessionOpenTrigger;
   rootSessionId?: string;
@@ -485,7 +496,68 @@ function shouldRestoreQueuedComposerFromAck(status: CommandAck["status"]): boole
  *   使回调在流式增量期间保持稳定引用，避免把新函数灌进 memo 子组件触发无谓重渲染；
  * - 模型表单的本地输入 state 下沉到对应子组件，输入时不牵动整个 pane。
  */
-export function SessionPane({
+export function SessionPane(props: SessionPaneProps) {
+  const { mountedOwner, sessionId, workspacePath, workspaceIdentity, remoteSessionId } = props;
+  if (props.mountedSessionRouting === "scoped" && sessionId && !mountedOwner) {
+    // Bug 原因：服务已启用但导航所有者尚未验证时，不能把未知 ID 当作原生 session。
+    return (
+      <div role="alert" className="p-4 text-ui-sm text-destructive">
+        Session owner unresolved
+      </div>
+    );
+  }
+  if (mountedOwner) {
+    if (
+      !sessionId ||
+      !matchesMountedSessionOwner(mountedOwner, sessionId, {
+        workspacePath,
+        workspaceIdentity,
+        remoteSessionId,
+      })
+    ) {
+      // Bug 原因：跨 target / workspace 的 ID 不能因 UI 导航别名失配就落回 native RPC。
+      return (
+        <div role="alert" className="p-4 text-ui-sm text-destructive">
+          Session owner mismatch
+        </div>
+      );
+    }
+    if (mountedOwner.kind === "external")
+      return (
+        <MountedExternalConversationProvider
+          key={`${mountedOwner.scope.targetId}:${mountedOwner.scope.workspaceId}:${sessionId}`}
+          owner={mountedOwner}
+        >
+          <ExternalSessionPane
+            paneId={props.paneId}
+            owner={mountedOwner}
+            readOnly={mountedSessionReadOnly(
+              props.mountedSessionRouting ?? "native",
+              sessionId,
+              mountedOwner,
+              Boolean(props.readOnly),
+            )}
+            workspaceBadge={props.workspaceBadge}
+            onClosePane={props.onClosePane}
+          />
+        </MountedExternalConversationProvider>
+      );
+  }
+  // 原因：直接挂载的 pane 也必须消费权威 historyOnly，不能依赖 workbench 的缓存 binding。
+  return (
+    <NativeSessionPane
+      {...props}
+      readOnly={mountedSessionReadOnly(
+        props.mountedSessionRouting ?? "native",
+        sessionId,
+        mountedOwner,
+        Boolean(props.readOnly),
+      )}
+    />
+  );
+}
+
+function NativeSessionPane({
   paneId,
   sessionId,
   openTrigger,

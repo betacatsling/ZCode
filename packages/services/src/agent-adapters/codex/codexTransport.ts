@@ -5,6 +5,7 @@ import { launchCodex, type CodexLaunchOptions } from "./codexLaunch.js";
 const MAX_FRAME = 1024 * 1024;
 const MAX_QUEUE = 4 * MAX_FRAME;
 const MAX_PENDING = 128;
+const MAX_PENDING_BYTES = 1024 * 1024;
 const APPROVAL_METHODS = new Set([
   "item/commandExecution/requestApproval",
   "item/fileChange/requestApproval",
@@ -26,6 +27,7 @@ export type CodexNativeEvent =
 export interface CodexTransportOptions extends CodexLaunchOptions {
   model: string;
   onEvent: (event: CodexNativeEvent) => void;
+  onFailure?: () => void;
 }
 
 type Pending = {
@@ -33,14 +35,21 @@ type Pending = {
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
 };
-type Approval = { rpcId: RpcId; threadId: string; turnId: string; itemId: string; method: string };
+type Approval = {
+  rpcId: RpcId;
+  threadId: string;
+  turnId: string;
+  itemId: string;
+  method: string;
+  bytes: number;
+};
 
 export async function createCodexTransport(
   options: CodexTransportOptions,
 ): Promise<CodexTransport> {
   if (!options.model.trim()) throw new Error("Codex model is required");
   const child = await launchCodex(options);
-  const transport = new CodexTransport(child, options.onEvent, options.model);
+  const transport = new CodexTransport(child, options.onEvent, options.model, options.onFailure);
   try {
     await transport.initialize();
     return transport;
@@ -57,8 +66,12 @@ export class CodexTransport {
   private readonly approvals = new Map<string, Approval>();
   private readonly seenApprovalRpcIds = new Set<RpcId>();
   private readonly activeTurns = new Map<string, string>();
+  private readonly interruptingTurns = new Set<string>();
   private readonly startingTurns = new Set<string>();
   private readonly earlyCompleted = new Map<string, string>();
+  private earlyCompletionBytes = 0;
+  private approvalBytes = 0;
+  private seenApprovalBytes = 0;
   private readonly decoder = new StringDecoder("utf8");
   private input = "";
   private queue: string[] = [];
@@ -71,6 +84,7 @@ export class CodexTransport {
     private readonly child: ChildProcessWithoutNullStreams,
     private readonly onEvent: (event: CodexNativeEvent) => void,
     private readonly model: string,
+    private readonly onFailure?: () => void,
   ) {
     child.stdout.on("data", (chunk: Buffer) => this.read(chunk));
     child.stdout.on("end", () => {
@@ -133,12 +147,17 @@ export class CodexTransport {
     } finally {
       this.startingTurns.delete(threadId);
       this.earlyCompleted.delete(threadId);
+      this.earlyCompletionBytes = [...this.earlyCompleted].reduce(
+        (bytes, [thread, turn]) => bytes + Buffer.byteLength(thread) + Buffer.byteLength(turn),
+        0,
+      );
     }
   }
 
   async interruptTurn(threadId: string, turnId: string): Promise<void> {
     if (this.activeTurns.get(threadId) !== turnId) throw new Error("Stale Codex turn");
-    this.activeTurns.delete(threadId);
+    // 修复原因：RPC ACK 不等于 turn/completed；保留活动标识直到原生终态，停止后续审批。
+    this.interruptingTurns.add(turnId);
     this.denyTurn(threadId, turnId);
     await this.request("turn/interrupt", { threadId, turnId });
   }
@@ -148,6 +167,7 @@ export class CodexTransport {
     if (!approval || this.activeTurns.get(approval.threadId) !== approval.turnId)
       throw new Error("Stale or unknown Codex approval");
     this.approvals.delete(callbackId);
+    this.approvalBytes -= approval.bytes;
     await this.send({ id: approval.rpcId, result: { decision } });
   }
 
@@ -229,8 +249,13 @@ export class CodexTransport {
 
   private read(chunk: Buffer): void {
     if (this.stopped) return;
+    // 修复：包含换行的一次性大块同样会先占用内存；解析前对原始字节+尾部双限额。
+    if (chunk.length + Buffer.byteLength(this.input) > MAX_FRAME) {
+      this.fail(new Error("Codex frame too large"));
+      return;
+    }
     this.input += this.decoder.write(chunk);
-    if (Buffer.byteLength(this.input) > MAX_FRAME && !this.input.includes("\n")) {
+    if (Buffer.byteLength(this.input) > MAX_FRAME) {
       this.fail(new Error("Codex frame too large"));
       return;
     }
@@ -267,9 +292,24 @@ export class CodexTransport {
         ) {
           if (this.activeTurns.get(value.params.threadId) === value.params.turn.id) {
             this.activeTurns.delete(value.params.threadId);
+            this.interruptingTurns.delete(value.params.turn.id);
             this.denyTurn(value.params.threadId, value.params.turn.id);
-          } else if (this.startingTurns.has(value.params.threadId))
+          } else if (this.startingTurns.has(value.params.threadId)) {
+            const previous = this.earlyCompleted.get(value.params.threadId);
+            const newBytes =
+              this.earlyCompletionBytes -
+              (previous
+                ? Buffer.byteLength(value.params.threadId) + Buffer.byteLength(previous)
+                : 0) +
+              Buffer.byteLength(value.params.threadId) +
+              Buffer.byteLength(value.params.turn.id);
+            if (this.earlyCompleted.size >= MAX_PENDING || newBytes > MAX_PENDING_BYTES) {
+              this.fail(new Error("Codex pending completion limit exceeded"));
+              return;
+            }
+            this.earlyCompletionBytes = newBytes;
             this.earlyCompleted.set(value.params.threadId, value.params.turn.id);
+          }
         }
         this.onEvent({ kind: "notification", method: value.method, params: value.params });
       } else if (typeof id === "number" || typeof id === "string")
@@ -297,25 +337,39 @@ export class CodexTransport {
       return;
     }
     if (this.seenApprovalRpcIds.has(id)) return;
-    if (this.seenApprovalRpcIds.size >= 1024) {
+    const idBytes = Buffer.byteLength(String(id));
+    if (
+      this.seenApprovalRpcIds.size >= 1024 ||
+      this.seenApprovalBytes + idBytes > MAX_PENDING_BYTES
+    ) {
       this.fail(new Error("Codex approval ID limit exceeded"));
       return;
     }
     this.seenApprovalRpcIds.add(id);
+    this.seenApprovalBytes += idBytes;
     if (
       this.approvals.size >= MAX_PENDING ||
-      this.activeTurns.get(params.threadId) !== params.turnId
+      this.activeTurns.get(params.threadId) !== params.turnId ||
+      this.interruptingTurns.has(params.turnId)
     ) {
       void this.send({ id, result: { decision: "decline" } });
       return;
     }
+    const bytes = Buffer.byteLength(JSON.stringify(params)) + idBytes;
+    // 修复：审批数量有界并不代表大 itemId/input 累计有界，超额即关闭租约进程。
+    if (this.approvalBytes + bytes > MAX_PENDING_BYTES) {
+      this.fail(new Error("Codex pending approval byte limit exceeded"));
+      return;
+    }
     const callbackId = `codex-callback-${++this.nextApprovalId}`;
+    this.approvalBytes += bytes;
     this.approvals.set(callbackId, {
       rpcId: id,
       method,
       threadId: params.threadId,
       turnId: params.turnId,
       itemId: params.itemId,
+      bytes,
     });
     try {
       this.onEvent({
@@ -327,6 +381,7 @@ export class CodexTransport {
       });
     } catch {
       this.approvals.delete(callbackId);
+      this.approvalBytes -= bytes;
       void this.send({ id, result: { decision: "decline" } });
     }
   }
@@ -335,6 +390,7 @@ export class CodexTransport {
     for (const [key, approval] of this.approvals) {
       if (approval.threadId === threadId && approval.turnId === turnId) {
         this.approvals.delete(key);
+        this.approvalBytes -= approval.bytes;
         void this.send({ id: approval.rpcId, result: { decision: "decline" } });
       }
     }
@@ -346,15 +402,19 @@ export class CodexTransport {
     this.queue = [];
     this.queuedBytes = 0;
     this.approvals.clear();
+    this.approvalBytes = 0;
     this.seenApprovalRpcIds.clear();
+    this.seenApprovalBytes = 0;
     this.activeTurns.clear();
     this.startingTurns.clear();
     this.earlyCompleted.clear();
+    this.earlyCompletionBytes = 0;
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
       pending.reject(error);
     }
     this.pending.clear();
     if (this.child.exitCode === null && !this.child.killed) this.child.kill("SIGTERM");
+    this.onFailure?.();
   }
 }

@@ -113,7 +113,11 @@ function shouldFlushMidConversationSystemBefore(entry: RuntimeMessageEntry): boo
   if (isRuntimeAttachmentEntry(entry)) return false;
   // pending system reminder 需要等到 assistant 或系统边界再落点，
   // 避免插入同一组 tool results 中间导致 provider-visible 顺序非法。
-  return entry.message.role === "assistant" || entry.message.role === "system";
+  return (
+    entry.message.role === "assistant" ||
+    entry.message.role === "system" ||
+    entry.message.role === "developer"
+  );
 }
 
 function canAnchorMidConversationSystemAfter(entry: ProjectedRuntimeMessageEntry): boolean {

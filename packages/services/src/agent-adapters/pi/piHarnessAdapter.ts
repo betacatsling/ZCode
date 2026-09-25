@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Adapter owns the existing V2 binding/transport state; effect lifecycle is extracted into PiParentEffects. */
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
@@ -14,7 +15,8 @@ import type {
 } from "@zcode/shared/agent-host";
 import type { HarnessAdapter } from "../../agent-host/harnessRegistry.js";
 import type { FromPiWorker, PiWorkerBoot, ToPiWorker } from "./piProtocol.js";
-import { piCapabilities } from "./piCapabilities.js";
+import { PiParentEffects } from "./piParentEffects.js";
+import { piTargetCapabilities, piTargetSupport } from "./piTargetSupport.js";
 import {
   forwardPiModelRequest,
   piModelInfo,
@@ -35,6 +37,8 @@ interface Runtime {
   pending: Map<string, Pending>;
   modelAborts: Map<string, AbortController>;
   failed?: Error;
+  cleanup?: Promise<void>;
+  effects: PiParentEffects;
 }
 
 /** Target-local Pi SDK worker; model calls remain in the existing ZCode model executor. */
@@ -49,29 +53,29 @@ export class PiHarnessAdapter implements HarnessAdapter {
   ) => Promise<ModelCapture> | ModelCapture;
   readonly #sessions = new Map<string, Runtime>();
   readonly #subscriptions = new Map<string, Set<(event: AgentEvent) => void>>();
+  readonly #nodeTestHooks?: {
+    beforeReadResolver?: (alias: string) => Promise<void>;
+    brokerExited?: (callId: string) => void;
+    bashSettled?: () => void;
+  };
 
   constructor(options: {
     root: string;
     modelFactory: (spec: SessionSpecV2, plan: BindingPlan) => Promise<ModelCapture> | ModelCapture;
+    /** Node-only deterministic lifecycle test seam; never enabled by production factory. */
+    nodeTestHooks?: {
+      beforeReadResolver?: (alias: string) => Promise<void>;
+      brokerExited?: (callId: string) => void;
+      bashSettled?: () => void;
+    };
   }) {
+    this.#nodeTestHooks = options.nodeTestHooks;
     this.#root = options.root;
     this.#modelFactory = options.modelFactory;
   }
 
   async probe(target: ExecutionTarget) {
-    if (!target.available)
-      return { support: "unsupported" as const, reason: target.reason ?? "target unavailable" };
-    if (target.platform !== "darwin" && target.platform !== "linux")
-      return {
-        support: "unsupported" as const,
-        reason: "first release only supports macOS and Linux",
-      };
-    if (target.platform !== process.platform)
-      return {
-        support: "unsupported" as const,
-        reason: "Pi worker must run on the execution target, not across an SSH stdio attachment",
-      };
-    return { support: "supported" as const };
+    return piTargetSupport(target);
   }
   async hostManagedSupport(target: ExecutionTarget, selection: ModelSelection) {
     const report = await this.probe(target);
@@ -83,8 +87,8 @@ export class PiHarnessAdapter implements HarnessAdapter {
       };
     return report;
   }
-  async capabilities(_target: ExecutionTarget) {
-    return piCapabilities();
+  async capabilities(target: ExecutionTarget) {
+    return piTargetCapabilities(target);
   }
   async create(spec: SessionSpecV2, plan: BindingPlan): Promise<BackendBindingV2> {
     if (this.#sessions.has(spec.hostSessionId)) throw new Error("duplicate Pi session");
@@ -216,12 +220,26 @@ export class PiHarnessAdapter implements HarnessAdapter {
     this.#sessions.delete(hostSessionId);
     await runtime.worker.terminate();
   }
+  /** Isolated Node fixture only: confirms owned effects and requests actually drained. */
+  pendingForNodeTest(hostSessionId: string): { effects: number; requests: number } {
+    if (!this.#nodeTestHooks) throw new Error("Pi diagnostic hook not enabled");
+    const runtime = this.#require(hostSessionId);
+    return { effects: runtime.effects.pendingCount(), requests: runtime.pending.size };
+  }
+  /** Only available for isolated Node fixtures; abrupt worker exit (not graceful shutdown). */
+  crashWorkerForNodeTest(hostSessionId: string): void {
+    if (!this.#nodeTestHooks) throw new Error("Pi crash hook not enabled");
+    this.#require(hostSessionId).worker.postMessage({
+      type: "nodeTest.crash",
+    } satisfies ToPiWorker);
+  }
   async shutdown(): Promise<void> {
     const workers = [...this.#sessions.values()];
     this.#sessions.clear();
     for (const runtime of workers)
       this.#failRuntime(runtime, new Error("Pi target host shut down during execution"));
     await Promise.all(workers.map((runtime) => runtime.worker.terminate()));
+    await Promise.all(workers.map((runtime) => runtime.cleanup));
   }
   subscribe(hostSessionId: string, listener: (event: AgentEvent) => void): () => void {
     let listeners = this.#subscriptions.get(hostSessionId);
@@ -298,6 +316,8 @@ export class PiHarnessAdapter implements HarnessAdapter {
       attach,
       sequence,
       model: piModelInfo(model, identity),
+      pauseBeforeReadResolver: !!this.#nodeTestHooks?.beforeReadResolver,
+      enableNodeTestCrash: !!this.#nodeTestHooks,
     };
     const sourceMode = import.meta.url.endsWith(".ts");
     const worker = new Worker(
@@ -320,6 +340,7 @@ export class PiHarnessAdapter implements HarnessAdapter {
       lastSequence: sequence,
       pending: new Map(),
       modelAborts: new Map(),
+      effects: new PiParentEffects(this.#nodeTestHooks),
     };
     const ready = new Promise<string>((resolve, reject) => {
       const onMessage = (raw: FromPiWorker) => {
@@ -340,10 +361,12 @@ export class PiHarnessAdapter implements HarnessAdapter {
       backendSessionId = await ready;
     } catch (error) {
       await worker.terminate();
+      await runtime.effects.close();
       throw error;
     }
     if (attach && backendSessionId !== binding.backendSessionId) {
       await worker.terminate();
+      await runtime.effects.close();
       throw new Error("Pi native session identity changed on attach");
     }
     runtime.binding = { ...binding, backendSessionId };
@@ -370,6 +393,15 @@ export class PiHarnessAdapter implements HarnessAdapter {
     return runtime;
   }
   #handleMessage(hostSessionId: string, runtime: Runtime, raw: FromPiWorker): void {
+    const reply = (message: ToPiWorker) => {
+      if (runtime.failed) return;
+      try {
+        runtime.worker.postMessage(message);
+      } catch {
+        this.#failRuntime(runtime, new Error("Pi worker transport closed"));
+      }
+    };
+    if (runtime.failed) return;
     if (raw.type === "event") {
       const event = raw.event;
       if (
@@ -388,6 +420,19 @@ export class PiHarnessAdapter implements HarnessAdapter {
       runtime.pending.delete(raw.commandId);
       if (raw.outcome === "completed") pending.resolve();
       else pending.reject(new Error("Pi operation failed"));
+    } else if (
+      raw.type === "broker.request" ||
+      raw.type === "bash.request" ||
+      raw.type === "bash.abort"
+    ) {
+      runtime.effects.handle(raw, reply);
+    } else if (raw.type === "read.pause") {
+      void Promise.resolve()
+        .then(() => this.#nodeTestHooks?.beforeReadResolver?.(raw.alias))
+        .then(
+          () => reply({ type: "read.resume", requestId: raw.requestId }),
+          () => this.#failRuntime(runtime, new Error("Pi read test handshake failed")),
+        );
     } else if (raw.type === "model.request") {
       void forwardPiModelRequest(runtime, raw.requestId, raw.turnId, raw.request);
     } else if (raw.type === "model.abort") {
@@ -400,7 +445,19 @@ export class PiHarnessAdapter implements HarnessAdapter {
     runtime.prepared = undefined;
     for (const controller of runtime.modelAborts.values()) controller.abort();
     runtime.modelAborts.clear();
-    for (const pending of runtime.pending.values()) pending.reject(error);
-    runtime.pending.clear();
+    // 修复：不能在 broker/Bash 仍可产生副作用时把已接受的 send 判作已清理。
+    // 保留失败 ownership，直到父进程收齐真实 child exit / SDK shell wait receipt。
+    runtime.cleanup = Promise.allSettled([
+      runtime.worker.terminate(),
+      runtime.effects.close(),
+    ]).then((outcomes) => {
+      const failed = outcomes.find((outcome) => outcome.status === "rejected");
+      const cause =
+        failed?.status === "rejected"
+          ? new Error("Pi worker died; effect cleanup uncertain", { cause: failed.reason })
+          : error;
+      for (const pending of runtime.pending.values()) pending.reject(cause);
+      runtime.pending.clear();
+    });
   }
 }

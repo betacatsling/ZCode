@@ -2,6 +2,7 @@ import { isAbsolute } from "node:path";
 import type { CapabilityReport, ExecutionTarget } from "@zcode/shared/agent-host";
 import type { TrustedAcpProfile } from "./acpHarnessAdapter.js";
 import { probeAcpDescriptor } from "./acpTransport.js";
+import { isPinnedClaudeAcpDescriptor } from "./pinnedClaudeProfile.js";
 
 const unsupported = (reason: string): CapabilityReport => ({ support: "unsupported", reason });
 export async function probeTrustedAcpProfile(
@@ -21,7 +22,9 @@ export async function probeTrustedAcpProfile(
     const version = await (profile.transport?.probeVersion ?? probeAcpDescriptor)(descriptor);
     if (version !== profile.version)
       return unsupported(`ACP executable version mismatch (expected ${profile.version})`);
-    return profile.certified
+    // 该 pinned 二进制仍读取工作树的 project/local settings 与 PreToolUse hook；
+    // 即使装配方错误地标记 certified，也不能宣称工具审批可强制执行。
+    return profile.certified && !isPinnedClaudeAcpDescriptor(descriptor)
       ? { support: "supported" }
       : {
           support: "experimental",

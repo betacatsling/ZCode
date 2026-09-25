@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
-import { mkdtemp, mkdir, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdtemp, mkdir, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -42,6 +42,245 @@ async function fixture() {
   });
   return { dir, main, service, binding, storageDirectory, activity };
 }
+
+test("process crash after real Git create preserves intent, denies replay and explicitly recovers original generation", async () => {
+  const f = await fixture();
+  const linkedPath = path.join(f.dir, "linked");
+  try {
+    await f.service.close();
+    const moduleUrl = new URL("../src/project-workspaces/worktreeService.ts", import.meta.url).href;
+    const child = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "--input-type=module",
+        "-e",
+        `import {openTargetWorktreeService} from ${JSON.stringify(moduleUrl)};
+         const service = await openTargetWorktreeService({
+           storageDirectory: process.argv[1], executionTargetId: 'local-a',
+           activity: async () => ({running:0, waiting:0, tools:0, uncertain:0, offline:false}),
+           afterGitCreate: async () => process.exit(77),
+         });
+         await service.create({bindingId:'b', workspaceId:'w', worktreePath:process.argv[2], branch:'feature', mode:'new', baseRef:'HEAD'});`,
+        f.storageDirectory,
+        linkedPath,
+      ],
+      { encoding: "utf8", timeout: 30_000 },
+    );
+    assert.equal(child.status, 77, child.stderr);
+    assert.equal(git(f.main, "worktree", "list", "--porcelain").includes(linkedPath), true);
+    const restarted = await openTargetWorktreeService({
+      storageDirectory: f.storageDirectory,
+      executionTargetId: "local-a",
+      activity: f.activity,
+      recoverStaleOwner: true,
+    });
+    try {
+      assert.equal(restarted.pendingCreations()[0]?.workspaceId, "w");
+      assert.equal(
+        (await restarted.discover("b")).some((candidate) => candidate.path === linkedPath),
+        false,
+      );
+      await assert.rejects(
+        restarted.adopt({
+          bindingId: "b",
+          workspaceId: "other",
+          worktreePath: linkedPath,
+        }),
+        /reserved by pending creation/,
+      );
+      await assert.rejects(
+        restarted.create({
+          bindingId: "b",
+          workspaceId: "w",
+          worktreePath: linkedPath,
+          branch: "feature",
+          mode: "new",
+          baseRef: "HEAD",
+        }),
+        /result unknown/,
+      );
+      await assert.rejects(
+        restarted.adopt({
+          bindingId: "b",
+          workspaceId: "w",
+          worktreePath: linkedPath,
+        }),
+        /explicit recovery/,
+      );
+      const recovered = await restarted.recoverCreation("w");
+      assert.equal(recovered.path, await realpath(linkedPath));
+      assert.equal(restarted.pendingCreations().length, 0);
+      await restarted.close();
+      const again = await openTargetWorktreeService({
+        storageDirectory: f.storageDirectory,
+        executionTargetId: "local-a",
+        activity: f.activity,
+      });
+      try {
+        assert.equal(again.history("w")?.generation, recovered.generation);
+      } finally {
+        await again.close();
+      }
+    } finally {
+      await restarted.close();
+    }
+  } finally {
+    await f.service.close();
+    await rm(f.dir, { recursive: true, force: true });
+  }
+});
+
+test("reviewed orphan cannot adopt a replaced Git administrative instance", async () => {
+  const f = await fixture();
+  const linkedPath = path.join(f.dir, "linked");
+  try {
+    await f.service.close();
+    const target = await openTargetWorktreeService({
+      storageDirectory: f.storageDirectory,
+      executionTargetId: "local-a",
+      activity: f.activity,
+      afterGitCreate: async () => {
+        throw new Error("crash after Git effect");
+      },
+    });
+    try {
+      await assert.rejects(
+        target.create({
+          bindingId: "b",
+          workspaceId: "w",
+          worktreePath: linkedPath,
+          branch: "feature",
+          mode: "new",
+          baseRef: "HEAD",
+          receipt: { title: "W", sortOrder: 0, requestKey: "create-w" },
+        }),
+        /crash after Git effect/,
+      );
+      assert.equal(target.pendingCreations().length, 1);
+      const admin = await realpath(
+        git(linkedPath, "rev-parse", "--path-format=absolute", "--absolute-git-dir"),
+      );
+      const original = await stat(admin);
+      const reviewedAdminIdentity = { device: original.dev, inode: original.ino };
+      // 中文：两次 Git 检查之间真正移除并重建同路径、同分支的 worktree。
+      // 延迟调用 inspectBinding 而不是伪造候选数据，让第二次扫描读取真实新实例。
+      const internal = target as unknown as {
+        inspectBinding(binding: unknown): Promise<unknown>;
+      };
+      const inspect = internal.inspectBinding.bind(target);
+      let scans = 0;
+      internal.inspectBinding = async (binding) => {
+        if (++scans === 2) {
+          git(f.main, "worktree", "remove", "--force", linkedPath);
+          git(f.main, "worktree", "add", "-q", linkedPath, "feature");
+        }
+        return inspect(binding);
+      };
+      await assert.rejects(
+        target.recoverCreation("w", { reviewedAdminIdentity }),
+        /Reviewed Git administrative instance changed/,
+      );
+      assert.equal(target.history("w"), undefined);
+      assert.equal(target.pendingCreations().length, 1);
+    } finally {
+      await target.close();
+    }
+  } finally {
+    await f.service.close();
+    await rm(f.dir, { recursive: true, force: true });
+  }
+});
+
+test("process crash after Git remove reconciles pending record without deleting the branch", async () => {
+  const f = await fixture();
+  try {
+    const linkedPath = path.join(f.dir, "linked");
+    const created = await f.service.create({
+      bindingId: "b",
+      workspaceId: "w",
+      worktreePath: linkedPath,
+      branch: "feature",
+      mode: "new",
+      baseRef: "HEAD",
+    });
+    await f.service.close();
+    const moduleUrl = new URL("../src/project-workspaces/worktreeService.ts", import.meta.url).href;
+    const child = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "--input-type=module",
+        "-e",
+        `import {openTargetWorktreeService} from ${JSON.stringify(moduleUrl)};
+       const service = await openTargetWorktreeService({
+         storageDirectory: process.argv[1], executionTargetId: 'local-a',
+         activity: async () => ({running:0, waiting:0, tools:0, uncertain:0, offline:false}),
+         afterGitRemove: async () => process.exit(78),
+       });
+       const preview = await service.previewRemoval('w', process.argv[2]);
+       if (!preview.safe) process.exit(79);
+       await service.remove('w', process.argv[2], true);`,
+        f.storageDirectory,
+        created.generation,
+      ],
+      { encoding: "utf8", timeout: 30_000 },
+    );
+    assert.equal(child.status, 78, child.stderr);
+    const restarted = await openTargetWorktreeService({
+      storageDirectory: f.storageDirectory,
+      executionTargetId: "local-a",
+      activity: f.activity,
+      recoverStaleOwner: true,
+    });
+    try {
+      assert.equal(restarted.history("w")?.lifecycle, "pendingRemoval");
+      await assert.rejects(restarted.verify("w", created.generation, "."));
+      assert.equal((await restarted.reconcile("b")).status, "ok");
+      assert.equal(restarted.history("w")?.lifecycle, "removed");
+      assert.equal(git(f.main, "show-ref", "--verify", "refs/heads/feature").length > 0, true);
+    } finally {
+      await restarted.close();
+    }
+  } finally {
+    await f.service.close();
+    await rm(f.dir, { recursive: true, force: true });
+  }
+});
+
+test("failed Git create is execution-unknown, cannot be replayed or claimed without Git evidence", async () => {
+  const f = await fixture();
+  try {
+    const linkedPath = path.join(f.dir, "linked");
+    await assert.rejects(
+      f.service.create({
+        bindingId: "b",
+        workspaceId: "w",
+        worktreePath: linkedPath,
+        branch: "not-created",
+        mode: "existing",
+      }),
+    );
+    assert.equal(f.service.pendingCreations()[0]?.workspaceId, "w");
+    await assert.rejects(f.service.recoverCreation("w"), /missing or ambiguous/);
+    await assert.rejects(
+      f.service.create({
+        bindingId: "b",
+        workspaceId: "w",
+        worktreePath: linkedPath,
+        branch: "not-created",
+        mode: "existing",
+      }),
+      /result unknown/,
+    );
+    assert.equal(f.service.pendingCreations().length, 1);
+  } finally {
+    await f.service.close();
+    await rm(f.dir, { recursive: true, force: true });
+  }
+});
 
 test("target namespace and actual Git administrative instance fence admission", async () => {
   const f = await fixture();
@@ -322,6 +561,44 @@ test("explicit stale owner recovery fences old lease and preserves history", asy
       await restarted.close();
     }
   } finally {
+    await f.service.close();
+    await rm(f.dir, { recursive: true, force: true });
+  }
+});
+
+test("offline or unknown runtime activity blocks even clean linked removal", async () => {
+  const f = await fixture();
+  const offline = await openTargetWorktreeService({
+    storageDirectory: path.join(f.dir, "offline-state"),
+    executionTargetId: "offline",
+    activity: async () => ({ running: 0, waiting: 0, tools: 0, uncertain: 0, offline: true }),
+  });
+  try {
+    const linked = await f.service.create({
+      bindingId: "b",
+      workspaceId: "w",
+      worktreePath: path.join(f.dir, "linked"),
+      branch: "feature",
+      mode: "new",
+      baseRef: "HEAD",
+    });
+    await offline.registerBinding({
+      id: "b",
+      executionTargetId: "offline",
+      repositoryPath: f.main,
+    });
+    const record = await offline.adopt({
+      bindingId: "b",
+      workspaceId: "w",
+      worktreePath: linked.path,
+    });
+    const preview = await offline.previewRemoval("w", record.generation);
+    assert.equal(preview.unknown, true);
+    assert.equal(preview.safe, false);
+    await assert.rejects(offline.remove("w", record.generation, true), /preview required/);
+    assert.equal(offline.history("w")?.lifecycle, "active");
+  } finally {
+    await offline.close();
     await f.service.close();
     await rm(f.dir, { recursive: true, force: true });
   }

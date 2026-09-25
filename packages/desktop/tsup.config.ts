@@ -2,8 +2,9 @@ import { pickProductEndpointEnv } from "@zcode/shared/zcodeEndpoint";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { defineConfig } from "tsup";
+import { defineConfig, type Options } from "tsup";
 import { getBuildMetadata } from "./scripts/build-metadata.mjs";
+import { selectDesktopTsupConfigs } from "./scripts/desktop-tsup-part-selector.mjs";
 import { resolveDesktopProductFlavor } from "./scripts/desktop-product-identity.mjs";
 // tsup 会先打包配置文件；动态加载构建工具，避免其 import.meta.dirname 被重定位到 desktop。
 const { loadBuiltinProviderConfig } = await import(
@@ -123,6 +124,9 @@ const desktopNodeRuntimeExternals = [
   // node-forge 内部用动态 require("crypto")，内联进 ESM main/host bundle 后 Electron 会报
   // Dynamic require of "crypto" is not supported。和 undici 同样保留为运行时外部依赖。
   "node-forge",
+  // Only the test entry imports Host/Core into Main. Their CJS dependencies need native
+  // require in that opt-in build; default packaged runtime keeps its existing dependency closure.
+  ...(process.env.ZCODE_ACTUAL_SHELL_FIXTURE_BUILD === "1" ? ["debug", "@vercel/oidc"] : []),
   // ZIP 解包器内部依赖 CommonJS require("fs")，不能内联到 ESM main/host 产物。
   "yauzl",
 ];
@@ -134,11 +138,15 @@ function createDevReadyMarkerHook(target: "main" | "host" | "preload"): string {
   return `node scripts/write-dev-ready-marker.mjs ${target}`;
 }
 
-export default defineConfig([
+const desktopConfigs: Options[] = [
   {
     name: "main",
     entry: {
       "main/index": "src/main/index.ts",
+      // Isolated, explicitly guarded test-only Electron entry; never included in packaged app.
+      ...(process.env.ZCODE_ACTUAL_SHELL_FIXTURE_BUILD === "1"
+        ? { "main/actualShellMount": "e2e/actualShellMount.main.ts" }
+        : {}),
       "main/browserWebmRecorder": "src/main/browserView/electronBrowserWebmRecorder.ts",
       "main/zcodeDataSizeWorker": "src/main/zcodeDataSizeWorker.ts",
       // 资源管理器「存储」tab 的扫描 Worker：main 持有 StorageService，遍历放独立线程，供 new Worker(new URL()) 解析。
@@ -148,6 +156,9 @@ export default defineConfig([
     format: "esm",
     platform: "node",
     target: "node22",
+    // 原因：tsup 默认剥除 node: 前缀，把实际 Core/CLI 的 node:sqlite 误写成
+    // 不存在的裸 sqlite 包；Electron 中 Host/主进程会在挂载前直接退出。
+    removeNodeProtocol: false,
     // undici 如果被 main ESM bundle 直接内联，运行时会落到它内部的 CommonJS require("assert")，
     // Electron 加载 main 产物时会报 Dynamic require of "assert" is not supported。
     // desktop 保持 undici 为外部依赖，remote 单文件 bundle 再单独内联。
@@ -215,6 +226,8 @@ export default defineConfig([
     format: "esm",
     platform: "node",
     target: "node22",
+    // Host 同样内联 Core/CLI storage，必须保留 node:sqlite 的 builtin 身份。
+    removeNodeProtocol: false,
     // host 和 Pi worker 均为 ESM；CJS-backed Pi SDK 必须从 node_modules 原生加载，
     // 否则 esbuild 内联后会执行不支持的 dynamic require(child_process)。
     external: [
@@ -269,4 +282,8 @@ export default defineConfig([
     onSuccess: createDevReadyMarkerHook("scheduler"),
     ...desktopTsupBundleSecurityOptions,
   },
-]);
+];
+
+export default defineConfig(
+  selectDesktopTsupConfigs(desktopConfigs, process.env.ZCODE_DESKTOP_BUILD_PART),
+);
