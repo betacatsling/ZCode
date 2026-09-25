@@ -28,13 +28,17 @@ export async function collectBareModuleSpecifiers(
   // metafile 不认识别名。只还原这种可证明绑定和 esbuild 自身的 __require，
   // 不把无关同名函数误认成 Node 包解析。只改解析副本，实际发行 bytes 不变。
   const boundAliases = new Set(
-    [...source.matchAll(/\b(?:var|const|let)\s+(require\d+)\s*=\s*createRequire\d*\s*\(\s*import\.meta\.url\s*\)\s*;/gu)]
-      .map((match) => match[1]),
+    [
+      ...source.matchAll(
+        /\b(?:var|const|let)\s+(require\d+)\s*=\s*createRequire\d*\s*\(\s*import\.meta\.url\s*\)\s*;/gu,
+      ),
+    ].map((match) => match[1]),
   );
   // 中文：实际 ESM bundle 的 banner 定义局部 `require`；只给解析副本改名，
   // 否则 esbuild 将下面的 require2→require 当成普通闭包函数，metafile 漏掉 node-pty。
   // 其他未知 require 绑定不具备来源证明，拒绝把空依赖闭包当作成功。
-  const bannerRequire = /\bconst\s+require\s*=\s*__zcodeCreateRequire\s*\(\s*import\.meta\.url\s*\)\s*;/gu;
+  const bannerRequire =
+    /\bconst\s+require\s*=\s*__zcodeCreateRequire\s*\(\s*import\.meta\.url\s*\)\s*;/gu;
   const withoutBannerShadow = source.replace(bannerRequire, (match) =>
     match.replace(/\brequire(?=\s*=)/u, "__zcodeStageRequire"),
   );

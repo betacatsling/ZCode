@@ -12,11 +12,21 @@ test("only source-bound release wiring requests strict native storage startup", 
     await writeFile(bundle, "// path selection only, not a process fixture\n");
     const release = createReleaseAgentWiring(dir, process.execPath, {});
     assert.equal(release?.ZCODE_AGENT_SERVER_REQUIRES_STORAGE_STARTUP, "1");
-    assert.deepEqual(JSON.parse(release!.ZCODE_AGENT_SERVER_ARGS_JSON), [bundle, "app-server", "--stdio"]);
-    assert.equal(createReleaseAgentWiring(dir, process.execPath, { ZCODE_AGENT_SERVER_COMMAND: "/custom" }), null);
+    assert.deepEqual(JSON.parse(release!.ZCODE_AGENT_SERVER_ARGS_JSON), [
+      bundle,
+      "app-server",
+      "--stdio",
+    ]);
+    assert.equal(
+      createReleaseAgentWiring(dir, process.execPath, { ZCODE_AGENT_SERVER_COMMAND: "/custom" }),
+      null,
+    );
     const built = await resolveBundledAgentWiring(dir, {});
     assert.equal(built?.ZCODE_AGENT_SERVER_REQUIRES_STORAGE_STARTUP, "1");
-    assert.equal(await resolveBundledAgentWiring(dir, { ZCODE_AGENT_SERVER_COMMAND: "/custom" }), null);
+    assert.equal(
+      await resolveBundledAgentWiring(dir, { ZCODE_AGENT_SERVER_COMMAND: "/custom" }),
+      null,
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

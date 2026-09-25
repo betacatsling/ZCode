@@ -16,7 +16,13 @@ test("stager recognizes executable ESM imports and ignores inline SDK documentat
     const shadowed = require5("shadowed-not-a-package");
     const docs = '"from", ", "';
   `);
-  assert.deepEqual([...imports].sort(), ["@scope/real", "dynamic-real", "generated-runtime", "node-pty", "real-export"]);
+  assert.deepEqual([...imports].sort(), [
+    "@scope/real",
+    "dynamic-real",
+    "generated-runtime",
+    "node-pty",
+    "real-export",
+  ]);
 });
 
 test("stager resolves generated require alias despite actual ESM createRequire banner", async () => {

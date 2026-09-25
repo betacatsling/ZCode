@@ -180,10 +180,16 @@ test(
       assert.equal(result.type, "ready", JSON.stringify(result));
       assert.equal(result.generation, 1);
       assert.equal(result.bootLeaseId, undefined);
-      async function maintenance(command: "maintenance-begin" | "maintenance-release", leaseId?: string) {
+      async function maintenance(
+        command: "maintenance-begin" | "maintenance-release",
+        leaseId?: string,
+      ) {
         const requestId = randomUUID();
         const reply = new Promise<Record<string, unknown>>((resolveReply, reject) => {
-          const timer = setTimeout(() => { core?.off("message", onMessage); reject(new Error(`installed maintenance timeout: ${stderr}`)); }, 5_000);
+          const timer = setTimeout(() => {
+            core?.off("message", onMessage);
+            reject(new Error(`installed maintenance timeout: ${stderr}`));
+          }, 5_000);
           function onMessage(message: Record<string, unknown>) {
             if (message.type !== "maintenance" || message.requestId !== requestId) return;
             clearTimeout(timer);
