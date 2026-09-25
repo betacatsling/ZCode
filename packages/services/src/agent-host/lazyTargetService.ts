@@ -132,6 +132,10 @@ export function createLazyTargetAgentHostService(input: {
     },
     queryCreationCommand: (commandId) => (target ?? historyOnly).queryCreationCommand(commandId),
     async attach(spec) {
+      // 中文：启动持有期间若先懒构造 Target，受信 adapter factory/Registry 已被激活，
+      // 随后 Target.withAdmission 的拒绝来得太晚；attach 必须在创建执行端之前检查同一门禁。
+      if (!input.allowNewSessions())
+        throw new Error("new external execution disabled; existing history remains readable");
       return (await getTarget()).attach(spec);
     },
     async dispatch(spec, command) {

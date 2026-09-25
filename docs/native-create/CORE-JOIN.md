@@ -1,5 +1,22 @@
 # Core → native create join (new agents; default OFF)
 
+## Pre-init activation boundary (boot-only follow-up)
+
+Held Core owns the workspace/Target admission lifetime before preparing storage. The selected CLI's single CommandInbox owns native accepted commands and freezes synchronously in the protocol server constructor; storage preparation and readonly reconciliation are permitted while held. Registry config startup currently precedes the constructor and can schedule config refresh checks; MCP pool construction also precedes it but creates only an unconnected lease. Neither path itself calls Model/tools. This observed ordering alone is not evidence of an unauthorized business execution; the CLI must not start stdio or cold session hydration until after its Inbox fence. Transport input is not serviced until after construction and startup; no cold session or queued input is automatically replayed by opening SQLite. Cold session hydration requires a later protocol request. A persisted ambiguous create receipt remains pending and cannot be promoted by startup or retried on release.
+
+```text
+Core held workspace + worker-spawn gate
+ → selected worker storage preparation (no business RPC)
+ → normal CLI opens SQLite → Registry config/refresh + unconnected MCP lease
+ → constructs server / installs CommandInbox hold → broker setup → starts stdio transport
+ → Core claims SAME worker/epoch, reconciles readonly → Supervisor commits
+ → exact release ACK opens CLI Inbox and workspace → fresh Host/native requests
+```
+
+The current server receives initialized Registry/MCP dependencies before transport starts; requests cannot observe an unset runtime. A failed/cancelled startup closes server/storage/Registry/pool without accepting business requests. Whether a future Registry/MCP implementation adds a business-capable preconstructor callback remains an explicit compatibility boundary, not an inferred current bug. External Host create/attach/new commands cannot materialize a trusted adapter before boot release; completed-create queries and history remain readonly. Boot claim itself must tolerate accepted/pending history; ordinary maintenance requires a fresh idle census and rejects running/waiting/unknown. On stale/disposed/rotated worker or lost release ACK, keep admission closed. New workspaces after release must use the dynamic open state, never an immutable initial-held flag. The production Native create gate remains OFF and this does not authorize arbitrary old CLI artifacts, attached remote routing, or completed-only metadata repair.
+
+Acceptance: actual selected CLI startup under held Core, storage state and readonly history before release, no Model/tool/MCP execution while held, real external Host create/attach denied before adapter activation, positive fresh input on same owner after release, cold persisted ordinary inputs only activated by guarded explicit request, pending/unknown creates not retried, wrong/stale/disposed release blocked; repeat with second worker and maintain fresh-idle semantics. External/Desktop route authentication is separate.
+
 Core Catalog and Target own the project/binding/workspace/generation; CLI CommandInbox and SQLite own original native IDs, actual runtime configuration, receipt and accepted commands. Core owns only a **new** verified mapping (not `native-migration/mapping.json`, which is backup-verified legacy evidence). Desktop continuous and mobile replayable are distinct deliveries of one CLI owner.
 
 ```
