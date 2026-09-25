@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
 import { mkdtemp, rm, readFile, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +13,7 @@ import { codexTrustedManifest } from "../src/agent-adapters/codex/codexAdapterCo
 import { HarnessRegistry } from "../src/agent-host/harnessRegistry.js";
 import { SessionHost } from "../src/agent-host/sessionHost.js";
 import { codexSessionProfile } from "../src/agent-adapters/codex/codexBinding.js";
+import { projectCodexNotification } from "../src/agent-adapters/codex/codexCanonicalProjection.js";
 import type { AgentEvent, BindingPlan, SessionSpecV2 } from "@zcode/shared/agent-host";
 
 class FakeProcess extends EventEmitter {
@@ -18,9 +21,17 @@ class FakeProcess extends EventEmitter {
   stdout = new PassThrough();
   stderr = new PassThrough();
   exitCode: number | null = null;
-  kill() {
-    this.exitCode = 0;
-    this.emit("exit", 0);
+  signalCode: NodeJS.Signals | null = null;
+  killed = false;
+  finish(exitCode: number | null, signalCode: NodeJS.Signals | null = null) {
+    this.exitCode = exitCode;
+    this.signalCode = signalCode;
+    this.emit("exit", exitCode, signalCode);
+  }
+  kill(signal: NodeJS.Signals = "SIGTERM") {
+    if (this.exitCode !== null || this.signalCode !== null) return false;
+    this.killed = true;
+    this.finish(null, signal);
     return true;
   }
   send(value: unknown) {
@@ -80,7 +91,7 @@ function fakeCodex(options: { delayStart?: boolean; failInterrupt?: boolean } = 
     if (args[0] === "--version")
       queueMicrotask(() => {
         child.stdout.end("codex-cli 0.156.1\n");
-        child.emit("exit", 0);
+        child.finish(0);
       });
     else {
       processes.push(child);
@@ -135,8 +146,63 @@ async function until(check: () => boolean) {
   }
   assert.fail("fixture event not received");
 }
+async function bounded<T>(promise: Promise<T>, milliseconds: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`fixture deadline ${milliseconds}ms`)),
+          milliseconds,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
-test("two frozen model leases restart pinned process and resume native thread without replay", async () => {
+test("Codex absolute usage preserves absent metrics separately from explicit zero", () => {
+  const events: Array<Record<string, unknown>> = [];
+  const project = (last: Record<string, unknown>) =>
+    projectCodexNotification(
+      {
+        kind: "notification",
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: "native-thread",
+          turnId: "native-turn",
+          tokenUsage: { last },
+        },
+      },
+      "native-thread",
+      "host-turn",
+      (event) => events.push(event),
+    );
+
+  project({ inputTokens: 0 });
+  project({ outputTokens: 0 });
+  project({});
+  assert.deepEqual(events, [
+    {
+      kind: "usage.accounted",
+      turnId: "host-turn",
+      sourceId: "codex-native-turn-usage",
+      accounting: "absolute",
+      inputTokens: 0,
+    },
+    {
+      kind: "usage.accounted",
+      turnId: "host-turn",
+      sourceId: "codex-native-turn-usage",
+      accounting: "absolute",
+      outputTokens: 0,
+    },
+  ]);
+});
+
+test("per-turn leases restart pinned process and resume native thread without replay", async () => {
   const root = await mkdtemp(join(tmpdir(), "codex-adapter-"));
   const f = fakeCodex();
   const issued: string[] = [];
@@ -296,7 +362,7 @@ test("reasoning-high and wrong target fail before any lease or native effect", a
 });
 
 test(
-  "pinned native CLI resumes two turns with distinct frozen Gateway models through SDK and fake upstream",
+  "pinned native CLI Host keeps its selected model and accounts two usage snapshots once",
   { skip: process.env.ZCODE_CODEX_ADAPTER_JOIN !== "1", timeout: 90000 },
   async () => {
     const { createServer } = await import("node:http");
@@ -355,6 +421,7 @@ test(
     });
     let gateway: ReturnType<typeof createModelGateway> | undefined;
     let adapter: CodexHarnessAdapter | undefined;
+    let host: SessionHost | undefined;
     try {
       upstream.listen(0, "127.0.0.1");
       await once(upstream, "listening");
@@ -408,15 +475,28 @@ test(
         modelId: "first",
         options: { reasoningLevel: "off" as const },
       };
-      const realPlan: BindingPlan = {
-        ...plan,
-        requested: { kind: "host-managed", selection: firstSelection },
-        effective: firstSelection,
+      const hostSpec: SessionSpecV2 = {
+        ...spec,
+        hostSessionId: randomUUID(),
+        modelBinding: { kind: "host-managed", selection: firstSelection },
+        execution: { ...spec.execution, worktreePath: join(root, "worktree") },
+      };
+      const hostRoot = join(root, "journal");
+      await mkdir(hostSpec.execution.worktreePath, { recursive: true });
+      const catalog = {
+        fingerprint: "synthetic-catalog",
+        validateSelection: () => ({ ok: true as const }),
+      };
+      const target = {
+        id: hostSpec.execution.targetId,
+        kind: "local" as const,
+        platform: process.platform as "darwin" | "linux",
+        available: true,
       };
       const issuer = createCodexGatewayLeaseIssuer({ gateway, gatewayUrl: `${url}/v1` });
       const issuedTokens: string[] = [];
       adapter = new CodexHarnessAdapter({
-        root,
+        root: join(root, "profiles"),
         lease: {
           ...issuer,
           issue: async (input) => {
@@ -426,46 +506,35 @@ test(
           },
         },
       });
-      const binding = await adapter.create({ ...spec, modelBinding: realPlan.requested }, realPlan);
-      const events: AgentEvent[] = [];
-      adapter.subscribe(spec.hostSessionId, (event) => events.push(event));
-      await adapter.prepareTurn(
-        { ...spec, modelBinding: realPlan.requested },
-        { turnId: "first", runtimeEpoch: binding.runtimeEpoch, plan: realPlan },
-      );
-      const firstRun = adapter.send({
+      const registry = new HarnessRegistry();
+      registry.registerTrusted(codexTrustedManifest, () => adapter!);
+      host = await SessionHost.create({
+        root: hostRoot,
+        spec: hostSpec,
+        registry,
+        target,
+        catalog,
+      });
+      const firstReceipt = await host.dispatch({
         type: "send",
         commandId: "first",
-        hostSessionId: spec.hostSessionId,
+        hostSessionId: hostSpec.hostSessionId,
         turnId: "first",
         text: "say one",
       });
-      await until(() =>
-        events.some((event) => event.kind === "turn.finished" && event.turnId === "first"),
-      );
-      await firstRun;
-      await adapter.prepareTurn(
-        { ...spec, modelBinding: realPlan.requested },
-        {
-          turnId: "second",
-          runtimeEpoch: binding.runtimeEpoch,
-          plan: {
-            ...realPlan,
-            requested: {
-              kind: "host-managed",
-              selection: { ...firstSelection, modelId: "second" },
-            },
-            effective: { ...firstSelection, modelId: "second" },
-          },
-        },
-      );
-      const secondRun = adapter.send({
+      assert.equal(firstReceipt.status, "accepted");
+      await host.whenIdle();
+      assert.equal(host.queryCommand("first")?.status, "completed");
+      const secondReceipt = await host.dispatch({
         type: "send",
         commandId: "second",
-        hostSessionId: spec.hostSessionId,
+        hostSessionId: hostSpec.hostSessionId,
         turnId: "second",
         text: "say two",
       });
+      assert.equal(secondReceipt.status, "accepted");
+      await host.whenIdle();
+      assert.equal(host.queryCommand("second")?.status, "completed");
       // 修复依据：旧 turn 的迟到/辅助请求不得在新 Model 绑定上取得授权。
       const oldRoute = await fetch(`${url}/v1/responses`, {
         method: "POST",
@@ -473,28 +542,307 @@ test(
         body: JSON.stringify({ model: "zcode-stale", stream: true, input: [] }),
       });
       assert.equal(oldRoute.status, 401);
-      await until(() =>
-        events.some((event) => event.kind === "turn.finished" && event.turnId === "second"),
-      );
-      await secondRun;
-      assert.equal(binding.backendVersion, "0.156.1");
+      assert.equal(host.binding.backendVersion, "0.156.1");
       assert.deepEqual(
         seen.map((item) => item.model),
-        ["first", "second"],
+        ["first", "first"],
       );
       assert.ok(
         JSON.stringify(seen[1]!.input).includes("reply-1"),
         "second native turn must retain thread context",
       );
+      const events = host.eventsSince(0);
       assert.deepEqual(
         events.filter((event) => event.kind === "turn.finished").map((event) => event.outcome),
         ["success", "success"],
       );
+      const usageEvents = events.filter(
+        (event) => event.kind === "usage.accounted" || event.kind === "usage.reported",
+      );
+      for (const turnId of ["first", "second"]) {
+        const turnUsage = usageEvents.filter((event) => event.turnId === turnId);
+        assert.ok(turnUsage.length > 0, `native ${turnId} must report its matched-turn usage`);
+        assert.ok(
+          turnUsage.every(
+            (event) =>
+              event.kind === "usage.accounted" &&
+              event.sourceId === "codex-native-turn-usage" &&
+              event.accounting === "absolute",
+          ),
+          `native ${turnId} usage must be source-scoped absolute snapshots`,
+        );
+      }
+      assert.deepEqual(host.snapshot().usage.cumulative, {
+        inputTokens: 20,
+        outputTokens: 4,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      });
+      const switchedSpec: SessionSpecV2 = {
+        ...hostSpec,
+        modelBinding: {
+          kind: "host-managed",
+          selection: { ...firstSelection, modelId: "second" },
+        },
+      };
+      await assert.rejects(
+        SessionHost.open({ root: hostRoot, spec: switchedSpec, registry, target, catalog }),
+        /session identity or configuration mismatch/,
+      );
+      assert.equal(issuedTokens.length, 2, "model-switch refusal must not issue a lease");
+      assert.equal(seen.length, 2, "model-switch refusal must not cause another upstream call");
     } finally {
+      await host?.close();
       await adapter?.shutdown();
       await gateway?.close();
       upstream.closeAllConnections();
       upstream.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "pinned OS child death behind Host ACK persists unknown across independent reopen without replay",
+  { skip: process.env.ZCODE_CODEX_HOST_OS_DEATH !== "1", timeout: 45000 },
+  async (t) => {
+    const { createServer } = await import("node:http");
+    const { once } = await import("node:events");
+    const root = await mkdtemp(join(tmpdir(), "codex-host-os-death-"));
+    const worktree = join(root, "worktree");
+    await mkdir(worktree);
+    const profileRoot = join(root, "profiles");
+    const journalRoot = join(root, "journal");
+    const hostSpec: SessionSpecV2 = {
+      ...spec,
+      hostSessionId: randomUUID(),
+      execution: { ...spec.execution, worktreePath: worktree },
+    };
+    const target = {
+      id: hostSpec.execution.targetId,
+      kind: "local" as const,
+      platform: process.platform as "darwin" | "linux",
+      available: true,
+    };
+    const catalog = {
+      fingerprint: "synthetic-catalog",
+      validateSelection: () => ({ ok: true as const }),
+    };
+    const revoked: string[] = [];
+    let leaseIssues = 0;
+    let upstreamRequests = 0;
+    let appServerCount = 0;
+    let nativeProcess: ChildProcessWithoutNullStreams | undefined;
+    let heldAckCount = 0;
+    let resolveHeldAck!: () => void;
+    const heldAck = new Promise<void>((resolve) => {
+      resolveHeldAck = resolve;
+    });
+    const upstream = createServer((request, response) => {
+      if (request.method !== "POST" || request.url !== "/v1/responses") {
+        response.writeHead(404).end();
+        return;
+      }
+      upstreamRequests++;
+      void (async () => {
+        let bytes = 0;
+        for await (const chunk of request) {
+          bytes += Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(String(chunk));
+          if (bytes > 1024 * 1024) {
+            response.writeHead(413).end();
+            return;
+          }
+        }
+        response.writeHead(503).end("synthetic upstream unavailable");
+      })().catch(() => response.destroy());
+    });
+    const spawnProcess: typeof spawn = (command, args, options) => {
+      const child = spawn(command, args, options);
+      if (args?.[0] !== "app-server") return child;
+      appServerCount++;
+      nativeProcess = child as ChildProcessWithoutNullStreams;
+      const originalStdout = nativeProcess.stdout;
+      const output = new PassThrough();
+      nativeProcess.stdout = output;
+      const decoder = new StringDecoder("utf8");
+      let buffered = "";
+      originalStdout.on("data", (chunk: Buffer) => {
+        buffered += decoder.write(chunk);
+        for (;;) {
+          const end = buffered.indexOf("\n");
+          if (end < 0) break;
+          const line = buffered.slice(0, end + 1);
+          buffered = buffered.slice(end + 1);
+          const frame = JSON.parse(line) as { result?: { turn?: { id?: unknown } } };
+          if (typeof frame.result?.turn?.id === "string" && heldAckCount === 0) {
+            heldAckCount++;
+            resolveHeldAck();
+          } else {
+            output.write(line);
+          }
+        }
+      });
+      originalStdout.once("end", () => output.end());
+      originalStdout.once("error", (error) => output.destroy(error));
+      return child;
+    };
+    let host: SessionHost | undefined;
+    let reopened: SessionHost | undefined;
+    const adapters: CodexHarnessAdapter[] = [];
+    let gatewayUrl: string | undefined;
+    const makeAdapter = () => {
+      if (!gatewayUrl) throw new Error("owned fake upstream is not listening");
+      const adapter = new CodexHarnessAdapter({
+        root: profileRoot,
+        executable: "codex",
+        spawnProcess,
+        lease: {
+          gatewayUrl,
+          gateway: { issueToken: async () => "", revokeToken: (token) => revoked.push(token) },
+          issue: async () => {
+            leaseIssues++;
+            return { token: `synthetic-os-death-${leaseIssues}`, modelAlias: "synthetic-os-model" };
+          },
+        },
+      });
+      adapters.push(adapter);
+      return adapter;
+    };
+    let adapter: CodexHarnessAdapter | undefined;
+    const makeRegistry = (current: CodexHarnessAdapter) => {
+      const registry = new HarnessRegistry();
+      registry.registerTrusted(codexTrustedManifest, () => current);
+      return registry;
+    };
+    try {
+      upstream.listen(0, "127.0.0.1");
+      await bounded(once(upstream, "listening"), 2000);
+      const address = upstream.address();
+      assert.ok(address && typeof address !== "string");
+      gatewayUrl = `http://127.0.0.1:${address.port}/v1`;
+      // The app-server targets this test-owned OS-assigned loopback fake upstream only.
+      const initialAdapter = makeAdapter();
+      adapter = initialAdapter;
+      host = await SessionHost.create({
+        root: journalRoot,
+        spec: hostSpec,
+        registry: makeRegistry(initialAdapter),
+        target,
+        catalog,
+      });
+      const accepted = await host.dispatch({
+        type: "send",
+        commandId: "accepted-os-once",
+        hostSessionId: hostSpec.hostSessionId,
+        turnId: "os-turn",
+        text: "synthetic request before held native ACK",
+      });
+      assert.equal(accepted.status, "accepted");
+      await bounded(heldAck, 15000);
+      assert.equal(heldAckCount, 1, "the stdout proxy withheld one genuine native turn/start ACK");
+      assert.ok(nativeProcess?.pid, "one actual pinned app-server PID must be owned");
+      // ACK delivery order is not a provider-effect proof; record zero or more actual fake-upstream requests.
+
+      const nativeExit = once(nativeProcess, "exit");
+      nativeProcess.kill("SIGKILL");
+      const [exitCode, signal] = await bounded(nativeExit, 3000);
+      assert.equal(exitCode, null);
+      assert.equal(signal, "SIGKILL");
+      assert.equal(nativeProcess.exitCode, null);
+      assert.equal(nativeProcess.signalCode, "SIGKILL");
+      await bounded(host.whenIdle(), 5000);
+      assert.equal(host.queryCommand("accepted-os-once")?.status, "execution-unknown");
+      assert.deepEqual(
+        revoked,
+        ["synthetic-os-death-1"],
+        "the admitted turn lease is revoked once",
+      );
+      assert.equal(
+        host.eventsSince(0).find((event) => event.kind === "turn.finished")?.outcome,
+        "unknown",
+      );
+      const requestsAtDeath = upstreamRequests;
+      const duplicate = await host.dispatch({
+        type: "send",
+        commandId: "accepted-os-once",
+        hostSessionId: hostSpec.hostSessionId,
+        turnId: "os-turn",
+        text: "synthetic request before held native ACK",
+      });
+      assert.equal(duplicate.status, "duplicate");
+      const blocked = await host.dispatch({
+        type: "send",
+        commandId: "os-retry",
+        hostSessionId: hostSpec.hostSessionId,
+        turnId: "os-retry-turn",
+        text: "must not be sent again",
+      });
+      assert.equal(blocked.status, "rejected");
+      assert.equal(blocked.reasonCode, "execution-unknown");
+      assert.equal(appServerCount, 1);
+      await host.close();
+      host = undefined;
+      await adapter?.shutdown();
+
+      const reopenedAdapter = makeAdapter();
+      reopened = await SessionHost.open({
+        root: journalRoot,
+        spec: hostSpec,
+        registry: makeRegistry(reopenedAdapter),
+        target,
+        catalog,
+      });
+      assert.equal(reopened.queryCommand("accepted-os-once")?.status, "execution-unknown");
+      assert.equal(
+        reopened.eventsSince(0).find((event) => event.kind === "turn.finished")?.outcome,
+        "unknown",
+      );
+      const persistedDuplicate = await reopened.dispatch({
+        type: "send",
+        commandId: "accepted-os-once",
+        hostSessionId: hostSpec.hostSessionId,
+        turnId: "os-turn",
+        text: "synthetic request before held native ACK",
+      });
+      assert.equal(persistedDuplicate.status, "duplicate");
+      const afterReopen = await reopened.dispatch({
+        type: "send",
+        commandId: "os-retry-after-reopen",
+        hostSessionId: hostSpec.hostSessionId,
+        turnId: "os-retry-after-reopen",
+        text: "must not be resent after independent reopen",
+      });
+      assert.equal(afterReopen.status, "rejected");
+      assert.equal(afterReopen.reasonCode, "execution-unknown");
+      assert.equal(leaseIssues, 1, "reopen and retry must not issue a replacement lease");
+      assert.deepEqual(revoked, ["synthetic-os-death-1"]);
+      assert.equal(appServerCount, 1, "no replacement native child may be launched");
+      assert.equal(
+        upstreamRequests,
+        requestsAtDeath,
+        "no upstream request may follow the blocked retry",
+      );
+      t.diagnostic(
+        `pinned pid=${nativeProcess.pid} exit=null signal=SIGKILL; heldACK=${heldAckCount}; fakeRequestsBeforeKill=${upstreamRequests}; leaseIssues=${leaseIssues}; revokes=${revoked.length}; appServers=${appServerCount}; independentHost=reopened-unknown`,
+      );
+    } finally {
+      if (nativeProcess && nativeProcess.exitCode === null && nativeProcess.signalCode === null) {
+        const exit = once(nativeProcess, "exit");
+        nativeProcess.kill("SIGKILL");
+        await bounded(exit, 3000);
+      }
+      await host?.whenIdle().catch(() => {});
+      await host?.close();
+      await reopened?.whenIdle().catch(() => {});
+      await reopened?.close();
+      for (const current of adapters) await current.shutdown();
+      upstream.closeAllConnections();
+      await bounded(
+        new Promise<void>((resolve, reject) => {
+          upstream.close((error) => (error ? reject(error) : resolve()));
+        }),
+        2000,
+      );
       await rm(root, { recursive: true, force: true });
     }
   },
@@ -620,7 +968,10 @@ for (const failure of ["death-before-ACK", "fragmented-unterminated", "aggregate
       await host.whenIdle();
       assert.equal(host.queryCommand("accepted-once")?.status, "execution-unknown");
       assert.deepEqual(revoked, ["only-lease"]);
-      assert.notEqual(child.exitCode, null, "owned child must be reaped by transport close");
+      assert.ok(
+        child.exitCode !== null || child.signalCode !== null,
+        "owned child must be reaped by transport close",
+      );
       const duplicate = await host.dispatch({
         type: "send",
         commandId: "accepted-once",
@@ -1096,7 +1447,8 @@ test("pre-ACK pending event bytes fail closed before 128 count despite valid ind
       /unknown|stale/,
     );
     assert.deepEqual(revoked, ["early-byte-token"]);
-    assert.equal(f.processes[0]!.exitCode, 0);
+    assert.equal(f.processes[0]!.exitCode, null);
+    assert.equal(f.processes[0]!.signalCode, "SIGTERM");
   } finally {
     await adapter.shutdown();
     await rm(root, { recursive: true, force: true });
