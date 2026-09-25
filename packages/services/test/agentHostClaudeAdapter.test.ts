@@ -383,7 +383,13 @@ test("Claude binding cannot silently reattach uncommitted native state or change
 });
 
 // Only the fixture overrides certification; the production Claude manifest remains blocked by beta ingress.
-for (const scenario of ["divergent", "final-only", "multi-tool", "missing-final"] as const)
+for (const scenario of [
+  "divergent",
+  "final-only",
+  "multi-tool",
+  "missing-final",
+  "sdk-fixture",
+] as const)
   test(`Claude ${scenario} terminal text and prompt survive SessionHost snapshot and read-only replay`, async () => {
     const root = await mkdtemp(join(tmpdir(), "claude-host-projection-"));
     const profileRoot = join(root, "native");
@@ -401,25 +407,82 @@ for (const scenario of ["divergent", "final-only", "multi-tool", "missing-final"
         revokeToken: () => {},
       },
       transportFactory: (options) =>
-        ({
-          run: async (
-            _prompt: string,
-            emit: (event: { type: "text" | "finalAssistant"; text: string }) => void,
-          ) => {
-            if (scenario !== "final-only") emit({ type: "text", text: "partial wrong" });
-            if (scenario === "multi-tool") {
-              emit({ type: "tool", id: "tool-1", name: "Read", input: {} } as never);
-              emit({ type: "toolResult", id: "tool-1", error: false, text: "first" } as never);
-              emit({ type: "tool", id: "tool-2", name: "Read", input: {} } as never);
-              emit({ type: "toolResult", id: "tool-2", error: false, text: "second" } as never);
-            }
-            if (scenario !== "missing-final")
-              emit({ type: "finalAssistant", text: "chunk answer" });
-            return { nativeSessionId: options.sessionId! };
-          },
-          cancel: () => {},
-          reply: () => false,
-        }) as unknown as ClaudeCodeTransport,
+        scenario === "sdk-fixture"
+          ? (() => {
+              const emitter = new EventEmitter();
+              const child = Object.assign(emitter, {
+                stdin: null,
+                stdout: null,
+                killed: false,
+                exitCode: null,
+                kill: () => true,
+              }) as unknown as SpawnedProcess;
+              const queryFactory = (({
+                options: sdkOptions,
+              }: {
+                options?: Parameters<
+                  typeof import("@anthropic-ai/claude-agent-sdk").query
+                >[0]["options"];
+              }) => {
+                const stream = (async function* () {
+                  sdkOptions!.spawnClaudeCodeProcess!({
+                    command: "fake-native-claude",
+                    args: [],
+                    cwd: "/tmp/fixture",
+                    env: {},
+                    signal: new AbortController().signal,
+                  });
+                  const id = sdkOptions!.sessionId!;
+                  yield {
+                    type: "system",
+                    subtype: "init",
+                    session_id: id,
+                    claude_code_version: "2.1.263",
+                  } as SDKMessage;
+                  yield {
+                    type: "stream_event",
+                    event: {
+                      type: "content_block_delta",
+                      index: 0,
+                      delta: { type: "text_delta", text: "partial wrong" },
+                    },
+                  } as SDKMessage;
+                  yield {
+                    type: "assistant",
+                    session_id: id,
+                    message: { content: [{ type: "text", text: "chunk answer" }] },
+                  } as SDKMessage;
+                  yield {
+                    type: "result",
+                    subtype: "success",
+                    is_error: false,
+                    session_id: id,
+                  } as SDKMessage;
+                  emitter.emit("exit", 0, null);
+                })();
+                return Object.assign(stream, { close: () => {} }) as unknown as Query;
+              }) as typeof import("@anthropic-ai/claude-agent-sdk").query;
+              return new ClaudeCodeTransport({ ...options, queryFactory, spawn: () => child });
+            })()
+          : ({
+              run: async (
+                _prompt: string,
+                emit: (event: { type: "text" | "finalAssistant"; text: string }) => void,
+              ) => {
+                if (scenario !== "final-only") emit({ type: "text", text: "partial wrong" });
+                if (scenario === "multi-tool") {
+                  emit({ type: "tool", id: "tool-1", name: "Read", input: {} } as never);
+                  emit({ type: "toolResult", id: "tool-1", error: false, text: "first" } as never);
+                  emit({ type: "tool", id: "tool-2", name: "Read", input: {} } as never);
+                  emit({ type: "toolResult", id: "tool-2", error: false, text: "second" } as never);
+                }
+                if (scenario !== "missing-final")
+                  emit({ type: "finalAssistant", text: "chunk answer" });
+                return { nativeSessionId: options.sessionId! };
+              },
+              cancel: () => {},
+              reply: () => false,
+            } as unknown as ClaudeCodeTransport),
     };
     class CertifiedFixture extends ClaudeHarnessAdapter {
       override async probe() {

@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { CodexHarnessAdapter } from "../src/agent-adapters/codex/codexHarnessAdapter.js";
+import { codexTrustedManifest } from "../src/agent-adapters/codex/codexAdapterContract.js";
+import { HarnessRegistry } from "../src/agent-host/harnessRegistry.js";
+import { SessionHost } from "../src/agent-host/sessionHost.js";
+import { codexSessionProfile } from "../src/agent-adapters/codex/codexBinding.js";
 import type { AgentEvent, BindingPlan, SessionSpecV2 } from "@zcode/shared/agent-host";
 
 class FakeProcess extends EventEmitter {
@@ -550,6 +555,105 @@ test("native child death revokes lease and refuses an automatic prompt retry", a
   }
 });
 
+for (const failure of ["death-before-ACK", "fragmented-unterminated", "aggregate-early"] as const) {
+  test(`V2 Host accepted send ${failure}: durable unknown, single revoke and no replay`, async () => {
+    const root = await mkdtemp(join(tmpdir(), `codex-host-${failure}-`));
+    const f = fakeCodex({ delayStart: true });
+    const revoked: string[] = [];
+    const scoped: SessionSpecV2 = {
+      ...spec,
+      hostSessionId: randomUUID(),
+      execution: { ...spec.execution, worktreePath: root },
+    };
+    const adapter = new CodexHarnessAdapter({
+      root: join(root, "profiles"),
+      spawnProcess: f.spawnProcess as any,
+      lease: {
+        gatewayUrl: "http://127.0.0.1:54321/v1",
+        gateway: { issueToken: async () => "", revokeToken: (token) => revoked.push(token) },
+        issue: async () => ({ token: "only-lease", modelAlias: "alias-1" }),
+      },
+    });
+    const registry = new HarnessRegistry();
+    registry.registerTrusted(codexTrustedManifest, () => adapter);
+    let host: SessionHost | undefined;
+    try {
+      host = await SessionHost.create({
+        root: join(root, "journal"),
+        spec: scoped,
+        registry,
+        target: {
+          id: scoped.execution.targetId,
+          kind: "local",
+          platform: process.platform as "darwin" | "linux",
+          available: true,
+        },
+        catalog: { fingerprint: "fixture", validateSelection: () => ({ ok: true }) },
+      });
+      const receipt = await host.dispatch({
+        type: "send",
+        commandId: "accepted-once",
+        hostSessionId: scoped.hostSessionId,
+        turnId: "turn",
+        text: "never replay this",
+      });
+      assert.equal(receipt.status, "accepted");
+      await until(() => f.requests.some((request) => request.method === "turn/start"));
+      const child = f.processes[0]!;
+      if (failure === "death-before-ACK") child.kill();
+      else if (failure === "fragmented-unterminated") {
+        // Each fragment is below the frame ceiling; the accumulated unterminated tail is not.
+        child.stdout.write(Buffer.from("x".repeat(600_000)));
+        child.stdout.write(Buffer.from("x".repeat(500_000)));
+      } else {
+        for (let i = 0; i < 2; i++)
+          child.send({
+            method: "item/agentMessage/delta",
+            params: {
+              threadId: "native-thread",
+              turnId: "native-turn-1",
+              itemId: "item",
+              delta: "x".repeat(600_000),
+            },
+          });
+      }
+      await host.whenIdle();
+      assert.equal(host.queryCommand("accepted-once")?.status, "execution-unknown");
+      assert.deepEqual(revoked, ["only-lease"]);
+      assert.notEqual(child.exitCode, null, "owned child must be reaped by transport close");
+      const duplicate = await host.dispatch({
+        type: "send",
+        commandId: "accepted-once",
+        hostSessionId: scoped.hostSessionId,
+        turnId: "turn",
+        text: "never replay this",
+      });
+      assert.equal(duplicate.status, "duplicate");
+      const next = await host.dispatch({
+        type: "send",
+        commandId: "retry",
+        hostSessionId: scoped.hostSessionId,
+        turnId: "retry",
+        text: "not dispatched",
+      });
+      assert.equal(next.status, "rejected");
+      assert.equal(next.reasonCode, "execution-unknown");
+      assert.equal(f.processes.length, 1);
+      await host.close();
+      host = undefined;
+      assert.equal(
+        (await SessionHost.queryCommandHistory(join(root, "journal"), scoped, "accepted-once"))
+          ?.status,
+        "execution-unknown",
+      );
+    } finally {
+      await host?.close();
+      await adapter.shutdown();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+}
+
 test("interrupt ACK retains Host send and lease until matching native completion; late tool effect stays live", async () => {
   const root = await mkdtemp(join(tmpdir(), "codex-ack-"));
   const f = fakeCodex();
@@ -813,6 +917,186 @@ test("V2 creation/attach scopes binding and launches verified subdirectory cwd",
       launches.at(-1),
       await (await import("node:fs/promises")).realpath(join(worktree, "src")),
     );
+  } finally {
+    await adapter.shutdown();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("durable native provenance: never-started draft reopens; missing, ambiguous or lost established context refuses before native IO", async () => {
+  const root = await mkdtemp(join(tmpdir(), "codex-provenance-"));
+  const f = fakeCodex();
+  const make = () =>
+    new CodexHarnessAdapter({
+      root,
+      spawnProcess: f.spawnProcess as any,
+      lease: {
+        gatewayUrl: "http://127.0.0.1:54321/v1",
+        gateway: { issueToken: async () => "", revokeToken: () => {} },
+        issue: async () => ({
+          token: `t-${f.processes.length}`,
+          modelAlias: `alias-${f.processes.length + 1}`,
+        }),
+      },
+    });
+  const profile = codexSessionProfile(root, spec);
+  let adapter = make();
+  try {
+    const binding = await adapter.create(spec, plan);
+    await adapter.shutdown();
+    adapter = make();
+    // A lost create receipt cannot replace even a never-started profile with a new binding.
+    const provenance = join(profile, `${binding.backendSessionId}.ownership.json`);
+    const oldRecord = await readFile(provenance, "utf8");
+    await assert.rejects(adapter.create(spec, plan), /native ownership unknown/);
+    assert.equal(await readFile(provenance, "utf8"), oldRecord);
+    // Host sequence may already include session-created, despite zero native turns.
+    await adapter.attach(spec, binding, 1, plan);
+    await adapter.shutdown();
+    const initial = await readFile(provenance, "utf8");
+    await writeFile(provenance, JSON.stringify({ ...JSON.parse(initial), state: "starting" }));
+    adapter = make();
+    await assert.rejects(adapter.attach(spec, binding, 1, plan), /native.*unknown|ownership/i);
+    await writeFile(provenance, initial);
+    await adapter.attach(spec, binding, 1, plan);
+    await adapter.prepareTurn(spec, { turnId: "first", runtimeEpoch: binding.runtimeEpoch, plan });
+    const send = adapter.send({
+      type: "send",
+      commandId: "first",
+      hostSessionId: spec.hostSessionId,
+      turnId: "first",
+      text: "first",
+    });
+    await until(() => f.requests.some((r) => r.method === "turn/start"));
+    f.processes[0]!.send({
+      method: "turn/completed",
+      params: { threadId: "native-thread", turn: { id: "native-turn-1", status: "completed" } },
+    });
+    await send;
+    await adapter.shutdown();
+    adapter = make();
+    await adapter.attach(spec, binding, 4, plan);
+    await adapter.shutdown();
+    // Collision with an established profile must preserve BOTH durable ownership artifacts.
+    const marker = join(profile, `${binding.backendSessionId}.thread`);
+    const established = await readFile(provenance, "utf8");
+    const originalMarker = await readFile(marker, "utf8");
+    await assert.rejects(adapter.create(spec, plan), /native ownership unknown/);
+    assert.equal(await readFile(provenance, "utf8"), established);
+    assert.equal(await readFile(marker, "utf8"), originalMarker);
+    await rm(marker);
+    adapter = make();
+    await assert.rejects(adapter.attach(spec, binding, 4, plan), /native.*unknown|ownership/i);
+    await mkdir(profile, { recursive: true });
+    await rm(profile, { recursive: true });
+    await assert.rejects(adapter.attach(spec, binding, 4, plan), /native.*unknown|ownership/i);
+    assert.equal(
+      f.processes.length,
+      1,
+      "lost state must never allocate a replacement native context",
+    );
+  } finally {
+    await adapter.shutdown();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+for (const loss of ["starting", "lost-marker", "lost-profile"] as const) {
+  test(`independent native ownership ${loss} refuses attach after committed turn`, async () => {
+    const root = await mkdtemp(join(tmpdir(), `codex-${loss}-`));
+    const f = fakeCodex();
+    const make = () =>
+      new CodexHarnessAdapter({
+        root,
+        spawnProcess: f.spawnProcess as any,
+        lease: {
+          gatewayUrl: "http://127.0.0.1:54321/v1",
+          gateway: { issueToken: async () => "", revokeToken: () => {} },
+          issue: async () => ({ token: "one", modelAlias: "alias-1" }),
+        },
+      });
+    let adapter = make();
+    try {
+      const binding = await adapter.create(spec, plan);
+      await adapter.prepareTurn(spec, {
+        turnId: "first",
+        runtimeEpoch: binding.runtimeEpoch,
+        plan,
+      });
+      const sent = adapter.send({
+        type: "send",
+        commandId: "first",
+        hostSessionId: spec.hostSessionId,
+        turnId: "first",
+        text: "once",
+      });
+      await until(() => f.requests.some((request) => request.method === "turn/start"));
+      f.processes[0]!.send({
+        method: "turn/completed",
+        params: { threadId: "native-thread", turn: { id: "native-turn-1", status: "completed" } },
+      });
+      await sent;
+      await adapter.shutdown();
+      const profile = codexSessionProfile(root, spec);
+      const record = join(profile, `${binding.backendSessionId}.ownership.json`);
+      if (loss === "starting") {
+        const saved = JSON.parse(await readFile(record, "utf8")) as object;
+        await writeFile(record, JSON.stringify({ ...saved, state: "starting" }));
+      } else if (loss === "lost-marker")
+        await rm(join(profile, `${binding.backendSessionId}.thread`));
+      else await rm(profile, { recursive: true });
+      adapter = make();
+      await assert.rejects(adapter.attach(spec, binding, 4, plan), /native ownership unknown/);
+      assert.equal(f.processes.length, 1, "unknown context must not launch another child");
+    } finally {
+      await adapter.shutdown();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+}
+
+test("pre-ACK pending event bytes fail closed before 128 count despite valid individual frames", async () => {
+  const root = await mkdtemp(join(tmpdir(), "codex-early-bytes-"));
+  const f = fakeCodex({ delayStart: true });
+  const revoked: string[] = [];
+  const adapter = new CodexHarnessAdapter({
+    root,
+    spawnProcess: f.spawnProcess as any,
+    lease: {
+      gatewayUrl: "http://127.0.0.1:54321/v1",
+      gateway: { issueToken: async () => "", revokeToken: (t) => revoked.push(t) },
+      issue: async () => ({ token: "early-byte-token", modelAlias: "alias-1" }),
+    },
+  });
+  try {
+    const binding = await adapter.create(spec, plan);
+    await adapter.prepareTurn(spec, { turnId: "early", runtimeEpoch: binding.runtimeEpoch, plan });
+    const sent = adapter.send({
+      type: "send",
+      commandId: "early",
+      hostSessionId: spec.hostSessionId,
+      turnId: "early",
+      text: "input",
+    });
+    const unknown = assert.rejects(sent, /unknown|transport closed/);
+    await until(() => f.requests.some((r) => r.method === "turn/start"));
+    for (let i = 0; i < 2; i++)
+      f.processes[0]!.send({
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "native-thread",
+          turnId: "native-turn-1",
+          itemId: "item",
+          delta: "x".repeat(600_000),
+        },
+      });
+    await unknown;
+    await assert.rejects(
+      adapter.prepareTurn(spec, { turnId: "retry", runtimeEpoch: binding.runtimeEpoch, plan }),
+      /unknown|stale/,
+    );
+    assert.deepEqual(revoked, ["early-byte-token"]);
+    assert.equal(f.processes[0]!.exitCode, 0);
   } finally {
     await adapter.shutdown();
     await rm(root, { recursive: true, force: true });

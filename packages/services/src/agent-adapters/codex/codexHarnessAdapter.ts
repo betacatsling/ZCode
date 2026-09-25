@@ -1,7 +1,7 @@
 /* eslint-disable max-lines -- Codex 单一 turn owner 保留 native ID、lease、审批与关闭顺序的同文件审计边界。 */
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, realpath, rename, writeFile } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { mkdir, realpath } from "node:fs/promises";
+import { isAbsolute, relative, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import type { ModelSelection } from "@zcode/shared/model-selection";
 import {
@@ -23,6 +23,12 @@ import { probeCodexVersion } from "./codexLaunch.js";
 import type { CodexTurnLeaseIssuer } from "./codexAdapterContract.js";
 import { projectCodexNotification } from "./codexCanonicalProjection.js";
 import { assertCodexBinding, codexSessionProfile } from "./codexBinding.js";
+import {
+  advanceNativeOwnership,
+  createNativeOwnership,
+  readNativeOwnership,
+  type NativeOwnership,
+} from "./codexOwnership.js";
 
 interface Session {
   spec: SessionSpecV2;
@@ -31,6 +37,7 @@ interface Session {
   binding: BackendBindingV2;
   profile: string;
   threadId?: string;
+  ownership: NativeOwnership;
   sequence: number;
   running?: RunningCodexTurn;
   busy: boolean;
@@ -123,7 +130,7 @@ export class CodexHarnessAdapter implements HarnessAdapter {
     if (this.#sessions.has(spec.hostSessionId)) throw new Error("duplicate Codex session");
     const cwd = await this.#verifiedCwd(spec);
     const profile = codexSessionProfile(this.options.root, spec);
-    await mkdir(profile, { recursive: true, mode: 0o700 });
+    await mkdir(this.options.root, { recursive: true, mode: 0o700 });
     const binding = backendBindingV2Schema.parse({
       schemaVersion: 2,
       targetId: spec.execution.targetId,
@@ -135,12 +142,14 @@ export class CodexHarnessAdapter implements HarnessAdapter {
       backendVersion: this.version,
       runtimeEpoch: randomUUID(),
     });
+    const ownership = await createNativeOwnership(profile, binding, spec, cwd);
     this.#sessions.set(spec.hostSessionId, {
       spec,
       cwd,
       plan,
       binding,
       profile,
+      ownership,
       sequence: 0,
       busy: false,
     });
@@ -178,21 +187,15 @@ export class CodexHarnessAdapter implements HarnessAdapter {
     }
     const cwd = await this.#verifiedCwd(spec);
     const profile = codexSessionProfile(this.options.root, spec);
-    let threadId: string | undefined;
-    try {
-      threadId = (
-        await readFile(join(profile, `${binding.backendSessionId}.thread`), "utf8")
-      ).trim();
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
+    const ownership = await readNativeOwnership(profile, binding, spec, cwd);
     this.#sessions.set(spec.hostSessionId, {
       spec,
       cwd,
       binding,
       plan,
       profile,
-      threadId,
+      threadId: ownership.threadId,
+      ownership,
       sequence,
       busy: false,
     });
@@ -260,10 +263,33 @@ export class CodexHarnessAdapter implements HarnessAdapter {
     session.prepared = undefined;
     const token = prepared.token;
     let transport: Awaited<ReturnType<typeof createCodexTransport>> | undefined;
+    let turn: RunningCodexTurn | undefined;
+    let nativeAttempted = false;
     try {
       session.plan = prepared.plan;
       // 修复：原生 cwd 只能来自该 worktree 的当前 realpath，避免创建后目录指向外部。
       session.cwd = await this.#verifiedCwd(session.spec);
+      if (session.cwd !== session.ownership.cwd)
+        throw new Error("Codex native ownership cwd changed");
+      // 修复：attach 后到实际 spawn 前 profile 仍可能丢失；不能只相信内存中的 threadId。
+      const durable = await readNativeOwnership(
+        session.profile,
+        session.binding,
+        session.spec,
+        session.cwd,
+      );
+      if (JSON.stringify(durable) !== JSON.stringify(session.ownership))
+        throw new Error("Codex native ownership changed");
+      if (session.ownership.state === "never-started")
+        session.ownership = await advanceNativeOwnership(
+          session.profile,
+          session.ownership,
+          "starting",
+        );
+      else if (session.ownership.state !== "established")
+        throw new Error("Codex native ownership unknown");
+      // 修复：从此处起子进程可能已消费请求；传输失败不能作为安全重试许可。
+      nativeAttempted = true;
       transport = await createCodexTransport({
         cwd: session.cwd,
         sessionHome: session.profile,
@@ -279,6 +305,7 @@ export class CodexHarnessAdapter implements HarnessAdapter {
         },
       });
       const running = createRunningCodexTurn(command.turnId, token, transport);
+      turn = running;
       session.running = running;
       if (session.threadId) {
         const resumed = await transport.resumeThread(session.threadId);
@@ -286,10 +313,12 @@ export class CodexHarnessAdapter implements HarnessAdapter {
       } else {
         // 修复依据：先记录原生 thread ID 再启动首个 turn；重启时绝不能重放已接受的 prompt。
         session.threadId = await transport.startThread();
-        const path = join(session.profile, `${session.binding.backendSessionId}.thread`);
-        const temp = `${path}.${randomUUID()}.tmp`;
-        await writeFile(temp, session.threadId, { mode: 0o600, flag: "wx" });
-        await rename(temp, path);
+        session.ownership = await advanceNativeOwnership(
+          session.profile,
+          session.ownership,
+          "established",
+          session.threadId,
+        );
       }
       this.#emit(session, { kind: "turn.started", turnId: command.turnId });
       this.#emit(session, {
@@ -303,6 +332,7 @@ export class CodexHarnessAdapter implements HarnessAdapter {
       // 修复原因：同线程旧 turn 的早到 completion 不能冒充 start 返回的原生 turn ID。
       const early = running.earlyCompletions.get(running.nativeTurnId);
       running.earlyCompletions.clear();
+      running.earlyBytes = 0;
       for (const pending of running.earlyEvents.splice(0))
         if (isRecord(pending.params) && pending.params.turnId === running.nativeTurnId)
           this.#native(session, command.turnId, pending);
@@ -313,11 +343,18 @@ export class CodexHarnessAdapter implements HarnessAdapter {
         throw new Error("Codex execution unknown; inspect history before explicit recovery");
     } catch (error) {
       session.failed = true;
-      if (session.running) await this.#finish(session, session.running, "unknown");
+      if (turn) await this.#finish(session, turn, "unknown");
       else {
+        // 修复：pre-ACK 溢出已经由 #finish 撤销 token；catch 不可再次撤销同一租约。
         this.options.lease.gateway.revokeToken(token);
         await transport?.close();
       }
+      // 修复：原生进程死亡可能抢在 turn/start ACK 前拒绝 RPC；Host 必须收到
+      // execution-unknown，而不是把原始 transport closed 当成可重发的失败。
+      if (nativeAttempted)
+        throw new Error("Codex execution unknown; inspect history before explicit recovery", {
+          cause: error,
+        });
       throw error;
     } finally {
       session.busy = false;
@@ -428,18 +465,26 @@ export class CodexHarnessAdapter implements HarnessAdapter {
             ? "cancelled"
             : "failed";
       if (!running.nativeTurnId) {
-        if (running.earlyCompletions.size >= 128) void this.#finish(session, running, "unknown");
-        else running.earlyCompletions.set(params.turn.id, outcome);
+        const bytes = Buffer.byteLength(params.turn.id) + 64;
+        // 修复：128 个巨大原生 ID 也可能耗尽内存；预 ACK 按计数及累计字节双限额。
+        if (running.earlyCompletions.size >= 128 || running.earlyBytes + bytes > 1024 * 1024)
+          void this.#finish(session, running, "unknown");
+        else {
+          running.earlyBytes += bytes;
+          running.earlyCompletions.set(params.turn.id, outcome);
+        }
       } else if (params.turn.id === running.nativeTurnId)
         void this.#finish(session, running, outcome);
     } else {
       // 修复：threadId 不能证明通知属于本 turn；无 turnId 的 usage/item/delta 一律丢弃。
       if (typeof params.turnId !== "string") return;
       if (!running.nativeTurnId) {
-        if (running.earlyEvents.length >= 128) {
+        const bytes = Buffer.byteLength(JSON.stringify(event));
+        if (running.earlyEvents.length >= 128 || running.earlyBytes + bytes > 1024 * 1024) {
           void this.#finish(session, running, "unknown");
           return;
         }
+        running.earlyBytes += bytes;
         running.earlyEvents.push(event);
         return;
       }

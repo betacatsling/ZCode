@@ -12,3 +12,7 @@ The existing joined route is intact; Desktop opt-in renderer entry `packages/des
 ## Core checkpoint consumed by convergence assembly
 
 Pinned Core source checkpoint `a8384bff7a13ca8a11369b6f90fec291cb0363f5` was merged as a committed dependency. Conflicting owner files use that exact Core-owned version (Core authority, hierarchy, native bridge/process/CLI seams); the mounted-history producer remains its own additive test composition. The Core branch's known repair self-deadlock, legacy-create admission bypass, and unproven pre-constructor gate remain blockers; this candidate stays disabled. See `.tmp/MICRO-core-ingress-authority.md`, `.tmp/MICRO-native-factory-boundaries.md`, and `.tmp/interface-handoff-core-native-join.md`.
+
+## Protocol checkpoint consumed by convergence assembly
+
+Pinned protocol source checkpoint `9f454fb3a3ab484810513d3b91315136e8173043` was merged as a committed dependency. Codex/Claude adapter source, tests, and specifications use the final checkpoint version where they overlapped earlier candidate copies; all mounted Shell/Core history sources remain intact. Protocol review still reports the focused suite/root UI gate and live/Claude limitations in `.tmp/MICRO-protocol-final.md` and `.tmp/protocol-model-access-recovery/REVIEW-protocol-final-2.md`; no production profile is enabled.

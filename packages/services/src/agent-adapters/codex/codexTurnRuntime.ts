@@ -11,6 +11,7 @@ export interface RunningCodexTurn {
   finish?: Promise<void>;
   earlyCompletions: Map<string, Exclude<CodexTurnOutcome, "unknown">>;
   earlyEvents: Array<Extract<CodexNativeEvent, { kind: "notification" }>>;
+  earlyBytes: number;
   terminal: Promise<CodexTurnOutcome>;
   settle: (outcome: CodexTurnOutcome) => void;
 }
@@ -32,6 +33,7 @@ export function createRunningCodexTurn(
     callbacks: new Map(),
     earlyCompletions: new Map(),
     earlyEvents: [],
+    earlyBytes: 0,
     terminal,
     settle,
   };
