@@ -31,6 +31,11 @@ try {
   const count = () =>
     (db.prepare("select count(*) as total from session").get() as { total: number }).total;
   const before = count();
+  const bootWorker = await service.getWorkspaceRuntimeIdentity({ workspacePath: process.cwd() });
+  const lifecycle: unknown[] = [];
+  const subscription = service.onAgentRuntimeLifecycle?.((event) => {
+    lifecycle.push(event);
+  });
   const original = await hierarchy.inspectCreateCommand({
     workspaceId: "workspace",
     commandId: "native-create-1",
@@ -71,6 +76,13 @@ try {
     { status: "unknown" },
   );
   assert.equal(count(), before, "pure inspection must not allocate");
+  assert.deepEqual(
+    await service.getWorkspaceRuntimeIdentity({ workspacePath: process.cwd() }),
+    bootWorker,
+    "pure inspection must not replace or start a CLI worker",
+  );
+  assert.equal(lifecycle.length, 0, "pure inspection must not spawn or retire a worker");
+  subscription?.dispose();
   const target = { workspacePath: process.cwd() };
   const command = (id: string) => ({
     commandId: id,

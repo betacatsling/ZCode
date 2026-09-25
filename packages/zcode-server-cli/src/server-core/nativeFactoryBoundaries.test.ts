@@ -32,6 +32,7 @@ for (const variant of [
   "boot-held",
   "worker-rotation",
   "schema-between",
+  "boot-old-command",
 ] as const)
   test(`public native factory ${variant}`, async () => {
     const root = await mkdtemp(join(tmpdir(), "native-factory-boundaries-"));
@@ -121,6 +122,7 @@ for (const variant of [
         ZCODE_SESSION_DB_PATH: dbPath,
         ZCODE_TELEMETRY_ENABLED: "false",
         ZCODE_AGENT_SERVER_REQUIRES_STORAGE_STARTUP: "1",
+        ZCODE_AGENT_SERVER_BOOT_FENCE_V1: "1", // trusted checked-out CLI fixture, not a credential
         ZCODE_AGENT_SERVER_COMMAND: process.execPath,
         ZCODE_AGENT_SERVER_ARGS_JSON: JSON.stringify([
           "--import",
@@ -271,12 +273,24 @@ for (const variant of [
         await writeFile(personal, JSON.stringify(settings));
       }
       const result = await boot(
-        variant === "boot-held"
-          ? "./coreIngressAuthorityBootChild.fixture.ts"
-          : "./nativeFactoryBoundariesChild.fixture.ts",
+        variant === "boot-old-command"
+          ? "./coreIngressAuthorityOldChild.fixture.ts"
+          : variant === "boot-held"
+            ? "./coreIngressAuthorityBootChild.fixture.ts"
+            : "./nativeFactoryBoundariesChild.fixture.ts",
         {
           ZCODE_MULTI_HARNESS_ENABLED: variant === "boot-held" ? "1" : "0",
           ZCODE_CORE_NATIVE_CREATE_TEST_ONLY: "0",
+          ...(variant === "boot-old-command"
+            ? {
+                ZCODE_AGENT_SERVER_BOOT_FENCE_V1: "0",
+                ZCODE_AGENT_SERVER_ARGS_JSON: JSON.stringify([
+                  "-e",
+                  "require('node:fs').writeFileSync(process.env.CORE_OLD_CLI_MARKER,'spawned')",
+                ]),
+                CORE_OLD_CLI_MARKER: join(root, "old-cli-spawned"),
+              }
+            : {}),
           ZCODE_SESSION_DB_PATH: secondSource ?? dbPath,
           CORE_NATIVE_IDS: JSON.stringify(recoveredIds),
           CORE_NATIVE_SECOND_WORKSPACE_TEST_ONLY: ["pending", "damaged"].includes(variant)
@@ -287,7 +301,11 @@ for (const variant of [
             variant === "pending" || variant === "completed" ? variant : "",
         },
       );
-      if (variant === "boot-held") {
+      if (variant === "boot-old-command") {
+        assert.equal(result.type, "old-command-refused");
+        assert.equal(result.spawned, false);
+        assert.equal(calls.length, 0);
+      } else if (variant === "boot-held") {
         assert.equal(result.type, "boot-held");
         assert.equal(result.heldReason, "guard.nativeMaintenanceFrozen");
         assert.equal(result.before, before);
