@@ -184,24 +184,27 @@ export class TargetWorktreeService {
       return { ...receipt.binding };
     });
   }
+  private async lookupWorkspaceHeld(
+    id: string,
+  ): Promise<{ record: TargetWorkspaceRecord; receipt: TargetOperationReceipt } | undefined> {
+    const receipt =
+      this.receipt("remove", id) ?? this.receipt("create", id) ?? this.receipt("adopt", id);
+    if (!receipt) return undefined;
+    if (receipt.status !== "succeeded") throw new Error("Target workspace result unknown");
+    const record = this.workspace(id);
+    if (receipt.kind === "remove") {
+      if (record.lifecycle !== "removed") throw new Error("Target removal result unknown");
+      await this.inspectBinding(this.binding(record.bindingId));
+    } else {
+      if (record.lifecycle !== "active") throw new Error("Target workspace result unknown");
+      await this.current(record, record.generation, false);
+    }
+    return { record: { ...record }, receipt: { ...receipt } };
+  }
   async lookupWorkspace(
     id: string,
   ): Promise<{ record: TargetWorkspaceRecord; receipt: TargetOperationReceipt } | undefined> {
-    return this.exclusive(async () => {
-      const receipt =
-        this.receipt("remove", id) ?? this.receipt("create", id) ?? this.receipt("adopt", id);
-      if (!receipt) return undefined;
-      if (receipt.status !== "succeeded") throw new Error("Target workspace result unknown");
-      const record = this.workspace(id);
-      if (receipt.kind === "remove") {
-        if (record.lifecycle !== "removed") throw new Error("Target removal result unknown");
-        await this.inspectBinding(this.binding(record.bindingId));
-      } else {
-        if (record.lifecycle !== "active") throw new Error("Target workspace result unknown");
-        await this.current(record, record.generation, false);
-      }
-      return { record: { ...record }, receipt: { ...receipt } };
-    });
+    return this.exclusive(() => this.lookupWorkspaceHeld(id));
   }
   private async inspectBinding(
     binding: TargetBindingRecord,
@@ -604,12 +607,41 @@ export class TargetWorktreeService {
   withAdmission<T>(
     workspaceId: string,
     expectedGeneration: string,
-    action: (canonicalCwd: string) => Promise<T>,
+    action: (
+      canonicalCwd: string,
+      lease: {
+        lookupWorkspace(): Promise<
+          | {
+              record: TargetWorkspaceRecord;
+              receipt: TargetOperationReceipt;
+            }
+          | undefined
+        >;
+      },
+    ) => Promise<T>,
     cwdRelative = ".",
   ): Promise<T> {
-    return this.exclusive(async () =>
-      action(await this.verifiedCwd(workspaceId, expectedGeneration, cwdRelative)),
-    );
+    return this.exclusive(async () => {
+      const cwd = await this.verifiedCwd(workspaceId, expectedGeneration, cwdRelative);
+      let active = true;
+      try {
+        return await action(cwd, {
+          lookupWorkspace: async () => {
+            // 中文：已持有 Target serial，不能再次排队 public lookup；每次异步写入前
+            // 重验真实 owner lease + Git 实例，且 callback 结束后证明不可复用。
+            if (!active) throw new Error("Target admission proof expired");
+            await this.store.assertLease();
+            await this.verifiedCwd(workspaceId, expectedGeneration, cwdRelative);
+            if (!active) throw new Error("Target admission proof expired");
+            const fact = await this.lookupWorkspaceHeld(workspaceId);
+            if (!active) throw new Error("Target admission proof expired");
+            return fact;
+          },
+        });
+      } finally {
+        active = false;
+      }
+    });
   }
 
   previewRemoval(workspaceId: string, expectedGeneration: string): Promise<RemovalPreview> {

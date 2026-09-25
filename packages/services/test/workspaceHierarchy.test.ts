@@ -85,6 +85,14 @@ test("real Git/catalog/target/Host: server derives identity and deduplicates cre
       title: "Main",
       worktreePath: repo,
     });
+    // 中文：真实 Git/Target serial 的租约内读取不再重入公共队列；离开 action 后失效。
+    let expired!: () => ReturnType<typeof target.lookupWorkspace>;
+    await target.withAdmission("w", workspace.worktreeGeneration, async (_cwd, lease) => {
+      expired = () => lease.lookupWorkspace();
+      const fact = await lease.lookupWorkspace();
+      assert.equal(fact?.record.generation, workspace.worktreeGeneration);
+    });
+    await assert.rejects(expired(), /proof expired/);
     const harnesses = new HarnessRegistry();
     harnesses.registerTrusted(
       { schemaVersion: 1, id: "mock", name: "Mock", adapterVersion: "1.0.0" },
@@ -319,7 +327,13 @@ test("real Git/catalog/target/Host: server derives identity and deduplicates cre
       newAdmissionsEnabled: () => false,
       withNativeAdmission: async (_id, _generation, _cwd, action) => {
         if (repairHeld) throw new Error("New admission frozen for maintenance");
-        return action();
+        return action({
+          recoveryFacts: async () => ({
+            status: "confirmed",
+            generation: workspace.worktreeGeneration,
+            receiptKind: "adopt",
+          }),
+        });
       },
       recoveryFacts: async () => ({
         status: "confirmed",
@@ -361,7 +375,8 @@ test("real Git/catalog/target/Host: server derives identity and deduplicates cre
                     workspacePath: scope.workspacePath,
                   },
                 },
-        completeCertified: async () => {
+        completeCertified: async (_command, _expected, beforeCommit) => {
+          await beforeCommit();
           repairs++;
           receiptStatus = "completed";
           return {

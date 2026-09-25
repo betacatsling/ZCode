@@ -164,8 +164,8 @@ export function createNativeProductionBridge(options: {
     },
     create: (request) => options.runtime.create(request),
     recover: (request) => options.runtime.recover?.(request) ?? Promise.resolve(undefined),
-    completeCertified: (commandId, expected) =>
-      options.runtime.completeCertified?.(commandId, expected) ??
+    completeCertified: (commandId, expected, beforeCommit) =>
+      options.runtime.completeCertified?.(commandId, expected, beforeCommit) ??
       Promise.reject(new Error("Native completed-only repair unavailable")),
     inspect: (commandId, expected) =>
       options.runtime.inspect?.(commandId, expected) ??

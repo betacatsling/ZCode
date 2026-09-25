@@ -27,6 +27,8 @@ for (const variant of [
   "per-id-model",
   "pending",
   "completed",
+  "coreCompletedRepair",
+  "coreCompletedRetry",
   "schema",
   "source-db",
   "boot-held",
@@ -191,20 +193,30 @@ for (const variant of [
         CORE_NATIVE_SECOND_WORKSPACE_TEST_ONLY: ["pending", "damaged"].includes(variant)
           ? "1"
           : "0",
-        CORE_NATIVE_FAILURE_BOUNDARY_TEST_ONLY: ["pending", "completed", "schema"].includes(variant)
-          ? variant
-          : "",
+        CORE_NATIVE_FAILURE_BOUNDARY_TEST_ONLY:
+          variant === "coreCompletedRepair" || variant === "coreCompletedRetry"
+            ? "completed"
+            : ["pending", "completed", "schema"].includes(variant)
+              ? variant
+              : "",
         ZCODE_NATIVE_CREATE_POST_COMMIT_PENDING_TEST_ONLY:
           variant === "pending" ? "native-create-pending-boundary" : "",
         ZCODE_CORE_NATIVE_BEFORE_MAPPING_FAULT_TEST_ONLY:
-          variant === "completed" ? "native-create-completed-boundary" : "",
+          variant === "completed" ||
+          variant === "coreCompletedRepair" ||
+          variant === "coreCompletedRetry"
+            ? "native-create-completed-boundary"
+            : "",
         ZCODE_CORE_NATIVE_CATALOG_FAULT_TEST_ONLY: "native-create-catalog-fault",
         ZCODE_CORE_NATIVE_DROP_ACK_TEST_ONLY: "native-create-1",
         ZCODE_CORE_NATIVE_MAPPING_FSYNC_FAULT_TEST_ONLY: "native-create-fsync-fault",
       });
       assert.equal(
         first.type,
-        variant === "pending" || variant === "completed"
+        variant === "pending" ||
+          variant === "completed" ||
+          variant === "coreCompletedRepair" ||
+          variant === "coreCompletedRetry"
           ? "boundary-staged"
           : variant === "schema"
             ? "boundary-schema"
@@ -273,13 +285,20 @@ for (const variant of [
         await writeFile(personal, JSON.stringify(settings));
       }
       const result = await boot(
-        variant === "boot-old-command"
-          ? "./coreIngressAuthorityOldChild.fixture.ts"
-          : variant === "boot-held"
-            ? "./coreIngressAuthorityBootChild.fixture.ts"
-            : "./nativeFactoryBoundariesChild.fixture.ts",
+        variant === "coreCompletedRepair" || variant === "coreCompletedRetry"
+          ? "./coreCompletedRepairChild.fixture.ts"
+          : variant === "boot-old-command"
+            ? "./coreIngressAuthorityOldChild.fixture.ts"
+            : variant === "boot-held"
+              ? "./coreIngressAuthorityBootChild.fixture.ts"
+              : "./nativeFactoryBoundariesChild.fixture.ts",
         {
-          ZCODE_MULTI_HARNESS_ENABLED: variant === "boot-held" ? "1" : "0",
+          ZCODE_MULTI_HARNESS_ENABLED:
+            variant === "boot-held" ||
+            variant === "coreCompletedRepair" ||
+            variant === "coreCompletedRetry"
+              ? "1"
+              : "0",
           ZCODE_CORE_NATIVE_CREATE_TEST_ONLY: "0",
           ...(variant === "boot-old-command"
             ? {
@@ -299,6 +318,8 @@ for (const variant of [
           CORE_NATIVE_VERIFY_INPUT: variant === "per-id-model" ? "1" : "0",
           CORE_NATIVE_RECOVER_BOUNDARY_TEST_ONLY:
             variant === "pending" || variant === "completed" ? variant : "",
+          CORE_COMPLETED_ORIGINAL_ID: first.originalId,
+          CORE_COMPLETED_RETRY_FIRST: variant === "coreCompletedRetry" ? "1" : "0",
         },
       );
       if (variant === "boot-old-command") {
@@ -310,6 +331,14 @@ for (const variant of [
         assert.equal(result.heldReason, "guard.nativeMaintenanceFrozen");
         assert.equal(result.before, before);
         assert.equal(result.after, before + 1);
+        assert.equal(calls.length, 0);
+      } else if (variant === "coreCompletedRepair" || variant === "coreCompletedRetry") {
+        assert.equal(result.type, "coreCompletedRepair");
+        assert.equal(result.originalId, first.originalId);
+        assert.equal(result.heldBoot, true);
+        assert.equal(result.heldMaintenance, true);
+        assert.equal(result.afterRelease, true);
+        assert.equal(result.references, 1);
         assert.equal(calls.length, 0);
       } else if (variant === "pending" || variant === "completed") {
         assert.equal(result.type, "boundary-read");
