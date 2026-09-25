@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { once } from "node:events";
 import { test } from "node:test";
-// NodeNext 下 Ajv 的默认导入被识别为不可构造的 CommonJS 命名空间；使用已导出的构造函数。
-import { Ajv } from "ajv";
+// Ajv 8.x 是纯 CommonJS：运行时仅暴露 default（即 module.exports），不存在具名 Ajv 导出；
+// NodeNext 下用默认导入才能同时被 tsc（esModuleInterop）与真实 ESM 运行时正确解析。
+import Ajv from "ajv";
 import {
   ModelErrorCode,
   modelInputMessageJsonSchema,
