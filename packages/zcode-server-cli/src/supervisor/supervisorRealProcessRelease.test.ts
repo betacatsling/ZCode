@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { fork, type ChildProcess } from "node:child_process";
 import { createReadStream } from "node:fs";
 import { access, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
@@ -180,6 +180,27 @@ test(
       assert.equal(result.type, "ready", JSON.stringify(result));
       assert.equal(result.generation, 1);
       assert.equal(result.bootLeaseId, undefined);
+      async function maintenance(command: "maintenance-begin" | "maintenance-release", leaseId?: string) {
+        const requestId = randomUUID();
+        const reply = new Promise<Record<string, unknown>>((resolveReply, reject) => {
+          const timer = setTimeout(() => { core?.off("message", onMessage); reject(new Error(`installed maintenance timeout: ${stderr}`)); }, 5_000);
+          function onMessage(message: Record<string, unknown>) {
+            if (message.type !== "maintenance" || message.requestId !== requestId) return;
+            clearTimeout(timer);
+            core?.off("message", onMessage);
+            resolveReply(message);
+          }
+          core!.on("message", onMessage);
+        });
+        core!.send({ command, requestId, ...(leaseId ? { leaseId } : {}) });
+        return await reply;
+      }
+      const begin = await maintenance("maintenance-begin");
+      assert.ok(begin.leaseId, JSON.stringify(begin));
+      assert.deepEqual(begin.nativeActivity, { running: 0, waiting: 0, uncertain: 0 });
+      assert.deepEqual(begin.externalActivity, { running: 0, waiting: 0, uncertain: 0 });
+      const released = await maintenance("maintenance-release", String(begin.leaseId));
+      assert.equal(released.leaseId, begin.leaseId);
       core.send({ command: "shutdown" });
       await coreClosed;
       assert.equal(core.exitCode, 0);
