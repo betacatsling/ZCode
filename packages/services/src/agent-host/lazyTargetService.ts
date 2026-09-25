@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { Emitter } from "@zcode/rpc";
 import type { ProviderRegistryService } from "@zcode/provider";
-import { writableSessionSpecV2Schema, type ExecutionTarget, type HarnessManifest } from "@zcode/shared/agent-host";
+import { writableSessionSpecV2Schema, harnessManifestSchema, type ExecutionTarget, type HarnessManifest } from "@zcode/shared/agent-host";
 import { HarnessRegistry, type HarnessAdapter } from "./harnessRegistry.js";
 import { createRegistryModelCatalog } from "./registryCatalog.js";
 import { createRpcAgentHostService } from "./rpcTargetService.js";
@@ -19,6 +19,13 @@ export function createLazyTargetAgentHostService(input: {
   admission: WorkspaceAdmissionPort;
   additionalTrustedHarnesses?: readonly { manifest: HarnessManifest; factory: () => HarnessAdapter }[];
 }): { service: IAgentHostService; dispose(): Promise<void> } {
+  // 中文：预检所有清单，避免尾部重复/非法时前部 factory 已占用进程或端口。
+  const seen = new Set([piManifest.id]);
+  for (const trusted of input.additionalTrustedHarnesses ?? []) {
+    const manifest = harnessManifestSchema.parse(trusted.manifest);
+    if (seen.has(manifest.id)) throw new Error(`duplicate-id: ${manifest.id}`);
+    seen.add(manifest.id);
+  }
   let target: AgentHostTargetService | undefined;
   let flight: Promise<AgentHostTargetService> | undefined;
   let targetDispose: (() => void) | undefined;
@@ -62,7 +69,7 @@ export function createLazyTargetAgentHostService(input: {
     onEvent: events.event,
     getAvailability: async () => ({
       target: input.target,
-      harnesses: [piManifest.id],
+      harnesses: [...seen],
       admissionEnabled: input.allowNewSessions() && input.target.available,
     }),
     catalogForTarget: async (targetId) => (await getTarget()).catalogForTarget(targetId),
