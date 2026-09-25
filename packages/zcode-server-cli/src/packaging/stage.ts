@@ -24,10 +24,16 @@ export async function collectBareModuleSpecifiers(
   // esbuild 只在内存解析入口，把 npm 包标成 external；metafile.outputs.imports
   // 才包含语法引用（bundle:false 的 inputs.imports 始终为空），不写入/改写发行产物。
   const sourcefile = commonJsBundle ? "agent.cjs" : "server-core.js";
-  // 中文：server-core 的 esbuild 内联旧 CJS 会生成 require2("node-pty/lib/utils")；
-  // metafile 不认识别名。只改内存中的解析副本（字符串/注释由解析器自行忽略），
-  // 不能把该原生依赖从闭包里漏掉，实际发行 bytes 始终不改写。
-  const analysisSource = source.replace(/\brequire\d+(?=\s*\()/gu, "require");
+  // 中文：server-core 内联旧 CJS 的 require2 由 createRequire(import.meta.url) 绑定；
+  // metafile 不认识别名。只还原这种可证明绑定和 esbuild 自身的 __require，
+  // 不把无关同名函数误认成 Node 包解析。只改解析副本，实际发行 bytes 不变。
+  const boundAliases = new Set(
+    [...source.matchAll(/\b(?:var|const|let)\s+(require\d+)\s*=\s*createRequire\d*\s*\(\s*import\.meta\.url\s*\)\s*;/gu)]
+      .map((match) => match[1]),
+  );
+  const analysisSource = source.replace(/\b(__require|require\d+)(?=\s*\()/gu, (name) =>
+    name === "__require" || boundAliases.has(name) ? "require" : name,
+  );
   const result = await build({
     stdin: { contents: analysisSource, sourcefile, resolveDir: process.cwd() },
     bundle: true,

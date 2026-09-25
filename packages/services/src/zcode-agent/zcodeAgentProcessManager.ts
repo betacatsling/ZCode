@@ -445,6 +445,9 @@ export function resolveDefaultZCodeAgentCommand(
         command,
         args: parseArgsJson(process.env.ZCODE_AGENT_SERVER_ARGS_JSON) ?? ["app-server", "--stdio"],
         cwd: process.env.ZCODE_AGENT_SERVER_CWD?.trim() || context.workspacePath,
+        // 中文：自定义 CLI 也必须提交 storage-startup ready；旧二进制缺帧会保持不可用，
+        // 不能让 Core 把未验证的相对 DB 路径当成当前原生 owner。
+        supportsStorageStartup: process.env.ZCODE_AGENT_SERVER_REQUIRES_STORAGE_STARTUP === "1",
       },
       context.presentationSurface,
     );

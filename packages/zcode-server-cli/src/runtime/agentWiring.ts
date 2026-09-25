@@ -4,6 +4,8 @@ import { join } from "node:path";
 export interface BundledAgentWiring {
   ZCODE_AGENT_SERVER_COMMAND: string;
   ZCODE_AGENT_SERVER_ARGS_JSON: string;
+  /** Require an actual same-path native storage-startup receipt, not a declared capability. */
+  ZCODE_AGENT_SERVER_REQUIRES_STORAGE_STARTUP: "1";
 }
 
 export function createReleaseAgentWiring(
@@ -14,6 +16,7 @@ export function createReleaseAgentWiring(
   if (env.ZCODE_AGENT_SERVER_COMMAND?.trim()) return null;
   return {
     ZCODE_AGENT_SERVER_COMMAND: runtimeNode,
+    ZCODE_AGENT_SERVER_REQUIRES_STORAGE_STARTUP: "1",
     ZCODE_AGENT_SERVER_ARGS_JSON: JSON.stringify([
       join(runtimeRoot, "zcode.cjs"),
       "app-server",
@@ -43,6 +46,7 @@ export async function resolveBundledAgentWiring(
   }
   return {
     ZCODE_AGENT_SERVER_COMMAND: process.execPath,
+    ZCODE_AGENT_SERVER_REQUIRES_STORAGE_STARTUP: "1",
     ZCODE_AGENT_SERVER_ARGS_JSON: JSON.stringify([bundlePath, "app-server", "--stdio"]),
   };
 }
