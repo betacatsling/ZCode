@@ -10,6 +10,11 @@ import {
 } from "@zcode/services";
 import { createCoreAuthority } from "@zcode/services/node";
 import { CHILD_MODEL, writeProviderConfig } from "./nativeLegacyProductCore.provider.js";
+import {
+  readLegacyVisibleInputs,
+  verifyLegacyActions,
+  type LegacyFixtureResult,
+} from "./nativeLegacyProductCore.actions.js";
 import { migrateOriginalLegacySession } from "./nativeLegacyProductCore.migration.js";
 import {
   recordWorkerPid,
@@ -29,30 +34,6 @@ const ROOT = process.env.CORE_NATIVE_LEGACY_FIXTURE_ROOT!;
 const CWD = process.env.CORE_NATIVE_LEGACY_FIXTURE_CWD!;
 const DB_PATH = process.env.ZCODE_SESSION_DB_PATH!;
 const CONFIG_ROOT = join(ROOT, ".zcode", "v2");
-
-interface FixtureResult {
-  kind: "result";
-  unmappedOwner: null;
-  indexedOriginalId: string;
-  mappingCount: number;
-  joinedOwner: { kind: string; originalSessionId: string; historyOnly: boolean };
-  initialCommandStatus: string;
-  followupCommandStatus: string;
-  followupTerminal: boolean;
-  runningCommandStatus: string;
-  queuedCommandStatus: string;
-  queuedRetryStatus: string;
-  reconnectSubscription: boolean;
-  sideSessionStatus: string;
-  sideSessionId: string;
-  sideSessionParentId: string;
-  duplicateSideSessionStatus: string;
-  modelCalls: string[];
-  modelRequestContainsInput: boolean[];
-  workerPids: number[];
-  coldOwner: { originalSessionId: string; historyOnly: boolean };
-  coldResumeIds: string[];
-}
 
 let authority: Awaited<ReturnType<typeof createCoreAuthority>> | undefined;
 let server: Server | undefined;
@@ -255,6 +236,7 @@ try {
   assert.equal(modelCalls.length, 5, "duplicate command must not issue another Model request");
   await joinedAgent.unsubscribeConversationV4({ ...scope, subscriptionId: sideSubscription });
   await joinedAgent.unsubscribeConversationV4({ ...scope, subscriptionId: reconnectSubscription });
+  const forkProof = await verifyLegacyActions(joinedAgent, scope, LEGACY_SESSION_ID);
 
   await authority.dispose();
   authority = undefined;
@@ -269,12 +251,17 @@ try {
   const parentSnapshot = await coldAgent.resumeSession({ ...scope, sessionId: LEGACY_SESSION_ID });
   await recordWorkerPid(coldAgent, scope, ownedProcessPids);
   const sideSnapshot = await coldAgent.resumeSession({ ...scope, sessionId: sideSessionId });
+  const forkSnapshot = await coldAgent.resumeSession({ ...scope, sessionId: forkProof.forkedId });
+  await recordWorkerPid(coldAgent, scope, ownedProcessPids);
+  const coldVisibleInputs = await readLegacyVisibleInputs(coldAgent, scope, LEGACY_SESSION_ID);
   assert.deepEqual(modelCalls, [
     "fixture-model",
     "fixture-model",
     "fixture-model",
     "fixture-model",
     "fixture-other",
+    "fixture-model",
+    "fixture-model",
   ]);
   const expectedInputs = [
     "legacy core index seed",
@@ -282,12 +269,14 @@ try {
     "held parent input",
     "queued parent input",
     "selection side child input",
+    forkProof.editedText,
+    forkProof.editedText,
   ];
   const modelRequestContainsInput = expectedInputs.map(
     (input, index) => modelRequests[index]?.includes(input) ?? false,
   );
-  assert.deepEqual(modelRequestContainsInput, [true, true, true, true, true]);
-  const result: FixtureResult = {
+  assert.deepEqual(modelRequestContainsInput, [true, true, true, true, true, true, true]);
+  const result: LegacyFixtureResult = {
     kind: "result",
     unmappedOwner: null,
     indexedOriginalId: migrated.indexedOriginalId,
@@ -308,6 +297,9 @@ try {
     sideSessionId,
     sideSessionParentId: LEGACY_SESSION_ID,
     duplicateSideSessionStatus: duplicateSideAck.status,
+    ...forkProof,
+    forkColdId: forkSnapshot.session.sessionId,
+    coldVisibleInputs,
     modelCalls: [...modelCalls],
     modelRequestContainsInput,
     workerPids: [...ownedProcessPids],
