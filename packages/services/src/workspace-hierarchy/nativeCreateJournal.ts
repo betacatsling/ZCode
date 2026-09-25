@@ -133,16 +133,23 @@ export class NativeCreateJournal {
     };
   }
 
-  /** Read-only recovery, even with new admission disabled; no CLI spawn, migration or replay. */
-  async read(
-    commandId: string,
-  ): Promise<{ intent: NativeCreateIntent; mapping: NativeCreateMapping | undefined } | undefined> {
+  /** Read immutable ownership first; a foreign request must not probe its mapping or source DB. */
+  async readIntent(commandId: string): Promise<NativeCreateIntent | undefined> {
     const raw = await readJson(this.path(commandId, "intent"));
     if (raw === undefined) return undefined;
     const intent = intentSchema.parse(raw);
     if (!isAbsolute(intent.nativeDatabasePath) || !isAbsolute(intent.workspacePath))
       throw new Error("native-create-path-not-absolute");
     if (intent.commandId !== commandId) throw new Error("native-create-intent-id-conflict");
+    return intent;
+  }
+
+  /** Read-only recovery, even with new admission disabled; no CLI spawn, migration or replay. */
+  async read(
+    commandId: string,
+  ): Promise<{ intent: NativeCreateIntent; mapping: NativeCreateMapping | undefined } | undefined> {
+    const intent = await this.readIntent(commandId);
+    if (!intent) return undefined;
     const mappingRaw = await readJson(this.path(commandId, "mapping"));
     if (mappingRaw === undefined) return { intent, mapping: undefined };
     const mapping = mappingSchema.parse(mappingRaw);
@@ -150,6 +157,22 @@ export class NativeCreateJournal {
     if (!verified || JSON.stringify(verified) !== JSON.stringify(mapping))
       throw new Error("native-create-mapping-source-conflict");
     return { intent, mapping };
+  }
+
+  /** Certify a source-completed CLI receipt without writing the missing Core mapping or Catalog ref. */
+  async inspectCompleted(
+    commandId: string,
+  ): Promise<
+    { intent: NativeCreateIntent; originalSessionId?: string; mapped: boolean } | undefined
+  > {
+    const state = await this.read(commandId);
+    if (!state) return undefined;
+    const certificate = state.mapping ?? (await this.certified(state.intent));
+    return {
+      intent: state.intent,
+      ...(certificate ? { originalSessionId: certificate.originalSessionId } : {}),
+      mapped: !!state.mapping,
+    };
   }
 
   /** Only committed, individually source-certified mappings; no CLI spawn/migration on reads. */

@@ -50,6 +50,10 @@ try {
         options: { reasoningLevel: "off" },
       },
     };
+    const beforeRepair = await hierarchy.inspectCreateCommand({
+      workspaceId: "workspace",
+      commandId,
+    });
     let recovered: Awaited<ReturnType<typeof hierarchy.createAgent>> | undefined;
     try {
       recovered = await hierarchy.createAgent({
@@ -76,8 +80,22 @@ try {
       workspaceId: "workspace",
       sessionId: receipt.id,
     });
+    const ownInspect = await hierarchy.inspectCreateCommand({
+      workspaceId: "workspace",
+      commandId,
+    });
+    const foreignInspect =
+      process.env.CORE_NATIVE_SECOND_WORKSPACE_TEST_ONLY === "1"
+        ? await hierarchy.inspectCreateCommand({ workspaceId: "foreign-workspace", commandId })
+        : undefined;
     process.send?.({
       type: "boundary-read",
+      beforeRepair:
+        beforeRepair.status === "completed-unindexed"
+          ? { status: beforeRepair.status, originalSessionId: beforeRepair.originalSessionId }
+          : { status: beforeRepair.status },
+      ownInspect: { status: ownInspect.status },
+      foreignInspect: foreignInspect ? { status: foreignInspect.status } : undefined,
       status: receipt.status,
       originalId: receipt.id,
       owner: mapped?.kind === "native" && !mapped.historyOnly,
@@ -187,8 +205,16 @@ try {
       workspaceId: "workspace",
       commandId: "native-create-1",
     });
+    const foreignInspect =
+      process.env.CORE_NATIVE_SECOND_WORKSPACE_TEST_ONLY === "1"
+        ? await hierarchy.inspectCreateCommand({
+            workspaceId: "foreign-workspace",
+            commandId: "native-create-1",
+          })
+        : undefined;
     process.send?.({
       type: "read",
+      foreignInspect: foreignInspect ? { status: foreignInspect.status } : undefined,
       inspected:
         inspected.status === "unavailable"
           ? { status: inspected.status, diagnostic: inspected.diagnostic }

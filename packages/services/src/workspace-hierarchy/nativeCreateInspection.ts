@@ -9,25 +9,63 @@ export function createNativeCreateInspection(
   journal: NativeCreateJournal,
   configRoot: string,
 ): NonNullable<NativeRuntimeFactsPort["inspect"]> {
-  return async (commandId) => {
-    const entryId = createHash("sha256").update(commandId).digest("hex");
-    let state: Awaited<ReturnType<typeof journal.read>>;
+  return async (commandId, expected) => {
+    // 中文：所有结果（含 pending/损坏源）必须先证实命令属于这个 Catalog workspace，
+    // 否则拿到别人的 commandId 就能侧信道探测状态或哈希诊断。
+    let intent: Awaited<ReturnType<typeof journal.readIntent>>;
     try {
-      state = await journal.read(commandId);
+      intent = await journal.readIntent(commandId);
     } catch {
-      // 中文：坏映射/源库不能升级成当前 owner；仅报告脱敏单项诊断，不修盘或启动 CLI。
+      return { status: "unknown" };
+    }
+    if (
+      !intent ||
+      intent.workspaceId !== expected.workspaceId ||
+      intent.targetId !== expected.targetId ||
+      intent.workspaceIdentity !== expected.workspaceIdentity ||
+      intent.workspacePath !== expected.workspacePath
+    )
+      return { status: "unknown" };
+    const entryId = createHash("sha256").update(commandId).digest("hex");
+    let state: Awaited<ReturnType<typeof journal.inspectCompleted>>;
+    try {
+      state = await journal.inspectCompleted(commandId);
+    } catch {
+      // 中文：跨 await 修改意图时不能让 foreign 损坏源通过上一版归属校验泄露状态。
+      const latest = await journal.readIntent(commandId).catch(() => undefined);
+      if (
+        !latest ||
+        latest.workspaceId !== expected.workspaceId ||
+        latest.targetId !== expected.targetId ||
+        latest.workspaceIdentity !== expected.workspaceIdentity ||
+        latest.workspacePath !== expected.workspacePath
+      )
+        return { status: "unknown" };
       return { status: "unavailable", diagnostic: { entryId, reason: "uncertified-mapping" } };
     }
-    if (!state) return { status: "unknown" };
-    if (!state.mapping) return { status: "pending" };
-    const { intent, mapping } = state;
+    if (
+      !state ||
+      state.intent.workspaceId !== expected.workspaceId ||
+      state.intent.targetId !== expected.targetId ||
+      state.intent.workspaceIdentity !== expected.workspaceIdentity ||
+      state.intent.workspacePath !== expected.workspacePath
+    )
+      return { status: "unknown" };
+    if (!state.originalSessionId) return { status: "pending" };
+    const { originalSessionId } = state;
+    if (!state.mapped)
+      return {
+        status: "completed-unindexed",
+        originalSessionId,
+        diagnostic: { entryId, reason: "unreferenced-completion" },
+      };
     const refs = await readNativeCatalogReferences(
       join(configRoot, "workspace-hierarchy", "profile", "catalog.json"),
     );
     const referenced = refs.some(
       (ref) =>
         ref.commandId === intent.commandId &&
-        ref.originalSessionId === mapping.originalSessionId &&
+        ref.originalSessionId === originalSessionId &&
         ref.targetId === intent.targetId &&
         ref.projectId === intent.projectId &&
         ref.workspaceId === intent.workspaceId &&
@@ -38,10 +76,14 @@ export function createNativeCreateInspection(
         ref.remoteSessionId === intent.remoteSessionId,
     );
     if (!referenced)
-      return { status: "unavailable", diagnostic: { entryId, reason: "unreferenced-completion" } };
+      return {
+        status: "completed-unindexed",
+        originalSessionId,
+        diagnostic: { entryId, reason: "unreferenced-completion" },
+      };
     return {
       status: "completed",
-      originalSessionId: mapping.originalSessionId,
+      originalSessionId,
       intent: {
         targetId: intent.targetId,
         projectId: intent.projectId,

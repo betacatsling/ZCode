@@ -8,6 +8,11 @@ import {
   IZCodeAgentService,
 } from "@zcode/services";
 import { join } from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { mkdir, writeFile } from "node:fs/promises";
+
+const git = promisify(execFile);
 
 let core: Awaited<ReturnType<typeof createCoreAuthority>> | undefined;
 try {
@@ -106,6 +111,42 @@ try {
   await ordinary.release();
   await core.bootAdmissionLease.release();
   await core.bootAdmissionLease.release();
+  const foreign = join(process.env.ZCODE_DATA_BASE_DIR!, "boot-foreign-repo");
+  await mkdir(foreign, { recursive: true });
+  await git("git", ["init", "-q", foreign]);
+  await writeFile(join(foreign, "README"), "foreign\n");
+  await git("git", ["-C", foreign, "add", "README"]);
+  await git("git", [
+    "-C",
+    foreign,
+    "-c",
+    "user.email=fixture@example.invalid",
+    "-c",
+    "user.name=fixture",
+    "commit",
+    "-qm",
+    "initial",
+  ]);
+  await catalog.importProject({
+    id: "boot-foreign-project",
+    name: "Foreign",
+    targetId: "native-mount-fixture",
+    repositoryPath: foreign,
+    bindingId: "boot-foreign-binding",
+  });
+  await catalog.adopt({
+    bindingId: "boot-foreign-binding",
+    workspaceId: "boot-foreign-workspace",
+    title: "Foreign",
+    worktreePath: foreign,
+  });
+  assert.deepEqual(
+    await hierarchy.inspectCreateCommand({
+      workspaceId: "boot-foreign-workspace",
+      commandId: "native-create-1",
+    }),
+    { status: "unknown" },
+  );
   if (original.status === "completed") {
     const retry = await hierarchy.createAgent({
       workspaceId: "workspace",

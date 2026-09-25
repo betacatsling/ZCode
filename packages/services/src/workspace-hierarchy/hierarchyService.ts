@@ -26,11 +26,19 @@ export interface NativeHierarchyPort {
   recover?(
     input: Parameters<NativeHierarchyPort["create"]>[0],
   ): Promise<{ originalSessionId: string; creationRemoteSessionId?: string } | undefined>;
-  inspect?(commandId: string): Promise<
+  inspect?(
+    commandId: string,
+    expected: WorkspaceNavigationScope,
+  ): Promise<
     | { status: "unknown" | "pending" }
     | {
         status: "unavailable";
-        diagnostic: { entryId: string; reason: "uncertified-mapping" | "unreferenced-completion" };
+        diagnostic: { entryId: string; reason: "uncertified-mapping" };
+      }
+    | {
+        status: "completed-unindexed";
+        originalSessionId: string;
+        diagnostic: { entryId: string; reason: "unreferenced-completion" };
       }
     | {
         status: "completed";
@@ -541,7 +549,7 @@ export function createWorkspaceHierarchyService(input: {
       const scope = await scopeFor(request.workspaceId);
       if (!scope) throw new Error("Unknown target workspace");
       const view = scopeWithAttachment(scope, request.attachment);
-      const inspected = await input.native?.inspect?.(request.commandId);
+      const inspected = await input.native?.inspect?.(request.commandId, scope);
       if (!inspected) throw new Error("Native read-only inspection unavailable");
       if (inspected.status !== "completed") return inspected;
       const snapshot = await input.catalog.sidebarSnapshot();

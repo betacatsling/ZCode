@@ -43,7 +43,12 @@ export type CreateCommandInspection =
   | { status: "unknown" | "pending" }
   | {
       status: "unavailable";
-      diagnostic: { entryId: string; reason: "uncertified-mapping" | "unreferenced-completion" };
+      diagnostic: { entryId: string; reason: "uncertified-mapping" };
+    }
+  | {
+      status: "completed-unindexed";
+      originalSessionId: string;
+      diagnostic: { entryId: string; reason: "unreferenced-completion" };
     }
   | { status: "completed"; owner: Extract<SessionOwner, { kind: "native" }> };
 

@@ -169,6 +169,39 @@ try {
       worktreePath: repo,
     });
   }
+  if (process.env.CORE_NATIVE_SECOND_WORKSPACE_TEST_ONLY === "1") {
+    // 中文：另一独立 Git 仓库只为实际 Target/Catalog 的 foreign command 检查；
+    // 原有两个 original ID 仍在同一真实 worktree，不引入第二个业务 CLI。
+    const foreign = join(root, "foreign-repo");
+    await mkdir(foreign, { recursive: true });
+    await git("git", ["init", "-q", foreign]);
+    await writeFile(join(foreign, "README"), "foreign\n");
+    await git("git", ["-C", foreign, "add", "README"]);
+    await git("git", [
+      "-C",
+      foreign,
+      "-c",
+      "user.email=fixture@example.invalid",
+      "-c",
+      "user.name=fixture",
+      "commit",
+      "-qm",
+      "initial",
+    ]);
+    await catalog.importProject({
+      id: "foreign-project",
+      name: "Foreign",
+      targetId: "native-mount-fixture",
+      repositoryPath: foreign,
+      bindingId: "foreign-binding",
+    });
+    await catalog.adopt({
+      bindingId: "foreign-binding",
+      workspaceId: "foreign-workspace",
+      title: "Foreign",
+      worktreePath: foreign,
+    });
+  }
   const binding = {
     kind: "host-managed" as const,
     selection: {

@@ -186,6 +186,9 @@ for (const variant of [
         CORE_NATIVE_BOOT_FENCE_TEST_ONLY: variant === "per-id-model" ? "1" : "0",
         CORE_INGRESS_ROTATE_WORKER_TEST_ONLY: variant === "worker-rotation" ? "1" : "0",
         CORE_INGRESS_SCHEMA_BETWEEN_TEST_ONLY: variant === "schema-between" ? "1" : "0",
+        CORE_NATIVE_SECOND_WORKSPACE_TEST_ONLY: ["pending", "damaged"].includes(variant)
+          ? "1"
+          : "0",
         CORE_NATIVE_FAILURE_BOUNDARY_TEST_ONLY: ["pending", "completed", "schema"].includes(variant)
           ? variant
           : "",
@@ -276,6 +279,9 @@ for (const variant of [
           ZCODE_CORE_NATIVE_CREATE_TEST_ONLY: "0",
           ZCODE_SESSION_DB_PATH: secondSource ?? dbPath,
           CORE_NATIVE_IDS: JSON.stringify(recoveredIds),
+          CORE_NATIVE_SECOND_WORKSPACE_TEST_ONLY: ["pending", "damaged"].includes(variant)
+            ? "1"
+            : "0",
           CORE_NATIVE_VERIFY_INPUT: variant === "per-id-model" ? "1" : "0",
           CORE_NATIVE_RECOVER_BOUNDARY_TEST_ONLY:
             variant === "pending" || variant === "completed" ? variant : "",
@@ -291,9 +297,19 @@ for (const variant of [
         assert.equal(result.type, "boundary-read");
         assert.equal(result.status, variant);
         assert.equal(result.originalId, first.originalId);
+        assert.deepEqual(
+          result.beforeRepair,
+          variant === "pending"
+            ? { status: "pending" }
+            : { status: "completed-unindexed", originalSessionId: first.originalId },
+        );
         assert.equal(result.owner, variant === "completed");
         assert.equal(result.listed, variant === "completed");
         assert.equal(result.unrelated, true);
+        if (variant === "pending") {
+          assert.deepEqual(result.ownInspect, { status: "pending" });
+          assert.deepEqual(result.foreignInspect, { status: "unknown" });
+        }
         assert.equal(result.after - result.before, variant === "completed" ? 1 : 0);
         assert.equal(calls.length, 0);
         const catalog = JSON.parse(
@@ -317,6 +333,7 @@ for (const variant of [
         assert.equal(result.type, "read");
         assert.equal(result.healthy, true);
         assert.equal(result.damaged, variant === "damaged" || variant === "source-db");
+        if (variant === "damaged") assert.deepEqual(result.foreignInspect, { status: "unknown" });
         if (variant === "damaged" || variant === "source-db") {
           assert.deepEqual(result.inspected, {
             status: "unavailable",

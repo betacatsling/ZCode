@@ -163,8 +163,8 @@ export function createNativeProductionBridge(options: {
     },
     create: (request) => options.runtime.create(request),
     recover: (request) => options.runtime.recover?.(request) ?? Promise.resolve(undefined),
-    inspect: (commandId) =>
-      options.runtime.inspect?.(commandId) ??
+    inspect: (commandId, expected) =>
+      options.runtime.inspect?.(commandId, expected) ??
       Promise.reject(new Error("Native inspection unavailable")),
     capabilities: (owner) => options.runtime.capabilities(owner),
   };
