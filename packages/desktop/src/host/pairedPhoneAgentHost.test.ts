@@ -138,6 +138,17 @@ test("Host registration exposes no window-wide or privileged channels", async ()
       workspacePath: "/a",
       targetId: "local",
     }),
+    resolveOwner: async () => ({
+      kind: "external",
+      scope: {
+        workspaceId: "a",
+        targetId: "local",
+        workspaceIdentity: "local:a",
+        workspacePath: "/a",
+      },
+      spec,
+      historyOnly: false,
+    }),
   } as unknown as IWorkspaceHierarchyService;
   const services = new ServiceCollection()
     .register(IAgentHostService, owner)
@@ -153,7 +164,21 @@ test("Host registration exposes no window-wide or privileged channels", async ()
     scope,
     () => true,
   );
-  assert.deepEqual([...channels.keys()], [IAgentHostService.channelName]);
+  assert.deepEqual(
+    [...channels.keys()],
+    [IAgentHostService.channelName, IWorkspaceHierarchyService.channelName],
+  );
+  const narrowHierarchy = channels.get(IWorkspaceHierarchyService.channelName)!;
+  await assert.rejects(
+    narrowHierarchy.call(null as never, "resolveOwner", [
+      { targetId: "local", workspaceId: "b", sessionId: "session-b" },
+    ]),
+    /denied/,
+  );
+  assert.throws(
+    () => narrowHierarchy.call(null as never, "createAgent", [{ workspaceId: "a" }]),
+    /denied/,
+  );
   const channel = channels.get(IAgentHostService.channelName)!;
   await assert.rejects(
     channel.call(null as never, "dispatch", [foreign, { type: "sendText" }]),

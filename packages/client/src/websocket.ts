@@ -16,6 +16,8 @@ export interface WebSocketConnectionCloseEvent {
 }
 
 interface WebSocketConnectionOptions {
+  /** Browser WS CSRF subprotocol supplied privately after authenticated pairing; never a URL parameter. */
+  protocols?: string[];
   onClose?: (event: WebSocketConnectionCloseEvent) => void;
   onOpenSocket?: (socket: WebSocket) => void;
 }
@@ -64,7 +66,7 @@ export function connectViaWebSocket(
   options?: WebSocketConnectionOptions,
 ): Promise<IServiceAccessor> {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(wsUrl);
+    const ws = new WebSocket(wsUrl, options?.protocols);
     let settled = false;
 
     ws.addEventListener("error", () => {

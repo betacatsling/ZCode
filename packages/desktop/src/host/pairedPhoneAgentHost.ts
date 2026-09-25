@@ -46,6 +46,96 @@ export function registerPairedPhoneChannel(
       return channel.listen(ctx, event, arg);
     },
   });
+  const hierarchy = services.get(IWorkspaceHierarchyService);
+  const ownerInput = {
+    targetId: "",
+    workspaceId: scope.workspaceId,
+    sessionId: scope.hostSessionId,
+  };
+  const checkOwner = async () => {
+    if (!current()) throw new Error("phone attachment denied");
+    const availability = await services.get(IAgentHostService).getAvailability();
+    if (!availability.target.available || !availability.target.id)
+      throw new Error("phone attachment denied");
+    const targetId = availability.target.id;
+    const workspace = await hierarchy.resolveWorkspace({
+      workspacePath: scope.workspacePath,
+      workspaceIdentity: scope.workspaceIdentity,
+      targetId,
+    });
+    if (
+      !current() ||
+      !workspace ||
+      workspace.workspaceId !== scope.workspaceId ||
+      workspace.workspaceIdentity !== scope.workspaceIdentity ||
+      workspace.workspacePath !== scope.workspacePath ||
+      workspace.targetId !== targetId
+    )
+      throw new Error("phone attachment denied");
+    const owner = await hierarchy.resolveOwner({ ...ownerInput, targetId });
+    if (
+      !current() ||
+      owner?.kind !== "external" ||
+      owner.spec.hostSessionId !== scope.hostSessionId ||
+      owner.scope.workspaceId !== scope.workspaceId ||
+      owner.scope.workspacePath !== scope.workspacePath ||
+      owner.scope.workspaceIdentity !== scope.workspaceIdentity ||
+      owner.scope.targetId !== targetId
+    )
+      throw new Error("phone attachment denied");
+    return owner;
+  };
+  const hierarchyChannel = ProxyChannel.fromService({
+    async resolveOwner(input: typeof ownerInput) {
+      const owner = await checkOwner();
+      if (
+        input?.targetId !== owner.scope.targetId ||
+        input.workspaceId !== scope.workspaceId ||
+        input.sessionId !== scope.hostSessionId
+      )
+        throw new Error("phone attachment denied");
+      return owner;
+    },
+    async capabilities(input: Parameters<IWorkspaceHierarchyService["capabilities"]>[0]) {
+      const owner = await checkOwner();
+      if (JSON.stringify(input) !== JSON.stringify(owner))
+        throw new Error("phone attachment denied");
+      const result = await hierarchy.capabilities(owner);
+      if (!current()) throw new Error("phone attachment denied");
+      return result;
+    },
+    async listHarnesses(workspaceId: string) {
+      const owner = await checkOwner();
+      if (workspaceId !== scope.workspaceId) throw new Error("phone attachment denied");
+      const entries = await hierarchy.listHarnesses(scope.workspaceId);
+      if (!current()) throw new Error("phone attachment denied");
+      return entries.filter((entry) => entry.manifest.id === owner.spec.harness.id);
+    },
+    async asset(assetId: string) {
+      const owner = await checkOwner();
+      const entries = await hierarchy.listHarnesses(scope.workspaceId);
+      const entry = entries.find((item) => item.manifest.id === owner.spec.harness.id);
+      if (
+        !current() ||
+        !entry ||
+        (assetId !== entry.manifest.icon?.light && assetId !== entry.manifest.icon?.dark)
+      )
+        throw new Error("phone asset denied");
+      const result = await hierarchy.asset(assetId);
+      if (!current()) throw new Error("phone attachment denied");
+      return result;
+    },
+  });
+  server.registerChannel(IWorkspaceHierarchyService.channelName, {
+    call(ctx, command, args, token) {
+      if (!new Set(["resolveOwner", "capabilities", "listHarnesses", "asset"]).has(command))
+        throw new Error("phone method denied");
+      return hierarchyChannel.call(ctx, command, args, token);
+    },
+    listen() {
+      throw new Error("phone event denied");
+    },
+  });
 }
 
 /** Narrow RPC surface for an already paired view. Never hand the window-wide collection to a phone. */

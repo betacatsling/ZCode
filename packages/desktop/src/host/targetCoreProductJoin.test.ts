@@ -275,7 +275,10 @@ test("real Core RPC mounts Git Catalog and hierarchy across window detach/restar
         },
         () => true,
       );
-      assert.deepEqual([...channels.keys()], [IAgentHostService.channelName]);
+      assert.deepEqual(
+        [...channels.keys()],
+        [IAgentHostService.channelName, IWorkspaceHierarchyService.channelName],
+      );
       const phoneHost = channels.get(IAgentHostService.channelName)!;
       await assert.rejects(
         phoneHost.call(null as never, "getSessionSpec", [

@@ -3,7 +3,14 @@ import { test } from "node:test";
 import { createPhoneAttachmentConsent } from "./phoneAttachmentConsent.js";
 
 const origin = "http://127.0.0.1:18191";
-const scope = { windowId: 7, workspacePath: "/same", workspaceIdentity: "remote:a", origin };
+const scope = {
+  windowId: 7,
+  workspaceId: "workspace-a",
+  hostSessionId: "session-a",
+  workspacePath: "/same",
+  workspaceIdentity: "remote:a",
+  origin,
+};
 
 test("default off; one-use bounded pair and exact origin/Host/identity", () => {
   let host: object | undefined = {};

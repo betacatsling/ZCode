@@ -3,12 +3,16 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 /** Main-owned consent state, never a Core/Host business owner or renderer authorization claim. */
 interface PhoneScope {
   windowId: number;
+  workspaceId: string;
+  hostSessionId: string;
   workspacePath: string;
   workspaceIdentity?: string;
   origin: string;
 }
 interface BoundScope {
   windowId: number;
+  workspaceId: string;
+  hostSessionId: string;
   workspacePath: string;
   workspaceKey: string;
   origin: string;
@@ -59,6 +63,8 @@ function sameScope(scope: BoundScope, input: PhoneScope, host: object | undefine
   return (
     scope.host === host &&
     scope.windowId === input.windowId &&
+    scope.workspaceId === input.workspaceId &&
+    scope.hostSessionId === input.hostSessionId &&
     scope.workspacePath === input.workspacePath &&
     scope.workspaceKey === (input.workspaceIdentity?.trim() || input.workspacePath) &&
     scope.origin === input.origin
@@ -115,6 +121,8 @@ export function createPhoneAttachmentConsent(options: {
       if (
         !host ||
         !Number.isSafeInteger(input.windowId) ||
+        !input.workspaceId ||
+        !input.hostSessionId ||
         !input.workspacePath ||
         !(input.workspaceIdentity?.trim() || input.workspacePath)
       ) {
@@ -127,6 +135,8 @@ export function createPhoneAttachmentConsent(options: {
         value,
         scope: {
           windowId: input.windowId,
+          workspaceId: input.workspaceId,
+          hostSessionId: input.hostSessionId,
           host,
           origin: input.origin,
           workspacePath: input.workspacePath,
