@@ -145,7 +145,10 @@ const desktopConfigs: Options[] = [
       "main/index": "src/main/index.ts",
       // Isolated, explicitly guarded test-only Electron entry; never included in packaged app.
       ...(process.env.ZCODE_ACTUAL_SHELL_FIXTURE_BUILD === "1"
-        ? { "main/actualShellMount": "e2e/actualShellMount.main.ts" }
+        ? {
+            "main/actualShellMount": "e2e/actualShellMount.main.ts",
+            "main/loadProductMount": "e2e/loadProductMount.main.ts",
+          }
         : {}),
       "main/browserWebmRecorder": "src/main/browserView/electronBrowserWebmRecorder.ts",
       "main/zcodeDataSizeWorker": "src/main/zcodeDataSizeWorker.ts",
