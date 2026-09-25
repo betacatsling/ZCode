@@ -602,251 +602,281 @@ test(
   },
 );
 
-test(
-  "pinned OS child death behind Host ACK persists unknown across independent reopen without replay",
-  { skip: process.env.ZCODE_CODEX_HOST_OS_DEATH !== "1", timeout: 45000 },
-  async (t) => {
-    const { createServer } = await import("node:http");
-    const { once } = await import("node:events");
-    const root = await mkdtemp(join(tmpdir(), "codex-host-os-death-"));
-    const worktree = join(root, "worktree");
-    await mkdir(worktree);
-    const profileRoot = join(root, "profiles");
-    const journalRoot = join(root, "journal");
-    const hostSpec: SessionSpecV2 = {
-      ...spec,
-      hostSessionId: randomUUID(),
-      execution: { ...spec.execution, worktreePath: worktree },
-    };
-    const target = {
-      id: hostSpec.execution.targetId,
-      kind: "local" as const,
-      platform: process.platform as "darwin" | "linux",
-      available: true,
-    };
-    const catalog = {
-      fingerprint: "synthetic-catalog",
-      validateSelection: () => ({ ok: true as const }),
-    };
-    const revoked: string[] = [];
-    let leaseIssues = 0;
-    let upstreamRequests = 0;
-    let appServerCount = 0;
-    let nativeProcess: ChildProcessWithoutNullStreams | undefined;
-    let heldAckCount = 0;
-    let resolveHeldAck!: () => void;
-    const heldAck = new Promise<void>((resolve) => {
-      resolveHeldAck = resolve;
-    });
-    const upstream = createServer((request, response) => {
-      if (request.method !== "POST" || request.url !== "/v1/responses") {
-        response.writeHead(404).end();
-        return;
-      }
-      upstreamRequests++;
-      void (async () => {
-        let bytes = 0;
-        for await (const chunk of request) {
-          bytes += Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(String(chunk));
-          if (bytes > 1024 * 1024) {
-            response.writeHead(413).end();
-            return;
-          }
-        }
-        response.writeHead(503).end("synthetic upstream unavailable");
-      })().catch(() => response.destroy());
-    });
-    const spawnProcess: typeof spawn = (command, args, options) => {
-      const child = spawn(command, args, options);
-      if (args?.[0] !== "app-server") return child;
-      appServerCount++;
-      nativeProcess = child as ChildProcessWithoutNullStreams;
-      const originalStdout = nativeProcess.stdout;
-      const output = new PassThrough();
-      nativeProcess.stdout = output;
-      const decoder = new StringDecoder("utf8");
-      let buffered = "";
-      originalStdout.on("data", (chunk: Buffer) => {
-        buffered += decoder.write(chunk);
-        for (;;) {
-          const end = buffered.indexOf("\n");
-          if (end < 0) break;
-          const line = buffered.slice(0, end + 1);
-          buffered = buffered.slice(end + 1);
-          const frame = JSON.parse(line) as { result?: { turn?: { id?: unknown } } };
-          if (typeof frame.result?.turn?.id === "string" && heldAckCount === 0) {
-            heldAckCount++;
-            resolveHeldAck();
-          } else {
-            output.write(line);
-          }
-        }
+for (const nativeFault of ["signal-death", "fragmented-unterminated", "aggregate-early"] as const) {
+  test(
+    `pinned OS child ${nativeFault} behind Host ACK persists unknown across independent reopen without replay`,
+    {
+      skip:
+        process.env[
+          nativeFault === "signal-death"
+            ? "ZCODE_CODEX_HOST_OS_DEATH"
+            : "ZCODE_CODEX_HOST_OS_BYTE_FAULT"
+        ] !== "1",
+      timeout: 45000,
+    },
+    async (t) => {
+      const { createServer } = await import("node:http");
+      const { once } = await import("node:events");
+      const root = await mkdtemp(join(tmpdir(), "codex-host-os-death-"));
+      const worktree = join(root, "worktree");
+      await mkdir(worktree);
+      const profileRoot = join(root, "profiles");
+      const journalRoot = join(root, "journal");
+      const hostSpec: SessionSpecV2 = {
+        ...spec,
+        hostSessionId: randomUUID(),
+        execution: { ...spec.execution, worktreePath: worktree },
+      };
+      const target = {
+        id: hostSpec.execution.targetId,
+        kind: "local" as const,
+        platform: process.platform as "darwin" | "linux",
+        available: true,
+      };
+      const catalog = {
+        fingerprint: "synthetic-catalog",
+        validateSelection: () => ({ ok: true as const }),
+      };
+      const revoked: string[] = [];
+      let leaseIssues = 0;
+      let upstreamRequests = 0;
+      let appServerCount = 0;
+      let nativeProcess: ChildProcessWithoutNullStreams | undefined;
+      let injectedStdout: PassThrough | undefined;
+      let heldAckCount = 0;
+      let resolveHeldAck!: () => void;
+      const heldAck = new Promise<void>((resolve) => {
+        resolveHeldAck = resolve;
       });
-      originalStdout.once("end", () => output.end());
-      originalStdout.once("error", (error) => output.destroy(error));
-      return child;
-    };
-    let host: SessionHost | undefined;
-    let reopened: SessionHost | undefined;
-    const adapters: CodexHarnessAdapter[] = [];
-    let gatewayUrl: string | undefined;
-    const makeAdapter = () => {
-      if (!gatewayUrl) throw new Error("owned fake upstream is not listening");
-      const adapter = new CodexHarnessAdapter({
-        root: profileRoot,
-        executable: "codex",
-        spawnProcess,
-        lease: {
-          gatewayUrl,
-          gateway: { issueToken: async () => "", revokeToken: (token) => revoked.push(token) },
-          issue: async () => {
-            leaseIssues++;
-            return { token: `synthetic-os-death-${leaseIssues}`, modelAlias: "synthetic-os-model" };
+      const upstream = createServer((request, response) => {
+        if (request.method !== "POST" || request.url !== "/v1/responses") {
+          response.writeHead(404).end();
+          return;
+        }
+        upstreamRequests++;
+        void (async () => {
+          let bytes = 0;
+          for await (const chunk of request) {
+            bytes += Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(String(chunk));
+            if (bytes > 1024 * 1024) {
+              response.writeHead(413).end();
+              return;
+            }
+          }
+          response.writeHead(503).end("synthetic upstream unavailable");
+        })().catch(() => response.destroy());
+      });
+      const spawnProcess: typeof spawn = (command, args, options) => {
+        const child = spawn(command, args, options);
+        if (args?.[0] !== "app-server") return child;
+        appServerCount++;
+        nativeProcess = child as ChildProcessWithoutNullStreams;
+        const originalStdout = nativeProcess.stdout;
+        const output = new PassThrough();
+        injectedStdout = output;
+        nativeProcess.stdout = output;
+        const decoder = new StringDecoder("utf8");
+        let buffered = "";
+        originalStdout.on("data", (chunk: Buffer) => {
+          buffered += decoder.write(chunk);
+          for (;;) {
+            const end = buffered.indexOf("\n");
+            if (end < 0) break;
+            const line = buffered.slice(0, end + 1);
+            buffered = buffered.slice(end + 1);
+            const frame = JSON.parse(line) as { result?: { turn?: { id?: unknown } } };
+            if (typeof frame.result?.turn?.id === "string" && heldAckCount === 0) {
+              heldAckCount++;
+              resolveHeldAck();
+            } else {
+              output.write(line);
+            }
+          }
+        });
+        originalStdout.once("end", () => output.end());
+        originalStdout.once("error", (error) => output.destroy(error));
+        return child;
+      };
+      let host: SessionHost | undefined;
+      let reopened: SessionHost | undefined;
+      const adapters: CodexHarnessAdapter[] = [];
+      let gatewayUrl: string | undefined;
+      const makeAdapter = () => {
+        if (!gatewayUrl) throw new Error("owned fake upstream is not listening");
+        const adapter = new CodexHarnessAdapter({
+          root: profileRoot,
+          executable: "codex",
+          spawnProcess,
+          lease: {
+            gatewayUrl,
+            gateway: { issueToken: async () => "", revokeToken: (token) => revoked.push(token) },
+            issue: async () => {
+              leaseIssues++;
+              return {
+                token: `synthetic-os-death-${leaseIssues}`,
+                modelAlias: "synthetic-os-model",
+              };
+            },
           },
-        },
-      });
-      adapters.push(adapter);
-      return adapter;
-    };
-    let adapter: CodexHarnessAdapter | undefined;
-    const makeRegistry = (current: CodexHarnessAdapter) => {
-      const registry = new HarnessRegistry();
-      registry.registerTrusted(codexTrustedManifest, () => current);
-      return registry;
-    };
-    try {
-      upstream.listen(0, "127.0.0.1");
-      await bounded(once(upstream, "listening"), 2000);
-      const address = upstream.address();
-      assert.ok(address && typeof address !== "string");
-      gatewayUrl = `http://127.0.0.1:${address.port}/v1`;
-      // The app-server targets this test-owned OS-assigned loopback fake upstream only.
-      const initialAdapter = makeAdapter();
-      adapter = initialAdapter;
-      host = await SessionHost.create({
-        root: journalRoot,
-        spec: hostSpec,
-        registry: makeRegistry(initialAdapter),
-        target,
-        catalog,
-      });
-      const accepted = await host.dispatch({
-        type: "send",
-        commandId: "accepted-os-once",
-        hostSessionId: hostSpec.hostSessionId,
-        turnId: "os-turn",
-        text: "synthetic request before held native ACK",
-      });
-      assert.equal(accepted.status, "accepted");
-      await bounded(heldAck, 15000);
-      assert.equal(heldAckCount, 1, "the stdout proxy withheld one genuine native turn/start ACK");
-      assert.ok(nativeProcess?.pid, "one actual pinned app-server PID must be owned");
-      // ACK delivery order is not a provider-effect proof; record zero or more actual fake-upstream requests.
+        });
+        adapters.push(adapter);
+        return adapter;
+      };
+      let adapter: CodexHarnessAdapter | undefined;
+      const makeRegistry = (current: CodexHarnessAdapter) => {
+        const registry = new HarnessRegistry();
+        registry.registerTrusted(codexTrustedManifest, () => current);
+        return registry;
+      };
+      try {
+        upstream.listen(0, "127.0.0.1");
+        await bounded(once(upstream, "listening"), 2000);
+        const address = upstream.address();
+        assert.ok(address && typeof address !== "string");
+        gatewayUrl = `http://127.0.0.1:${address.port}/v1`;
+        // The app-server targets this test-owned OS-assigned loopback fake upstream only.
+        const initialAdapter = makeAdapter();
+        adapter = initialAdapter;
+        host = await SessionHost.create({
+          root: journalRoot,
+          spec: hostSpec,
+          registry: makeRegistry(initialAdapter),
+          target,
+          catalog,
+        });
+        const accepted = await host.dispatch({
+          type: "send",
+          commandId: "accepted-os-once",
+          hostSessionId: hostSpec.hostSessionId,
+          turnId: "os-turn",
+          text: "synthetic request before held native ACK",
+        });
+        assert.equal(accepted.status, "accepted");
+        await bounded(heldAck, 15000);
+        assert.equal(
+          heldAckCount,
+          1,
+          "the stdout proxy withheld one genuine native turn/start ACK",
+        );
+        assert.ok(nativeProcess?.pid, "one actual pinned app-server PID must be owned");
+        // ACK delivery order is not a provider-effect proof; record zero or more actual fake-upstream requests.
 
-      const nativeExit = once(nativeProcess, "exit");
-      nativeProcess.kill("SIGKILL");
-      const [exitCode, signal] = await bounded(nativeExit, 3000);
-      assert.equal(exitCode, null);
-      assert.equal(signal, "SIGKILL");
-      assert.equal(nativeProcess.exitCode, null);
-      assert.equal(nativeProcess.signalCode, "SIGKILL");
-      await bounded(host.whenIdle(), 5000);
-      assert.equal(host.queryCommand("accepted-os-once")?.status, "execution-unknown");
-      assert.deepEqual(
-        revoked,
-        ["synthetic-os-death-1"],
-        "the admitted turn lease is revoked once",
-      );
-      assert.equal(
-        host.eventsSince(0).find((event) => event.kind === "turn.finished")?.outcome,
-        "unknown",
-      );
-      const requestsAtDeath = upstreamRequests;
-      const duplicate = await host.dispatch({
-        type: "send",
-        commandId: "accepted-os-once",
-        hostSessionId: hostSpec.hostSessionId,
-        turnId: "os-turn",
-        text: "synthetic request before held native ACK",
-      });
-      assert.equal(duplicate.status, "duplicate");
-      const blocked = await host.dispatch({
-        type: "send",
-        commandId: "os-retry",
-        hostSessionId: hostSpec.hostSessionId,
-        turnId: "os-retry-turn",
-        text: "must not be sent again",
-      });
-      assert.equal(blocked.status, "rejected");
-      assert.equal(blocked.reasonCode, "execution-unknown");
-      assert.equal(appServerCount, 1);
-      await host.close();
-      host = undefined;
-      await adapter?.shutdown();
+        const nativeExit = once(nativeProcess, "exit");
+        if (nativeFault === "signal-death") nativeProcess.kill("SIGKILL");
+        else if (nativeFault === "fragmented-unterminated") {
+          // 修复依据：真实进程的预 ACK 流也必须按累计字节拒绝，不能只依赖模拟子进程的同步退出。
+          injectedStdout!.write(Buffer.alloc(600_000, 120));
+          injectedStdout!.write(Buffer.alloc(500_000, 120));
+        } else {
+          const line = `${JSON.stringify({ method: "thread/name/updated", params: { payload: "x".repeat(600_000) } })}\n`;
+          injectedStdout!.write(Buffer.from(line + line));
+        }
+        const [exitCode, signal] = await bounded(nativeExit, 3000);
+        assert.ok(exitCode !== null || signal !== null, "actual native child must be OS-reaped");
+        if (nativeFault === "signal-death") {
+          assert.equal(exitCode, null);
+          assert.equal(signal, "SIGKILL");
+        }
+        assert.equal(nativeProcess.exitCode, exitCode);
+        assert.equal(nativeProcess.signalCode, signal);
+        await bounded(host.whenIdle(), 5000);
+        assert.equal(host.queryCommand("accepted-os-once")?.status, "execution-unknown");
+        assert.deepEqual(
+          revoked,
+          ["synthetic-os-death-1"],
+          "the admitted turn lease is revoked once",
+        );
+        assert.equal(
+          host.eventsSince(0).find((event) => event.kind === "turn.finished")?.outcome,
+          "unknown",
+        );
+        const requestsAtDeath = upstreamRequests;
+        const duplicate = await host.dispatch({
+          type: "send",
+          commandId: "accepted-os-once",
+          hostSessionId: hostSpec.hostSessionId,
+          turnId: "os-turn",
+          text: "synthetic request before held native ACK",
+        });
+        assert.equal(duplicate.status, "duplicate");
+        const blocked = await host.dispatch({
+          type: "send",
+          commandId: "os-retry",
+          hostSessionId: hostSpec.hostSessionId,
+          turnId: "os-retry-turn",
+          text: "must not be sent again",
+        });
+        assert.equal(blocked.status, "rejected");
+        assert.equal(blocked.reasonCode, "execution-unknown");
+        assert.equal(appServerCount, 1);
+        await host.close();
+        host = undefined;
+        await adapter?.shutdown();
 
-      const reopenedAdapter = makeAdapter();
-      reopened = await SessionHost.open({
-        root: journalRoot,
-        spec: hostSpec,
-        registry: makeRegistry(reopenedAdapter),
-        target,
-        catalog,
-      });
-      assert.equal(reopened.queryCommand("accepted-os-once")?.status, "execution-unknown");
-      assert.equal(
-        reopened.eventsSince(0).find((event) => event.kind === "turn.finished")?.outcome,
-        "unknown",
-      );
-      const persistedDuplicate = await reopened.dispatch({
-        type: "send",
-        commandId: "accepted-os-once",
-        hostSessionId: hostSpec.hostSessionId,
-        turnId: "os-turn",
-        text: "synthetic request before held native ACK",
-      });
-      assert.equal(persistedDuplicate.status, "duplicate");
-      const afterReopen = await reopened.dispatch({
-        type: "send",
-        commandId: "os-retry-after-reopen",
-        hostSessionId: hostSpec.hostSessionId,
-        turnId: "os-retry-after-reopen",
-        text: "must not be resent after independent reopen",
-      });
-      assert.equal(afterReopen.status, "rejected");
-      assert.equal(afterReopen.reasonCode, "execution-unknown");
-      assert.equal(leaseIssues, 1, "reopen and retry must not issue a replacement lease");
-      assert.deepEqual(revoked, ["synthetic-os-death-1"]);
-      assert.equal(appServerCount, 1, "no replacement native child may be launched");
-      assert.equal(
-        upstreamRequests,
-        requestsAtDeath,
-        "no upstream request may follow the blocked retry",
-      );
-      t.diagnostic(
-        `pinned pid=${nativeProcess.pid} exit=null signal=SIGKILL; heldACK=${heldAckCount}; fakeRequestsBeforeKill=${upstreamRequests}; leaseIssues=${leaseIssues}; revokes=${revoked.length}; appServers=${appServerCount}; independentHost=reopened-unknown`,
-      );
-    } finally {
-      if (nativeProcess && nativeProcess.exitCode === null && nativeProcess.signalCode === null) {
-        const exit = once(nativeProcess, "exit");
-        nativeProcess.kill("SIGKILL");
-        await bounded(exit, 3000);
+        const reopenedAdapter = makeAdapter();
+        reopened = await SessionHost.open({
+          root: journalRoot,
+          spec: hostSpec,
+          registry: makeRegistry(reopenedAdapter),
+          target,
+          catalog,
+        });
+        assert.equal(reopened.queryCommand("accepted-os-once")?.status, "execution-unknown");
+        assert.equal(
+          reopened.eventsSince(0).find((event) => event.kind === "turn.finished")?.outcome,
+          "unknown",
+        );
+        const persistedDuplicate = await reopened.dispatch({
+          type: "send",
+          commandId: "accepted-os-once",
+          hostSessionId: hostSpec.hostSessionId,
+          turnId: "os-turn",
+          text: "synthetic request before held native ACK",
+        });
+        assert.equal(persistedDuplicate.status, "duplicate");
+        const afterReopen = await reopened.dispatch({
+          type: "send",
+          commandId: "os-retry-after-reopen",
+          hostSessionId: hostSpec.hostSessionId,
+          turnId: "os-retry-after-reopen",
+          text: "must not be resent after independent reopen",
+        });
+        assert.equal(afterReopen.status, "rejected");
+        assert.equal(afterReopen.reasonCode, "execution-unknown");
+        assert.equal(leaseIssues, 1, "reopen and retry must not issue a replacement lease");
+        assert.deepEqual(revoked, ["synthetic-os-death-1"]);
+        assert.equal(appServerCount, 1, "no replacement native child may be launched");
+        assert.equal(
+          upstreamRequests,
+          requestsAtDeath,
+          "no upstream request may follow the blocked retry",
+        );
+        t.diagnostic(
+          `pinned pid=${nativeProcess.pid} exit=${exitCode} signal=${signal}; fault=${nativeFault}; heldACK=${heldAckCount}; fakeRequestsAtFault=${upstreamRequests}; leaseIssues=${leaseIssues}; revokes=${revoked.length}; appServers=${appServerCount}; independentHost=reopened-unknown`,
+        );
+      } finally {
+        if (nativeProcess && nativeProcess.exitCode === null && nativeProcess.signalCode === null) {
+          const exit = once(nativeProcess, "exit");
+          nativeProcess.kill("SIGKILL");
+          await bounded(exit, 3000);
+        }
+        await host?.whenIdle().catch(() => {});
+        await host?.close();
+        await reopened?.whenIdle().catch(() => {});
+        await reopened?.close();
+        for (const current of adapters) await current.shutdown();
+        upstream.closeAllConnections();
+        await bounded(
+          new Promise<void>((resolve, reject) => {
+            upstream.close((error) => (error ? reject(error) : resolve()));
+          }),
+          2000,
+        );
+        await rm(root, { recursive: true, force: true });
       }
-      await host?.whenIdle().catch(() => {});
-      await host?.close();
-      await reopened?.whenIdle().catch(() => {});
-      await reopened?.close();
-      for (const current of adapters) await current.shutdown();
-      upstream.closeAllConnections();
-      await bounded(
-        new Promise<void>((resolve, reject) => {
-          upstream.close((error) => (error ? reject(error) : resolve()));
-        }),
-        2000,
-      );
-      await rm(root, { recursive: true, force: true });
-    }
-  },
-);
+    },
+  );
+}
 
 test("native child death revokes lease and refuses an automatic prompt retry", async () => {
   const root = await mkdtemp(join(tmpdir(), "codex-adapter-death-"));

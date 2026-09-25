@@ -41,6 +41,16 @@ Host accepted send → transport turn/start pending → OS child SIGKILL / exit(
 later close → already reaped child → return without awaiting a second exit
 ```
 
+## Actual-child bounded stdout fault (2026-09 continuation)
+
+The transport remains the sole owner of stdout frame limits and the pinned app-server child. In an isolated loopback-only test, first obtain a genuine native thread and hold its genuine `turn/start` ACK in a test stdout proxy; then inject either two individually sub-limit fragments forming an unterminated >1 MiB tail, or a single >1 MiB chunk of individually valid sub-limit notification lines. These are _injected IO faults_, not native-generated oversized frames or forged successes. Both must reject the pending native RPC with the frame-limit error, stop the transport without dispatching the injected notifications, signal and OS-reap the actual child, and allow repeated bounded `close()` without spawning a replacement. The test owns the OS-assigned fake upstream and must count requests before and after fault and close sockets; the held ACK alone cannot prove absence of model effect. Host separately owns durable unknown/reopen and single lease revocation (already exercised for real signal death and fake-child byte faults); this transport test does not promote byte-fault Host durability to actual-child proof.
+
+```text
+actual child → genuine thread/turn ACK held by test proxy → injected fragmented/aggregate stdout
+           → transport byte gate → pending turn rejects → owned PID signalled/reaped
+           → repeated close; no replacement child; Host admission unaffected here
+```
+
 ## Acceptance scenarios
 
 Fake child: interleaved thread/turn calls maintain ID association; malformed or oversized frames and process exit reject pending requests; command/file approval denial returns exactly the native decision and late/duplicate replies fail closed; interrupt invalidates approval; closed transport refuses new commands. Opt-in isolated CLI smoke must exercise initialize, a fake Responses turn and structured completion only; it is not model routing certification. Unknown versions fail closed, not as a best-effort parser.
