@@ -39,6 +39,7 @@ export interface CompositionOptions {
   nativeActivity: (workspaceId?: string) => Promise<TargetRuntimeActivity>;
   newAdmissionsEnabled: () => boolean;
   nativeAdmissionFence: () => Promise<NativeAdmissionFence>;
+  initiallyHeld?: boolean;
   /** Core binds the real Catalog receipt/archive reconciliation, not a window-local fallback. */
   reconcileBoot: (catalog: ProjectCatalog) => Promise<void>;
   resolveRemoteSession?: (workspaceIdentity: string) => Promise<string | undefined>;
@@ -69,6 +70,7 @@ export function createLazyWorkspaceComposition(options: CompositionOptions): {
   let host: IAgentHostService;
   const maintenance = createMaintenanceCoordination({
     nativeFence: options.nativeAdmissionFence,
+    initiallyHeld: options.initiallyHeld,
     activity: async () => {
       const [native, external] = await Promise.all([
         options.nativeActivity(),

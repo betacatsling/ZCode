@@ -1414,6 +1414,10 @@ export function createLocalServices(options: {
   agentHostTargetId?: string;
   /** Core supplies an isolated, persistent profile root; windows never open this writer. */
   workspaceCompositionRoot?: string;
+  /** Core's initial workspace hold is independent of ordinary maintenance. */
+  initiallyHeld?: boolean;
+  /** Core-only native worker/Inbox hold before storage preparation. */
+  bootAdmissionHeld?: boolean;
   /** Core's authenticated target; OS platform is not proof that a target is remote. */
   workspaceCompositionTarget?: CompositionOptions["target"];
   /** Required live native bridge, including the configured-path complete index and real CLI fence. */
@@ -2193,6 +2197,7 @@ export function createLocalServices(options: {
           resolveOffPeakTaskService: () => offPeakTaskServiceForAgent,
         };
   const zcodeAgentService = createZCodeAgentService({
+    bootAdmissionHeld: options?.bootAdmissionHeld,
     ...(agentAccountProviderConfigSource
       ? { accountProviderConfigSource: agentAccountProviderConfigSource }
       : {}),
@@ -2757,6 +2762,7 @@ export function createLocalServices(options: {
       native: composition.native,
       nativeActivity: composition.nativeActivity,
       nativeAdmissionFence: composition.nativeAdmissionFence,
+      initiallyHeld: options.initiallyHeld,
       resolveRemoteSession: composition.resolveRemoteSession,
       reconcileBoot: async (catalog) => {
         await catalog.reconcilePending();

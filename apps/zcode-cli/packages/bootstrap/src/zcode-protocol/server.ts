@@ -246,18 +246,29 @@ export class ZCodeProtocolAgentServer {
 
   private nativeActivity(): NativeMaintenanceActivity {
     const v4 = this.requireV4Gateway().getNativeActivity();
-    let active = v4.active, tools = v4.tools;
+    let active = v4.active,
+      tools = v4.tools;
     const approvals = v4.approvals + this.context.v4Interactions.pendingCount;
     let unknown = v4.unknown;
     for (const record of this.context.sessions.values()) {
       if (record.activeAbortController || record.residencyFinalizationCount) active++;
-      if (record.protocolToolInputTransmissions.size) tools += record.protocolToolInputTransmissions.size;
+      if (record.protocolToolInputTransmissions.size)
+        tools += record.protocolToolInputTransmissions.size;
       if (!this.context.v4Gateway?.hasNativeSnapshot(record.app.sessionId)) unknown = true;
     }
-    return { ...v4, frozen: this.nativeLease !== null,
-      active, tools, approvals,
-      pending: v4.pending + this.protocolMutationInFlight + this.workspaceGenerateTextControllers.size + this.pendingClientRequests.size,
-      unknown };
+    return {
+      ...v4,
+      frozen: this.nativeLease !== null,
+      active,
+      tools,
+      approvals,
+      pending:
+        v4.pending +
+        this.protocolMutationInFlight +
+        this.workspaceGenerateTextControllers.size +
+        this.pendingClientRequests.size,
+      unknown,
+    };
   }
 
   readonly browserControlPort: BrowserControlPort;
@@ -322,6 +333,10 @@ export class ZCodeProtocolAgentServer {
     };
     // v4 通道：gateway 闭包持有 context 做帧出口与命令副作用，构造完立即挂回。
     this.context.v4Gateway = createConversationV4Gateway(this.context);
+    // 中文：启动持有必须在 resident 池、恢复回调或首个 stdio 请求之前进入唯一 Inbox。
+    // 旧 CLI 不实现 claimBoot，Core 因而不能误把普通 freeze 当作启动前屏障。
+    if (resolvedDeps.env?.ZCODE_CORE_BOOT_ADMISSION === "held")
+      this.nativeLease = this.context.v4Gateway.freezeNativeAdmission();
     this.browserControlPort = createProtocolBrowserControlBroker(this.context);
     const sessionResidentTargetCount =
       deps.sessionResidentPoolOptions?.targetCount ?? deps.sessionResidentTargetCount;
@@ -495,8 +510,10 @@ export class ZCodeProtocolAgentServer {
     // request id 可在前一请求完成后复用；新请求不能继承未消费的旧 outbox。
     this.postResponseOutbox.delete(request.id);
     let releaseResidencyOperation: (() => void) | undefined;
-    const protocolMutation = !MAINTENANCE_READ_METHODS.has(request.method) &&
+    const protocolMutation =
+      !MAINTENANCE_READ_METHODS.has(request.method) &&
       !MAINTENANCE_ACCEPTED_CONTROLS.has(request.method) &&
+      request.method !== zcodeProtocolMethods.nativeMaintenanceClaimBoot &&
       request.method !== zcodeProtocolMethods.nativeMaintenanceFreeze &&
       request.method !== zcodeProtocolMethods.nativeMaintenanceGetActivity &&
       request.method !== zcodeProtocolMethods.nativeMaintenanceRelease;
@@ -504,6 +521,12 @@ export class ZCodeProtocolAgentServer {
     // lease 的 trust/config/attachment/v4 command 写请求误判为空闲。
     if (protocolMutation) this.protocolMutationInFlight++;
     try {
+      if (request.method === zcodeProtocolMethods.nativeMaintenanceClaimBoot) {
+        zcodeProtocolEmptyResultSchema.parse(request.params);
+        if (!this.nativeLease || this.context.deps.env?.ZCODE_CORE_BOOT_ADMISSION !== "held")
+          throw new Error("native boot lease unavailable");
+        return this.ok(request.id, { lease: this.nativeLease, activity: this.nativeActivity() });
+      }
       if (request.method === zcodeProtocolMethods.nativeMaintenanceFreeze) {
         zcodeProtocolEmptyResultSchema.parse(request.params);
         if (this.nativeLease) throw new Error("native maintenance already frozen");
@@ -514,14 +537,22 @@ export class ZCodeProtocolAgentServer {
       }
       if (request.method === zcodeProtocolMethods.nativeMaintenanceGetActivity) {
         const lease = nativeMaintenanceLeaseSchema.parse(request.params);
-        if (!this.nativeLease || lease.epoch !== this.nativeLease.epoch || lease.leaseId !== this.nativeLease.leaseId)
+        if (
+          !this.nativeLease ||
+          lease.epoch !== this.nativeLease.epoch ||
+          lease.leaseId !== this.nativeLease.leaseId
+        )
           throw new Error("native maintenance lease mismatch");
         return this.ok(request.id, this.nativeActivity());
       }
       if (request.method === zcodeProtocolMethods.nativeMaintenanceRelease) {
         const lease = nativeMaintenanceLeaseSchema.parse(request.params);
-        if (!this.nativeLease || lease.epoch !== this.nativeLease.epoch || lease.leaseId !== this.nativeLease.leaseId ||
-            !this.requireV4Gateway().releaseNativeAdmission(lease))
+        if (
+          !this.nativeLease ||
+          lease.epoch !== this.nativeLease.epoch ||
+          lease.leaseId !== this.nativeLease.leaseId ||
+          !this.requireV4Gateway().releaseNativeAdmission(lease)
+        )
           throw new Error("native maintenance lease mismatch");
         this.nativeLease = null;
         return this.ok(request.id, { released: true });

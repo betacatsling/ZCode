@@ -3588,6 +3588,8 @@ export type NativeMaintenanceFreezeResult = z.infer<typeof nativeMaintenanceFree
 export const nativeMaintenanceReleaseResultSchema = z.object({ released: z.boolean() }).strict();
 
 export const zcodeProtocolMethods = {
+  /** Read-only claim of the lease installed by this worker before its protocol server starts. */
+  nativeMaintenanceClaimBoot: "native/maintenance/claimBoot",
   nativeMaintenanceFreeze: "native/maintenance/freeze",
   nativeMaintenanceGetActivity: "native/maintenance/getActivity",
   nativeMaintenanceRelease: "native/maintenance/release",

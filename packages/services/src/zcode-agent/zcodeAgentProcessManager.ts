@@ -41,6 +41,8 @@ export interface ZCodeAgentCommand {
   storagePreparationEntry?: string;
   /** 本次部署的 Agent 支持迁移前的启动通知；旧自定义命令保持原协议。 */
   supportsStorageStartup?: boolean;
+  /** Deployment-attested paired CLI implements constructor-held Inbox + claimBoot. Not a renderer capability. */
+  supportsBootAdmissionFence?: boolean;
   command: string;
   args?: string[];
   cwd?: string;
@@ -59,6 +61,8 @@ export type ZCodeAgentCommandResolver = (
 ) => Promise<ZCodeAgentCommand | null> | ZCodeAgentCommand | null;
 
 export interface ZCodeAgentProcessManagerOptions {
+  /** Node Core-only: CLI constructor installs its CommandInbox hold before serving requests. */
+  bootAdmissionHeld?: () => boolean;
   commandResolver?: ZCodeAgentCommandResolver;
   presentationSurface?: ZCodeAgentPresentationSurface;
   requestTimeoutMs?: number;
@@ -448,6 +452,7 @@ export function resolveDefaultZCodeAgentCommand(
         // 中文：自定义 CLI 也必须提交 storage-startup ready；旧二进制缺帧会保持不可用，
         // 不能让 Core 把未验证的相对 DB 路径当成当前原生 owner。
         supportsStorageStartup: process.env.ZCODE_AGENT_SERVER_REQUIRES_STORAGE_STARTUP === "1",
+        supportsBootAdmissionFence: process.env.ZCODE_AGENT_SERVER_BOOT_FENCE_V1 === "1",
       },
       context.presentationSurface,
     );
@@ -460,7 +465,7 @@ export function resolveDefaultZCodeAgentCommand(
     resolveElectronRuntimeZCodeAgentCommand(context);
   return applyPresentationSurfaceToCommand(
     bundled
-      ? { ...bundled, supportsStorageStartup: true }
+      ? { ...bundled, supportsStorageStartup: true, supportsBootAdmissionFence: true }
       : resolveDeployedZCodeAgentBinaryCommand(context),
     context.presentationSurface,
   );
@@ -519,6 +524,7 @@ function wrapZCodeAgentCommandWithStdioTapDevProxy(
   // 这里只在显式开关打开时用旁路 proxy 写盘，生产构建和默认开发路径都不受影响。
   return {
     supportsStorageStartup: command.supportsStorageStartup,
+    supportsBootAdmissionFence: command.supportsBootAdmissionFence,
     command: process.execPath,
     args: [
       tapScript,
@@ -588,6 +594,7 @@ export class ZCodeAgentProcessManager {
   readonly onRuntimeLifecycle = this.runtimeLifecycleEmitter.event;
 
   constructor(options?: ZCodeAgentProcessManagerOptions) {
+    this.bootAdmissionHeld = options?.bootAdmissionHeld;
     this.commandResolver = options?.commandResolver ?? resolveDefaultZCodeAgentCommand;
     this.presentationSurface = options?.presentationSurface;
     this.requestTimeoutMs = options?.requestTimeoutMs;
@@ -599,6 +606,8 @@ export class ZCodeAgentProcessManager {
     this.idleTimeoutMs =
       options?.idleTimeoutMs && options.idleTimeoutMs > 0 ? options.idleTimeoutMs : undefined;
   }
+
+  private readonly bootAdmissionHeld?: () => boolean;
 
   private reportProcessLifecycle(
     callback: (reporter: RuntimeProcessLifecycleReporter) => void,
@@ -978,6 +987,13 @@ export class ZCodeAgentProcessManager {
       throw admissionSignal.reason ?? new Error("ZCode agent process start was cancelled.");
     }
     const effectiveCommand = wrapZCodeAgentCommandWithStdioTapDevProxy(command, workspaceKey);
+    // 中文：旧自定义 CLI 忽略启动模式 env 可能自行恢复业务。必须在 spawn 前拒绝，
+    // 运行时 claimBoot 仍核实真实 Inbox lease，而不信此声明本身。
+    if (
+      this.bootAdmissionHeld?.() &&
+      (!effectiveCommand.supportsStorageStartup || !effectiveCommand.supportsBootAdmissionFence)
+    )
+      throw new Error("Core boot CLI lacks pre-initialization admission fence capability");
     log("ZCode agent command resolved", {
       workspaceKey,
       command: command.command,
@@ -1039,6 +1055,8 @@ export class ZCodeAgentProcessManager {
         // 身份/隔离语义使用 workspaceIdentity；cwd 继续使用 workspacePath。
         ...buildAgentWorkspaceIdentityEnv(params.workspaceIdentity),
         ...buildE2EAgentCoverageEnv(),
+        // 中文：最后写入受信 Core 的启动模式；自定义 command.env 不得覆盖门禁。
+        ZCODE_CORE_BOOT_ADMISSION: this.bootAdmissionHeld?.() ? "held" : "open",
       },
       stdio: ["pipe", "pipe", "pipe"],
     });

@@ -15,7 +15,7 @@ import {
   createNativeProductionBridge,
 } from "./workspace-hierarchy/nativeProductionBridge.js";
 import type { NativeRuntimeFactsPort } from "./workspace-hierarchy/nativeProductionBridge.js";
-import { getNativeProcessControlPort } from "./zcode-agent/zcodeAgentService.js";
+import { getNativeProcessControlPort, getNativeMaintenanceControlPort } from "./zcode-agent/zcodeAgentService.js";
 import { IZCodeAgentService } from "./zcode-agent/zcodeAgent.js";
 import type { ServiceCollection } from "./collection.js";
 import {
@@ -30,6 +30,7 @@ export interface CoreAuthorityOptions {
   /** Installation/runtime layout, not the writable profile root. */
   profileRoot: string;
   zcodeBuiltinProviderConfigFilePath: string;
+  admissionFence?: "open" | "held";
 }
 export interface CoreAuthorityResult {
   services: ServiceCollection;
@@ -41,6 +42,7 @@ export interface CoreAuthorityResult {
     }>;
   };
   reconcileBeforeAdmission(): Promise<void>;
+  bootAdmissionLease?: { release(): Promise<void> };
   dispose(): Promise<void>;
 }
 
@@ -132,6 +134,8 @@ export async function createCoreAuthority(
       agentHostTargetId: options.installationId,
       workspaceCompositionRoot: join(configRoot, "workspace-hierarchy"),
       workspaceComposition: bridge,
+      initiallyHeld: options.admissionFence === "held",
+      bootAdmissionHeld: options.admissionFence === "held",
     });
     const nativeService = services.get(IZCodeAgentService);
     live = getNativeProcessControlPort(nativeService);
@@ -149,7 +153,34 @@ export async function createCoreAuthority(
     const collection = services;
     const coordinator = getWorkspaceMaintenanceCoordination(collection);
     if (!coordinator) throw new Error("Core maintenance coordinator missing");
+    if (options.admissionFence === "held") {
+      const control = getNativeMaintenanceControlPort(nativeService);
+      const target = { workspacePath: process.cwd() };
+      // 中文：claim 只认 CLI 构造时已冻结的真实 Inbox，不能存储启动后才做 late freeze。
+      const { lease, activity } = await control.claimBoot(target);
+      if (activity.epoch !== lease.epoch || !activity.frozen || activity.unknown)
+        throw new Error("Core boot worker lease uncertain");
+      coordinator.attachBootFence({
+        verify: async () => {
+          const current = await control.getActivity(target, lease);
+          if (current.epoch !== lease.epoch || !current.frozen || current.unknown)
+            throw new Error("Core boot worker changed");
+          return [current.active, current.accepted, current.pending, current.tools, current.approvals]
+            .every((count) => Number.isSafeInteger(count) && count === 0);
+        },
+        release: () => control.releaseBoot(target, lease),
+      });
+    }
     let disposing: Promise<void> | undefined;
+    let disposed = false;
+    const bootAdmissionLease = options.admissionFence === "held"
+      ? { async release() {
+          if (disposed) throw new Error("Core boot admission owner disposed");
+          await getWorkspaceCompositionReady(collection);
+          if (disposed) throw new Error("Core boot admission owner disposed");
+          await coordinator.releaseInitialHold();
+        } }
+      : undefined;
     return {
       services: collection,
       maintenance: {
@@ -172,7 +203,9 @@ export async function createCoreAuthority(
         },
       },
       reconcileBeforeAdmission: () => getWorkspaceCompositionReady(collection),
+      ...(bootAdmissionLease ? { bootAdmissionLease } : {}),
       dispose() {
+        disposed = true;
         return (disposing ??= (async () => {
           try {
             await disposeServiceResourcesAndWait(collection);
