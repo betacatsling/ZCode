@@ -1,5 +1,9 @@
 # Load runner and production-driver contract
 
+## Runner source boundary
+
+The runner owns all provenance and comparisons; the baseline decision may be extracted as a private pure helper using runner-supplied verified readers. It cannot mount a product or own an accepted command. The main runner stays below the 400-line policy without disabling the rule; existing CLI and comparison behavior remains unchanged.
+
 ## Ownership and event order
 
 The runner owns the disposable Git fixture, schedule, result artifact, provenance snapshots, baseline comparison, and cleanup registry. The CLI owns only argument parsing and process-exit reporting; its exit code is derived from the same persisted run status. The driver owns the synthetic backend composition and a deterministic, bounded autonomous source workload. `AgentHostTargetService` remains the sole owner of accepted commands, event sequencing, and durable journal writes; this load source does not claim accepted prompts, dispatch a user `send`, call a Provider, launch SSH/CLI, or write workspace files. Target owns Git discovery/lifecycle, Catalog owns adopted workspace references, and Host owns session/event state. Browser owns paint and drafts; the runner/driver cannot substitute synthetic values for browser evidence.
