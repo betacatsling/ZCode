@@ -745,7 +745,11 @@ test(
           requestControl(layout.controlEndpoint, { command: "apply-update" }, 30_000),
           /Core failed|ready|boot/i,
         );
-        assert.equal(rollbackSupervisor.status().state, "ready");
+        assert.equal(
+          rollbackSupervisor.status().state,
+          "ready",
+          "a positively acknowledged previous-release open returns rollback to ready",
+        );
         assert.equal(rollbackSupervisor.status().generation, 3);
         assert.equal(rollbackSupervisor.status().pid, rollbackChildren[2]?.pid);
         assert.equal(rollbackChildren[0]?.exitCode, 0);
@@ -928,6 +932,205 @@ test(
       }
       assert.equal(ackChildren.length, 2);
       assert.equal(ackChildren[1]!.exitCode, 0);
+      assert.deepEqual(await new DataRootLock(layout.lockFile).inspect(), { state: "missing" });
+      await assert.rejects(requestControl(layout.controlEndpoint, { command: "status" }));
+
+      // Rollback is a separate possible-open boundary: fail the candidate before READY,
+      // then lose only the previous installed Core's real ACK after its release effect.
+      await releases.restoreCurrent(candidate);
+      await releases.writePending(manifest);
+      const rollbackAckChildren: ChildProcess[] = [];
+      const rollbackAckClosed: Promise<void>[] = [];
+      let droppedRollbackOpenAck: { requestId: string; leaseId: string } | undefined;
+      const rollbackAckSupervisor = new Supervisor({
+        layout,
+        version: candidate.version,
+        coreReadyTimeoutMs: 8_000,
+        verifyHeldRelease: (release) => verifyTrustedLocalSourceBootSelection(layout, release),
+        launcher: {
+          launch(generation, release, bootMode, selected) {
+            assert.ok(release?.releaseDir);
+            const root = join(release.releaseDir, "runtime");
+            const node = join(root, "node");
+            const child = fork(join(root, "server-core.js"), [String(generation), bootMode], {
+              execPath: node,
+              execArgv: [],
+              cwd: dir,
+              env: {
+                ...isolatedEnv,
+                ZCODE_SERVER_ROOT: layout.serverRoot,
+                ...createReleaseAgentWiring(root, node, {}, selected),
+                // Gen2 is the deliberately unsupported candidate and must fail before READY.
+                ZCODE_AGENT_SERVER_BOOT_FENCE_V1:
+                  generation === 2 && bootMode === "held"
+                    ? undefined
+                    : selected?.protocol === "constructor-held-native-v1"
+                      ? "1"
+                      : undefined,
+              },
+              stdio: ["ignore", "ignore", "pipe", "ipc"],
+            });
+            if (generation === 3 && bootMode === "held") {
+              const originalEmit = (
+                child.emit as (event: string, ...values: unknown[]) => boolean
+              ).bind(child);
+              child.emit = ((event: string, ...values: unknown[]) => {
+                const value = values[0];
+                if (
+                  event === "message" &&
+                  !droppedRollbackOpenAck &&
+                  value &&
+                  typeof value === "object" &&
+                  "type" in value &&
+                  value.type === "maintenance" &&
+                  "requestId" in value &&
+                  typeof value.requestId === "string" &&
+                  "leaseId" in value &&
+                  typeof value.leaseId === "string"
+                ) {
+                  droppedRollbackOpenAck = {
+                    requestId: value.requestId,
+                    leaseId: value.leaseId,
+                  };
+                  return false; // suppress delivery only; the real previous Core already opened.
+                }
+                return originalEmit(event, ...values);
+              }) as typeof child.emit;
+            }
+            rollbackAckChildren.push(child);
+            rollbackAckClosed.push(
+              new Promise<void>((resolveClosed) => child.once("close", () => resolveClosed())),
+            );
+            return child;
+          },
+        },
+      });
+      try {
+        await rollbackAckSupervisor.start();
+        const readyDeadline = Date.now() + 25_000;
+        while (rollbackAckSupervisor.status().state !== "ready" && Date.now() < readyDeadline)
+          await new Promise((resolveDelay) => setTimeout(resolveDelay, 40));
+        assert.equal(rollbackAckSupervisor.status().state, "ready");
+        await assert.rejects(
+          requestControl(layout.controlEndpoint, { command: "apply-update" }, 30_000),
+          /release|acknowledge|uncertain/i,
+        );
+        assert.ok(
+          droppedRollbackOpenAck?.requestId && droppedRollbackOpenAck.leaseId,
+          "the previous installed Core's actual release ACK must be suppressed after effect",
+        );
+        assert.match(droppedRollbackOpenAck.requestId, /^[a-f0-9-]{36}$/iu);
+        assert.equal(rollbackAckSupervisor.status().state, "stop-failed");
+        assert.equal(rollbackAckSupervisor.status().generation, 3);
+        assert.equal(rollbackAckSupervisor.status().pid, rollbackAckChildren[2]?.pid);
+        assert.equal(rollbackAckChildren.length, 3);
+        assert.equal(rollbackAckChildren[0]?.exitCode, 0, "old current Core was reaped");
+        assert.equal(
+          rollbackAckChildren[1]?.exitCode,
+          1,
+          "candidate lacking the constructor-held fence must fail before READY",
+        );
+        assert.equal(rollbackAckChildren[2]?.exitCode, null, "possibly-open rollback remains live");
+        assert.deepEqual(await releases.readCurrentForExecution(), candidate);
+        assert.equal(await releases.readPending(), null);
+        assert.equal(
+          await stat(layout.updateTransactionFile).then(
+            () => true,
+            () => false,
+          ),
+          false,
+          "the pointer restore transaction must be closed before rollback open",
+        );
+        assert.equal((await new DataRootLock(layout.lockFile).inspect()).state, "active");
+
+        // This fresh maintenance roundtrip proves the suppressed release changed actual
+        // admission state on this same rollback Core, not a fixture-side held flag.
+        const rollbackCore = rollbackAckChildren[2]!;
+        async function rollbackMaintenance(
+          command: "maintenance-begin" | "maintenance-release",
+          leaseId?: string,
+        ) {
+          const requestId = randomUUID();
+          const response = new Promise<Record<string, unknown>>((resolveReply, reject) => {
+            const timer = setTimeout(
+              () => reject(new Error("actual rollback Core did not answer maintenance")),
+              5_000,
+            );
+            function onMessage(message: Record<string, unknown>) {
+              if (message.type !== "maintenance" || message.requestId !== requestId) return;
+              clearTimeout(timer);
+              rollbackCore.off("message", onMessage);
+              resolveReply(message);
+            }
+            rollbackCore.on("message", onMessage);
+          });
+          rollbackCore.send({ command, requestId, ...(leaseId ? { leaseId } : {}) });
+          return await response;
+        }
+        const actualRollbackOpen = await rollbackMaintenance("maintenance-begin");
+        assert.ok(actualRollbackOpen.leaseId, "rollback Core really opened after the lost ACK");
+        assert.deepEqual(actualRollbackOpen.nativeActivity, {
+          running: 0,
+          waiting: 0,
+          uncertain: 0,
+        });
+        assert.deepEqual(actualRollbackOpen.externalActivity, {
+          running: 0,
+          waiting: 0,
+          uncertain: 0,
+        });
+        assert.equal(
+          (await rollbackMaintenance("maintenance-release", String(actualRollbackOpen.leaseId)))
+            .leaseId,
+          actualRollbackOpen.leaseId,
+        );
+        assert.equal(rollbackAckSupervisor.status().state, "stop-failed");
+        assert.equal((await new DataRootLock(layout.lockFile).inspect()).state, "active");
+
+        // Retry remains blocked on the uncertain lifecycle owner and cannot launch a third
+        // replacement, even if a new pending archive appears.
+        await releases.writePending(manifest);
+        await assert.rejects(
+          requestControl(layout.controlEndpoint, { command: "apply-update" }, 30_000),
+          /maintenance|Core unavailable/i,
+        );
+        assert.equal(rollbackAckChildren.length, 3);
+        assert.equal(rollbackAckSupervisor.status().pid, rollbackAckChildren[2]?.pid);
+        assert.deepEqual(await releases.readCurrentForExecution(), candidate);
+        assert.deepEqual(await releases.readPending(), manifest);
+        assert.equal((await new DataRootLock(layout.lockFile).inspect()).state, "active");
+        process.stdout.write(
+          "real rollback open ACK lost: candidate reaped; previous Core effect opened, matching ACK suppressed; previous pointer/live owner/lock retained stop-failed; retry launched no third Core\n",
+        );
+      } finally {
+        // Explicit fixture cleanup follows the uncertainty assertions; never auto-recover by PID.
+        try {
+          await rollbackAckSupervisor.stop("installed-rollback-open-ack-loss-fixture-cleanup");
+        } finally {
+          for (const [index, child] of rollbackAckChildren.entries()) {
+            if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+            let closed = await Promise.race([
+              rollbackAckClosed[index]!.then(() => true),
+              new Promise<false>((resolveTimeout) =>
+                setTimeout(() => resolveTimeout(false), 2_000),
+              ),
+            ]);
+            if (!closed) {
+              child.kill("SIGKILL");
+              closed = await Promise.race([
+                rollbackAckClosed[index]!.then(() => true),
+                new Promise<false>((resolveTimeout) =>
+                  setTimeout(() => resolveTimeout(false), 2_000),
+                ),
+              ]);
+            }
+            assert.equal(closed, true, "owned rollback Core must close before profile removal");
+          }
+          await releases.removePending();
+        }
+      }
+      assert.equal(rollbackAckChildren.length, 3);
+      assert.equal(rollbackAckChildren[2]!.exitCode, 0);
       assert.deepEqual(await new DataRootLock(layout.lockFile).inspect(), { state: "missing" });
       await assert.rejects(requestControl(layout.controlEndpoint, { command: "status" }));
       assert.equal(
