@@ -31,6 +31,16 @@ Config source is the _installed CLI 0.156.1's own_ `codex app-server --help` (`-
 
 Critically, developer `input` messages still contain `<skills_instructions>` (~2,490 characters of CLI-bundled skills) and `<permissions instructions>` (~341 characters describing the tested read-only sandbox/approval policy) for _all six cases_, including both empty instruction overrides, disabled optional tools, and `features.skill_search=false` plus `features.skip_host_skill_discovery=true`. Therefore these two segments are **not shown to be removable by the tested controls** and must retain developer precedence. The skills segment is CLI-provided optional-skill discovery content, but the tested flags did not eliminate the bundled skills; the permissions segment represents backend control policy, not caller input. This is precise evidence for this isolated configuration, not proof that no possible official config can ever suppress them. The joined Model public request now preserves developer role and prompt-cache affinity on its OpenAI Responses route. No developer-to-system downgrade or silent discard is permitted. This pinned probe is control-plane evidence only; use the dedicated native Gateway join test for actual codec and SDK execution.
 
+## OS-reaped child after pre-ACK loss
+
+When a real app-server child exits from a signal before the `turn/start` reply is delivered, Node reports `signalCode` while `exitCode` remains null. The transport owns the child and its pending RPCs; `exit` fails pending RPCs, and later `close()` must return without subscribing to an already-consumed exit event. A delivered signal exit is terminal even when `exitCode` is null; no second kill and no re-send. Only Host owns durable accepted-input uncertainty and lease revocation; this transport does not turn the lost ACK into a success. Repeated `close()` after exit is idempotent. Native test must observe an actual pinned CLI PID and OS exit signal, bound fixture cleanup, and use an isolated HOME without provider credentials. This narrow transport proof alone is not a Host reopen or production Model route certification.
+
+```text
+Host accepted send → transport turn/start pending → OS child SIGKILL / exit(signalCode)
+                 → pending rejects → Host marks unknown/revokes lease
+later close → already reaped child → return without awaiting a second exit
+```
+
 ## Acceptance scenarios
 
 Fake child: interleaved thread/turn calls maintain ID association; malformed or oversized frames and process exit reject pending requests; command/file approval denial returns exactly the native decision and late/duplicate replies fail closed; interrupt invalidates approval; closed transport refuses new commands. Opt-in isolated CLI smoke must exercise initialize, a fake Responses turn and structured completion only; it is not model routing certification. Unknown versions fail closed, not as a best-effort parser.

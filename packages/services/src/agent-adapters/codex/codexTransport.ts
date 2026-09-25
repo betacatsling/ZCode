@@ -172,7 +172,8 @@ export class CodexTransport {
   }
 
   async close(): Promise<void> {
-    if (this.child.exitCode !== null) {
+    // 修复原因：原生子进程被信号终止后 exitCode 仍是 null；若已收到 exit 再等待一次会永久挂起。
+    if (this.child.exitCode !== null || this.child.signalCode !== null) {
       this.fail(new Error("Codex transport closed"));
       return;
     }
