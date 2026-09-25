@@ -24,3 +24,9 @@ Owned: services Codex/Claude adapters, adapter-local provenance, tests/spec. Hos
 
 # protocol-final-2 early seam (HEAD f2c6259)
 Owned: adapter catch normalization and pinned CLI Host fixture only; spec updated before implementation. No Host/Core/UI/Target/Git/Gateway writes or new public seam. Independent Host/adapter reopen must send on original native thread; child-death accepted send must return execution-unknown, revoke once and never replay. Before-ACK genuine byte proxy remains separately scoped if not proven; no Claude production beta claim. Global heavy slot required for tests/builds.
+
+---
+
+# sol-resume-codex transport handoff (source f34a5738d26c4f901ecca7a5e29c2fc721f2b6df)
+
+No new public API. `CodexTransport.close()` now treats an already signal-reaped native child as exited (`signalCode` non-null even when `exitCode` null). Unique opt-in OS-child test captures genuine native `turn/start` ACK, kills actual pinned process (PID 21410 on final run), observes one child and two bounded closes; executed RED timeout pre-fix, GREEN 1/1 post-fix. See `.tmp/MICRO-sol-resume-codex.md` and `/tmp/sol-codex-{red,green-final}.log`. This proves transport cleanup only, not Host durable unknown/reopen, lease count, actual oversize, per-turn Host Model switch or full route/usage. No Host/Core/Gateway/shared changes; no new dependency for parallel owners. Offline missing `border-beam` blocked install and mandatory root type/lint/owned format; arch 0 new. No ongoing owned process; no paid/live call.
