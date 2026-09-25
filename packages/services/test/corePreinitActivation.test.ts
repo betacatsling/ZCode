@@ -199,3 +199,47 @@ test(
     }
   },
 );
+
+test(
+  "held boot preserves the preexisting read-only harness catalog path",
+  { timeout: 15000 },
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "core-preinit-catalog-"));
+    const lazy = createLazyTargetAgentHostService({
+      root,
+      target: {
+        id: "local",
+        kind: "local",
+        platform: process.platform as "darwin" | "linux" | "win32",
+        available: true,
+      },
+      allowNewSessions: () => false,
+      registry: {
+        start: async () => {},
+        getSnapshot: () => ({
+          registry: { providers: [] },
+          sourceRevisions: { config: "fixture", account: "fixture" },
+        }),
+      } as unknown as ProviderRegistryService,
+      admission: {
+        verify: async () => {
+          throw new Error("readonly query entered admission");
+        },
+        withAdmission: async () => {
+          throw new Error("readonly query entered admission");
+        },
+      },
+    });
+    try {
+      const entries = await lazy.service.catalogForTarget("local");
+      assert.deepEqual(
+        entries.map(({ manifest }) => manifest.id),
+        ["pi"],
+      );
+      assert.equal((await lazy.service.getAvailability()).admissionEnabled, false);
+    } finally {
+      await lazy.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
