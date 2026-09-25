@@ -197,6 +197,52 @@ test("catalog persists empty projects, order and preferences without tabs, secon
   }
 });
 
+test("native Catalog lease snapshot and reference writer expire after admission callback", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "catalog-native-lease-"));
+  const path = join(dir, "catalog.json");
+  const catalog = await ProjectCatalog.open(path, port(), index);
+  try {
+    await catalog.importProject({
+      id: "p",
+      bindingId: "b",
+      name: "P",
+      targetId: "local",
+      repositoryPath: "/same",
+    });
+    const workspace = await catalog.adopt({
+      bindingId: "b",
+      workspaceId: "w",
+      title: "W",
+      worktreePath: "/same",
+    });
+    const before = await readFile(path);
+    const expired = await catalog.withNativeReferenceAdmission(async (lease) => {
+      assert.equal(lease.snapshot().workspaces[0]?.id, "w");
+      return lease;
+    });
+    // 中文：租约外的快照/写能力不能跨异步边界复用，避免给已过期 Git 证明补引用。
+    assert.throws(() => expired.snapshot(), /expired/);
+    await assert.rejects(
+      expired.commitNativeReference({
+        commandId: "expired",
+        originalSessionId: "original",
+        targetId: "local",
+        projectId: "p",
+        workspaceId: "w",
+        repositoryBindingId: "b",
+        worktreeGeneration: workspace.worktreeGeneration,
+        workspaceIdentity: workspace.workspaceIdentity,
+        workspacePath: workspace.worktreePath,
+      }),
+      /expired/,
+    );
+    assert.ok((await readFile(path)).equals(before));
+  } finally {
+    await catalog.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("failed target unarchive remains denied and explicit retry reconciles target policy", async () => {
   const dir = await mkdtemp(join(tmpdir(), "catalog-archive-"));
   const target = port();
