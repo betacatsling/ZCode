@@ -11,6 +11,20 @@
 - History/snapshot/rows/events/command query are read-only and never call workspace admission or launch an adapter, including after feature-off and path replacement. The lazy wrapper must not initialize a worker merely to answer a control/history request while the feature is off.
 - No capability advertisement for a removed/archived scope as writable. A mounted Host owns its epoch; an unrelated caller cannot forge a new Host binding via the control path.
 
+## Usage admission atomicity
+
+The event journal is the sole durable history owner. Its in-memory usage index is derived, not a second ledger: rebuild once from committed events on open, and on the serialized append tail validate a usage transition against that index *before* durableAppend. Apply the prepared transition only after cursor publication succeeds. The projector replays the same pure transition rule; it never authorizes an append. Identity is `(turnId, sourceId)` within one journal epoch; legacy unscoped events cannot mix with scoped usage in a turn. An absolute snapshot may introduce a previously unknown metric, but cannot omit or decrease any metric already known for that source. Delta is once-only; collisions in source kind or accounting mode fail closed. Unknown is not zero. A duplicate source event with identical bytes is idempotent and has no usage transition. Validation rejection must leave committed history readable, the next legitimate sequence usable, and must not poison writes; a durability failure instead fences future append because disk commit status is uncertain. Neither case replays an accepted command; Host event-gap policy remains execution-unknown. Per-event admission is O(1) in history length (bounded five usage fields); open replay is O(history length). No Host import of projection domain or lock recovery change.
+
+```
+source event → EventJournal serialized tail → schema/scope/sequence/idempotency
+             → pure prepared usage transition → durable append + cursor
+             → apply in-memory index → Host publish / desktop continuous
+                                           └→ mobile replayable reads same committed cursor
+reopen → committed journal replay → same usage transition → derived index
+```
+
+Acceptance: Host-level omitted/decreasing known metric RED before repair; unknown→known, same-source idempotence/collision, cross-turn isolation; invalid source cannot poison history/snapshot or next committed sequence; failure to persist never applies the index and fences subsequent writes. Unknown turn after a bad source remains no-replay. No Core journal-lock recovery is claimed.
+
 ## Event order / acceptance
 
 ```

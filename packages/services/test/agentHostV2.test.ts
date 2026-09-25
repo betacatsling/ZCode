@@ -3,7 +3,7 @@ import { appendFile, mkdtemp, mkdir, readFile, readdir, rename, rm, truncate, wr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import type { SessionSpecV2 } from "@zcode/shared/agent-host";
+import type { AgentEvent, SessionSpecV2 } from "@zcode/shared/agent-host";
 import { HarnessRegistry } from "../src/agent-host/harnessRegistry.js";
 import { MockHarness } from "../src/agent-host/mockHarness.js";
 import { AgentHostTargetService, type WorkspaceAdmissionPort } from "../src/agent-host/targetService.js";
@@ -267,6 +267,83 @@ test("legacy manifest stays readable without adapter, but v1 and future versions
   await assert.rejects(service.dispatch(v1 as unknown as SessionSpecV2, send("old", "no-write")));
   await assert.rejects(service.create({ ...spec(path, "future"), schemaVersion: 3 } as unknown as SessionSpecV2, "future"));
 }));
+
+test("Host rejects invalid usage before durable history; accepted turn becomes unknown without replay", async () => {
+  class UsageFaultHarness extends MockHarness {
+    listener?: (event: AgentEvent) => void;
+    override subscribe(_id: string, listener: (event: AgentEvent) => void): () => void {
+      this.listener = listener;
+      return () => {
+        this.listener = undefined;
+      };
+    }
+    override async send(command: Parameters<MockHarness["send"]>[0]): Promise<void> {
+      const common = {
+        hostSessionId: command.hostSessionId,
+        runtimeEpoch: this.epoch(command.hostSessionId),
+        turnId: command.turnId,
+        at: 1,
+      };
+      this.listener?.({ ...common, kind: "turn.started", sequence: 1, eventId: "start" });
+      this.listener?.({
+        ...common,
+        kind: "usage.accounted",
+        sequence: 2,
+        eventId: "known",
+        sourceId: "call",
+        accounting: "absolute",
+        inputTokens: 5,
+      });
+      this.listener?.({
+        ...common,
+        kind: "usage.accounted",
+        sequence: 3,
+        eventId: "omitted",
+        sourceId: "call",
+        accounting: "absolute",
+        outputTokens: 3,
+      });
+    }
+  }
+  const mock = new UsageFaultHarness();
+  await fixture(async (root, path, service) => {
+    const a = spec(path, "usage-fault");
+    await service.create(a, "create-usage-fault");
+    assert.equal(
+      (await service.dispatch(a, send(a.hostSessionId, "usage-turn"))).status,
+      "accepted",
+    );
+    await assert.rejects(service.waitForIdle(a), /omitted prior metric/);
+    const live = await service.snapshot(a);
+    assert.equal(live.seq, 2);
+    assert.equal(live.usage.cumulative.inputTokens, 5);
+    assert.deepEqual(
+      (await service.eventsSince(a, 0)).map((event) => event.sequence),
+      [1, 2],
+    );
+    assert.equal(
+      (await service.dispatch(a, send(a.hostSessionId, "do-not-replay"))).reasonCode,
+      "execution-unknown",
+    );
+    assert.equal((await service.queryCommand(a, "usage-turn"))?.status, "execution-unknown");
+    const readonly = new AgentHostTargetService({
+      root: join(root, "sessions"),
+      target,
+      catalog,
+      registry: new HarnessRegistry(),
+      admission: {
+        verify: async () => {
+          throw new Error("read only");
+        },
+        withAdmission: async () => {
+          throw new Error("read only");
+        },
+      },
+    });
+    assert.equal((await readonly.snapshot(a)).seq, 2);
+    await readonly.close();
+  }, mock);
+});
 
 test("source gap fences execution while desktop/mobile recover committed prefix through snapshot", async () => {
   const mock = new MockHarness({ gapBeforeText: true });

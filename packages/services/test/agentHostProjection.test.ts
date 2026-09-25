@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { conversationSnapshotSchema } from "@zcode/shared/zcode-protocol-v4";
 import type { AgentEvent } from "@zcode/shared/agent-host";
 import { projectHostConversation } from "../src/agent-ui-projection/projector.js";
-import { UsageAccounting } from "../src/agent-ui-projection/usageAccounting.js";
+import { UsageAccounting } from "../src/agent-host/usageAccounting.js";
 
 const spec = {
   schemaVersion: 1 as const, hostSessionId: "host-1",

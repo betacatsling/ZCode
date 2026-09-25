@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { FileHandle } from "node:fs/promises";
 import { agentEventSchema, type AgentEvent } from "@zcode/shared/agent-host";
 import { closeJournal, durableAppend, journalPath, openJournal, readJournalLines, type JournalIdentity } from "./journalStorage.js";
+import { UsageAccounting } from "./usageAccounting.js";
 
 export class EventJournal {
   readonly #file: FileHandle;
@@ -11,6 +12,7 @@ export class EventJournal {
   readonly #root: string;
   readonly #events: AgentEvent[];
   readonly #bySource: Map<string, AgentEvent>;
+  readonly #usage = new UsageAccounting();
   #tail: Promise<void> = Promise.resolve();
   #closed = false;
   #writeError?: unknown;
@@ -23,6 +25,7 @@ export class EventJournal {
     this.#identity = identity;
     this.#events = events;
     this.#bySource = new Map(events.map((event) => [event.sourceEventId ?? event.eventId, event]));
+    for (const event of events) if (event.kind === "usage.accounted" || event.kind === "usage.reported") this.#usage.record(event);
   }
 
   /** Sidecar replay never creates a journal or acquires its live owner's writer lock. */
@@ -79,8 +82,11 @@ export class EventJournal {
         // 修复旧 journal 任意 JSON 扩展必须可读；新写入禁止携带未审查的嵌套数据、凭据或私有签名。
         if (event.payload !== "unsupported") throw new Error("unsafe extension event payload");
       }
+      // 修复旧流程先持久写入、后由投影拒绝语义无效用量：在序列化的写入尾上预验，失败不污染已提交历史。
+      const commitUsage = event.kind === "usage.accounted" || event.kind === "usage.reported" ? this.#usage.prepare(event) : undefined;
       try { await durableAppend(this.#file, journalPath(this.#root, this.#identity, "events"), event); }
       catch (error) { this.#writeError = error; throw error; }
+      commitUsage?.();
       this.#events.push(event);
       this.#bySource.set(sourceId, event);
       return { event, appended: true };
