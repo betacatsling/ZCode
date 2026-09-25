@@ -144,8 +144,19 @@ test(
     assert.notEqual(result.sideSessionId, LEGACY_SESSION_ID);
     assert.equal(result.sideSessionParentId, LEGACY_SESSION_ID);
     assert.equal(result.duplicateSideSessionStatus, "duplicate");
-    assert.deepEqual(result.modelCalls, ["fixture-model", "fixture-model", "fixture-model", "fixture-model", "fixture-other"]);
-    assert.deepEqual(result.modelRequestContainsInput, [true, true, true, true, true]);
+    assert.ok(result.forkTarget.rowId >= 0);
+    assert.ok(result.forkTarget.entityId.length > 0);
+    assert.ok(result.forkRevision >= 0);
+    assert.equal(result.forkColdId, result.forkedId);
+    assert.equal(result.editStatus, "accepted");
+    assert.equal(result.retryStatus, "accepted");
+    assert.ok(result.editTarget.entityId);
+    assert.ok(result.retryTarget.entityId);
+    assert.notEqual(result.editTarget.rowId, result.retryTarget.rowId);
+    assert.ok(result.coldVisibleInputs.some((text) => text.includes(result.editedText)));
+    assert.ok(!result.coldVisibleInputs.some((text) => text.includes("queued parent input")), "cold active branch hides rewound turn");
+    assert.deepEqual(result.modelCalls, ["fixture-model", "fixture-model", "fixture-model", "fixture-model", "fixture-other", "fixture-model", "fixture-model"]);
+    assert.deepEqual(result.modelRequestContainsInput, [true, true, true, true, true, true, true]);
     assert.ok(result.workerPids.length >= 2, "fixture must prove it owned real CLI workers");
     for (const pid of result.workerPids)
       assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
@@ -158,8 +169,11 @@ test(
     try {
       const parent = await reopened.getSession(LEGACY_SESSION_ID as SessionId);
       const side = await reopened.getSession(result.sideSessionId as SessionId);
+      const forked = await reopened.getSession(result.forkedId as SessionId);
       assert.ok(parent);
       assert.ok(side);
+      assert.ok(forked);
+      assert.equal(forked.parentID, LEGACY_SESSION_ID);
       assert.equal(parent.title, "Imported custom title");
       assert.equal(parent.parentID, undefined);
       assert.equal(side.parentID, LEGACY_SESSION_ID);
@@ -180,12 +194,18 @@ test(
         sessionID: result.sideSessionId as SessionId,
         type: SESSION_ENTRY_MODEL_SELECTION,
       });
+      const forkSelection = await reopened.sessionEntries({
+        sessionID: result.forkedId as SessionId,
+        type: SESSION_ENTRY_MODEL_SELECTION,
+      });
       assert.deepEqual(parentSelection.at(-1)?.data, FIXTURE_SELECTION);
+      assert.deepEqual(forkSelection.at(-1)?.data, FIXTURE_SELECTION);
       assert.deepEqual(parentExecution.at(-1)?.data, { mode: "yolo", planEnabled: false });
       const childSelection = sideSelection.at(-1)?.data as { modelId?: unknown } | undefined;
       assert.equal(childSelection?.modelId, "fixture-other");
       const parentMessages = await reopened.messages({ sessionID: LEGACY_SESSION_ID as SessionId });
       const sideMessages = await reopened.messages({ sessionID: result.sideSessionId as SessionId });
+      const forkMessages = await reopened.messages({ sessionID: result.forkedId as SessionId });
       const parentText = parentMessages
         .flatMap(({ parts }) => parts)
         .map((part) => (part.type === "text" ? part.text : ""));
@@ -196,17 +216,22 @@ test(
       assert.ok(parentMessages.some(({ info }) => info.id === "legacy-core-assistant"));
       assert.ok(parentText.some((text) => text.includes("legacy core followup")));
       assert.ok(parentText.some((text) => text.includes("held parent input")));
-      assert.ok(parentText.some((text) => text.includes("queued parent input")));
+      assert.ok(parentText.some((text) => text.includes(result.editedText)));
+      // SQLite retains historical branch messages; only the cold public projection defines visible lineage.
       assert.ok(!parentText.some((text) => text.includes("selection side child input")));
       assert.ok(sideText.some((text) => text.includes("selection side child input")));
       assert.ok(sideText.some((text) => text.includes("Legacy seed")), "fork copies committed source context");
       assert.ok(sideText.some((text) => text.includes("Legacy answer")), "fork preserves source answer");
+      const forkText = forkMessages.flatMap(({ parts }) => parts).map((part) => part.type === "text" ? part.text : "");
+      assert.ok(forkText.some((text) => text.includes("Legacy seed")));
+      assert.ok(forkText.some((text) => text.includes("queued parent input")));
+      assert.ok(!forkText.some((text) => text.includes("selection side child input")));
       const sessionRows = new DatabaseSync(dbPath, { readOnly: true });
       try {
         const rows = sessionRows
           .prepare("SELECT id, parent_id FROM session ORDER BY id")
           .all() as Array<{ id: string; parent_id: string | null }>;
-        assert.equal(rows.length, 2, "duplicate side-session command must not allocate another ID");
+        assert.equal(rows.length, 3, "duplicate fork/side commands must not allocate another ID");
         const childRow = rows.find(({ id }) => id === result.sideSessionId);
         assert.equal(childRow?.id, result.sideSessionId);
         assert.equal(childRow?.parent_id, LEGACY_SESSION_ID);
@@ -323,6 +348,16 @@ interface CoreResult {
   sideSessionId: string;
   sideSessionParentId: string;
   duplicateSideSessionStatus: string;
+  forkedId: string;
+  forkTarget: { rowId: number; entityId: string };
+  forkRevision: number;
+  forkColdId: string;
+  editTarget: { rowId: number; entityId: string };
+  retryTarget: { rowId: number; entityId: string };
+  editStatus: string;
+  retryStatus: string;
+  editedText: string;
+  coldVisibleInputs: string[];
   modelCalls: string[];
   modelRequestContainsInput: boolean[];
   workerPids: number[];
