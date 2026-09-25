@@ -939,6 +939,163 @@ test("actual Core → utility Host → preload → Shell Pi create/input/final/u
       console.log(
         `[history] accepted Host cancel completed, seq=${cancelled.seq}, kinds=${JSON.stringify(cancelled.kinds)}, owner=${cancelledId}`,
       );
+      const waitHistory = (id: string, type: string, timeoutMs = 180_000) =>
+        new Promise<{ seq: number; kinds: Record<string, number> }>((resolve, reject) => {
+          const timer = setTimeout(() => {
+            core?.off("message", onMessage);
+            reject(new Error(`Core history ${type} not observed for ${id}`));
+          }, timeoutMs);
+          const onMessage = (message: unknown) => {
+            if (
+              !message ||
+              typeof message !== "object" ||
+              !("type" in message) ||
+              !("id" in message) ||
+              message.type !== type ||
+              message.id !== id
+            )
+              return;
+            clearTimeout(timer);
+            core?.off("message", onMessage);
+            resolve(message as { seq: number; kinds: Record<string, number> });
+          };
+          core!.on("message", onMessage);
+        });
+      const createForControl = async () => {
+        const id = await app!.evaluate(() =>
+          (
+            globalThis as typeof globalThis & { __actualShellCreateHistory: () => Promise<string> }
+          ).__actualShellCreateHistory(),
+        );
+        await window.evaluate(() => window.dispatchEvent(new Event("focus")));
+        await expect(window.getByTestId(`session-${id}`)).toBeVisible({ timeout: 15_000 });
+        return id;
+      };
+      const sendForControl = async (id: string) => {
+        const receipt = await app!.evaluate(
+          (_, sessionId) =>
+            (
+              globalThis as typeof globalThis & {
+                __actualShellSendHistory: (id: string) => Promise<{ status: string }>;
+              }
+            ).__actualShellSendHistory(sessionId),
+          id,
+        );
+        expect(receipt.status).toBe("accepted");
+      };
+      const censusForControl = (id: string) =>
+        app!.evaluate(
+          (_, sessionId) =>
+            (
+              globalThis as typeof globalThis & {
+                __actualShellCountHistory: (
+                  id: string,
+                ) => Promise<{ sequence: number; kinds: Record<string, number> }>;
+              }
+            ).__actualShellCountHistory(sessionId),
+          id,
+        );
+
+      // 中文：在真实 durable read 返回前被取消，之后不得注册没有等待者可唤醒的新屏障。
+      const checkpointId = await createForControl();
+      const armed = waitHistory(checkpointId, "history-checkpoint-armed", 10_000);
+      core!.send({ command: "arm-history-checkpoint", id: checkpointId });
+      await armed;
+      const checkpointReached = waitHistory(checkpointId, "history-before-seed-barrier");
+      await sendForControl(checkpointId);
+      expect((await checkpointReached).seq).toBe(2_500);
+      const checkpointStopped = waitHistory(checkpointId, "history-cancelled", 20_000);
+      const checkpointReceipt = await app.evaluate(
+        (_, id) =>
+          (
+            globalThis as typeof globalThis & {
+              __actualShellCancelHistory: (id: string) => Promise<{ status: string }>;
+            }
+          ).__actualShellCancelHistory(id),
+        checkpointId,
+      );
+      expect(checkpointReceipt.status).toBe("completed");
+      const checkpointFinal = await checkpointStopped;
+      expect(checkpointFinal.seq).toBe(2_502);
+      expect(await censusForControl(checkpointId)).toEqual({
+        sequence: checkpointFinal.seq,
+        kinds: checkpointFinal.kinds,
+      });
+      console.log(
+        `[history] pre-barrier Host cancel reaped, seq=${checkpointFinal.seq}, kinds=${JSON.stringify(checkpointFinal.kinds)}`,
+      );
+
+      // After success, the *same* original tool ID must never get a second cancelled finish.
+      const lateId = await createForControl();
+      const lateSeed = waitHistory(lateId, "history-seeded");
+      await sendForControl(lateId);
+      await lateSeed;
+      const appended = waitHistory(lateId, "history-appended", 30_000);
+      core!.send({ command: "release-history", id: lateId });
+      await appended;
+      const oldToolDone = waitHistory(lateId, "history-old-tool-finished", 30_000);
+      core!.send({ command: "release-history", id: lateId });
+      await oldToolDone;
+      const lateStopped = waitHistory(lateId, "history-cancelled", 20_000);
+      const lateReceipt = await app.evaluate(
+        (_, id) =>
+          (
+            globalThis as typeof globalThis & {
+              __actualShellCancelHistory: (id: string) => Promise<{ status: string }>;
+            }
+          ).__actualShellCancelHistory(id),
+        lateId,
+      );
+      expect(lateReceipt.status).toBe("completed");
+      const lateFinal = await lateStopped;
+      expect(lateFinal.seq).toBe(2_758);
+      expect(lateFinal.kinds["tool.finished"]).toBe(1);
+      expect(lateFinal.kinds["turn.finished"]).toBe(1);
+      expect(await censusForControl(lateId)).toEqual({
+        sequence: lateFinal.seq,
+        kinds: lateFinal.kinds,
+      });
+      console.log(
+        `[history] late Host cancel preserved completed original tool, seq=${lateFinal.seq}, kinds=${JSON.stringify(lateFinal.kinds)}`,
+      );
+
+      const terminateId = await createForControl();
+      const terminateSeed = waitHistory(terminateId, "history-seeded");
+      await sendForControl(terminateId);
+      await terminateSeed;
+      const terminated = waitHistory(terminateId, "history-cancelled", 20_000);
+      const terminateReceipt = await app.evaluate(
+        (_, id) =>
+          (
+            globalThis as typeof globalThis & {
+              __actualShellTerminateHistory: (id: string) => Promise<{ status: string }>;
+            }
+          ).__actualShellTerminateHistory(id),
+        terminateId,
+      );
+      expect(terminateReceipt.status).toBe("completed");
+      const terminateFinal = await terminated;
+      expect(terminateFinal.seq).toBe(2_502);
+      expect(await censusForControl(terminateId)).toEqual({
+        sequence: terminateFinal.seq,
+        kinds: terminateFinal.kinds,
+      });
+      console.log(`[history] Host terminate reaped, seq=${terminateFinal.seq}`);
+
+      const shutdownId = await createForControl();
+      const shutdownSeed = waitHistory(shutdownId, "history-seeded");
+      await sendForControl(shutdownId);
+      await shutdownSeed;
+      const stoppedOnShutdown = waitHistory(shutdownId, "history-cancelled", 20_000);
+      await app.close();
+      app = undefined;
+      await stopOwnedCore(core!);
+      core = undefined;
+      const shutdownFinal = await stoppedOnShutdown;
+      expect(shutdownFinal.seq).toBe(2_502);
+      console.log(
+        `[history] owned Core shutdown reaped tracked producer, seq=${shutdownFinal.seq}, no process remains to emit`,
+      );
     }
   } finally {
     releaseSecond();

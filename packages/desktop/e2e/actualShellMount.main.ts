@@ -213,6 +213,30 @@ void (async () => {
   };
   (
     globalThis as typeof globalThis & {
+      __actualShellTerminateHistory?: (id: string) => Promise<unknown>;
+    }
+  ).__actualShellTerminateHistory = async (id) => {
+    const read = await core.mountLocalCore(location);
+    try {
+      const agent = read.services.get(services.IAgentHostService);
+      const spec = await agent.getSessionSpec({
+        targetId: location.installationId,
+        workspaceId: "main",
+        hostSessionId: id,
+      });
+      if (!spec || spec.harness.id !== "synthetic-history")
+        throw new Error("Foreign synthetic Host");
+      return await agent.dispatch(spec, {
+        type: "terminateSession",
+        commandId: crypto.randomUUID(),
+        hostSessionId: id,
+      });
+    } finally {
+      read.attachment.dispose();
+    }
+  };
+  (
+    globalThis as typeof globalThis & {
       __actualShellHistory?: (id: string, beforeRowId?: number) => Promise<unknown>;
     }
   ).__actualShellHistory = async (id, beforeRowId) => {

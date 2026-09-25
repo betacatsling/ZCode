@@ -33,6 +33,8 @@ class SyntheticHistoryHarness implements HarnessAdapter {
   readonly #stopped = new Set<string>();
   readonly #runs = new Map<string, Promise<void>>();
   readonly #kinds = new Map<string, Record<string, number>>();
+  readonly #finishedTools = new Set<string>();
+  readonly #beforeSeedBarrier = new Set<string>();
   readonly #sequences = new Map<string, number>();
   #hostService: ReturnType<typeof getHostService> | undefined;
 
@@ -99,13 +101,28 @@ class SyntheticHistoryHarness implements HarnessAdapter {
     if (atLeast > 2_200 && atLeast < 2_500)
       process.send?.({ type: "history-observed-commit", id: spec.hostSessionId, seq: model.seq });
     if (model.seq < atLeast) throw new Error(`Core journal lag: ${model.seq} < ${atLeast}`);
+    if (atLeast === SEED_EVENTS && this.#beforeSeedBarrier.delete(spec.hostSessionId)) {
+      // 中文：只在受控测试中停在真实 durable read 返回前，检验停止先于下一屏障注册的竞态。
+      process.send?.({
+        type: "history-before-seed-barrier",
+        id: spec.hostSessionId,
+        seq: model.seq,
+      });
+      await this.#barrier(spec.hostSessionId);
+    }
   }
   #barrier(id: string): Promise<void> {
+    // 中文：停止可能发生在上一轮 durable await 中；此时尚无等待者可唤醒，注册必须先检查停止态。
+    if (this.#stopped.has(id)) throw new ProducerStopped();
     return new Promise((resolve) => {
       const pending = this.#released.get(id) ?? [];
       pending.push(resolve);
       this.#released.set(id, pending);
     });
+  }
+  armBeforeSeedBarrier(id: string) {
+    if (this.#sequences.has(id)) throw new Error("Checkpoint must precede send");
+    this.#beforeSeedBarrier.add(id);
   }
   release(id: string) {
     const next = this.#released.get(id)?.shift();
@@ -177,6 +194,7 @@ class SyntheticHistoryHarness implements HarnessAdapter {
         }
       }
       await this.#committedFromCommand(id, command);
+      this.#ensureRunning(id);
       process.send?.({
         type: "history-seeded",
         id,
@@ -207,7 +225,9 @@ class SyntheticHistoryHarness implements HarnessAdapter {
         outcome: "success",
         outputText: "old tool completed after append",
       });
+      this.#finishedTools.add(id);
       await this.#committedFromCommand(id, command);
+      this.#ensureRunning(id);
       process.send?.({ type: "history-old-tool-finished", id, seq: this.#sequences.get(id) });
       // Keep the original turn running while the older visible tool row is checked in the Shell.
       await this.#barrier(id);
@@ -223,7 +243,9 @@ class SyntheticHistoryHarness implements HarnessAdapter {
     } catch (error) {
       if (!(error instanceof ProducerStopped)) throw error;
       // 中文：仅已接受且真实中断的原轮次生成取消终结，不凭空补写历史；Host 收敛 activeTurn。
-      this.#emit(id, "tool.finished", { ...tool, outcome: "cancelled" }, true);
+      // 中文：晚期取消不能再次关闭已成功的同一 toolCallId；只关闭仍未完成的原实体。
+      if (!this.#finishedTools.has(id))
+        this.#emit(id, "tool.finished", { ...tool, outcome: "cancelled" }, true);
       this.#emit(id, "turn.finished", { ...common, outcome: "cancelled" }, true);
       await this.#committedFromCommand(id, command);
       process.send?.({
@@ -246,7 +268,8 @@ class SyntheticHistoryHarness implements HarnessAdapter {
       if (this.#sequences.get(id)! % 8_192 === 0)
         process.send?.({ type: "history-progress", id, seq: this.#sequences.get(id) });
     } catch (error) {
-      process.send?.({ type: "history-producer-error", id, error: String(error) });
+      if (!(error instanceof ProducerStopped))
+        process.send?.({ type: "history-producer-error", id, error: String(error) });
       throw error;
     }
   }
@@ -256,6 +279,7 @@ class SyntheticHistoryHarness implements HarnessAdapter {
   }
   #stop(id: string) {
     this.#stopped.add(id);
+    this.#beforeSeedBarrier.delete(id);
     for (const resolve of this.#released.get(id) ?? []) resolve();
     this.#released.delete(id);
   }
@@ -285,12 +309,15 @@ process.on("message", (message: unknown) => {
     !message ||
     typeof message !== "object" ||
     !("command" in message) ||
-    message.command !== "release-history"
+    !["release-history", "arm-history-checkpoint"].includes(String(message.command))
   )
     return;
   if (!("id" in message) || typeof message.id !== "string") return;
   try {
-    producer.release(message.id);
+    if (message.command === "arm-history-checkpoint") {
+      producer.armBeforeSeedBarrier(message.id);
+      process.send?.({ type: "history-checkpoint-armed", id: message.id });
+    } else producer.release(message.id);
   } catch (error) {
     process.send?.({ type: "history-release-error", error: String(error) });
   }
