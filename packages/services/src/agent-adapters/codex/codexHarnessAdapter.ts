@@ -489,9 +489,25 @@ export class CodexHarnessAdapter implements HarnessAdapter {
         return;
       }
       if (params.turnId !== running.nativeTurnId) return;
-      projectCodexNotification(event, session.threadId!, turnId, (detail) =>
-        this.#emit(session, detail),
-      );
+      if (
+        event.method === "thread/tokenUsage/updated" &&
+        isRecord(params.tokenUsage) &&
+        isRecord(params.tokenUsage.last)
+      ) {
+        // 修复原因：空快照不会被投影器发出，仍不能抹去这个 turn 已知的计量字段。
+        for (const field of running.knownUsageFields)
+          if (params.tokenUsage.last[field] === undefined)
+            throw new Error("Codex usage snapshot omitted prior metric");
+      }
+      projectCodexNotification(event, session.threadId!, turnId, (detail) => {
+        if (detail.kind === "usage.accounted") {
+          // 修复原因：Host 只在读取时检查遗漏；先拒绝不完整原生快照，
+          // 避免污染不可撤销的 journal。这里只记已见字段，不复制计量账本。
+          for (const field of ["inputTokens", "outputTokens"] as const)
+            if (detail[field] !== undefined) running.knownUsageFields.add(field);
+        }
+        this.#emit(session, detail);
+      });
     }
   }
   async #finish(
