@@ -118,3 +118,84 @@ test("held external attach cannot activate the real Host adapter before a worksp
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test(
+  "closing admission during a real lazy Registry await stops external activation before adapter/catalog",
+  { timeout: 15000 },
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "core-preinit-race-"));
+    const path = join(root, "tree");
+    await mkdir(path);
+    let open = true;
+    let started!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let resume!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    let snapshots = 0;
+    const lazy = createLazyTargetAgentHostService({
+      root,
+      target: {
+        id: "local",
+        kind: "local",
+        platform: process.platform as "darwin" | "linux" | "win32",
+        available: true,
+      },
+      allowNewSessions: () => open,
+      registry: {
+        start: async () => {
+          started();
+          await blocked;
+        },
+        getSnapshot: () => {
+          snapshots++;
+          throw new Error("adapter catalog activated during hold");
+        },
+      } as unknown as ProviderRegistryService,
+      admission: {
+        verify: async () => ({ canonicalCwd: path }),
+        withAdmission: async <T>(
+          _candidate: SessionSpecV2,
+          action: (verified: { canonicalCwd: string }) => Promise<T>,
+        ) => {
+          if (!open) throw new Error("held workspace admission");
+          return action({ canonicalCwd: path });
+        },
+      },
+    });
+    const spec: SessionSpecV2 = {
+      schemaVersion: 2,
+      hostSessionId: "racing",
+      projectId: "p",
+      workspaceId: "w",
+      execution: {
+        targetId: "local",
+        workspaceIdentity: "identity",
+        worktreePath: path,
+        worktreeGeneration: "generation-1",
+        cwdRelativeToWorktree: ".",
+      },
+      harness: { id: "pi", adapterVersion: "0.87.1" },
+      modelBinding: {
+        kind: "host-managed",
+        selection: { providerId: "provider", modelId: "model" },
+      },
+    };
+    try {
+      const pending = lazy.service.attach(spec);
+      await entered;
+      open = false;
+      resume();
+      await assert.rejects(pending, /disabled|held/);
+      assert.equal(snapshots, 0, "not even the adapter catalog may activate after the hold");
+      assert.deepEqual(await lazy.service.listWorkspaceSessions("w"), []);
+    } finally {
+      resume();
+      await lazy.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
