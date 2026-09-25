@@ -53,6 +53,89 @@ export function mountActualShellFixture(services: IServiceAccessor, platform: IP
       throw new Error("Synthetic owner not found");
     return services.agentHostService.rowsRange(spec, { sessionId: id, beforeRowId: 10, limit: 9 });
   };
+  (
+    window as typeof window & {
+      __actualShellReadonlyJoin?: {
+        createNativeSession(): Promise<string>;
+        archiveWorkspace(): Promise<void>;
+        resolveOwner(sessionId: string): Promise<unknown>;
+        dispatchHostSend(sessionId: string): Promise<unknown>;
+      };
+    }
+  ).__actualShellReadonlyJoin = {
+    async createNativeSession() {
+      const hierarchy = services.workspaceHierarchyService;
+      if (!hierarchy || !services.projectCatalogService)
+        throw new Error("Mounted Core hierarchy missing");
+      const snapshot = await services.projectCatalogService.sidebarSnapshot();
+      const workspace = snapshot.workspaces.find((row) => row.id === "main");
+      if (!workspace) throw new Error("Mounted Core workspace missing");
+      const options = await hierarchy.listCreateOptions(workspace.id);
+      const native = options.options.find((option) => option.harnessId === "zcode");
+      if (!native) throw new Error("Isolated real Native option unavailable");
+      const created = await hierarchy.createAgent({
+        workspaceId: workspace.id,
+        harnessId: "zcode",
+        modelBinding: native.binding,
+        commandId: crypto.randomUUID(),
+      });
+      if (created.owner.kind !== "native" || created.owner.historyOnly)
+        throw new Error("Core did not return a writable original Native owner");
+      const nativeOwner = created.owner;
+      const indexed = await services.projectCatalogService.sidebarSnapshot();
+      if (
+        !indexed.sessions.some(
+          (row) =>
+            row.session.id === nativeOwner.originalSessionId && row.session.harnessId === "zcode",
+        )
+      )
+        throw new Error("Core Catalog did not index the original Native session ID");
+      return nativeOwner.originalSessionId;
+    },
+    async archiveWorkspace() {
+      if (!services.projectCatalogService) throw new Error("Mounted Core Catalog missing");
+      await services.projectCatalogService.updateWorkspace("main", { archived: true });
+    },
+    async resolveOwner(sessionId) {
+      const hierarchy = services.workspaceHierarchyService;
+      const catalogService = services.projectCatalogService;
+      if (!hierarchy || !catalogService) throw new Error("Mounted Core hierarchy missing");
+      const snapshot = await catalogService.sidebarSnapshot();
+      const workspace = snapshot.workspaces.find((row) => row.id === "main");
+      const binding = snapshot.bindings.find((row) => row.id === workspace?.repositoryBindingId);
+      if (!workspace || !binding) throw new Error("Mounted Core workspace scope missing");
+      return hierarchy.resolveOwner({
+        targetId: binding.executionTargetId,
+        workspaceId: workspace.id,
+        sessionId,
+      });
+    },
+    async dispatchHostSend(sessionId) {
+      const hierarchy = services.workspaceHierarchyService;
+      const catalogService = services.projectCatalogService;
+      const host = services.agentHostService;
+      if (!hierarchy || !catalogService || !host)
+        throw new Error("Mounted Core Host/hierarchy missing");
+      const snapshot = await catalogService.sidebarSnapshot();
+      const workspace = snapshot.workspaces.find((row) => row.id === "main");
+      const binding = snapshot.bindings.find((row) => row.id === workspace?.repositoryBindingId);
+      if (!workspace || !binding) throw new Error("Mounted Core workspace scope missing");
+      const owner = await hierarchy.resolveOwner({
+        targetId: binding.executionTargetId,
+        workspaceId: workspace.id,
+        sessionId,
+      });
+      if (!owner || owner.kind !== "external") throw new Error("Mounted external owner missing");
+      const commandId = crypto.randomUUID();
+      return host.dispatch(owner.spec, {
+        type: "send",
+        commandId,
+        hostSessionId: sessionId,
+        turnId: commandId,
+        text: "Must not dispatch after archive",
+      });
+    },
+  };
   createRoot(document.getElementById("root")!).render(
     <ZCodeIntlProvider initialLocale="en-US">
       <PlatformProvider platform={platform}>
