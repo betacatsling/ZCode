@@ -133,6 +133,16 @@ export type RuntimeActivity = z.infer<typeof runtimeActivitySchema>;
 
 export const coreMessageSchema = z.discriminatedUnion("type", [
   z.object({
+    // 受管 Core 在取得任何 occupancy 锁之前，经私有 IPC 向可信 Supervisor 申报
+    // owner 身份；Supervisor 只认 pid 与 fork 句柄内核值一致的申报，并把它与该
+    // child 的 exit/close 收割证据绑定后才允许退休其锁。旧 Supervisor 忽略本消息，
+    // 旧 Core 不申报则一律 fail closed。见 docs/specs/core-occupancy-recovery.md。
+    type: z.literal("occupancy-owner"),
+    pid: z.number().int().positive(),
+    ownerEpoch: z.string().min(8).max(128),
+    installationId: z.string().min(1).max(128),
+  }),
+  z.object({
     type: z.literal("ready"),
     host: z.string().min(1),
     port: z.number().int().positive(),

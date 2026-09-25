@@ -1,6 +1,7 @@
 import {
   materializeZCodeBuiltinProviderConfig,
   getAppConfigDir,
+  getProcessOwnerEpoch,
   ZCODE_BUILTIN_PROVIDER_CONFIG_FILE_ENV,
   createServiceLogger,
 } from "@zcode/services/node";
@@ -32,6 +33,17 @@ export async function runServerCore(
     if (shutdown) void shutdown("parent-disconnected");
     else parentDisconnected = true;
   });
+  const send = (message: unknown): Promise<void> => {
+    if (typeof process.send !== "function" || process.connected === false) return Promise.resolve();
+    return new Promise((resolve) => {
+      try {
+        process.send?.(message, () => resolve());
+      } catch {
+        // 父进程断连后的最后一条生命周期消息不应阻塞资源释放。
+        resolve();
+      }
+    });
+  };
   const explicitZCodeBuiltinProviderConfigFilePath =
     process.env[ZCODE_BUILTIN_PROVIDER_CONFIG_FILE_ENV]?.trim();
   const zcodeBuiltinProviderConfigFilePath = explicitZCodeBuiltinProviderConfigFilePath
@@ -49,6 +61,15 @@ export async function runServerCore(
   }
   const serverId = await resolveCoreServerId();
   if (!serverId) throw new Error("Persistent Core requires validated installation identity");
+  // 在 createAuthority 取得任何 occupancy 锁之前申报 owner 身份：本进程所有
+  // profile/catalog/target marker 都写入同一 ownerEpoch，可信 Supervisor 只凭
+  // {pid, ownerEpoch, installationId} 与已收割证据一致的锁才允许退休。
+  await send({
+    type: "occupancy-owner",
+    pid: process.pid,
+    ownerEpoch: getProcessOwnerEpoch(),
+    installationId: serverId,
+  });
   const authority = await createAuthority({
     installationId: serverId,
     profileRoot: resolveServerLayout(process.env.ZCODE_SERVER_ROOT).serverRoot,
@@ -108,17 +129,6 @@ export async function runServerCore(
       );
     throw error;
   }
-  const send = (message: unknown): Promise<void> => {
-    if (typeof process.send !== "function" || process.connected === false) return Promise.resolve();
-    return new Promise((resolve) => {
-      try {
-        process.send?.(message, () => resolve());
-      } catch {
-        // 父进程断连后的最后一条生命周期消息不应阻塞资源释放。
-        resolve();
-      }
-    });
-  };
   // ready.version 的语义是 Core 版本；不能误发 Node runtime 版本常量
   // （22.16.0），否则消费方读取会拿到错误值。
   await send({

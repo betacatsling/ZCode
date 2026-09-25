@@ -415,7 +415,10 @@ test(
         );
       }
 
-      fixtureModel = await createInstalledHostModel(dir);
+      // 中文：受管 Core 的配置根固定为 getAppConfigDir(layout.dataBaseDir)（与 cli.ts
+      // 生产 launcher 契约一致），fixture provider_config.json 必须写入子进程实际
+      // 读取的同一命名空间，否则 host.create 得到 provider-not-found。
+      fixtureModel = await createInstalledHostModel(layout.dataBaseDir);
       // 中文：独立 Core freeze 正常并不证明 Supervisor 的 IPC、current 选择和收口顺序。
       // 用已安装可执行文件重新启动实际 Supervisor，经控制 socket 受理一次
       // 新的原生/外部 census 并释放同一租约，再核验 child close、锁和 socket。
@@ -446,7 +449,10 @@ test(
                   ...isolatedEnv,
                   HOME: dir,
                   XDG_CONFIG_HOME: join(dir, "config"),
-                  ZCODE_DATA_BASE_DIR: dir,
+                  // 中文：Supervisor 的 occupancy 恢复扫描固定在
+                  // getAppConfigDir(layout.dataBaseDir)；launcher 契约（与 cli.ts
+                  // 生产路径一致）要求子进程 ZCODE_DATA_BASE_DIR 恒等于它。
+                  ZCODE_DATA_BASE_DIR: layout.dataBaseDir,
                   ZCODE_SERVER_ROOT: layout.serverRoot,
                   ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: provider,
                   ZCODE_SERVER_SKIP_SERVICE_REGISTRATION: "1",
@@ -902,6 +908,16 @@ test(
       assert.equal(supervisor.status().state, "stopped");
       assert.deepEqual(await new DataRootLock(layout.lockFile).inspect(), { state: "missing" });
       await assert.rejects(requestControl(layout.controlEndpoint, { command: "status" }));
+      if (process.env.ZCODE_SUPERVISOR_UNCERTAIN_PROBE === "1") {
+        // 中文：探针故意留下 execution-unknown 历史；它按产品语义永久 fencing 后续
+        // 非 force 维护（新 boot 的 externalActivity.uncertain>0）。后续阶段需要的是
+        // 干净 root——相当于运维人工核验后删除不可裁决的会话历史。这里在所有
+        // Core 已停止、锁已释放的窗口执行该人工处置，不是绕过 fencing。
+        await rm(
+          join(layout.dataBaseDir, ".zcode", "v2", "workspace-hierarchy", "agent-host"),
+          { recursive: true, force: true },
+        );
+      }
       // Test setup only: restore A while no owner/lock exists, preserving two independently
       // installed archives, so the next installed CLI executes its own production update.
       await releases.restoreCurrent(manifest);
@@ -1084,6 +1100,8 @@ test(
               cwd: dir,
               env: {
                 ...isolatedEnv,
+                // 中文：Supervisor occupancy 恢复命名空间即 getAppConfigDir(layout.dataBaseDir)。
+                ZCODE_DATA_BASE_DIR: layout.dataBaseDir,
                 ZCODE_SERVER_ROOT: layout.serverRoot,
                 ...createReleaseAgentWiring(root, node, {}, selected),
                 // Drop only the candidate declaration at this transport fault boundary;
@@ -1187,6 +1205,7 @@ test(
               cwd: dir,
               env: {
                 ...isolatedEnv,
+                ZCODE_DATA_BASE_DIR: layout.dataBaseDir,
                 ZCODE_SERVER_ROOT: layout.serverRoot,
                 ...createReleaseAgentWiring(root, node, {}, selected),
               },
@@ -1328,6 +1347,7 @@ test(
               cwd: dir,
               env: {
                 ...isolatedEnv,
+                ZCODE_DATA_BASE_DIR: layout.dataBaseDir,
                 ZCODE_SERVER_ROOT: layout.serverRoot,
                 ...createReleaseAgentWiring(root, node, {}, selected),
                 // Gen2 is the deliberately unsupported candidate and must fail before READY.

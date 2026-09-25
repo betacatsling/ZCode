@@ -3,11 +3,12 @@
 import { type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
-import { createServiceLogger } from "@zcode/services/node";
+import { createServiceLogger, getAppConfigDir } from "@zcode/services/node";
 import {
   coreMessageSchema,
   SERVER_CLI_PROTOCOL_VERSION,
   type ControlRequest,
+  type CoreMessage,
   type LifecycleState,
   type ReleaseManifest,
   type RuntimeActivity,
@@ -16,6 +17,11 @@ import {
 import { createControlServer, type ControlHandler } from "../ipc/controlServer.js";
 import { ControlRequestError } from "../ipc/controlError.js";
 import { DataRootLock } from "../runtime/lock.js";
+import { validateServerInstallOwnership } from "../runtime/installationOwnership.js";
+import {
+  recoverManagedOccupancyLocks,
+  type ManagedOccupancyRecord,
+} from "../runtime/occupancyRecovery.js";
 import { resolveServerLayout, type ServerLayout } from "../runtime/paths.js";
 import { ReleaseManager } from "../runtime/releaseManager.js";
 import type { TrustedLocalSourceBootSelection } from "../runtime/releaseBootSelection.js";
@@ -94,6 +100,15 @@ export class Supervisor {
   private fallbackMaintenance: MaintenanceLease | undefined;
   private maintenanceInFlight: object | undefined;
   private maintenanceHeld: object | undefined;
+  // 可信证明链：仅本 Supervisor 亲自 fork、并已在私有 IPC 收到 occupancy-owner 申报
+  // 的 child 才进入此表；exit/close 后标记 reaped。Supervisor 重启即丢失——上一任
+  // Supervisor 的 child 残留锁一律走人工恢复，不能被新实例退休。
+  private readonly occupancyOwners = new Map<
+    string,
+    ManagedOccupancyRecord & { child: ChildProcess }
+  >();
+  private installationId: string | undefined;
+  private occupancyRecovery: Promise<void> | undefined;
 
   public constructor(private readonly options: SupervisorOptions) {
     this.layout = options.layout ?? resolveServerLayout();
@@ -135,6 +150,11 @@ export class Supervisor {
         serverRoot: this.layout.serverRoot,
         version: this.options.version,
       });
+      // 中文：在拉起新 Core 前先对 managed occupancy 锁做逐锁判定；不可证明旧 owner
+      // 已收割的一律拒绝并保持现场（锁仍在、人工恢复），绝不让子进程 EEXIST 崩溃循环。
+      await this.recoverManagedCoreOccupancy();
+      if (this.state !== "starting" || this.core)
+        throw new Error("Supervisor state changed during Core occupancy recovery");
       this.launchCore();
       await this.persistStatusSnapshot();
       return this.status();
@@ -345,6 +365,9 @@ export class Supervisor {
       this.activeRelease = pending;
       await this.recheckHeldReleaseBeforeLaunch(pending);
       this.state = "starting";
+      await this.recoverManagedCoreOccupancy();
+      if (this.state !== "starting" || this.core)
+        throw new Error("Supervisor state changed during Core occupancy recovery");
       this.launchCore("held");
       await waitForUpdateReady(
         () => (this.bootFence ? "ready" : this.state),
@@ -404,6 +427,21 @@ export class Supervisor {
           throw createRollbackFailure(error, rollbackError);
         }
         this.state = "starting";
+        try {
+          await this.recoverManagedCoreOccupancy();
+        } catch (rollbackError) {
+          // 中文：回滚目标残留锁同样必须逐锁证明；不可证明时不得无凭据删锁启动，
+          // 以 rollback failure 保持现场并保留锁供人工核验。
+          this.state = "stop-failed";
+          this.lastExitReason = `rollback occupancy recovery refused: ${updateErrorMessage(rollbackError)}`;
+          await this.persistStatusSnapshot();
+          throw createRollbackFailure(error, rollbackError);
+        }
+        if (this.state !== "starting" || this.core)
+          throw createRollbackFailure(
+            error,
+            new Error("Supervisor state changed during Core occupancy recovery"),
+          );
         this.launchCore("held");
         try {
           await waitForUpdateReady(
@@ -488,6 +526,11 @@ export class Supervisor {
     const handleTerminal = (reason: string): void => {
       if (terminalObserved) return;
       terminalObserved = true;
+      // OS 终态（exit/close）是对旧 owner 唯一可信的收割证据；无论该 child 是否仍是
+      // 当前代际都先标记，否则其残留 occupancy 锁永远无法被后续 relaunch 证明。
+      for (const record of this.occupancyOwners.values()) {
+        if (record.child === child) record.reaped = true;
+      }
       if (this.core !== child || this.state === "stopping" || this.state === "stopped") return;
       if (this.state === "stop-failed") {
         // stop 已失败时继续保留锁；迟到的终态只清除已死亡 child，不得计入 crash budget
@@ -523,7 +566,7 @@ export class Supervisor {
           return;
         }
         this.state = "starting";
-        this.launchCore();
+        this.relaunchAfterOccupancyRecovery(generation);
       }, decision.delayMs).unref();
     };
     // fork 的 execPath 不存在/不可执行时 Node 只发 error + close，不发 exit。
@@ -599,8 +642,93 @@ export class Supervisor {
     } else if (message.type === "exit") {
       this.lastExitReason = message.reason;
       log.info("server core reported exit", { reason: message.reason });
+    } else if (message.type === "occupancy-owner") {
+      this.recordOccupancyOwner(child, expectedGeneration, message);
+      // occupancy 申报不改变对外生命周期状态，无需触发 status 落盘。
+      return;
     }
     void this.persistStatusSnapshot();
+  }
+
+  private recordOccupancyOwner(
+    child: ChildProcess,
+    generation: number,
+    message: Extract<CoreMessage, { type: "occupancy-owner" }>,
+  ): void {
+    // 申报的 pid 必须与内核分配给该 fork 句柄的 pid 一致；谎报只会让该 child 自己的
+    // 锁不可恢复（文件里写的是它的真实进程 epoch/pid），不影响其他 owner。
+    if (message.pid !== child.pid) {
+      log.warn("ignoring Core occupancy report with mismatched pid", {
+        reportedPid: message.pid,
+        childPid: child.pid,
+        generation,
+      });
+      return;
+    }
+    this.occupancyOwners.set(message.ownerEpoch, {
+      pid: message.pid,
+      generation,
+      ownerEpoch: message.ownerEpoch,
+      installationId: message.installationId,
+      reaped: child.exitCode !== null || child.signalCode !== null,
+      child,
+    });
+  }
+
+  /**
+   * 拉起新 Core 前的逐锁恢复门：扫描 managed occupancy 命名空间，只有命中本
+   * Supervisor 已收割 child 申报的 {pid, ownerEpoch, installationId} 的 marker 才退休；
+   * 外来/旧格式/存活/歧义记录一律拒绝并保持文件不动作人工恢复。
+   */
+  private recoverManagedCoreOccupancy(): Promise<void> {
+    // 同进程并发调用共享同一在途扫描；第二次调用读到的是退休后的状态，天然幂等。
+    this.occupancyRecovery ??= this.scanManagedCoreOccupancy().finally(() => {
+      this.occupancyRecovery = undefined;
+    });
+    return this.occupancyRecovery;
+  }
+
+  private async scanManagedCoreOccupancy(): Promise<void> {
+    this.installationId ??= (await validateServerInstallOwnership(this.layout)).installationId;
+    const retired = await recoverManagedOccupancyLocks({
+      // launcher 约定：子进程 ZCODE_DATA_BASE_DIR 恒为 layout.dataBaseDir，因此
+      // child 的 getAppConfigDir() 与此处显式传入的路径指向同一命名空间。
+      configRoot: getAppConfigDir(this.layout.dataBaseDir),
+      installationId: this.installationId,
+      owners: this.occupancyOwners,
+    });
+    for (const lockPath of retired) {
+      log.info("retired proven-terminated Core occupancy lock", { lockPath });
+    }
+  }
+
+  private relaunchAfterOccupancyRecovery(expectedGeneration: number): void {
+    void this.recoverManagedCoreOccupancy().then(
+      () => {
+        if (
+          this.state !== "starting" ||
+          this.generation !== expectedGeneration ||
+          this.core
+        )
+          return;
+        if (this.lifecycleOperation) {
+          // 恢复期间受理了生命周期操作：回到 crashed 并交给 finishLifecycleOperation
+          // 在操作结算后重走这条路径（扫描幂等，重扫读到的是退休后状态）。
+          this.state = "crashed";
+          this.deferredRestartGeneration = expectedGeneration;
+          return;
+        }
+        this.launchCore();
+      },
+      (error: unknown) => {
+        // 中文：恢复被拒 = 旧 occupancy owner 不可证明已死亡。保留锁与现场进入
+        // 需人工介入的终态；绝不能继续拉起注定 EEXIST 的 Core 形成崩溃循环。
+        this.state = "stop-failed";
+        this.lastExitReason = `Core occupancy owner is unverifiable: ${updateErrorMessage(error)}`;
+        log.error("core occupancy recovery refused; manual recovery required", error);
+        void this.persistStatusSnapshot();
+      },
+    );
   }
 
   private enterUpdateRollback(): void {
@@ -970,7 +1098,7 @@ export class Supervisor {
       this.deferredRestartGeneration === this.generation
     ) {
       this.state = "starting";
-      this.launchCore();
+      this.relaunchAfterOccupancyRecovery(this.generation);
       void this.persistStatusSnapshot();
     }
   }

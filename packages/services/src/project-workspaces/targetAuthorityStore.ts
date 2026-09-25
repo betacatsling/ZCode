@@ -14,6 +14,7 @@ export interface TargetOperationReceipt {
   presentation?: { title: string; sortOrder: number; origin: "adopted" | "created" };
 }
 import type { TargetWorkspaceRecord } from "./worktreeReconciler.js";
+import { getProcessOwnerEpoch } from "./ownerEpoch.js";
 
 function validIdentity(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
@@ -91,7 +92,10 @@ export class TargetAuthorityStore {
   ): Promise<TargetAuthorityStore> {
     const lease = await open(leaseFile, "wx");
     try {
-      await lease.writeFile(JSON.stringify({ token, pid: process.pid }));
+      // ownerEpoch 与 ProfileFileOwner 锁同语义：仅可信 Supervisor 记录的已收割化身可恢复。
+      await lease.writeFile(
+        JSON.stringify({ token, pid: process.pid, ownerEpoch: getProcessOwnerEpoch() }),
+      );
       const persisted = await readFile(dataFile, "utf8").catch((error: NodeJS.ErrnoException) => {
         if (error.code === "ENOENT") return null;
         throw error;

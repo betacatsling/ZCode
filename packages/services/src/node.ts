@@ -102,6 +102,9 @@ export type { WorkspaceAdmissionPort } from "./agent-host/targetService.js";
 export { SessionRouter } from "./agent-host/sessionRouter.js";
 export { ProjectCatalog } from "./project-workspaces/projectCatalog.js";
 export { TargetWorktreeService } from "./project-workspaces/worktreeService.js";
+export { ProfileFileOwner } from "./project-workspaces/profilePersistence.js";
+export { TargetAuthorityStore } from "./project-workspaces/targetAuthorityStore.js";
+export { getProcessOwnerEpoch } from "./project-workspaces/ownerEpoch.js";
 export {
   ProjectCatalogTargetBridge,
   CatalogWorkspaceAdmission,

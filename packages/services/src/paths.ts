@@ -49,9 +49,15 @@ export function getConversationWorkspaceDir(): string {
   return join(getZCodeDataRootDir(), "workspace", "default");
 }
 
-/** {dataBaseDir}/.zcode/v2 */
-export function getAppConfigDir(): string {
-  return join(getZCodeDataRootDir(), "v2");
+/**
+ * {dataBaseDir}/.zcode/v2；未传 dataBaseDir 时按本进程 getDataBaseDir() 解析。
+ * Supervisor 显式传 layout.dataBaseDir —— 与 launcher 注入子进程的 ZCODE_DATA_BASE_DIR
+ * 是同一约定值，保证双方定位同一个 Core occupancy 命名空间。
+ */
+export function getAppConfigDir(dataBaseDir?: string): string {
+  return dataBaseDir === undefined
+    ? join(getZCodeDataRootDir(), "v2")
+    : join(dataBaseDir, ".zcode", "v2");
 }
 
 function readEnvValue(env: Record<string, string | undefined>, key: string): string | undefined {

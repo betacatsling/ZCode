@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, open, readFile, rename, unlink, type FileHandle } from "node:fs/promises";
 import { dirname } from "node:path";
+import { getProcessOwnerEpoch } from "./ownerEpoch.js";
 
 /** Lock stealing is deliberately forbidden: after a crash recovery requires operator inspection. */
 export class ProfileFileOwner {
@@ -55,7 +56,13 @@ export class ProfileFileOwner {
     const lock = await open(`${path}.lock`, "wx", 0o600);
     const token = randomUUID();
     try {
-      await lock.writeFile(JSON.stringify({ token, pid: process.pid }), "utf8");
+      // ownerEpoch 绑定本进程本次化身；可信 Supervisor 只认它与私有 IPC 申报一致且已收割
+      // 的记录，PID 复用、旧格式（无 epoch）或外来记录一律 fail closed。
+      // 见 docs/specs/core-occupancy-recovery.md。
+      await lock.writeFile(
+        JSON.stringify({ token, pid: process.pid, ownerEpoch: getProcessOwnerEpoch() }),
+        "utf8",
+      );
       await lock.sync();
       return new ProfileFileOwner(path, lock, token);
     } catch (error) {
