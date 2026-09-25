@@ -195,9 +195,11 @@ export async function createCoreAuthority(
         JSON.stringify(intent.modelBinding) !== JSON.stringify(input.modelBinding)
       )
         throw new Error("native-create-intent-conflict");
-      const mapping = state.mapping ?? (await journal.complete(input.commandId));
+      // 中文：旧 createAgent 的 recover 在 admission 之外执行；这里必须保持纯读，
+      // 未落盘 mapping 的完成收据只准经共享的显式修复租约落盘。
+      if (!state.mapping) return undefined;
       return {
-        originalSessionId: mapping.originalSessionId,
+        originalSessionId: state.mapping.originalSessionId,
         ...(intent.remoteSessionId ? { creationRemoteSessionId: intent.remoteSessionId } : {}),
       };
     };
@@ -205,7 +207,7 @@ export async function createCoreAuthority(
       certifiedCreate: nativeEnabled,
       recover,
       inspect: createNativeCreateInspection(journal, configRoot),
-      async completeCertified(commandId, expected) {
+      async completeCertified(commandId, expected, beforeCommit) {
         // 中文：只读来源证书先验证命令归属与完成 ID，pending/损坏/跨 workspace
         // 绝不能通过修复入口调用 allocator，也不能落一份假的 mapping。
         const certificate = await journal.inspectCompleted(commandId);
@@ -222,7 +224,7 @@ export async function createCoreAuthority(
           !certificate.originalSessionId
         )
           throw new Error("Native completed receipt unavailable for this workspace");
-        const mapping = await journal.complete(commandId);
+        const mapping = await journal.complete(commandId, beforeCommit);
         if (mapping.originalSessionId !== certificate.originalSessionId)
           throw new Error("Native completion changed during repair");
         return { originalSessionId: mapping.originalSessionId, intent };

@@ -290,9 +290,32 @@ export function createLazyWorkspaceComposition(options: CompositionOptions): {
       maintenance.withAdmission(async () => {
         requireBoot();
         const { target } = await get();
-        // 中文：原生入口不能只信 Catalog 路径；持有 Target 当前 generation 的排他 admission
-        // 直到 V4 create 回执完成，移除/重建必须在之后重新检查实例。
-        return target.withAdmission(workspaceId, generation, () => action(), cwd);
+        // 中文：不能在同一 Target exclusive 内重进 public lookupWorkspace；仅持有者
+        // 可取得仍验证租约和 Git 实例的 scoped facts，直至映射与 Catalog fsync 完毕。
+        return target.withAdmission(
+          workspaceId,
+          generation,
+          (_canonical, lease) =>
+            action({
+              recoveryFacts: async (id) => {
+                if (id !== workspaceId) throw new Error("Target admission workspace mismatch");
+                const result = await lease.lookupWorkspace();
+                if (!result)
+                  return {
+                    status: "unresolved" as const,
+                    reason: "target-receipts-unavailable" as const,
+                  };
+                if (result.receipt.kind === "import")
+                  throw new Error("Unexpected workspace import receipt");
+                return {
+                  status: "confirmed" as const,
+                  generation: result.record.generation,
+                  receiptKind: result.receipt.kind,
+                };
+              },
+            }),
+          cwd,
+        );
       }),
     resolveRemoteSession: options.resolveRemoteSession,
   });

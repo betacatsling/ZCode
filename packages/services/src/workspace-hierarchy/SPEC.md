@@ -94,6 +94,21 @@ Read-only receipt recovery is not promotion of pending commands. Startup hooks o
 
 The public `nativeHistoryHealth()` read model returns bounded, hashed mapping diagnostics with no raw paths, commands or unbounded filesystem errors. A directory read failure rejects rather than reporting an empty/healthy state; one damaged entry does not hide certified rows. This read never starts a CLI or migrates SQLite. Journal is the sole Core mapping writer; CLI CommandInbox is the sole native business owner, Catalog is the reference writer, Target certifies generation. Tests exercise missing/pending/completed/damaged and error-before-commit, with real subprocess source tests separately from port-level RED cases.
 
+## Completed recovery lease (repair paths)
+
+CLI CommandInbox alone owns native ID/receipt; Core journal owns mapping, Catalog owns reference, Target owns generation/exclusive lease, and maintenance owns freeze/drain. Read-only inspection never writes. Both explicit reconcile and old create-command retry first inspect the same immutable intent and source certificate. A fully referenced completion returns its original ID without a metadata write; an unindexed completion must enter the **same** maintenance + Target admission, regardless of new-create flag. Held boot/ordinary maintenance, disposed owner, pending/unknown/corrupt/foreign commands refuse repair without metadata/CLI effects. The legacy create retry must not call mutation-capable `recover` outside this admission.
+
+```
+inspect → completed-unindexed → maintenance admission → Target exclusive lease
+ → lease-local Target receipt + Git/generation check → source certificate → mapping fsync
+ → lease-local Target recheck → Catalog reference fsync → final pure inspection
+ → release Target → release maintenance → fresh idle may be granted
+```
+
+A Target lease-local fact reader is only handed to the currently executing Node callback; it must assert the actual owner lease and revalidate Git instance/generation on every read. It cannot enqueue the public `lookupWorkspace` (the Target serial queue is already occupied), cannot escape its callback lifetime, and cannot be serialized. On concurrent remove/recreate the Target serializes that operation behind the repair; external Git changes must fail a renewed pre-write check. Completed source remains original provenance, attachment only the current view; uncertainty never falls through to new allocation.
+
+Acceptance: actual public Core/CLI/SQLite/Git completed-before-mapping receipt, explicit bounded repair, held boot and ordinary maintenance retries with byte-identical mapping/reference, release with flag OFF, cold restart and duplicate parallel retry same ID/reference; pending/foreign/corrupt zero effects and source DB isolation. Timer in test is only finite deadlock detection and child cleanup, never product synchronization.
+
 ## Native factory pass 2: boot fence, diagnostics and negative boundaries
 
 Core alone owns an optional initial admission hold. When `admissionFence: 'held'`, create the composition gate synchronously _before_ any asynchronous Target/Catalog initialization, before native storage preparation, and before boot reconciliation. Its instance-owned release is idempotent after successful `ready()`, but disposal or a failed reconciliation rejects release. An ordinary maintenance lease may be acquired/released while boot is held and cannot clear that hold; a stale instance cannot open its successor. Default is `open`. The gate covers Catalog mutation, Host new accepted work and Target-mediated native create; autonomous CLI work that does not cross this gate is **not** certified fenced by this change. Read-only queries and completed native receipt recovery remain available. Sequence: initial hold → storage/Target/Catalog boot → reconcile → supervisor commit decision → release same-instance hold → new admission; maintenance leases nest without clearing the boot hold. No timer-based unlocking.

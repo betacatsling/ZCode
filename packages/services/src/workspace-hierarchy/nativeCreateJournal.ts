@@ -214,13 +214,18 @@ export class NativeCreateJournal {
   }
 
   /** Only a real completed SQLite fact can produce the durable NEW mapping. */
-  async complete(commandId: string): Promise<NativeCreateMapping> {
+  async complete(
+    commandId: string,
+    beforeWrite?: () => Promise<void>,
+  ): Promise<NativeCreateMapping> {
     return this.serial(commandId, async () => {
       const state = await this.read(commandId);
       if (!state) throw new Error("native-create-intent-unavailable");
       if (state.mapping) return state.mapping;
       const mapping = await this.certified(state.intent);
       if (!mapping) throw new Error("native-create-receipt-uncertain");
+      // 中文：来源证书自身需要 await；保持 Target 租约内的重验紧邻映射写入。
+      await beforeWrite?.();
       const path = this.path(commandId, "mapping");
       try {
         await atomicJsonWrite(path, mapping, () => {
