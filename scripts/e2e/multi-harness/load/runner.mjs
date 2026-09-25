@@ -5,6 +5,8 @@ import { mkdir, mkdtemp, readFile, realpath, rename, writeFile } from 'node:fs/p
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { comparison } from './runner-baseline-comparison.mjs';
+// 中文：比较器抽出后，runner 自身的 benchmark 人口校验仍须保留，不能变为运行时 ReferenceError。
+import { validMeasurement } from './measurement.mjs';
 import { validateProductFacts, checkSample } from './facts.mjs';
 export { validateProductFacts } from './facts.mjs';
 
