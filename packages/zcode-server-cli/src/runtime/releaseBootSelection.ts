@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { isAbsolute, join, relative, win32 } from "node:path";
 import { z } from "zod";
 import type { ReleaseManifest } from "../contracts.js";
 import { hashReleaseTree } from "./immutableRelease.js";
@@ -59,6 +59,19 @@ async function readSelections(layout: ServerLayout): Promise<TrustedLocalSourceB
   return selectionsSchema.parse(JSON.parse(source));
 }
 
+export function isInstalledReleaseOffset(offset: string): boolean {
+  // 中文：Windows 不同盘的 relative() 可以返回绝对 D:\\...，仅检查 .. 会把
+  // 越界 release 错误地当成已安装可信产物；同时覆盖 POSIX 与 Windows 路径语法。
+  return Boolean(
+    offset &&
+    !isAbsolute(offset) &&
+    !win32.isAbsolute(offset) &&
+    offset !== ".." &&
+    !offset.startsWith("../") &&
+    !offset.startsWith("..\\"),
+  );
+}
+
 async function verifyContent(
   layout: ServerLayout,
   release: ReleaseManifest,
@@ -67,7 +80,7 @@ async function verifyContent(
   const directory = await realpath(release.releaseDir);
   const root = await realpath(layout.releasesDir);
   const offset = relative(root, directory);
-  if (!offset || offset === ".." || offset.startsWith("../") || offset.startsWith("..\\"))
+  if (!isInstalledReleaseOffset(offset))
     throw new Error("Boot selection release escaped installed releases directory");
   const expected = selectionSchema.parse(selection);
   if (

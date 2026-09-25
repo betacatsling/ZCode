@@ -11,9 +11,18 @@ import { createReleaseAgentWiring } from "./agentWiring.js";
 import {
   registerTrustedLocalSourceBootSelection,
   verifyTrustedLocalSourceBootSelection,
+  isInstalledReleaseOffset,
 } from "./releaseBootSelection.js";
 
 const digest = (bytes: string): string => createHash("sha256").update(bytes).digest("hex");
+
+test("different-drive absolute and parent release offsets are never trusted", () => {
+  assert.equal(isInstalledReleaseOffset("local-a"), true);
+  assert.equal(isInstalledReleaseOffset("../outside"), false);
+  assert.equal(isInstalledReleaseOffset("..\\outside"), false);
+  assert.equal(isInstalledReleaseOffset("D:\\outside"), false);
+  assert.equal(isInstalledReleaseOffset("/outside"), false);
+});
 
 test("old, forged, mismatched and tampered local release selections fail closed", async () => {
   const dir = await mkdtemp(join(tmpdir(), "zcode-boot-selection-"));

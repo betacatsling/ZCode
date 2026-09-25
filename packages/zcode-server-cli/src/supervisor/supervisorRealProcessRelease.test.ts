@@ -2,7 +2,17 @@ import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { fork, spawn, type ChildProcess } from "node:child_process";
 import { createReadStream } from "node:fs";
-import { access, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import {
+  access,
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,6 +31,7 @@ import { createReleaseAgentWiring } from "../runtime/agentWiring.js";
 import { requestControl } from "../ipc/controlClient.js";
 import { DataRootLock } from "../runtime/lock.js";
 import { Supervisor } from "./supervisor.js";
+import { isolatedReleaseEnv } from "./supervisorRealProcessEnv.fixture.js";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 async function hash(path: string): Promise<string> {
@@ -51,8 +62,10 @@ test(
   "local source Core/CLI/Node executable release is staged, installed, and booted",
   { timeout: 300_000 },
   async () => {
-    // 中文：macOS UNIX socket 路径长度有上限；测试 profile 前缀保持短且独立。
-    const dir = await mkdtemp(join(tmpdir(), "sr-"));
+    // 中文：真实 Agent 在 TMPDIR 下建 znr-UUID.sock；macOS 的长 per-user
+    // tmpdir + 隔离 profile + /tmp 会超出 UNIX socket 路径上限而 EINVAL 秒退。
+    // /tmp 是短基目录，每次只创建/清理本测试专有的 sr-* profile。
+    const dir = await mkdtemp(join(process.platform === "darwin" ? "/tmp" : tmpdir(), "sr-"));
     const layout = resolveServerLayout(join(dir, "install"));
     const dist = join(repo, "packages/zcode-server-cli/dist");
     const agent = join(repo, "apps/zcode-cli/packages/cli/dist/zcode.cjs");
@@ -151,19 +164,85 @@ test(
         }),
       );
       const runtimeNode = join(runtime, "node");
-      // 中文：真实子进程不继承测试框架的 tsx/execArgv、仓库 cwd 或宿主凭据；
-      // 已安装 Node/CLI/依赖只能从隔离发行目录和空 profile 启动。
-      const isolatedEnv: NodeJS.ProcessEnv = {
-        PATH: process.env.PATH,
-        NODE_OPTIONS: process.env.NODE_OPTIONS,
-        TMPDIR: process.env.TMPDIR,
-        LANG: process.env.LANG,
-        HOME: dir,
-        XDG_CONFIG_HOME: join(dir, "config"),
-        ZCODE_DATA_BASE_DIR: dir,
-        ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: provider,
-        ZCODE_SERVER_SKIP_SERVICE_REGISTRATION: "1",
-      };
+      const poisonedPath = join(dir, "poisoned-path");
+      await mkdir(poisonedPath, { recursive: true });
+      await mkdir(join(dir, "tmp"), { recursive: true });
+      const poisonMarker = join(dir, "inherited-node-options-used");
+      const pathMarker = join(dir, "inherited-path-used");
+      const preload = join(poisonedPath, "preload.cjs");
+      await writeFile(
+        preload,
+        `require("node:fs").writeFileSync(${JSON.stringify(poisonMarker)}, "executed")`,
+      );
+      const poisonedNode = join(poisonedPath, process.platform === "win32" ? "node.cmd" : "node");
+      await writeFile(
+        poisonedNode,
+        `#!/bin/sh\nprintf 'executed' > ${JSON.stringify(pathMarker)}\nexit 93\n`,
+      );
+      if (process.platform !== "win32") await chmod(poisonedNode, 0o755);
+      // 只构造无凭据的合成父环境；测试证明所选 installed processes 不会跑
+      // 继承的 preload/PATH 伪装，真正的 Node/Agent 都走安装归档内绝对路径。
+      const isolatedEnv = isolatedReleaseEnv(
+        {
+          NODE_OPTIONS: `--require=${preload}`,
+          PATH: `${poisonedPath}:${process.env.PATH ?? ""}`,
+          ZCODE_MEMORY_HEAVY_SLOT_OWNER: process.env.ZCODE_MEMORY_HEAVY_SLOT_OWNER,
+        },
+        dir,
+        provider,
+      );
+      // 中文：隔离环境下 Core 的 stdout_closed 只说明 Agent 管道断开，
+      // 不能推断是 idle。先对同一安装包 Node/Agent 执行有界独立探测，
+      // 从 stderr/退出状态定位依赖，所有子进程在下一步前必须 close。
+      const agentProbe = spawn(runtimeNode, [join(runtime, "zcode.cjs"), "app-server", "--stdio"], {
+        cwd: dir,
+        env: isolatedEnv,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      let agentProbeStderr = "";
+      agentProbe.stderr.on("data", (part: Buffer) => {
+        agentProbeStderr += part.toString().replaceAll(dir, "<profile>").slice(0, 4096);
+      });
+      const probeClosed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+        (resolveClosed) =>
+          agentProbe.once("close", (code, signal) => resolveClosed({ code, signal })),
+      );
+      try {
+        const earlyExit = await Promise.race([
+          probeClosed,
+          new Promise<null>((resolveDelay) => setTimeout(() => resolveDelay(null), 4_000)),
+        ]);
+        assert.equal(
+          earlyExit,
+          null,
+          `installed Agent exited: ${JSON.stringify(earlyExit)} stderr=${agentProbeStderr}`,
+        );
+      } finally {
+        agentProbe.stdin.end();
+        const settled = await Promise.race([
+          probeClosed.then(() => true),
+          new Promise<false>((resolveDelay) => setTimeout(() => resolveDelay(false), 2_000)),
+        ]);
+        if (!settled) agentProbe.kill("SIGTERM");
+        const ended = await Promise.race([
+          probeClosed.then(() => true),
+          new Promise<false>((resolveDelay) => setTimeout(() => resolveDelay(false), 2_000)),
+        ]);
+        if (!ended) agentProbe.kill("SIGKILL");
+        assert.ok(
+          await Promise.race([
+            probeClosed.then(() => true),
+            new Promise<false>((resolveDelay) => setTimeout(() => resolveDelay(false), 2_000)),
+          ]),
+          "installed Agent diagnostic child must close",
+        );
+      }
+      assert.equal(isolatedEnv.NODE_OPTIONS, "--max-old-space-size=2048");
+      assert.ok(!isolatedEnv.PATH?.includes(poisonedPath));
+      assert.equal(
+        isolatedEnv.ZCODE_MEMORY_HEAVY_SLOT_OWNER,
+        process.env.ZCODE_MEMORY_HEAVY_SLOT_OWNER,
+      );
       core = fork(join(runtime, "server-core.js"), ["1", "open"], {
         execPath: runtimeNode,
         execArgv: [],
@@ -226,7 +305,7 @@ test(
         return await reply;
       }
       const begin = await maintenance("maintenance-begin");
-      assert.ok(begin.leaseId, JSON.stringify(begin));
+      assert.ok(begin.leaseId, JSON.stringify({ reply: begin, stderr }));
       assert.deepEqual(begin.nativeActivity, { running: 0, waiting: 0, uncertain: 0 });
       assert.deepEqual(begin.externalActivity, { running: 0, waiting: 0, uncertain: 0 });
       const released = await maintenance("maintenance-release", String(begin.leaseId));
@@ -851,6 +930,20 @@ test(
       assert.equal(ackChildren[1]!.exitCode, 0);
       assert.deepEqual(await new DataRootLock(layout.lockFile).inspect(), { state: "missing" });
       await assert.rejects(requestControl(layout.controlEndpoint, { command: "status" }));
+      assert.equal(
+        await access(poisonMarker).then(
+          () => true,
+          () => false,
+        ),
+        false,
+      );
+      assert.equal(
+        await access(pathMarker).then(
+          () => true,
+          () => false,
+        ),
+        false,
+      );
     } finally {
       if (core && core.exitCode === null) core.kill("SIGTERM");
       if (core && coreClosed) {
