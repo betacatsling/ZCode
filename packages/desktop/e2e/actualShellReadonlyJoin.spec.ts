@@ -142,11 +142,10 @@ test("actual Core archive keeps Native and external Shell owners history-only", 
 
     await window.getByRole("button", { name: /New agent in Main checkout/ }).click();
     await expect(window.getByRole("dialog")).toContainText("Pi");
+    await window.getByRole("dialog").locator('input[name="harness"][value="pi"]').check();
     await window.getByRole("dialog").getByRole("button", { name: "Create agent" }).click();
     await expect(window.getByRole("dialog")).toHaveCount(0);
     try {
-      await expect(window.getByText(/^sess_[0-9a-f-]+$/)).toHaveCount(1, { timeout: 12_000 });
-      await window.getByText(/^sess_[0-9a-f-]+$/).click();
       await expect(window.locator("[data-session-id]")).toHaveCount(1, { timeout: 12_000 });
     } catch (error) {
       throw new Error(
@@ -174,10 +173,19 @@ test("actual Core archive keeps Native and external Shell owners history-only", 
     });
     assert.ok(nativeId);
     await window.evaluate(() => document.defaultView?.dispatchEvent(new Event("focus")), undefined);
-    await expect(window.getByTestId(`session-${nativeId}`)).toBeVisible({ timeout: 15_000 });
-    await window.getByTestId(`session-${nativeId}`).click();
+    const nativeTreeRow = window.locator('button[data-testid^="session-native:"]');
+    await expect(nativeTreeRow).toBeVisible({ timeout: 15_000 });
+    await expect(nativeTreeRow).toContainText(nativeId);
+    await nativeTreeRow.click();
     const nativePane = window.locator(`[data-session-id="${nativeId}"]`);
-    await expect(nativePane).toBeVisible();
+    try {
+      await expect(nativePane).toBeVisible({ timeout: 8_000 });
+    } catch (error) {
+      throw new Error(
+        `Original Native owner did not mount: ${JSON.stringify({ body: await window.locator("body").innerText(), panes: await window.locator("[data-session-id]").evaluateAll((nodes) => nodes.map((node) => node.outerHTML.slice(0, 300))), alerts: await window.getByRole("alert").allInnerTexts(), rendererErrors, coreDiagnostics })}`,
+        { cause: error },
+      );
+    }
     await nativePane.getByTestId("v4-composer-input").fill("Native archived history");
     await nativePane.getByTestId("v4-composer-send").click();
     await expect(nativePane).toContainText("Native owner history", { timeout: 15_000 });
@@ -295,8 +303,8 @@ test("actual Core archive keeps Native and external Shell owners history-only", 
     await expect(window.getByRole("heading", { name: /Fixture Git/ })).toBeVisible({
       timeout: 20_000,
     });
-    await expect(window.getByTestId(`session-${nativeId}`)).toBeVisible({ timeout: 15_000 });
-    await window.getByTestId(`session-${nativeId}`).click();
+    await expect(window.locator('button[data-testid^="session-native:"]')).toBeVisible({ timeout: 15_000 });
+    await window.locator('button[data-testid^="session-native:"]').click();
     const restoredNative = window.locator(`[data-session-id="${nativeId}"]`);
     const restoredExternal = window.locator(`[data-session-id="${externalId}"]`);
     await expect(restoredNative).toContainText("Native owner history");

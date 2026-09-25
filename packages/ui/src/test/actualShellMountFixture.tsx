@@ -82,14 +82,20 @@ export function mountActualShellFixture(services: IServiceAccessor, platform: IP
       if (created.owner.kind !== "native" || created.owner.historyOnly)
         throw new Error("Core did not return a writable original Native owner");
       const nativeOwner = created.owner;
-      const indexed = await services.projectCatalogService.sidebarSnapshot();
+      // 中文：Native 树行使用派生 ID，不等于真实 CLI ID；只信相同 Core 的原始 owner 证明。
+      const binding = snapshot.bindings.find((row) => row.id === workspace.repositoryBindingId);
+      if (!binding) throw new Error("Mounted Core Native target missing");
+      const resolved = await hierarchy.resolveOwner({
+        targetId: binding.executionTargetId,
+        workspaceId: workspace.id,
+        sessionId: nativeOwner.originalSessionId,
+      });
       if (
-        !indexed.sessions.some(
-          (row) =>
-            row.session.id === nativeOwner.originalSessionId && row.session.harnessId === "zcode",
-        )
+        resolved?.kind !== "native" ||
+        resolved.originalSessionId !== nativeOwner.originalSessionId ||
+        resolved.historyOnly
       )
-        throw new Error("Core Catalog did not index the original Native session ID");
+        throw new Error("Core did not resolve the original Native CLI owner");
       return nativeOwner.originalSessionId;
     },
     async archiveWorkspace() {
@@ -168,6 +174,7 @@ function MountedShell({
     identity: string;
     name: string;
   } | null>(null);
+  const [selectedNativeId, setSelectedNativeId] = React.useState<string | null>(null);
   const [splitSessionId, setSplitSessionId] = React.useState("");
   const [splitError, setSplitError] = React.useState<string | null>(null);
   React.useEffect(() => {
@@ -207,11 +214,11 @@ function MountedShell({
     isTerminalOpen: false,
     isSidePaneOpen: false,
     isGitOpen: false,
-    activeTaskId: null,
+    activeTaskId: selectedNativeId,
     sidePaneOwnerId: null,
     activeSessionId: null,
     workspaceShellZCodeState: {
-      activeTaskId: null,
+      activeTaskId: selectedNativeId,
       optimisticTaskListByTaskId: {},
       workspaceInit: "ready",
     },
@@ -246,7 +253,8 @@ function MountedShell({
     },
     sidebarContainerRef: { current: null },
     onCreateTask: noop,
-    handleSelectTask: noop,
+    // 中文：真实 Core owner 校验后 Shell 才调用此导航回调；fixture 只保存视图焦点。
+    handleSelectTask: (_path: string, originalSessionId: string) => setSelectedNativeId(originalSessionId),
     handleStartDraftInWorkspace: noop,
     onWorkspaceMainViewChange: noop,
     onOpenBrowserUrl: noop,
