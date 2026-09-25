@@ -29,6 +29,9 @@ for (const variant of [
   "completed",
   "coreCompletedRepair",
   "coreCompletedRetry",
+  "coreCompletedArchiveDrain",
+  "coreCompletedGitSwap",
+  "coreCompletedDisposeDrain",
   "schema",
   "source-db",
   "boot-held",
@@ -194,7 +197,11 @@ for (const variant of [
           ? "1"
           : "0",
         CORE_NATIVE_FAILURE_BOUNDARY_TEST_ONLY:
-          variant === "coreCompletedRepair" || variant === "coreCompletedRetry"
+          variant === "coreCompletedRepair" ||
+          variant === "coreCompletedRetry" ||
+          variant === "coreCompletedArchiveDrain" ||
+          variant === "coreCompletedGitSwap" ||
+          variant === "coreCompletedDisposeDrain"
             ? "completed"
             : ["pending", "completed", "schema"].includes(variant)
               ? variant
@@ -204,7 +211,10 @@ for (const variant of [
         ZCODE_CORE_NATIVE_BEFORE_MAPPING_FAULT_TEST_ONLY:
           variant === "completed" ||
           variant === "coreCompletedRepair" ||
-          variant === "coreCompletedRetry"
+          variant === "coreCompletedRetry" ||
+          variant === "coreCompletedArchiveDrain" ||
+          variant === "coreCompletedGitSwap" ||
+          variant === "coreCompletedDisposeDrain"
             ? "native-create-completed-boundary"
             : "",
         ZCODE_CORE_NATIVE_CATALOG_FAULT_TEST_ONLY: "native-create-catalog-fault",
@@ -216,7 +226,10 @@ for (const variant of [
         variant === "pending" ||
           variant === "completed" ||
           variant === "coreCompletedRepair" ||
-          variant === "coreCompletedRetry"
+          variant === "coreCompletedRetry" ||
+          variant === "coreCompletedArchiveDrain" ||
+          variant === "coreCompletedGitSwap" ||
+          variant === "coreCompletedDisposeDrain"
           ? "boundary-staged"
           : variant === "schema"
             ? "boundary-schema"
@@ -285,7 +298,11 @@ for (const variant of [
         await writeFile(personal, JSON.stringify(settings));
       }
       const result = await boot(
-        variant === "coreCompletedRepair" || variant === "coreCompletedRetry"
+        variant === "coreCompletedRepair" ||
+          variant === "coreCompletedRetry" ||
+          variant === "coreCompletedArchiveDrain" ||
+          variant === "coreCompletedGitSwap" ||
+          variant === "coreCompletedDisposeDrain"
           ? "./coreCompletedRepairChild.fixture.ts"
           : variant === "boot-old-command"
             ? "./coreIngressAuthorityOldChild.fixture.ts"
@@ -296,7 +313,10 @@ for (const variant of [
           ZCODE_MULTI_HARNESS_ENABLED:
             variant === "boot-held" ||
             variant === "coreCompletedRepair" ||
-            variant === "coreCompletedRetry"
+            variant === "coreCompletedRetry" ||
+            variant === "coreCompletedArchiveDrain" ||
+            variant === "coreCompletedGitSwap" ||
+            variant === "coreCompletedDisposeDrain"
               ? "1"
               : "0",
           ZCODE_CORE_NATIVE_CREATE_TEST_ONLY: "0",
@@ -321,6 +341,13 @@ for (const variant of [
           CORE_COMPLETED_ORIGINAL_ID: first.originalId,
           CORE_COMPLETED_RETRY_FIRST: variant === "coreCompletedRetry" ? "1" : "0",
         },
+        variant === "coreCompletedArchiveDrain"
+          ? ["archive-drain"]
+          : variant === "coreCompletedGitSwap"
+            ? ["git-swap"]
+            : variant === "coreCompletedDisposeDrain"
+              ? ["dispose-drain"]
+              : [],
       );
       if (variant === "boot-old-command") {
         assert.equal(result.type, "old-command-refused");
@@ -338,6 +365,26 @@ for (const variant of [
         assert.equal(result.heldBoot, true);
         assert.equal(result.heldMaintenance, true);
         assert.equal(result.afterRelease, true);
+        assert.equal(result.references, 1);
+        assert.equal(calls.length, 0);
+      } else if (variant === "coreCompletedArchiveDrain") {
+        assert.equal(result.type, "coreCompletedArchiveDrain");
+        assert.deepEqual(result.order.slice(-1), ["maintenance-granted"]);
+        assert.ok(
+          result.order.indexOf("repair-completed") < result.order.indexOf("maintenance-granted"),
+        );
+        assert.ok(
+          result.order.indexOf("archive-completed") < result.order.indexOf("maintenance-granted"),
+        );
+        assert.equal(result.references, 1);
+        assert.equal(calls.length, 0);
+      } else if (variant === "coreCompletedGitSwap") {
+        assert.equal(result.type, "coreCompletedGitSwap");
+        assert.equal(result.rejectedBeforeWrite, true);
+        assert.equal(calls.length, 0);
+      } else if (variant === "coreCompletedDisposeDrain") {
+        assert.equal(result.type, "coreCompletedDisposeDrain");
+        assert.deepEqual(result.order, ["repair-completed", "disposed"]);
         assert.equal(result.references, 1);
         assert.equal(calls.length, 0);
       } else if (variant === "pending" || variant === "completed") {

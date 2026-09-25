@@ -320,6 +320,14 @@ test("real Git/catalog/target/Host: server derives identity and deduplicates cre
     let references = 0;
     let receiptStatus: "pending" | "completed-unindexed" | "completed" = "pending";
     let repairHeld = true;
+    const repairProject = await catalog.project("p");
+    const repairBinding = await catalog.binding("b");
+    assert.ok(repairProject && repairBinding);
+    const repairFacts = {
+      projects: [repairProject],
+      bindings: [repairBinding],
+      workspaces: [workspace],
+    };
     const repair = createWorkspaceHierarchyService({
       targetId: "local",
       catalog,
@@ -333,6 +341,12 @@ test("real Git/catalog/target/Host: server derives identity and deduplicates cre
             generation: workspace.worktreeGeneration,
             receiptKind: "adopt",
           }),
+          catalog: {
+            snapshot: () => repairFacts,
+            commitNativeReference: async () => {
+              references++;
+            },
+          },
         });
       },
       recoveryFacts: async () => ({
@@ -340,9 +354,6 @@ test("real Git/catalog/target/Host: server derives identity and deduplicates cre
         generation: workspace.worktreeGeneration,
         receiptKind: "adopt",
       }),
-      commitNativeReference: async () => {
-        references++;
-      },
       native: {
         certifiedCreate: true,
         resolveOwner: async () => undefined,

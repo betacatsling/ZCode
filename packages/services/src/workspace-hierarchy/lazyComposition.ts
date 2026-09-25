@@ -41,6 +41,8 @@ export interface CompositionOptions {
   newAdmissionsEnabled: () => boolean;
   nativeAdmissionFence: () => Promise<NativeAdmissionFence>;
   initiallyHeld?: boolean;
+  /** Trusted fixture observer only; cannot bypass or alter the maintenance gate. */
+  testOnlyOnWorkspaceAdmission?: () => void;
   additionalTrustedHarnesses?: readonly {
     manifest: HarnessManifest;
     factory: () => HarnessAdapter;
@@ -76,6 +78,7 @@ export function createLazyWorkspaceComposition(options: CompositionOptions): {
   const maintenance = createMaintenanceCoordination({
     nativeFence: options.nativeAdmissionFence,
     initiallyHeld: options.initiallyHeld,
+    testOnlyOnWorkspaceAdmission: options.testOnlyOnWorkspaceAdmission,
     activity: async () => {
       const [native, external] = await Promise.all([
         options.nativeActivity(),
@@ -283,38 +286,38 @@ export function createLazyWorkspaceComposition(options: CompositionOptions): {
       return { status: "unresolved" as const, reason: "target-receipts-unavailable" as const };
     },
     native: options.native,
-    commitNativeReference: async (reference) =>
-      (await get()).catalog.commitNativeReference(reference),
     newAdmissionsEnabled,
     withNativeAdmission: (workspaceId, generation, cwd, action) =>
       maintenance.withAdmission(async () => {
         requireBoot();
-        const { target } = await get();
-        // 中文：不能在同一 Target exclusive 内重进 public lookupWorkspace；仅持有者
-        // 可取得仍验证租约和 Git 实例的 scoped facts，直至映射与 Catalog fsync 完毕。
-        return target.withAdmission(
-          workspaceId,
-          generation,
-          (_canonical, lease) =>
-            action({
-              recoveryFacts: async (id) => {
-                if (id !== workspaceId) throw new Error("Target admission workspace mismatch");
-                const result = await lease.lookupWorkspace();
-                if (!result)
+        const { catalog, target } = await get();
+        // 中文：统一按 Catalog → Target 锁序，避免归档持有 Catalog 等 Target、修复持有 Target 等 Catalog 的闭环。
+        return catalog.withNativeReferenceAdmission((catalogLease) =>
+          target.withAdmission(
+            workspaceId,
+            generation,
+            (_canonical, lease) =>
+              action({
+                catalog: catalogLease,
+                recoveryFacts: async (id) => {
+                  if (id !== workspaceId) throw new Error("Target admission workspace mismatch");
+                  const result = await lease.lookupWorkspace();
+                  if (!result)
+                    return {
+                      status: "unresolved" as const,
+                      reason: "target-receipts-unavailable" as const,
+                    };
+                  if (result.receipt.kind === "import")
+                    throw new Error("Unexpected workspace import receipt");
                   return {
-                    status: "unresolved" as const,
-                    reason: "target-receipts-unavailable" as const,
+                    status: "confirmed" as const,
+                    generation: result.record.generation,
+                    receiptKind: result.receipt.kind,
                   };
-                if (result.receipt.kind === "import")
-                  throw new Error("Unexpected workspace import receipt");
-                return {
-                  status: "confirmed" as const,
-                  generation: result.record.generation,
-                  receiptKind: result.receipt.kind,
-                };
-              },
-            }),
-          cwd,
+                },
+              }),
+            cwd,
+          ),
         );
       }),
     resolveRemoteSession: options.resolveRemoteSession,

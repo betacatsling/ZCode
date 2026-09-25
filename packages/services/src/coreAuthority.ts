@@ -51,6 +51,15 @@ export interface CoreAuthorityOptions {
     commandId: string,
     target: { workspacePath: string; workspaceIdentity: string },
   ) => Promise<void>;
+  /** Trusted Node fixture observer at the actual completed-source certificate boundary. */
+  testOnlyAfterCompletedCertificate?: (
+    commandId: string,
+    originalSessionId: string,
+  ) => Promise<void>;
+  /** Trusted Node fixture observer; observes the real CLI fence without controlling it. */
+  testOnlyAfterNativeMaintenanceFence?: () => void;
+  /** Trusted Node fixture observer after an operation entered the real maintenance gate. */
+  testOnlyOnWorkspaceAdmission?: () => void;
 }
 export interface CoreAuthorityResult {
   services: ServiceCollection;
@@ -224,6 +233,8 @@ export async function createCoreAuthority(
           !certificate.originalSessionId
         )
           throw new Error("Native completed receipt unavailable for this workspace");
+        // 中文：测试仅在真实 SQLite 来源证书已读出、mapping 尚未写入时暂停；不授予跳过校验的能力。
+        await options.testOnlyAfterCompletedCertificate?.(commandId, certificate.originalSessionId);
         const mapping = await journal.complete(commandId, beforeCommit);
         if (mapping.originalSessionId !== certificate.originalSessionId)
           throw new Error("Native completion changed during repair");
@@ -329,12 +340,21 @@ export async function createCoreAuthority(
       runtime,
       targetId: options.installationId,
     });
+    const workspaceComposition = {
+      ...bridge,
+      testOnlyOnWorkspaceAdmission: options.testOnlyOnWorkspaceAdmission,
+      nativeAdmissionFence: async () => {
+        const fence = await bridge.nativeAdmissionFence();
+        options.testOnlyAfterNativeMaintenanceFence?.();
+        return fence;
+      },
+    };
     services = createLocalServices({
       zcodeBuiltinProviderConfigFilePath: options.zcodeBuiltinProviderConfigFilePath,
       serviceAuthorityMode: "standalone-server",
       agentHostTargetId: options.installationId,
       workspaceCompositionRoot: join(configRoot, "workspace-hierarchy"),
-      workspaceComposition: bridge,
+      workspaceComposition,
       initiallyHeld: options.admissionFence === "held",
       bootAdmissionHeld: options.admissionFence === "held",
       additionalTrustedHarnesses: options.additionalTrustedHarnesses,
