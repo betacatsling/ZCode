@@ -75,7 +75,10 @@ export {
 } from "./paths.js";
 export {
   ProfileFileOwner,
+  ownerMarkerRecoveryGatePath,
+  recoverStaleOwnerMarkers,
   recoverStaleProfileOwnerLock,
+  type ManagedMarkersRecovery,
   type StaleOwnerRecoveryOutcome,
 } from "./project-workspaces/profilePersistence.js";
 export { createGitService } from "./git/gitService.js";

@@ -114,36 +114,82 @@ export type StaleOwnerRecoveryOutcome =
     };
 
 /**
- * 可信 Supervisor 专用的 Core-owner 锁恢复：调用方必须独立证明 expectedOwnerPid
- * 是自己启动并已回收的旧 owner（persisted launch record 或进程内 exit/close）。
- * 仅在 lock 内容合法、pid 与证据精确匹配、且该 pid 已不存在（ESRCH）时移除锁；
+ * owner marker → 其恢复门栓路径。`.lock` 族（ProfileFileOwner）沿用 data 文件
+ * 的 `${path}.recovery` 约定；`.owner` 族（TargetAuthorityStore）沿用
+ * `${leaseFile}.recovery` 约定。与各子系统自己的 operator recovery 共用同一门栓，
+ * 保证可信 Supervisor 与 operator 恢复互斥。
+ */
+export function ownerMarkerRecoveryGatePath(markerPath: string): string {
+  return markerPath.endsWith(".lock")
+    ? `${markerPath.slice(0, -".lock".length)}.recovery`
+    : `${markerPath}.recovery`;
+}
+
+/**
+ * 可信 Supervisor 专用的 Core-owner marker 恢复：调用方必须独立证明
+ * expectedOwnerPid 是自己启动并已回收的旧 owner（persisted launch record 或
+ * 进程内 exit/close）。markerPath 是 marker 文件本身（`x.lock` 或 `x.owner`）。
+ * 仅在内容合法、pid 与证据精确匹配、且该 pid 已不存在（ESRCH）时移除 marker；
  * 其余一切情况（畸形/异主/存活/EPERM/并发/fence 丢失）原样保留并拒绝。
  */
 export async function recoverStaleProfileOwnerLock(
-  profilePath: string,
+  markerPath: string,
   proof: { readonly expectedOwnerPid: number },
 ): Promise<StaleOwnerRecoveryOutcome> {
-  const lockPath = `${profilePath}.lock`;
-  // 快路径：锁不存在时直接放行，不进恢复临界区——否则在 profile 目录尚未创建的
+  // 快路径：marker 不存在时直接放行，不进恢复临界区——否则在目录尚未创建的
   // 全新环境（或锁已被正常释放）里写 `.recovery` 门栓会先 ENOENT 失败。
-  if ((await readOwnerLock(lockPath)) === null) return { outcome: "absent" };
-  const releaseGate = await tryAcquireRecoveryGate(`${profilePath}.recovery`);
+  if ((await readOwnerLock(markerPath)) === null) return { outcome: "absent" };
+  const releaseGate = await tryAcquireRecoveryGate(ownerMarkerRecoveryGatePath(markerPath));
   if (!releaseGate) return { outcome: "refused", reason: "recovery-concurrent" };
   try {
-    // 门栓内重读：快路径观察与拿门栓之间锁可能已被释放或替换。
-    const observed = await readOwnerLock(lockPath);
+    // 门栓内重读：快路径观察与拿门栓之间 marker 可能已被释放或替换。
+    const observed = await readOwnerLock(markerPath);
     if (observed === null) return { outcome: "absent" };
     if (observed === "malformed") return { outcome: "refused", reason: "malformed-owner" };
     if (observed.pid !== proof.expectedOwnerPid)
       return { outcome: "refused", reason: "owner-identity-mismatch" };
     if (ownerPidAlive(observed.pid)) return { outcome: "refused", reason: "owner-alive" };
     // 断言与 claim 之间仍可能被替换：claim 内部回读验证捕获竞争。
-    if (!(await claimObservedPath(lockPath, observed.raw)))
+    if (!(await claimObservedPath(markerPath, observed.raw)))
       return { outcome: "refused", reason: "fence-lost" };
     return { outcome: "recovered" };
   } finally {
     await releaseGate();
   }
+}
+
+export type ManagedMarkersRecovery =
+  | {
+      readonly outcome: "clear"; // 全部 managed marker 均不存在或已恢复
+      readonly recoveredMarkers: number;
+    }
+  | { readonly outcome: "refused"; readonly reason: string; readonly marker: string };
+
+/**
+ * managed 命名空间内全部 Core-owner marker 的批量恢复，供可信 Supervisor 在
+ * 每次 launch 前调用。两阶段：
+ *   phase 1 只读 preflight：任一 marker 畸形或归属异主即整体拒绝（不改动任何文件）；
+ *   phase 2 对每个 marker 走完整 verified 恢复（门栓 + ESRCH + quarantine-claim）。
+ * phase 2 中途被拒时已 claim 的 marker 不回滚——每个 marker 的恢复幂等，下次
+ * launch 重新评估剩余项即可，结果依然 fail-closed。
+ */
+export async function recoverStaleOwnerMarkers(
+  markerPaths: readonly string[],
+  proof: { readonly expectedOwnerPid: number },
+): Promise<ManagedMarkersRecovery> {
+  for (const marker of markerPaths) {
+    const observed = await readOwnerLock(marker);
+    if (observed === "malformed") return { outcome: "refused", reason: "malformed-owner", marker };
+    if (observed !== null && observed.pid !== proof.expectedOwnerPid)
+      return { outcome: "refused", reason: "owner-identity-mismatch", marker };
+  }
+  let recoveredMarkers = 0;
+  for (const marker of markerPaths) {
+    const result = await recoverStaleProfileOwnerLock(marker, proof);
+    if (result.outcome === "refused") return { outcome: "refused", reason: result.reason, marker };
+    if (result.outcome === "recovered") recoveredMarkers += 1;
+  }
+  return { outcome: "clear", recoveredMarkers };
 }
 
 /** Lock stealing is deliberately forbidden: after a crash recovery requires operator inspection. */
