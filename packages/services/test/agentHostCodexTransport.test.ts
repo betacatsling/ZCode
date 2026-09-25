@@ -15,9 +15,17 @@ class FakeProcess extends EventEmitter {
   stdout = new PassThrough();
   stderr = new PassThrough();
   exitCode: number | null = null;
-  kill() {
-    this.exitCode = 0;
-    this.emit("exit", 0);
+  signalCode: NodeJS.Signals | null = null;
+  killed = false;
+  finish(exitCode: number | null, signalCode: NodeJS.Signals | null = null) {
+    this.exitCode = exitCode;
+    this.signalCode = signalCode;
+    this.emit("exit", exitCode, signalCode);
+  }
+  kill(signal: NodeJS.Signals = "SIGTERM") {
+    if (this.exitCode !== null || this.signalCode !== null) return false;
+    this.killed = true;
+    this.finish(null, signal);
     return true;
   }
 }
@@ -58,7 +66,7 @@ function fixture() {
           const version = new FakeProcess();
           queueMicrotask(() => {
             version.stdout.end("codex-cli 0.156.1\n");
-            version.emit("exit", 0);
+            version.finish(0);
           });
           return version as any;
         }
@@ -76,6 +84,25 @@ function fixture() {
   };
   return { child, sent, receive, next, open, cleanup };
 }
+
+test("close respects live and already signal-exited ChildProcess state", async () => {
+  const live = fixture();
+  const liveTransport = await live.open();
+  await liveTransport.close();
+  assert.equal(live.child.exitCode, null);
+  assert.equal(live.child.signalCode, "SIGTERM");
+  assert.equal(live.child.killed, true);
+  await live.cleanup();
+
+  const signaled = fixture();
+  const signaledTransport = await signaled.open();
+  signaled.child.finish(null, "SIGKILL");
+  await signaledTransport.close();
+  assert.equal(signaled.child.exitCode, null);
+  assert.equal(signaled.child.signalCode, "SIGKILL");
+  assert.equal(signaled.child.killed, false);
+  await signaled.cleanup();
+});
 
 test("correlates interleaved sessions and rejects stale approval after interrupt", async () => {
   const f = fixture();
@@ -228,7 +255,7 @@ test("rejects malformed and oversized frames; exit clears pending calls", async 
   const transport = await f.open();
   const pending = transport.startThread();
   await f.next(2);
-  f.child.emit("exit", 1);
+  f.child.finish(1);
   await assert.rejects(pending);
   await assert.rejects(transport.startThread());
   await transport.close();
@@ -383,7 +410,7 @@ test("unknown CLI versions never launch app-server or expose token in argv", asy
           const child = new FakeProcess();
           queueMicrotask(() => {
             child.stdout.end("codex-cli 0.156.2\n");
-            child.emit("exit", 0);
+            child.finish(0);
           });
           return child as any;
         },

@@ -48,12 +48,23 @@ export function projectCodexNotification(
     record(params.tokenUsage.last)
   ) {
     const usage = params.tokenUsage.last;
-    if (Number.isSafeInteger(usage.inputTokens) && Number.isSafeInteger(usage.outputTokens))
+    const metric = (value: unknown): number | undefined => {
+      if (value === undefined) return undefined;
+      if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)
+        throw new Error("Invalid Codex native usage metric");
+      return value;
+    };
+    const inputTokens = metric(usage.inputTokens);
+    const outputTokens = metric(usage.outputTokens);
+    if (inputTokens !== undefined || outputTokens !== undefined)
       emit({
-        kind: "usage.reported",
+        // 修复依据：原生 last 是每个 turn 的绝对快照；稳定 source 防止重复更新被累加，未报告字段不能伪造为 0。
+        kind: "usage.accounted",
         turnId,
-        inputTokens: usage.inputTokens,
-        outputTokens: usage.outputTokens,
+        sourceId: "codex-native-turn-usage",
+        accounting: "absolute",
+        ...(inputTokens !== undefined ? { inputTokens } : {}),
+        ...(outputTokens !== undefined ? { outputTokens } : {}),
       });
   }
 }

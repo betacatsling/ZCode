@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { createServer } from "node:http";
 import { existsSync } from "node:fs";
 import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { registerHooks } from "node:module";
@@ -44,6 +45,16 @@ test(
     const cwd = join(root, "cwd");
     await mkdir(cwd);
     let native;
+    let upstreamRequests = 0;
+    const upstream = createServer(async (request, response) => {
+      upstreamRequests++;
+      for await (const chunk of request) assert.ok(chunk.length < 1024 * 1024);
+      response.writeHead(503).end("synthetic upstream unavailable");
+    });
+    upstream.listen(0, "127.0.0.1");
+    await bounded(once(upstream, "listening"), 2000);
+    const address = upstream.address();
+    assert.ok(address && typeof address !== "string");
     let intercepted;
     const heldAck = new Promise((resolve) => {
       intercepted = resolve;
@@ -55,7 +66,7 @@ test(
       transport = await createCodexTransport({
         cwd,
         sessionHome: join(root, "private"),
-        gatewayUrl: "http://127.0.0.1:19371/v1",
+        gatewayUrl: `http://127.0.0.1:${address.port}/v1`,
         gatewayToken: "synthetic-local-only",
         model: "synthetic-local-only",
         executable: "codex",
@@ -87,7 +98,7 @@ test(
         },
       });
       const thread = await bounded(transport.startThread(), 5000);
-      const pending = transport.startTurn(thread, "no provider request after held ACK");
+      const pending = transport.startTurn(thread, "synthetic request may start before held ACK");
       // Register a rejection handler before the child dies; the ACK is the actual native reply, not a fabricated frame.
       const rejected = assert.rejects(pending, /exited|closed|stdout ended/i);
       await bounded(heldAck, 6000);
@@ -106,12 +117,15 @@ test(
       await bounded(transport.close(), 1200);
       await bounded(transport.close(), 1200);
       assert.equal(appServers, 1, "accepted input must not start a replacement native child");
+      t.diagnostic(`fake upstream observed ${upstreamRequests} requests before death`);
     } finally {
       if (native && native.exitCode === null && native.signalCode === null) {
         const exited = once(native, "exit");
         native.kill("SIGKILL");
         await bounded(exited, 2000);
       }
+      upstream.closeAllConnections();
+      await bounded(new Promise((resolve) => upstream.close(resolve)), 2000);
       await rm(root, { recursive: true, force: true });
     }
   },
