@@ -617,64 +617,95 @@ export function createWorkspaceHierarchyService(input: {
       const workspace = snapshot.workspaces.find((row) => row.id === scope.workspaceId);
       const binding = snapshot.bindings.find((row) => row.id === workspace?.repositoryBindingId);
       const project = snapshot.projects.find((row) => row.id === workspace?.projectId);
-      if (!workspace || !binding || !project || !input.native?.completeCertified)
-        throw new Error("Native completed-only recovery unavailable");
-      const facts = await input.recoveryFacts?.(workspace.id);
-      // 中文：修复写入前重新检查 Target 和 Catalog；旧代完成事实只能留作历史，
-      // 不能因新 attachment 或一次丢 ACK 就补写成当前代的可执行引用。
-      if (facts?.status !== "confirmed" || facts.generation !== workspace.worktreeGeneration)
-        throw new Error("Target generation unavailable for native completion repair");
-      const completed = await input.native.completeCertified(request.commandId, {
-        ...scope,
-        projectId: project.id,
-        repositoryBindingId: binding.id,
-        worktreeGeneration: workspace.worktreeGeneration,
-      });
-      if (
-        completed.originalSessionId !== inspected.originalSessionId ||
-        completed.intent.targetId !== scope.targetId ||
-        completed.intent.workspaceId !== scope.workspaceId ||
-        completed.intent.workspaceIdentity !== scope.workspaceIdentity ||
-        completed.intent.workspacePath !== scope.workspacePath ||
-        completed.intent.projectId !== project.id ||
-        completed.intent.repositoryBindingId !== binding.id ||
-        completed.intent.worktreeGeneration !== workspace.worktreeGeneration
-      )
-        throw new Error("native-create-intent-conflict");
-      if (!input.commitNativeReference)
-        throw new Error("Native Catalog reference writer unavailable");
-      const current = await scopeFor(request.workspaceId);
-      const latest = await input.recoveryFacts?.(request.workspaceId);
-      if (
-        !current ||
-        current.targetId !== scope.targetId ||
-        current.workspaceIdentity !== scope.workspaceIdentity ||
-        current.workspacePath !== scope.workspacePath ||
-        latest?.status !== "confirmed" ||
-        latest.generation !== completed.intent.worktreeGeneration
-      )
-        throw new Error("Native completion target changed before Catalog repair");
-      await input.commitNativeReference({
-        commandId: request.commandId,
-        originalSessionId: completed.originalSessionId,
-        targetId: scope.targetId,
-        projectId: project.id,
-        workspaceId: scope.workspaceId,
-        repositoryBindingId: binding.id,
-        worktreeGeneration: workspace.worktreeGeneration,
-        workspaceIdentity: scope.workspaceIdentity,
-        workspacePath: scope.workspacePath,
-        ...(completed.intent.remoteSessionId
-          ? { remoteSessionId: completed.intent.remoteSessionId }
-          : {}),
-      });
-      const verified = await this.inspectCreateCommand(request);
-      if (
-        verified.status !== "completed" ||
-        verified.owner.originalSessionId !== inspected.originalSessionId
-      )
-        throw new Error("Native completion repair uncertain");
-      return verified;
+      const completeCertified = input.native?.completeCertified;
+      if (!workspace || !binding || !project || !completeCertified || !input.withNativeAdmission)
+        throw new Error("Native completed-only recovery admission unavailable");
+      // 中文：旧修复入口在维护/启动持有期间绕过了唯一的 workspace/Target admission，
+      // 读后写的 Target generation 检查也无法阻止并发维护发放 idle 租约。
+      // 整段映射+Catalog fsync+最终证书必须作为一个已登记的 admission 排空。
+      return input.withNativeAdmission(
+        workspace.id,
+        workspace.worktreeGeneration,
+        ".",
+        async () => {
+          const fresh = await input.catalog.sidebarSnapshot();
+          const same = fresh.workspaces.find((row) => row.id === workspace.id);
+          const sameBinding = fresh.bindings.find((row) => row.id === same?.repositoryBindingId);
+          const sameProject = fresh.projects.find((row) => row.id === same?.projectId);
+          if (
+            !same ||
+            same.worktreeGeneration !== workspace.worktreeGeneration ||
+            same.workspaceIdentity !== scope.workspaceIdentity ||
+            same.worktreePath !== scope.workspacePath ||
+            sameBinding?.id !== binding.id ||
+            sameProject?.id !== project.id ||
+            sameBinding.executionTargetId !== scope.targetId
+          )
+            throw new Error("Native completion Catalog changed before repair");
+          const inside = await this.inspectCreateCommand(request);
+          if (
+            inside.status !== "completed-unindexed" ||
+            inside.originalSessionId !== inspected.originalSessionId
+          )
+            throw new Error("Native completion changed before repair");
+          const facts = await input.recoveryFacts?.(workspace.id);
+          // 中文：修复写入前重新检查 Target 和 Catalog；旧代完成事实只能留作历史，
+          // 不能因新 attachment 或一次丢 ACK 就补写成当前代的可执行引用。
+          if (facts?.status !== "confirmed" || facts.generation !== workspace.worktreeGeneration)
+            throw new Error("Target generation unavailable for native completion repair");
+          const completed = await completeCertified(request.commandId, {
+            ...scope,
+            projectId: project.id,
+            repositoryBindingId: binding.id,
+            worktreeGeneration: workspace.worktreeGeneration,
+          });
+          if (
+            completed.originalSessionId !== inspected.originalSessionId ||
+            completed.intent.targetId !== scope.targetId ||
+            completed.intent.workspaceId !== scope.workspaceId ||
+            completed.intent.workspaceIdentity !== scope.workspaceIdentity ||
+            completed.intent.workspacePath !== scope.workspacePath ||
+            completed.intent.projectId !== project.id ||
+            completed.intent.repositoryBindingId !== binding.id ||
+            completed.intent.worktreeGeneration !== workspace.worktreeGeneration
+          )
+            throw new Error("native-create-intent-conflict");
+          if (!input.commitNativeReference)
+            throw new Error("Native Catalog reference writer unavailable");
+          const current = await scopeFor(request.workspaceId);
+          const latest = await input.recoveryFacts?.(request.workspaceId);
+          if (
+            !current ||
+            current.targetId !== scope.targetId ||
+            current.workspaceIdentity !== scope.workspaceIdentity ||
+            current.workspacePath !== scope.workspacePath ||
+            latest?.status !== "confirmed" ||
+            latest.generation !== completed.intent.worktreeGeneration
+          )
+            throw new Error("Native completion target changed before Catalog repair");
+          await input.commitNativeReference({
+            commandId: request.commandId,
+            originalSessionId: completed.originalSessionId,
+            targetId: scope.targetId,
+            projectId: project.id,
+            workspaceId: scope.workspaceId,
+            repositoryBindingId: binding.id,
+            worktreeGeneration: workspace.worktreeGeneration,
+            workspaceIdentity: scope.workspaceIdentity,
+            workspacePath: scope.workspacePath,
+            ...(completed.intent.remoteSessionId
+              ? { remoteSessionId: completed.intent.remoteSessionId }
+              : {}),
+          });
+          const verified = await this.inspectCreateCommand(request);
+          if (
+            verified.status !== "completed" ||
+            verified.owner.originalSessionId !== inspected.originalSessionId
+          )
+            throw new Error("Native completion repair uncertain");
+          return verified;
+        },
+      );
     },
     createAgent(request) {
       const intent = JSON.stringify([

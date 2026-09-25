@@ -311,11 +311,16 @@ test("real Git/catalog/target/Host: server derives identity and deduplicates cre
     let repairs = 0;
     let references = 0;
     let receiptStatus: "pending" | "completed-unindexed" | "completed" = "pending";
+    let repairHeld = true;
     const repair = createWorkspaceHierarchyService({
       targetId: "local",
       catalog,
       host: rpc.service,
       newAdmissionsEnabled: () => false,
+      withNativeAdmission: async (_id, _generation, _cwd, action) => {
+        if (repairHeld) throw new Error("New admission frozen for maintenance");
+        return action();
+      },
       recoveryFacts: async () => ({
         status: "confirmed",
         generation: workspace.worktreeGeneration,
@@ -380,6 +385,16 @@ test("real Git/catalog/target/Host: server derives identity and deduplicates cre
     );
     assert.equal(repairs, 0);
     receiptStatus = "completed-unindexed";
+    await assert.rejects(
+      repair.reconcileCompletedCreateCommand({
+        workspaceId: "w",
+        commandId: "repair-id",
+      }),
+      /frozen/,
+    );
+    assert.equal(repairs, 0);
+    assert.equal(references, 0);
+    repairHeld = false;
     const repaired = await repair.reconcileCompletedCreateCommand({
       workspaceId: "w",
       commandId: "repair-id",
