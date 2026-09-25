@@ -253,7 +253,13 @@ async function runServe(
   const daemon = supervisorProcess;
   const { Supervisor } = await import("./supervisor/supervisor.js");
   const serviceRegistered = supervisorProcess && isRegisteredServiceEntry(args);
-  let foregroundStopped: (() => void) | undefined;
+  // 中文：旧实现直到 Core READY 后才安装完成回调；若控制 stop 恰在 READY 与
+  // 回调赋值之间到达，Core/锁虽已收口，CLI 却永远挂在后续 await 上。
+  // 在 Supervisor 可对外提供控制 socket 前建立一次性终态等待者。
+  let foregroundStopped!: () => void;
+  const foregroundCompletion = new Promise<void>((resolve) => {
+    foregroundStopped = resolve;
+  });
   const supervisor = new Supervisor({
     layout,
     launcher: {
@@ -288,7 +294,7 @@ async function runServe(
     serviceRegistered,
     onStopped: () => {
       process.stdin.pause();
-      foregroundStopped?.();
+      foregroundStopped();
       if (supervisorProcess) process.disconnect?.();
     },
   });
@@ -306,16 +312,14 @@ async function runServe(
   }
   if (json) stdout(io, status);
   else stdout(io, `ZCode Server ${status.state} at ${status.host ?? ""}:${status.port ?? ""}`);
-  await new Promise<void>((resolve) => {
-    foregroundStopped = resolve;
-    if (!daemon) {
-      const finish = () => {
-        void supervisor.stop("signal").then(() => resolve());
-      };
-      process.once("SIGINT", finish);
-      process.once("SIGTERM", finish);
-    }
-  });
+  if (!daemon) {
+    const finish = () => {
+      void supervisor.stop("signal").then(() => foregroundStopped());
+    };
+    process.once("SIGINT", finish);
+    process.once("SIGTERM", finish);
+  }
+  await foregroundCompletion;
   return 0;
 }
 

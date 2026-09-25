@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import { fork, type ChildProcess } from "node:child_process";
+import { fork, spawn, type ChildProcess } from "node:child_process";
 import { createReadStream } from "node:fs";
 import { access, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -304,6 +304,104 @@ test(
       assert.equal(supervisor.status().state, "stopped");
       assert.deepEqual(await new DataRootLock(layout.lockFile).inspect(), { state: "missing" });
       await assert.rejects(requestControl(layout.controlEndpoint, { command: "status" }));
+
+      // 另起真正的已安装 CLI 入口，走 cli.ts 的生产 release/Node/Agent 选择逻辑，
+      // 不是测试中重写一个看似等价的 launcher。
+      const cli = spawn(
+        runtimeNode,
+        [
+          join(runtime, "server-cli.js"),
+          "serve",
+          "--supervisor",
+          "--server-root",
+          layout.serverRoot,
+        ],
+        {
+          env: {
+            ...process.env,
+            HOME: dir,
+            XDG_CONFIG_HOME: join(dir, "config"),
+            ZCODE_DATA_BASE_DIR: dir,
+            ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: provider,
+            ZCODE_SERVER_SKIP_SERVICE_REGISTRATION: "1",
+          },
+          stdio: ["ignore", "ignore", "pipe"],
+        },
+      );
+      const cliClosed = new Promise<void>((resolveClosed) =>
+        cli.once("close", () => resolveClosed()),
+      );
+      let cliStderr = "";
+      cli.stderr?.on("data", (chunk: Buffer) => {
+        cliStderr += chunk.toString().replaceAll(dir, "<profile>");
+      });
+      let cliCorePid: number | undefined;
+      try {
+        const deadline = Date.now() + 25_000;
+        while (Date.now() < deadline) {
+          if (cli.exitCode !== null || cli.signalCode !== null)
+            throw new Error(`installed CLI exited before READY: ${cliStderr}`);
+          try {
+            const status = (await requestControl(
+              layout.controlEndpoint,
+              { command: "status" },
+              1000,
+            )) as {
+              state: string;
+              pid: number | null;
+              generation: number;
+            };
+            if (status.state === "ready" && status.pid) {
+              cliCorePid = status.pid;
+              assert.equal(status.generation, 1);
+              break;
+            }
+          } catch {
+            // Socket 还未创建时重试；终态/READY 仍受绝对 deadline 约束。
+          }
+          await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+        }
+        assert.ok(cliCorePid, `installed CLI/default launcher did not reach READY: ${cliStderr}`);
+        assert.deepEqual(
+          await requestControl(layout.controlEndpoint, { command: "begin-fallback-migration" }),
+          { ready: true },
+        );
+        assert.deepEqual(
+          await requestControl(layout.controlEndpoint, { command: "end-fallback-migration" }),
+          { released: true },
+        );
+        assert.deepEqual(await requestControl(layout.controlEndpoint, { command: "stop" }), {
+          stopping: true,
+        });
+        const closed = await Promise.race([
+          cliClosed.then(() => true),
+          new Promise<false>((resolveTimeout) => setTimeout(() => resolveTimeout(false), 10_000)),
+        ]);
+        assert.equal(closed, true, `installed CLI failed to close: ${cliStderr}`);
+        assert.equal(cli.exitCode, 0, cliStderr);
+        // 中文：不凭一个可能复用的 PID 杀进程；只读检验 CLI 的 Supervisor 已收口 Core。
+        assert.throws(() => process.kill(cliCorePid!, 0), { code: "ESRCH" });
+        assert.deepEqual(await new DataRootLock(layout.lockFile).inspect(), { state: "missing" });
+        await assert.rejects(requestControl(layout.controlEndpoint, { command: "status" }));
+      } finally {
+        if (cli.exitCode === null && cli.signalCode === null) {
+          await requestControl(layout.controlEndpoint, { command: "stop" }).catch(() => undefined);
+          if (
+            !(await Promise.race([
+              cliClosed.then(() => true),
+              new Promise<false>((resolveTimeout) =>
+                setTimeout(() => resolveTimeout(false), 2_000),
+              ),
+            ]))
+          )
+            cli.kill("SIGTERM");
+        }
+        const finished = await Promise.race([
+          cliClosed.then(() => true),
+          new Promise<false>((resolveTimeout) => setTimeout(() => resolveTimeout(false), 2_000)),
+        ]);
+        assert.equal(finished, true, "owned installed CLI must close before profile removal");
+      }
     } finally {
       if (core && core.exitCode === null) core.kill("SIGTERM");
       if (core && coreClosed) {
