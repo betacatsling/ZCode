@@ -62,6 +62,13 @@ export interface CoreAuthorityResult {
     }>;
   };
   reconcileBeforeAdmission(): Promise<void>;
+  /** Pure Core read model; these are source-certified mappings, not a writable Catalog owner count. */
+  nativeHistoryHealth(): Promise<{
+    sourceCertifiedMappings: number;
+    degradedCount: number;
+    diagnostics: readonly { entryId: string; reason: "uncertified-mapping" }[];
+    truncated: boolean;
+  }>;
   bootAdmissionLease?: { release(): Promise<void> };
   dispose(): Promise<void>;
 }
@@ -198,6 +205,28 @@ export async function createCoreAuthority(
       certifiedCreate: nativeEnabled,
       recover,
       inspect: createNativeCreateInspection(journal, configRoot),
+      async completeCertified(commandId, expected) {
+        // 中文：只读来源证书先验证命令归属与完成 ID，pending/损坏/跨 workspace
+        // 绝不能通过修复入口调用 allocator，也不能落一份假的 mapping。
+        const certificate = await journal.inspectCompleted(commandId);
+        const intent = certificate?.intent;
+        if (
+          !intent ||
+          intent.workspaceId !== expected.workspaceId ||
+          intent.targetId !== expected.targetId ||
+          intent.workspaceIdentity !== expected.workspaceIdentity ||
+          intent.workspacePath !== expected.workspacePath ||
+          intent.projectId !== expected.projectId ||
+          intent.repositoryBindingId !== expected.repositoryBindingId ||
+          intent.worktreeGeneration !== expected.worktreeGeneration ||
+          !certificate.originalSessionId
+        )
+          throw new Error("Native completed receipt unavailable for this workspace");
+        const mapping = await journal.complete(commandId);
+        if (mapping.originalSessionId !== certificate.originalSessionId)
+          throw new Error("Native completion changed during repair");
+        return { originalSessionId: mapping.originalSessionId, intent };
+      },
       async create(input) {
         if (!nativeEnabled || !creation)
           throw new Error("Native durable creation receipt unavailable");
@@ -391,6 +420,18 @@ export async function createCoreAuthority(
         },
       },
       reconcileBeforeAdmission: () => getWorkspaceCompositionReady(collection),
+      async nativeHistoryHealth() {
+        if (disposed) throw new Error("Core native history owner disposed");
+        // 中文：目录读取异常不能伪装成健康的空历史；单条损坏则隔离并提供有界哈希诊断。
+        // 与导航使用同一 SQLite 来源证书，但此纯查询不启动 CLI、迁移或补写引用。
+        const { rows, diagnostics } = await journal.listCompletedWithDiagnostics();
+        return {
+          sourceCertifiedMappings: rows.length,
+          degradedCount: diagnostics.length,
+          diagnostics: diagnostics.slice(0, 32),
+          truncated: diagnostics.length > 32,
+        };
+      },
       ...(bootAdmissionLease ? { bootAdmissionLease } : {}),
       dispose() {
         disposed = true;

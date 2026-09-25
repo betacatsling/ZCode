@@ -94,6 +94,12 @@ export interface IWorkspaceHierarchyService {
     /** Optional view provenance from Desktop's independently authenticated current registry. */
     attachment?: WorkspaceAttachmentMetadata;
   }): Promise<{ owner: SessionOwner; snapshot?: ConversationSnapshot }>;
+  /** Explicit completed-only Core mapping/Catalog repair. Pending/unknown never executes CLI effects. */
+  reconcileCompletedCreateCommand(input: {
+    workspaceId: string;
+    commandId: string;
+    attachment?: WorkspaceAttachmentMetadata;
+  }): Promise<CreateCommandInspection>;
   /** Pure completed-only inspection; never repairs, allocates, sends or starts CLI. */
   inspectCreateCommand(input: {
     workspaceId: string;

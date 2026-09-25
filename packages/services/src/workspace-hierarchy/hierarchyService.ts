@@ -26,6 +26,27 @@ export interface NativeHierarchyPort {
   recover?(
     input: Parameters<NativeHierarchyPort["create"]>[0],
   ): Promise<{ originalSessionId: string; creationRemoteSessionId?: string } | undefined>;
+  /** Never allocates: rechecks a completed CLI source certificate and fsyncs Core mapping only. */
+  completeCertified?(
+    commandId: string,
+    expected: WorkspaceNavigationScope & {
+      projectId: string;
+      repositoryBindingId: string;
+      worktreeGeneration: string;
+    },
+  ): Promise<{
+    originalSessionId: string;
+    intent: {
+      targetId: string;
+      projectId: string;
+      workspaceId: string;
+      repositoryBindingId: string;
+      worktreeGeneration: string;
+      workspaceIdentity: string;
+      workspacePath: string;
+      remoteSessionId?: string;
+    };
+  }>;
   inspect?(
     commandId: string,
     expected: WorkspaceNavigationScope,
@@ -585,6 +606,75 @@ export function createWorkspaceHierarchyService(input: {
           historyOnly: !current,
         },
       };
+    },
+    async reconcileCompletedCreateCommand(request): Promise<CreateCommandInspection> {
+      const inspected = await this.inspectCreateCommand(request);
+      if (inspected.status !== "completed-unindexed") return inspected;
+      const scope = await scopeFor(request.workspaceId);
+      if (!scope) throw new Error("Unknown target workspace");
+      scopeWithAttachment(scope, request.attachment);
+      const snapshot = await input.catalog.sidebarSnapshot();
+      const workspace = snapshot.workspaces.find((row) => row.id === scope.workspaceId);
+      const binding = snapshot.bindings.find((row) => row.id === workspace?.repositoryBindingId);
+      const project = snapshot.projects.find((row) => row.id === workspace?.projectId);
+      if (!workspace || !binding || !project || !input.native?.completeCertified)
+        throw new Error("Native completed-only recovery unavailable");
+      const facts = await input.recoveryFacts?.(workspace.id);
+      // 中文：修复写入前重新检查 Target 和 Catalog；旧代完成事实只能留作历史，
+      // 不能因新 attachment 或一次丢 ACK 就补写成当前代的可执行引用。
+      if (facts?.status !== "confirmed" || facts.generation !== workspace.worktreeGeneration)
+        throw new Error("Target generation unavailable for native completion repair");
+      const completed = await input.native.completeCertified(request.commandId, {
+        ...scope,
+        projectId: project.id,
+        repositoryBindingId: binding.id,
+        worktreeGeneration: workspace.worktreeGeneration,
+      });
+      if (
+        completed.originalSessionId !== inspected.originalSessionId ||
+        completed.intent.targetId !== scope.targetId ||
+        completed.intent.workspaceId !== scope.workspaceId ||
+        completed.intent.workspaceIdentity !== scope.workspaceIdentity ||
+        completed.intent.workspacePath !== scope.workspacePath ||
+        completed.intent.projectId !== project.id ||
+        completed.intent.repositoryBindingId !== binding.id ||
+        completed.intent.worktreeGeneration !== workspace.worktreeGeneration
+      )
+        throw new Error("native-create-intent-conflict");
+      if (!input.commitNativeReference)
+        throw new Error("Native Catalog reference writer unavailable");
+      const current = await scopeFor(request.workspaceId);
+      const latest = await input.recoveryFacts?.(request.workspaceId);
+      if (
+        !current ||
+        current.targetId !== scope.targetId ||
+        current.workspaceIdentity !== scope.workspaceIdentity ||
+        current.workspacePath !== scope.workspacePath ||
+        latest?.status !== "confirmed" ||
+        latest.generation !== completed.intent.worktreeGeneration
+      )
+        throw new Error("Native completion target changed before Catalog repair");
+      await input.commitNativeReference({
+        commandId: request.commandId,
+        originalSessionId: completed.originalSessionId,
+        targetId: scope.targetId,
+        projectId: project.id,
+        workspaceId: scope.workspaceId,
+        repositoryBindingId: binding.id,
+        worktreeGeneration: workspace.worktreeGeneration,
+        workspaceIdentity: scope.workspaceIdentity,
+        workspacePath: scope.workspacePath,
+        ...(completed.intent.remoteSessionId
+          ? { remoteSessionId: completed.intent.remoteSessionId }
+          : {}),
+      });
+      const verified = await this.inspectCreateCommand(request);
+      if (
+        verified.status !== "completed" ||
+        verified.owner.originalSessionId !== inspected.originalSessionId
+      )
+        throw new Error("Native completion repair uncertain");
+      return verified;
     },
     createAgent(request) {
       const intent = JSON.stringify([
