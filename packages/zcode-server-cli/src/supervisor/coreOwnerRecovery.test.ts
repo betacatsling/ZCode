@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { fork, spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, rm, writeFile, readFile, mkdir } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile, mkdir, open } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -223,6 +223,26 @@ test("Supervisor crash relaunch recovers only the proven reaped Core owner lock"
     await writeMarker(targetMarker(layout), firstPid);
     await writeMarker(migrationMarker(layout), firstPid);
 
+    // 埋一条真实的 durable command journal 记录（accepted 但 outcome unknown）：
+    // 恢复边界只允许动 owner marker，journal 字节必须原样保留且不被重放。
+    const journalPath = join(
+      coreConfigDir(layout),
+      "workspace-hierarchy",
+      "agent-host",
+      "aa11.command.jsonl",
+    );
+    await mkdir(dirname(journalPath), { recursive: true });
+    const journalHandle = await open(journalPath, "wx");
+    try {
+      await journalHandle.writeFile(
+        `${JSON.stringify({ commandId: "cmd-unknown-1", status: "execution-unknown", acceptedAt: 1 })}\n`,
+      );
+      await journalHandle.sync();
+    } finally {
+      await journalHandle.close();
+    }
+    const journalBefore = await readFile(journalPath, "utf8");
+
     // 真实 stale-owner 场景：SIGKILL 让 Core 来不及释放 owner marker；
     // Supervisor 观察到 exit/close（退出+回收的正面证明）后重拉下一代。
     process.kill(firstPid, "SIGKILL");
@@ -232,6 +252,9 @@ test("Supervisor crash relaunch recovers only the proven reaped Core owner lock"
     );
     const second = supervisor.status();
     assert.equal(second.generation, 2);
+
+    // 恢复不得触碰 journal/命令状态：accepted-but-unknown 永远不被重放。
+    assert.equal(await readFile(journalPath, "utf8"), journalBefore);
 
     // 新 owner 的锁内容必须是新 pid；旧的 owner 记录已被覆盖
     const lockRaw = JSON.parse(await readFile(authorityMarker(layout), "utf8")) as {
