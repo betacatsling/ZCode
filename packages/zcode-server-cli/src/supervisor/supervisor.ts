@@ -24,6 +24,7 @@ import { waitForUpdateReady } from "../runtime/updateReadiness.js";
 import { createRollbackFailure, updateErrorMessage } from "../runtime/updateErrors.js";
 import { CrashBudget } from "./crashBudget.js";
 import { unsafeActivityCount } from "./activityGuard.js";
+import { evaluateCoreAuthorityLock, writeCoreOwnerRecord } from "./coreOwnerRecovery.js";
 
 // 生命周期事件按运维排障判据用 info/warn/error（出问题时运维要能在日志里看到）；
 // 高频 heartbeat/task-activity 明细走 debug，避免生产日志膨胀。
@@ -113,7 +114,7 @@ export class Supervisor {
         serverRoot: this.layout.serverRoot,
         version: this.options.version,
       });
-      this.launchCore();
+      await this.launchCore();
       await this.persistStatusSnapshot();
       return this.status();
     } catch (error) {
@@ -295,7 +296,7 @@ export class Supervisor {
       await this.releaseManager.applyPendingWithTransaction(previous);
       this.activeRelease = pending;
       this.state = "starting";
-      this.launchCore();
+      await this.launchCore();
       await waitForUpdateReady(() => this.state, this.options.coreReadyTimeoutMs ?? 15_000);
       await this.releaseManager.completeUpdate();
       log.info("release applied", { version: pending.version });
@@ -330,8 +331,8 @@ export class Supervisor {
       this.state = "stopped";
       if (previous) {
         this.state = "starting";
-        this.launchCore();
         try {
+          await this.launchCore();
           await waitForUpdateReady(() => this.state, this.options.coreReadyTimeoutMs ?? 15_000);
         } catch (rollbackError) {
           log.error("previous release rollback failed", rollbackError);
@@ -364,12 +365,36 @@ export class Supervisor {
     };
   }
 
-  private launchCore(): void {
+  private async launchCore(): Promise<void> {
+    // 启动前评估 Core profile 锁：仅当可信启动记录证明锁内 pid 是本安装已回收的
+    // 旧 Core 时才移除 stale lock；异主/存活/畸形/无记录一律拒绝且不 spawn——
+    // 对存活的外部 Core owner 崩溃循环没有意义，只会让干扰更难诊断。
+    const recovery = await evaluateCoreAuthorityLock(this.layout);
+    if (recovery.kind === "refused") {
+      const reason = `core authority owner recovery refused: ${recovery.reason}`;
+      this.lastExitReason = reason;
+      throw new Error(reason);
+    }
+    if (recovery.kind === "recovered") {
+      log.warn("recovered stale Core authority lock from proven dead owner", {
+        pid: recovery.pid,
+      });
+    }
     const generation = ++this.generation;
     const child = this.options.launcher.launch(generation, this.activeRelease);
     this.core = child;
     this.clearCoreScopedStatus();
     log.info("launching server core", { generation, pid: child.pid });
+    // 持久化启动记录是跨 Supervisor 重启的唯一可信 owner 证据；写失败只降级
+    // 为"下次重启无法自动恢复"（fail-closed），不影响本次已 spawn 的 Core。
+    if (typeof child.pid === "number" && child.pid > 0) {
+      await writeCoreOwnerRecord(this.layout, {
+        pid: child.pid,
+        generation,
+      }).catch((error: unknown) =>
+        log.warn("failed to persist Core owner record; next restart cannot self-recover", error),
+      );
+    }
     child.on("message", (raw: unknown) => this.handleCoreMessage(child, generation, raw));
     let terminalObserved = false;
     let spawnErrorReason: string | undefined;
@@ -407,7 +432,14 @@ export class Supervisor {
       setTimeout(() => {
         if (this.state !== "crashed") return;
         this.state = "starting";
-        this.launchCore();
+        // 恢复被拒（异主/存活/畸形 owner）时不再重试：spawn 也只会撞上 EEXIST，
+        // 停在 crash-loop-stopped 并把拒绝原因暴露给运维。
+        void this.launchCore().catch((error: unknown) => {
+          this.state = "crash-loop-stopped";
+          this.lastExitReason = error instanceof Error ? error.message : String(error);
+          log.error("core relaunch aborted", error);
+          void this.persistStatusSnapshot();
+        });
       }, decision.delayMs).unref();
     };
     // fork 的 execPath 不存在/不可执行时 Node 只发 error + close，不发 exit。

@@ -49,9 +49,14 @@ export function getConversationWorkspaceDir(): string {
   return join(getZCodeDataRootDir(), "workspace", "default");
 }
 
+/** 给可信的进程监管方（如 Supervisor）从已知 dataBaseDir 推导同一路径，不读 env。 */
+export function getAppConfigDirFor(dataBaseDir: string): string {
+  return join(dataBaseDir, ".zcode", "v2");
+}
+
 /** {dataBaseDir}/.zcode/v2 */
 export function getAppConfigDir(): string {
-  return join(getZCodeDataRootDir(), "v2");
+  return getAppConfigDirFor(getDataBaseDir());
 }
 
 function readEnvValue(env: Record<string, string | undefined>, key: string): string | undefined {

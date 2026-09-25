@@ -62,6 +62,7 @@ export {
   getZCodeDataRootDir,
   getConversationWorkspaceDir,
   getAppConfigDir,
+  getAppConfigDirFor,
   getExportLogStageDir,
   getExportLogDir,
   getFeedbackRootDir,
@@ -72,6 +73,11 @@ export {
   validateDataBaseDirTarget,
   ZCODE_WINDOWS_APP_INSTALL_DIR_ENV,
 } from "./paths.js";
+export {
+  ProfileFileOwner,
+  recoverStaleProfileOwnerLock,
+  type StaleOwnerRecoveryOutcome,
+} from "./project-workspaces/profilePersistence.js";
 export { createGitService } from "./git/gitService.js";
 export { GitCommitMessageGenerator } from "./git/gitCommitMessageGenerator.js";
 export { createGitCheckpointService } from "./git/gitCheckpointService.js";
