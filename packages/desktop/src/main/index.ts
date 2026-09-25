@@ -1,4 +1,5 @@
 import { createLocalTtftExporter } from "./localTtftExporter.js";
+import { registerPairedPhoneDesktop } from "./pairedPhoneDesktop.js";
 /* eslint-disable max-lines */
 import "./desktopEarlyDataBaseDirBootstrap.js";
 import "./desktopEarlyChromiumHardwareAccelerationBootstrap.js";
@@ -619,6 +620,7 @@ const windowWorkspaceMap = new Map<number, Set<string>>();
 const windowTaskRealtimeHostIdMap = new Map<number, string>();
 const windowUnreadCountMap = new Map<number, number>();
 const windowHostProcessMap = new Map<number, ElectronUtilityProcess>();
+let pairedPhoneDesktop: ReturnType<typeof registerPairedPhoneDesktop> | undefined;
 const cuaPipFocusRouter = createCuaPipFocusRouter({
   send: (windowId, event) => {
     windowHostProcessMap.get(windowId)?.postMessage({
@@ -1704,7 +1706,11 @@ function createWindowInstance(startupBootstrap: StartupWindowBootstrap = {}) {
               packagedLocalCoreServer(process.resourcesPath, join(getZCodeDataRootDir(), "server")),
             )
         : undefined,
-    onHostProcessReady: (windowKey) => cuaPipFocusRouter.refreshWindow(windowKey),
+    onHostProcessReady: (windowKey) => {
+      // 中文：Host 换代不得复用旧手机租约，即使窗口和 workspace 路径相同。
+      cuaPipFocusRouter.refreshWindow(windowKey);
+      pairedPhoneDesktop?.revokeWindow(win.id);
+    },
     awaitFirstHostSpawnDecision,
     spawnHostProcess: (win, label, initMessage, localCoreEndpoint) =>
       spawnHostProcess(
@@ -2067,6 +2073,10 @@ app.whenReady().then(async () => {
     logger,
   });
 
+  pairedPhoneDesktop ??= registerPairedPhoneDesktop({
+    hosts: windowHostProcessMap,
+    rendererRoot: join(import.meta.dirname, "../renderer"),
+  });
   registerPlatformIpcHandlers({
     fetchHelpConfig: readHelpConfig,
     logger,
@@ -2317,6 +2327,7 @@ app.whenReady().then(async () => {
 app.on("browser-window-created", (_, win) => {
   const windowWebContentsId = win.webContents.id;
   win.on("closed", () => {
+    pairedPhoneDesktop?.revokeWindow(win.id);
     browserScreenshotSurfaceCoordinator.handleWindowDestroyed(win.id);
     browserGuestManager.closeWindow(win.id);
     windowWorkspaceMap.delete(win.id);

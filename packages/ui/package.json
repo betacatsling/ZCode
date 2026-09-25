@@ -13,7 +13,8 @@
     "./styles.css": "./src/styles.css",
     "./replay": "./src/replay.ts",
     "./actual-shell-test-fixture": "./src/test/actualShellMountFixture.tsx",
-    "./load-product-mount-fixture": "./src/test/loadProductMountFixture.tsx"
+    "./load-product-mount-fixture": "./src/test/loadProductMountFixture.tsx",
+    "./paired-phone-conversation": "./src/pairedPhone/PairedPhoneConversation.tsx"
   },
   "scripts": {
     "lint": "oxlint",

@@ -15,6 +15,20 @@ test("Core loss detaches local renderer ports without dropping remote window att
   });
   const local = new EventEmitter();
   const remote = new EventEmitter();
+  const phone = new EventEmitter();
+  registry.attach({
+    requestId: "phone-request",
+    attachmentId: "phone",
+    clientMode: "web-remote-replayable",
+    scope: {
+      kind: "phone",
+      workspaceId: "work",
+      hostSessionId: "session",
+      workspacePath: "/local",
+      workspaceIdentity: "/local",
+    },
+    port: phone,
+  });
   registry.attach({
     requestId: "local-request",
     attachmentId: "local",
@@ -35,7 +49,7 @@ test("Core loss detaches local renderer ports without dropping remote window att
     port: remote,
   });
   registry.detachLocalAttachments();
-  assert.deepEqual(disposed, ["local"]);
+  assert.deepEqual(disposed, ["phone", "local"]);
   assert.deepEqual(
     registry.list().map((item) => item.attachmentId),
     ["remote"],
@@ -43,5 +57,5 @@ test("Core loss detaches local renderer ports without dropping remote window att
   local.emit("close");
   assert.equal(registry.size(), 1);
   registry.dispose();
-  assert.deepEqual(disposed, ["local", "remote"]);
+  assert.deepEqual(disposed, ["phone", "local", "remote"]);
 });

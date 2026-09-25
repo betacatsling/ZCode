@@ -227,6 +227,7 @@ export default defineConfig(({ mode }) => {
         // 多入口：主窗口 + 进程监控 + CUA 权限拖拽浮窗
         input: {
           index: resolve(__dirname, "src/renderer/index.html"),
+          "paired-phone": resolve(__dirname, "src/renderer/paired-phone.html"),
           // Test-only actual Core→preload→Shell entry; default packaged renderer excludes it.
           ...(process.env.ZCODE_ACTUAL_SHELL_FIXTURE_BUILD === "1"
             ? {

@@ -54,6 +54,7 @@ import { AutomationsMainBreadcrumbFrame } from "@/settings/AutomationsMainBreadc
 import { PluginStorePage } from "@/settings/PluginStorePage.js";
 import { TaskFindDialog } from "@/quickpick/TaskFindDialog.js";
 import { WorkspaceHeader } from "@/WorkspaceHeader.js";
+import { PairedPhoneConsent } from "@/pairedPhone/PairedPhoneConsent.js";
 import { WorkspaceSidebar, type SidebarFileTreeOpenRequest } from "@/WorkspaceSidebar.js";
 import { MountedProjectSidebar } from "@/project-sidebar/MountedProjectSidebar.js";
 import { hasMountedHierarchy } from "@/hooks/useMountedProjectSidebar.js";
@@ -1958,6 +1959,7 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
                       isTerminalVisible && "rounded-b-[var(--workspace-panel-radius)] border-b",
                     )}
                   >
+                    {isDesktop && selectedExternalId ? <PairedPhoneConsent owner={selectedMountedOwner} /> : null}
                     {shouldRenderWorkspaceHeader ? (
                       <ScopedErrorBoundary
                         scope="workspace-header"

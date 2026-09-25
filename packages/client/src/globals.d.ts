@@ -56,6 +56,16 @@ import type {
 declare global {
   interface Window {
     zcode: {
+      pairedPhoneConsent?(
+        command: "enable" | "disable",
+        selection?: {
+          targetId: string;
+          workspaceId: string;
+          hostSessionId: string;
+          workspacePath: string;
+          workspaceIdentity: string;
+        },
+      ): Promise<{ origin: string; challenge: string } | null>;
       connectRemote(
         options: RemoteTarget,
         requestId?: string,

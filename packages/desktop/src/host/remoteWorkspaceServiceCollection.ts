@@ -13,6 +13,7 @@ import {
   IZCodeTaskService,
   IZCodeAgentService,
   IAgentHostService,
+  IWorkspaceHierarchyService,
   IZCodeSessionService,
   IConversationShareService,
   IBotsService,
@@ -323,6 +324,9 @@ export function createRemoteWorkspaceServiceCollection(params: {
     .register(IBroadcastService, localBroadcastService)
     .register(IZCodeTaskService, remoteZCodeTaskService)
     .register(IZCodeAgentService, params.connectionServices.zcodeAgentService)
+    // 中文：Native create 的目标必须是远端 Core 自己的 hierarchy，不可借本机 Core 的 factory。
+    // 具体写入仍由窗口 Host 的已认证 registry generation 在 attachment 层把关。
+    .register(IWorkspaceHierarchyService, params.connectionServices.workspaceHierarchyService)
     .register(IZCodeSessionService, remoteZCodeSessionService)
     .register(IConversationShareService, conversationShareService)
     .register(

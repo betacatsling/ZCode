@@ -527,6 +527,18 @@ export type CuaOsSupport =
  * 业务服务（文件、终端、凭据等）走 IServiceAccessor 的 RPC 通道。
  */
 export interface IPlatformService {
+  /** Desktop-only explicit one-session paired phone consent. Browser/Web has no grant API. */
+  pairedPhoneConsent?(
+    command: "enable" | "disable",
+    selection?: {
+      targetId: string;
+      workspaceId: string;
+      hostSessionId: string;
+      workspacePath: string;
+      workspaceIdentity: string;
+    },
+  ): Promise<{ origin: string; challenge: string } | null>;
+
   /** 当前平台的文件选择框是否能返回 agent 可访问的本地绝对路径 */
   canSelectFilePath?: boolean;
 

@@ -245,6 +245,16 @@ window.addEventListener("DOMContentLoaded", updateRendererProcessTitle, {
  * 通过 MessagePort RPC 访问，不再经过此 bridge。
  */
 contextBridge.exposeInMainWorld("zcode", {
+  pairedPhoneConsent: (
+    command: "enable" | "disable",
+    selection?: {
+      targetId: string;
+      workspaceId: string;
+      hostSessionId: string;
+      workspacePath: string;
+      workspaceIdentity: string;
+    },
+  ) => ipcRenderer.invoke("zcode:paired-phone-consent", command, selection),
   connectRemote: (
     options: RemoteTarget,
     requestId?: string,

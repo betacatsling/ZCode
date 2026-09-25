@@ -14,6 +14,8 @@
  * 3. 后续远端 connect / scoped attachment 都由同一 Host 处理
  */
 import { createHostDatabaseStartup } from "./hostDatabaseStartup.js";
+import { createRemoteHierarchyAttachment } from "./remoteHierarchyAttachment.js";
+import { registerPairedPhoneChannel } from "./pairedPhoneAgentHost.js";
 import { mountLocalCore, type CoreAttachmentLocation } from "./targetCoreMount.js";
 import { randomUUID } from "node:crypto";
 import {
@@ -44,6 +46,7 @@ import {
   IZCodeAgentService,
   IZCodeTaskService,
   IZCodeSessionService,
+  IWorkspaceHierarchyService,
   ICuaPipSessionService,
   createZCodeAgentConnectionScope,
   type ZCodeAgentV4ClientMode,
@@ -1992,6 +1995,7 @@ function exposeServicesOnMessagePort(
   clientMode: ZCodeAgentV4ClientMode = "desktop-continuous",
   attachmentScope: WindowHostAttachmentScope = { kind: "local" },
   capabilities?: HostRemoteConnectionCapabilities,
+  attachmentGeneration?: number,
 ): ExposedServicePortHandle {
   const wrappedPort = wrapElectronPort(port);
   const protocol = new MessagePortProtocol(wrappedPort);
@@ -2002,6 +2006,24 @@ function exposeServicesOnMessagePort(
   const rawServer = new ChannelServer(protocol, "host", 1000, deferInit);
   const loggedServer = new LoggingChannelServer(rawServer, logRpc);
   const server = new NetworkTelemetryChannelServer(loggedServer);
+  if (attachmentScope.kind === "phone") {
+    // 中文：通用 ServiceCollection 含凭据、文件、终端和全窗口服务，手机端绝不可暴露。
+    // 只暴露 Host 检查每次方法/参数的 AgentHost 小接口；端口关闭即撤销实时效果。
+    if (clientMode !== "web-remote-replayable") throw new Error("phone delivery profile denied");
+    let phoneDisposed = false;
+    registerPairedPhoneChannel(server, services, attachmentScope, () => !phoneDisposed);
+    const handle: ExposedServicePortHandle = {
+      server,
+      dispose() {
+        if (phoneDisposed) return;
+        phoneDisposed = true;
+        rawServer.dispose();
+        protocol.disconnect();
+      },
+    };
+    port.once("close", () => handle.dispose());
+    return handle;
+  }
   const agentService = services.getOptional(IZCodeAgentService);
   const connectionScope = agentService
     ? createZCodeAgentConnectionScope(agentService, {
@@ -2031,6 +2053,23 @@ function exposeServicesOnMessagePort(
   }
   if (connectionScope) {
     overrides.set(IZCodeAgentService.channelName, connectionScope.service);
+  }
+  if (attachmentScope.kind === "remote") {
+    const hierarchy = services.getOptional(IWorkspaceHierarchyService);
+    if (hierarchy && attachmentGeneration !== undefined) {
+      // 中文：远端 Native create 必须复用这条 Host 已认证 attachment 的代际与目标服务，
+      // 不可让 renderer 的 ID 决定路由；异步提交后失联只报告不确定，不自动重新发送。
+      overrides.set(
+        IWorkspaceHierarchyService.channelName,
+        createRemoteHierarchyAttachment(hierarchy, attachmentScope, (action) =>
+          windowRemoteConnectionRegistry.withCurrentScopedServices(
+            attachmentScope,
+            attachmentGeneration,
+            (targetServices, lease) => action(targetServices, lease.assertCurrent),
+          ),
+        ),
+      );
+    }
   }
   const conversationShareService = services.getOptional(IConversationShareService);
   if (conversationShareService) {
@@ -2095,7 +2134,7 @@ const windowHostAttachmentRegistry = createWindowHostAttachmentRegistry<
   HostRemoteConnectionCapabilities
 >({
   resolveScope: (scope: WindowHostAttachmentScope) => {
-    if (scope.kind === "local") {
+    if (scope.kind === "local" || scope.kind === "phone") {
       if (!activeServices) {
         throw new Error("local services 尚未初始化");
       }
@@ -2111,8 +2150,8 @@ const windowHostAttachmentRegistry = createWindowHostAttachmentRegistry<
       capabilities: windowRemoteConnectionRegistry.resolveScopedCapabilities(scope),
     };
   },
-  expose: ({ port, services, clientMode, scope, capabilities }) =>
-    exposeServicesOnMessagePort(port, services, false, clientMode, scope, capabilities),
+  expose: ({ port, services, clientMode, scope, capabilities, generation }) =>
+    exposeServicesOnMessagePort(port, services, false, clientMode, scope, capabilities, generation),
 });
 
 function logWindowHostTopology(reason: string): void {
@@ -2740,7 +2779,10 @@ parentPort.on("message", async (e: Electron.MessageEvent) => {
       logger.error("attach-service-port message missing MessagePort");
       return;
     }
-    if (msg.scope.kind === "local" && databaseStartup?.coordinator.snapshot.phase !== "ready") {
+    if (
+      (msg.scope.kind === "local" || msg.scope.kind === "phone") &&
+      databaseStartup?.coordinator.snapshot.phase !== "ready"
+    ) {
       // 刷新/手机 attachment 复用同一 Host，等待现有准备，不启动第二个执行者。
       pendingStartupAttachments.set(msg.attachmentId, () => {
         windowHostAttachmentRegistry.attach({ ...msg, port });
