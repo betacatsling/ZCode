@@ -26,7 +26,7 @@ export async function assertIsolated(input) {
   return root;
 }
 
-// Trusted synthetic adapter: only inert canonical events; never resolves a Model, calls the CLI, or mutates files.
+// Trusted synthetic adapter: bounded canonical lifecycle; never resolves a Model, calls the CLI, or mutates files.
 class LoadHarness {
   id = 'load-synthetic';
   version = '1.0.0';
@@ -51,7 +51,19 @@ class LoadHarness {
   emit(id,eventId) {
     const state = this.#states.get(id);
     if (!state || !/^[a-z0-9-]+$/.test(eventId)) throw new Error('invalid synthetic event');
-    const event = {kind:'extension.event',namespace:'load.synthetic',version:1,payload:{},hostSessionId:id,runtimeEpoch:state.binding.runtimeEpoch,sequence:++state.sequence,eventId,at:state.sequence};
+    // 中文：七步闭合一个真实可投影的合成轮次；每步只向 Host 交付一次，不制造空扩展事件。
+    const step=state.sequence%7,turnId=`load-turn-${Math.floor(state.sequence/7)}`;
+    const base={hostSessionId:id,runtimeEpoch:state.binding.runtimeEpoch,sequence:++state.sequence,eventId,at:state.sequence,turnId};
+    const messageId=`${turnId}-message`,toolCallId=`${turnId}-tool`;
+    const event=[
+      {kind:'turn.started'},
+      {kind:'text.delta',messageId,text:'Inspecting synthetic worktree state. '},
+      {kind:'tool.started',toolCallId,name:'load.readonly.inspect',inputText:'synthetic fixture only'},
+      {kind:'tool.finished',toolCallId,name:'load.readonly.inspect',outcome:'success',outputText:'fixture inspection completed'},
+      {kind:'text.delta',messageId,text:'Synthetic inspection complete.'},
+      {kind:'message.finished',messageId,text:'Inspecting synthetic worktree state. Synthetic inspection complete.',role:'assistant'},
+      {kind:'turn.finished',outcome:'success'},
+    ].map(shape=>({...base,...shape}))[step];
     for (const fn of this.#listeners.get(id) ?? []) fn(event);
     return event.sequence;
   }
@@ -188,13 +200,28 @@ export async function createProductionBackend(input) {
   }
 }
 
+// 中文：顶层 disposer 在 open 前就可调用；部分打开、正常 close 和 runner 重试清理只关闭同一 owner 一次。
+let activeOwner, closed = false;
+async function disposeOwner() {
+  if (closed) return;
+  closed = true;
+  const owner = activeOwner;
+  activeOwner = undefined;
+  await owner?.close();
+}
 export default {
+  sourceCheckout: checkout,
+  dispose: disposeOwner,
   async open(input) {
+    if (closed || activeOwner) throw new Error('driver cannot be reused after disposal');
+    if (typeof input.registerCleanup !== 'function' || typeof input.registerChild !== 'function') throw new Error('runner cleanup registry required');
+    input.registerCleanup(disposeOwner);
     await assertIsolated(input);
-    if (!['desktop-continuous','web-remote-replayable'].includes(input.delivery ?? process.argv[process.argv.indexOf('--delivery') + 1])) throw new Error('delivery mode required');
-    const delivery = input.delivery ?? process.argv[process.argv.indexOf('--delivery') + 1];
+    if (!['desktop-continuous','web-remote-replayable'].includes(input.delivery)) throw new Error('explicit delivery mode required');
+    if (input.sourceCheckout && await realpath(input.sourceCheckout) !== await realpath(checkout)) throw new Error('driver source checkout mismatch');
     const {stdout} = await exec('git',['rev-parse','HEAD'],{cwd:checkout,env:{PATH:process.env.PATH,HOME:input.isolation.home,GIT_CONFIG_GLOBAL:'/dev/null',GIT_CONFIG_NOSYSTEM:'1'}});
-    const owner = await createProductionBackend({...input,delivery});
+    const owner = await createProductionBackend(input);
+    activeOwner = owner;
     return {
       metadata:{productionCommit:stdout.trim(),driverVersion:'production-driver-1',paths:input.isolation},
       discover:args=>owner.discover(args),
@@ -209,7 +236,7 @@ export default {
       async reconnect() {return owner.reconnect();},
       async sample() {throw new Error('no real mounted browser paint sampler');},
       async facts() {throw new Error('no separate mounted Host/renderer process metrics or owner-derived UI cursor');},
-      async close() {await owner.close();},
+      async close() {await disposeOwner();},
     };
   },
 };
