@@ -10,7 +10,7 @@ import {
   type PlanState,
 } from "@zcode/shared/zcode-protocol-v4";
 import type { AgentEvent, LegacySessionSpec, SessionSpecV2 } from "@zcode/shared/agent-host";
-import { UsageAccounting } from "./usageAccounting.js";
+import { UsageAccounting } from "../agent-host/usageAccounting.js";
 
 const unavailable = { allowed: false as const, reasonCode: "externalHarnessUnsupported" };
 
