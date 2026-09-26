@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { createInterface } from "node:readline";
-import { mkdtemp, mkdir, rm, writeFile, readFile, access, readdir } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile, readFile, realpath, access, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -102,6 +102,7 @@ if (childMode) {
     api: "anthropic-messages",
     baseUrl: process.env.ZCODE_BOOT_FIXTURE_URL!,
     fetch: globalThis.fetch.bind(globalThis),
+    allowedToolNames: ["Read", "Write", "Bash"],
     notify: () => {},
   });
   const cwd = process.env.ZCODE_BOOT_FIXTURE_CWD!;
@@ -135,6 +136,9 @@ if (childMode) {
         output: process.stdout,
       },
       {
+        loggerFactory: createPrivateNoopLoggerFactory(),
+        fileSystemPort: effects.fileSystemPort,
+        executionPort: effects.executionPort,
         // 中文：仅测试子进程使用 IPC 栅栏停在真实 SQLite COMMIT 后、ACK 前；
         // 父进程 SIGKILL 后可证明丢 ACK 不会重复创建或首发，产品启动不安装此钩子。
         ...(process.env.ZCODE_BOOT_FIXTURE_CREATE_BARRIER === "1"
@@ -160,9 +164,6 @@ if (childMode) {
               },
             }
           : {}),
-        loggerFactory: createPrivateNoopLoggerFactory(),
-        fileSystemPort: effects.fileSystemPort,
-        executionPort: effects.executionPort,
         modelAdapter: new AiSdkModelAdapter({
           env: {},
           retry: { maxAttempts: 1 },
@@ -191,7 +192,8 @@ if (childMode) {
     "native V4 matrix uses real Registry/Model: Read, denied/allowed Write, Bash and post-terminal fresh Read",
     { timeout: 40000 },
     async () => {
-      const root = await mkdtemp(join(tmpdir(), "native-boot-v4-"));
+      // 修复：macOS /var 是 /private/var 链接；已知 fixture 的脚本须在 canonical cwd 中验证。
+      const root = await realpath(await mkdtemp(join(tmpdir(), "native-boot-v4-")));
       const cwd = join(root, "worktree");
       await mkdir(cwd);
       const fixturePath = join(cwd, "input.txt");
@@ -200,7 +202,7 @@ if (childMode) {
       const bashPath = join(cwd, "bash-effect.txt");
       await writeFile(
         join(cwd, "verify.cjs"),
-        "require('node:fs').writeFileSync('bash-effect.txt', 'bash-verified'); console.log('exit=0')\n",
+        "require('node:fs').writeFileSync('bash-effect.txt', 'bash-verified|' + process.execPath); console.log('exit=0')\n",
       );
       const bashCommand = "node verify.cjs";
       const changedContent = "seed=amber-unknown-until-turn-three";
@@ -236,7 +238,7 @@ if (childMode) {
             : 0;
         const step = routeCounts[turn]++;
         if (turn === 2 && step > 0) sawCurrentRead = body.includes(Buffer.from(changedContent));
-        if (turn === 0 && step === 4) {
+        if (turn === 1 && step === 2) {
           const decoded = body.toString();
           const containsExactCommand = (value: unknown): boolean =>
             typeof value === "string"
@@ -248,13 +250,13 @@ if (childMode) {
                   : false;
           bashResultSeen = decoded.includes("exit=0") && containsExactCommand(JSON.parse(decoded));
         }
-        const tools: Array<{ name: string; input: object }> = [
+        const tool = turn === 0 ? [
           { name: "Read", input: { file_path: fixturePath } },
           { name: "Write", input: { file_path: writePath, content: "allowed-write-content" } },
+        ][step] : turn === 1 ? [
           { name: "Write", input: { file_path: writePath, content: "allowed-write-content" } },
           { name: "Bash", input: { command: bashCommand } },
-        ];
-        const tool = turn === 0 ? tools[step] : step === 0 ? tools[0] : undefined;
+        ][step] : step === 0 ? { name: "Read", input: { file_path: fixturePath } } : undefined;
         if (turn === 2 && !tool) finalAnswerSent = sawCurrentRead;
         const event = (type: string, data: object) =>
           `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`;
@@ -364,7 +366,7 @@ if (childMode) {
             if (decision === "deny" && toolName !== "Write")
               throw new Error("unapproved tool input");
             if (toolName === "Write") {
-              if (deniedWrites === 0) {
+              if (currentTurn === 1) {
                 await assert.rejects(access(writePath));
                 deniedWrites++;
                 assert.equal(decision, "deny");
@@ -499,15 +501,18 @@ if (childMode) {
             if (terminalTimeout) clearTimeout(terminalTimeout);
           }
           assert.ok(
-            routeCounts[turn - 1]! >= (turn === 1 ? 5 : 2),
+            routeCounts[turn - 1]! >= (turn === 3 ? 2 : 3),
             `terminal did not follow this turn's Model continuation: turn=${turn}`,
           );
           if (turn === 1) {
             assert.equal(deniedWrites, 1);
+            await assert.rejects(access(writePath));
+          }
+          if (turn === 2) {
             assert.equal(allowedWrites, 1);
             assert.equal(bashApprovals, 1);
             assert.equal(await readFile(writePath, "utf8"), "allowed-write-content");
-            assert.equal(await readFile(bashPath, "utf8"), "bash-verified");
+            assert.equal(await readFile(bashPath, "utf8"), `bash-verified|${process.execPath}`);
           }
           // 外部变更只能发生在第二轮真实 terminal 之后，不能由旧聚合上下文冒充。
           if (turn === 2) await writeFile(fixturePath, changedContent);
@@ -527,8 +532,8 @@ if (childMode) {
           true,
           "Bash command/result must be present in model continuation",
         );
-        assert.ok(routeCounts[0] >= 5 && routeCounts[0] <= 6);
-        assert.deepEqual(routeCounts.slice(1), [2, 2]);
+        assert.ok(routeCounts[0] >= 3 && routeCounts[0] <= 4);
+        assert.deepEqual(routeCounts.slice(1), [3, 2]);
         assert.ok(requests <= 12, `fake native route exceeded request budget: ${requests}`);
         console.log(
           `native-fake-proof: upstreamHttpRequests=${requests} modelCallCounter=observed readTools=3 deniedWrites=${deniedWrites} allowedWrites=${allowedWrites} bashApprovals=${bashApprovals} terminalTurns=3 currentRead=true finalAnswer=true paidUsage=none`,

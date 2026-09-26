@@ -191,6 +191,12 @@ export interface ZCodeAppOptions {
   workspaceHookTrustEnabled?: boolean;
   /** Presence means this owner Host supports the dedicated Workspace Hook review route. */
   workspaceHookReviewHost?: WorkspaceHookReviewHostContext;
+  /**
+   * 可信私有装配标记：runtimeConfig.toolAllowlist 只收窄工具注册面，
+   * 不投影到 permission.allowedTools（那会静默预批准 Write/Bash）。
+   * 普通产品启动不得设置；工作区/项目文件也不能填充此字段。
+   */
+  privateToolRegistrationOnly?: boolean;
 }
 
 export interface SubmitPromptOptionsBase {

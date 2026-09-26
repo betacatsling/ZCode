@@ -14,7 +14,8 @@ export function createConfigCliOverrides(options: ZCodeAppOptions): RuntimeConfi
   if (options.runtimeConfig?.mode) {
     permission.mode = options.runtimeConfig.mode;
   }
-  if (options.runtimeConfig?.toolAllowlist) {
+  // 修复：私有 runner 的注册清单不是权限免审批清单，否则 Write/Bash 绕过 broker。
+  if (options.runtimeConfig?.toolAllowlist && !options.privateToolRegistrationOnly) {
     permission.allowedTools = [...options.runtimeConfig.toolAllowlist];
   }
   if (options.runtimeConfig?.toolDisallowlist) {

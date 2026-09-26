@@ -66,10 +66,8 @@ test("existing filesystem/execution adapters deny out-of-scope Read, Write and B
       ports.fileSystemPort.readTextFileRange({ path: readPath }),
       /scope denied/,
     );
-    await assert.rejects(
-      ports.fileSystemPort.writeTextFile({ path: writePath, content: "approved" }),
-      /scope denied/,
-    );
+    await ports.fileSystemPort.writeTextFile({ path: writePath, content: "approved" });
+    assert.equal(await readFile(writePath, "utf8"), "approved");
     ports.setPhase(3);
     assert.equal(
       (await ports.fileSystemPort.readTextFileRange({ path: readPath })).content.trim(),

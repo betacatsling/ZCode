@@ -17,11 +17,12 @@ import type {
   ModelStatusSink,
   ModelStreamEvent,
   ModelTextResult,
+  ModelUsage,
+  ModelInvocationContext,
 } from "@zcode/contracts";
 import type { RegistryModelConfig, RegistryProviderConfig } from "@zcode/provider";
 import {
   AiSdkModelExecution,
-  type AiSdkResolvedModel,
   type AiSdkNetworkConfig,
   type AiSdkModelExecutionConfig,
   type EnvRecord,
@@ -34,7 +35,12 @@ import {
 import { DEFAULT_MODEL_STREAM_IDLE_TIMEOUT_MS } from "./stream-idle-timeout.js";
 import { runGenerateText } from "./runner-generate.js";
 import { runStreamText } from "./runner-stream.js";
-import { normalizeReasoningHistory } from "./reasoning-history-normalization.js";
+import {
+  assertSameBoundModel,
+  hasRequestAuth,
+  projectRequestHistory,
+  requireMaxOutputTokens,
+} from "./runner-request-support.js";
 import {
   defaultRuntime,
   type AiSdkModelRuntime,
@@ -68,6 +74,14 @@ export interface AiSdkModelAdapterOptions {
   transport?: typeof globalThis.fetch;
   /** 仅可信 Node 装配：Model executor 调用（与 HTTP attempts 分开计数）。 */
   onModelCall?: (kind: "generate" | "stream", providerId: string, modelId: string) => void;
+  /** Trusted Node-only diagnostic: existing Model result/finish, never request content. */
+  onModelObservation?: (event: {
+    callId: number;
+    kind: "generate" | "stream";
+    phase: "start" | "finish" | "error";
+    context: ModelInvocationContext | undefined;
+    usage?: ModelUsage;
+  }) => void;
   streamIdleTimeoutMs?: number;
   modelIoFullRetentionEnabled?: boolean;
 }
@@ -90,6 +104,8 @@ export class AiSdkModelAdapter {
   private readonly logger?: Logger;
   private readonly retry: ResolvedAiSdkModelRetryOptions;
   private readonly onModelCall?: AiSdkModelAdapterOptions["onModelCall"];
+  private readonly onModelObservation?: AiSdkModelAdapterOptions["onModelObservation"];
+  private nextObservationId = 0;
   private statusSink?: ModelStatusSink;
   private readonly streamIdleTimeoutMs: number;
   private modelIoFullRetentionEnabled: boolean;
@@ -112,6 +128,7 @@ export class AiSdkModelAdapter {
     this.logger = options.logger;
     this.retry = resolveAiSdkModelRetryOptions(options.retry, this.env);
     this.onModelCall = options.onModelCall;
+    this.onModelObservation = options.onModelObservation;
     this.statusSink = options.statusSink;
     this.streamIdleTimeoutMs = options.streamIdleTimeoutMs ?? DEFAULT_MODEL_STREAM_IDLE_TIMEOUT_MS;
     this.modelIoFullRetentionEnabled = options.modelIoFullRetentionEnabled ?? false;
@@ -293,21 +310,48 @@ export class AiSdkModelAdapter {
       executor: {
         generateText: (request) => {
           this.onModelCall?.("generate", options.providerId, options.modelId);
+          const context = getCurrentModelInvocationContext();
+          const callId = ++this.nextObservationId;
+          this.onModelObservation?.({ callId, kind: "generate", phase: "start", context });
           const legacyRequest = toLegacyRequest(request);
           return this.generateTextWithResolved(
             legacyRequest,
             resolved,
             resolveForRequest(legacyRequest, request.options),
-          );
+          ).then((result) => {
+            this.onModelObservation?.({ callId, kind: "generate", phase: "finish", context, usage: result.usage });
+            return result;
+          }, (error: unknown) => {
+            this.onModelObservation?.({ callId, kind: "generate", phase: "error", context });
+            throw error;
+          });
         },
         streamText: (request) => {
           this.onModelCall?.("stream", options.providerId, options.modelId);
+          const context = getCurrentModelInvocationContext();
+          const callId = ++this.nextObservationId;
+          this.onModelObservation?.({ callId, kind: "stream", phase: "start", context });
           const legacyRequest = toLegacyRequest(request);
-          return this.streamTextWithResolved(
+          const source = this.streamTextWithResolved(
             legacyRequest,
             resolved,
             resolveForRequest(legacyRequest, request.options),
           );
+          const observer = this.onModelObservation;
+          return (async function* () {
+            let finished = false;
+            try {
+              for await (const event of source) {
+                if (event.type === "finish") {
+                  finished = true;
+                  observer?.({ callId, kind: "stream", phase: "finish", context, usage: event.usage });
+                }
+                yield event;
+              }
+            } finally {
+              if (!finished) observer?.({ callId, kind: "stream", phase: "error", context });
+            }
+          })();
         },
       },
     });
@@ -355,45 +399,4 @@ export class AiSdkModelAdapter {
   }
 }
 
-function requireMaxOutputTokens(options: ModelOptions): number {
-  if (options.maxOutputTokens === undefined) {
-    throw new ModelProtocolError(
-      ModelErrorCode.InvalidModelRequest,
-      "maxOutputTokens requires an explicit request value",
-    );
-  }
-  return options.maxOutputTokens;
-}
 
-function hasRequestAuth(
-  requestAuth: ModelRequestAuth | undefined,
-): requestAuth is ModelRequestAuth {
-  if (requestAuth?.apiKey?.trim()) return true;
-  return Object.values(requestAuth?.headers ?? {}).some((value) => value.trim().length > 0);
-}
-
-function assertSameBoundModel(
-  bound: ResolvedAiSdkModel,
-  refreshed: AiSdkResolvedModel,
-): AiSdkResolvedModel {
-  if (bound.providerId !== refreshed.providerId || bound.modelId !== refreshed.modelId) {
-    throw new Error("Runtime header refresh changed the bound model identity.");
-  }
-  return refreshed;
-}
-
-function projectRequestHistory(
-  request: AiSdkModelTextRequest,
-  resolved: ResolvedAiSdkModel,
-): AiSdkModelTextRequest {
-  if (resolved.providerKind !== "anthropic") return request;
-
-  // 结构归一化过去位于每次物理请求都会经过的 serializer，签名修复重试
-  // 因而会再次删除上一轮刚补出的 assistant 占位并合并 user。逻辑请求入口只投影一次，
-  // 后续 attempt 只能复用或从这份 request-local history 派生。
-  const messages = normalizeReasoningHistory(request.messages, {
-    providerId: resolved.providerId,
-    modelId: resolved.modelId,
-  });
-  return messages === request.messages ? request : { ...request, messages };
-}

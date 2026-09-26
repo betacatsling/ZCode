@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   matchingFinalAnswer,
+  matchingTool,
   matchingTerminal,
   nativeEvidenceRows,
   permittedFixtureAction,
@@ -64,6 +65,14 @@ test("ACK, stale terminal, wrong session and control-only phase cannot complete 
   );
 });
 
+test("tool proof requires current turn + exact input + successful result, not an old row or answer-only", () => {
+  const read = { kind: "toolCall", turnId: "old", toolName: "Read", status: "success", input: { file_path: "input" }, output: { text: "new-nonce" } };
+  assert.equal(matchingTool([read], "new", "Read", { file_path: "input" }, (output) => JSON.stringify(output).includes("new-nonce")), false);
+  assert.equal(matchingTool([{ ...read, turnId: "new", input: { file_path: "wrong" } }], "new", "Read", { file_path: "input" }), false);
+  assert.equal(matchingTool([{ ...read, turnId: "new", status: "error" }], "new", "Read", { file_path: "input" }), false);
+  assert.equal(matchingTool([{ ...read, turnId: "new" }], "new", "Read", { file_path: "input" }, (output) => JSON.stringify(output).includes("new-nonce")), true);
+});
+
 test("permission gate requires exact params, scope and phase, not tool name", () => {
   const base = {
     toolName: "Bash",
@@ -73,8 +82,8 @@ test("permission gate requires exact params, scope and phase, not tool name", ()
     writePath: "output",
     writeContent: "exact",
     bashCommand: "node verify.cjs",
-    phase: 1,
-    deniedWrites: 0,
+    phase: 2,
+    deniedWrites: 1,
   };
   assert.equal(permittedFixtureAction(base), "allow");
   assert.equal(
@@ -93,7 +102,7 @@ test("permission gate requires exact params, scope and phase, not tool name", ()
     permittedFixtureAction({ ...base, params: { command: "node verify.cjs", cwd: "/tmp" } }),
     "deny",
   );
-  assert.equal(permittedFixtureAction({ ...base, phase: 2 }), "deny");
+  assert.equal(permittedFixtureAction({ ...base, phase: 1 }), "deny");
   assert.equal(
     permittedFixtureAction({
       ...base,
@@ -106,17 +115,13 @@ test("permission gate requires exact params, scope and phase, not tool name", ()
     permittedFixtureAction({
       ...base,
       toolName: "Write",
+      phase: 1,
       params: { file_path: "output", content: "exact" },
     }),
     "deny",
   );
   assert.equal(
-    permittedFixtureAction({
-      ...base,
-      toolName: "Write",
-      deniedWrites: 1,
-      params: { file_path: "output", content: "exact" },
-    }),
+    permittedFixtureAction({ ...base, toolName: "Write", params: { file_path: "output", content: "exact" } }),
     "allow",
   );
 });
