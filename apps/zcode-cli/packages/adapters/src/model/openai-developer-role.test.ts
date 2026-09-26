@@ -273,6 +273,20 @@ test("SDK instruction body tampering, extra instruction, and missing instruction
       (error: { code?: string }) => error.code === ModelErrorCode.InvalidModelRequest,
     );
   }
+  // 顶层 instructions 字段与多 system 计划冲突时必须在发 HTTP 前拒绝，不能让 SDK 偷偷改指令通道。
+  await assert.rejects(
+    guarded("http://127.0.0.1/", {
+      method: "POST",
+      body: JSON.stringify({
+        instructions: "unexpected",
+        input: [
+          { role: "system", content: "synthetic instruction 0" },
+          { role: "system", content: "synthetic instruction 1" },
+        ],
+      }),
+    }),
+    (error: { code?: string }) => error.code === ModelErrorCode.InvalidModelRequest,
+  );
   assert.equal(sent, 0);
 });
 
