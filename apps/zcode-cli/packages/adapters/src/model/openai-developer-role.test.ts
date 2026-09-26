@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { once } from "node:events";
 import { test } from "node:test";
-// Ajv 8.x 是纯 CommonJS：运行时仅暴露 default（即 module.exports），不存在具名 Ajv 导出；
-// NodeNext 下用默认导入才能同时被 tsc（esModuleInterop）与真实 ESM 运行时正确解析。
-import Ajv from "ajv";
+// Ajv 8.x 是纯 CommonJS：运行时 module.exports 既是 Ajv 类本身、又挂了 .Ajv/.default 属性；
+// NodeNext 下默认导入在类型空间得到的是整个 CJS 模块命名空间（没有构造签名），
+// 具名导入 { Ajv } 同时被 tsc 与真实 ESM 运行时（cjs-module-lexer 静态导出）正确解析。
+import { Ajv } from "ajv";
 import {
   ModelErrorCode,
   modelInputMessageJsonSchema,
