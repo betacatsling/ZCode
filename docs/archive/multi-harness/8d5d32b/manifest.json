@@ -1,0 +1,215 @@
+{
+  "sourceCommit": "8d5d32b3bee0242a3f68ed2b79b4796fe0bd1bb6",
+  "entries": [
+    {
+      "originalPath": "docs/agent-host/ACCEPTANCE.md",
+      "archivePath": "docs/archive/multi-harness/8d5d32b/docs/agent-host/ACCEPTANCE.md",
+      "action": "snapshot-before-rewrite",
+      "sha256": "9b8d22c7c61ea59b047911371fdb3499f2abccdb5dcde6946a2ccac0e46c46ca"
+    },
+    {
+      "originalPath": "docs/agent-host/BASELINE.md",
+      "archivePath": "docs/archive/multi-harness/8d5d32b/docs/agent-host/BASELINE.md",
+      "action": "snapshot-before-rewrite",
+      "sha256": "2685038257cebc3dc23d8bed72f772be0c35bb8655c3a57959316c8c7cf2eff4"
+    },
+    {
+      "originalPath": "docs/agent-host/INTEGRATION-ASSEMBLY.md",
+      "archivePath": "docs/archive/multi-harness/8d5d32b/docs/agent-host/INTEGRATION-ASSEMBLY.md",
+      "action": "snapshot-before-rewrite",
+      "sha256": "5d4c1257755d47de686207f656e55bbfe5d854f55907bdfd60c110c134af08f2"
+    },
+    {
+      "originalPath": "docs/agent-host/E2E.md",
+      "archivePath": "docs/archive/multi-harness/8d5d32b/docs/agent-host/E2E.md",
+      "action": "snapshot-before-rewrite",
+      "sha256": "63865c09b197fbc11e841bb10cbc232d11476fa1247a94fbde5b43ba72fa3f50"
+    },
+    {
+      "originalPath": "docs/agent-host/UI-SESSION-MOUNT.md",
+      "archivePath": "docs/archive/multi-harness/8d5d32b/docs/agent-host/UI-SESSION-MOUNT.md",
+      "action": "snapshot-before-rewrite",
+      "sha256": "9f62380830f609b76d2f66a79b4bf038f4c67e001da45f5e476ecfd33ca69f70"
+    },
+    {
+      "originalPath": "docs/agent-host/LIVE-MATRIX-LOCAL.md",
+      "archivePath": "docs/archive/multi-harness/8d5d32b/docs/agent-host/LIVE-MATRIX-LOCAL.md",
+      "action": "snapshot-before-rewrite",
+      "sha256": "19c979592e69dee2fc4146b1b25ca69610d363d9227bf70dd615605a162aa39f"
+    },
+    {
+      "originalPath": "docs/agent-host/LIVE-MATRIX-REMOTE.md",
+      "archivePath": "docs/archive/multi-harness/8d5d32b/docs/agent-host/LIVE-MATRIX-REMOTE.md",
+      "action": "snapshot-before-rewrite",
+      "sha256": "97815bd231429a32b6ebef81c8699a1afbd819f8d483191a965b43e5ec4b96fb"
+    },
+    {
+      "originalPath": "docs/agent-host/LOAD-VALIDATION.md",
+      "archivePath": "docs/archive/multi-harness/8d5d32b/docs/agent-host/LOAD-VALIDATION.md",
+      "action": "snapshot-before-rewrite",
+      "sha256": "7862a5b10cc1d87630bd6b5a4c41a29c4c0d1d42d452442d51a55d03d9c867a8"
+    },
+    {
+      "originalPath": "docs/native-create/CORE-JOIN.md",
+      "archivePath": "docs/archive/multi-harness/8d5d32b/docs/native-create/CORE-JOIN.md",
+      "action": "snapshot-before-rewrite",
+      "sha256": "52083ffc8355649f3ad096b38f310a153ff6ba4283409632a721646b2e2023d2"
+    },
+    {
+      "originalPath": "docs/native-create/LEGACY-SESSION-REGRESSION.md",
+      "archivePath": "docs/archive/multi-harness/8d5d32b/docs/native-create/LEGACY-SESSION-REGRESSION.md",
+      "action": "snapshot-before-rewrite",
+      "sha256": "8366f5afce99aab0bae67659b68bd0ba232ddda3e7a498cc196facc848778f8b"
+    },
+    {
+      "originalPath": ".tmp/MICRO-actual-shell-mount.md",
+      "archivePath": "docs/archive/multi-harness/8d5d32b/.tmp/MICRO-actual-shell-mount.md",
+      "action": "moved",
+      "sha256": "d44db85195940360bc3ddd1a36b522d42bee6c25ddd1866a547361bf5efbb8f9"
+    },
+    {
+      "originalPath": ".tmp/MICRO-convergence-assembly.md",
+      "archivePath": "docs/archive/multi-harness/8d5d32b/.tmp/MICRO-convergence-assembly.md",
+      "action": "moved",
+      "sha256": "90fef62618cf0b0c6c25c9c92528d6470903731e36402961c90e6c0feb38d4fc"
+    },
+    {
+      "originalPath": ".tmp/MICRO-core-ingress-authority.md",
+      "archivePath": "docs/archive/multi-harness/8d5d32b/.tmp/MICRO-core-ingress-authority.md",
+      "action": "moved",
+      "sha256": "5598324daaf5021cbfa5a5bd2a5aa938c46857a8e764bb65e6b376a548538361"
+    },
+    {
+      "originalPath": ".tmp/MICRO-core-native-join.md",
+      "archivePath": "docs/archive/multi-harness/8d5d32b/.tmp/MICRO-core-native-join.md",
+      "action": "moved",
+      "sha256": "12dc3e73ad52c0e699daf911e9cd89b423e76ebdccb026b288326c81094637e9"
+    },
+    {
+      "originalPath": ".tmp/MICRO-core-native-mount.md",
+      "archivePath": "docs/archive/multi-harness/8d5d32b/.tmp/MICRO-core-native-mount.md",
+      "action": "moved",
+      "sha256": "389d75d65c4f3908263cc48ffbe5709e12bf6087bd38d0deadca3b936bbd9286"
+    },
+    {
+      "originalPath": ".tmp/MICRO-integration-ready.md",
+      "archivePath": "docs/archive/multi-harness/8d5d32b/.tmp/MICRO-integration-ready.md",
+      "action": "moved",
+      "sha256": "20c5e185bd7b026f68ed0baac0b6a0e55c88e309e54b3068693a0aab0876e0d1"
+    },
+    {
+      "originalPath": ".tmp/MICRO-native-create-receipt.md",
+      "archivePath": "docs/archive/multi-harness/8d5d32b/.tmp/MICRO-native-create-receipt.md",
+      "action": "moved",
+      "sha256": "e0076e4e8eb3451e1865931ee38318b017b847fefbc62f351166a965455b3488"
+    },
+    {
+      "originalPath": ".tmp/MICRO-native-factory-boundaries.md",
+      "archivePath": "docs/archive/multi-harness/8d5d32b/.tmp/MICRO-native-factory-boundaries.md",
+      "action": "moved",
+      "sha256": "1166e3e60284f2afc722127bcda833c0dfc7758be38e69df026bd008f28748c3"
+    },
+    {
+      "originalPath": ".tmp/MICRO-native-private-runner.md",
+      "archivePath": "docs/archive/multi-harness/8d5d32b/.tmp/MICRO-native-private-runner.md",
+      "action": "moved",
+      "sha256": "bad4508289fd41863b9a00f5c04283092c5c2404441ec5ac2c155f2860841b18"
+    },
+    {
+      "originalPath": ".tmp/MICRO-product-shell-join.md",
+      "archivePath": "docs/archive/multi-harness/8d5d32b/.tmp/MICRO-product-shell-join.md",
+      "action": "moved",
+      "sha256": "305eea0c3a1051d685a8cc655bc5391c6fd64cae2d9b3ccd300894c83e032d62"
+    },
+    {
+      "originalPath": ".tmp/MICRO-protocol-final.md",
+      "archivePath": "docs/archive/multi-harness/8d5d32b/.tmp/MICRO-protocol-final.md",
+      "action": "moved",
+      "sha256": "e4a21c3bb5d4172ed498e1cf59eeb4e4e8b60d6a0a525d965071a832fd22cf0a"
+    },
+    {
+      "originalPath": ".tmp/MICRO-protocol-v2-closure.md",
+      "archivePath": "docs/archive/multi-harness/8d5d32b/.tmp/MICRO-protocol-v2-closure.md",
+      "action": "moved",
+      "sha256": "3404a50a93a6f24b51e845a7a201eab48eab48a87480e7c239464d321f39b01f"
+    },
+    {
+      "originalPath": ".tmp/MICRO-sol-resume-codex.md",
+      "archivePath": "docs/archive/multi-harness/8d5d32b/.tmp/MICRO-sol-resume-codex.md",
+      "action": "moved",
+      "sha256": "9934ed866d0944616952b6260519bfd6e0c65d496595eb71ff88ae9f375caeb4"
+    },
+    {
+      "originalPath": ".tmp/MICRO-sol-resume-integration.md",
+      "archivePath": "docs/archive/multi-harness/8d5d32b/.tmp/MICRO-sol-resume-integration.md",
+      "action": "moved",
+      "sha256": "e28777d8b232c4ec3888a3e9d2c3dd3729d775bd4ca681f5ad45e93bf7e297d6"
+    },
+    {
+      "originalPath": ".tmp/MICRO-sol-resume-legacy.md",
+      "archivePath": "docs/archive/multi-harness/8d5d32b/.tmp/MICRO-sol-resume-legacy.md",
+      "action": "moved",
+      "sha256": "796c6140c8999492b436cc1b90f0db95b01177034daafbab29f094c25bd66a14"
+    },
+    {
+      "originalPath": ".tmp/MICRO-ui-convergence.md",
+      "archivePath": "docs/archive/multi-harness/8d5d32b/.tmp/MICRO-ui-convergence.md",
+      "action": "moved",
+      "sha256": "81f682bf3ddbec8320ad13d2a866a98da5c023f4f8b0d24cd20283ac92945469"
+    },
+    {
+      "originalPath": ".tmp/MICRO-ui-product.md",
+      "archivePath": "docs/archive/multi-harness/8d5d32b/.tmp/MICRO-ui-product.md",
+      "action": "moved",
+      "sha256": "6b6cb5df5443293f5ea08ddb13a37aa5067bca7ba3d18f63a35ea5ef90b6db2f"
+    },
+    {
+      "originalPath": ".tmp/REVIEW-actual-shell-mount-1.md",
+      "archivePath": "docs/archive/multi-harness/8d5d32b/.tmp/REVIEW-actual-shell-mount-1.md",
+      "action": "moved",
+      "sha256": "aac629427d75e87726e88bd123b514080f6b30bf945500788163ae20b0c8df54"
+    },
+    {
+      "originalPath": ".tmp/REVIEW-core-native-mount-1.md",
+      "archivePath": "docs/archive/multi-harness/8d5d32b/.tmp/REVIEW-core-native-mount-1.md",
+      "action": "moved",
+      "sha256": "2136c1f7f1c0e82c4ebaa1041ee5a23513929105795d3f52e3e88aced09c449e"
+    },
+    {
+      "originalPath": ".tmp/REVIEW-product-shell-join-1.md",
+      "archivePath": "docs/archive/multi-harness/8d5d32b/.tmp/REVIEW-product-shell-join-1.md",
+      "action": "moved",
+      "sha256": "4a699336d240a9910c442e9320cb14f319c32fe2726cc246f5c2835cc7bdf243"
+    },
+    {
+      "originalPath": ".tmp/REVIEW-product-shell-join-2.md",
+      "archivePath": "docs/archive/multi-harness/8d5d32b/.tmp/REVIEW-product-shell-join-2.md",
+      "action": "moved",
+      "sha256": "2482a4fbbf01dc5b265f681abc1e0028f0245f6f77ea88393e45339778a427ab"
+    },
+    {
+      "originalPath": ".tmp/interface-handoff-core-native-join.md",
+      "archivePath": "docs/archive/multi-harness/8d5d32b/.tmp/interface-handoff-core-native-join.md",
+      "action": "moved",
+      "sha256": "41df536f30ff6c0b13600467e32aa747f2b6addfa80509be9cf62ebf84d261b3"
+    },
+    {
+      "originalPath": ".tmp/interface-handoff.md",
+      "archivePath": "docs/archive/multi-harness/8d5d32b/.tmp/interface-handoff.md",
+      "action": "moved",
+      "sha256": "8e788a797d67969a6fea0dc80afbdae35e3160a3887e462d86871b41e7ed53f3"
+    },
+    {
+      "originalPath": ".tmp/sup-compat/core-boot-5a847fc.patch",
+      "archivePath": "docs/archive/multi-harness/8d5d32b/.tmp/sup-compat/core-boot-5a847fc.patch",
+      "action": "moved",
+      "sha256": "76a63fee5006cf3bb73148540318309051387ae2fd3f2b3a36e15eb5c2be6942"
+    },
+    {
+      "originalPath": ".tmp/sup-compat/core-boot-b4de52e.patch",
+      "archivePath": "docs/archive/multi-harness/8d5d32b/.tmp/sup-compat/core-boot-b4de52e.patch",
+      "action": "moved",
+      "sha256": "a0614ba5750fb08f42a286ca16ae2adb4a13abe9b316d25154cfb0b851d60663"
+    }
+  ]
+}

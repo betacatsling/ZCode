@@ -1,7 +1,5 @@
 # Server1 live matrix — target-local component gate
 
-This document preserves a **historical fixed two-model runner contract and observation**, not the current feature/packaging inventory. Its exact `anthropic-messages` requirement applies to that fixture; it does not prove StepFun cannot use a separately certified protocol. Do not silently override the target profile. Current requested model scope, authorization and remaining deployment gates are in [ACCEPTANCE](ACCEPTANCE.md), current SSH/resource inventory in [BASELINE](BASELINE.md), and remote execution policy in [REMOTE-EXECUTION](REMOTE-EXECUTION.md). The old missing-composition/native-injection statements must not be reused as current source blockers.
-
 Scope: SERVER1 only, Linux x64, disposable fixture. This lane does not own product code, service registration, GUI, user profiles, or the existing server deployment. It must not infer a packaged persistent Core from a source runner or copied distribution. Plan authority: `ZCode_Multi_Harness_Refactor_Plan_v0.3_Orca_Hierarchy.md` §§3, 6 P3/P4, 9–10, 13; local precedent: `LIVE-PI-V2.md`.
 
 ## Contract before test
@@ -23,7 +21,7 @@ Scope: SERVER1 only, Linux x64, disposable fixture. This lane does not own produ
 
 At `25f459d` this worktree has no `node_modules` and no built `packages/services/dist` or bootstrap dist. The source `packages/services/src/node.ts` still has an unfulfilled `WorkspaceAdmissionPort` wiring typecheck blocker. Thus shipping only this checkout over SSH would not create a real runnable target-local public Host/V4/native route. This gate must be resolved by the runtime-mount and service-composition owners rather than a private one-off HTTP client or a second fake executor. The existing local StepFun Pi success (`LIVE-PI-V2.md`: 8 Model calls, 3 approvals, 3 turns) is **local only** and is not repeated or counted as remote.
 
-## Historical server1 execution / blocker (at the earlier source checkpoint)
+## Actual server1 execution / blocker
 
 Read-only SSH inventory: Linux x64, system Node v20.19.2; target-owned profile exists. The preflight inspected only **in-memory** API type, credential/endpoint presence flags and exact model membership. `axonhub/deepseek-v4-flash` is present with `anthropic-messages`; `stepfun/step-3.5-flash` exists with credentials and endpoint but its **provider API is `openai-completions`, not the required `anthropic-messages`**. This conflicts with the earlier parent metadata assertion; do not edit or override that profile and do not use its alternate API as an implicit authorization. Phase `target-profile-api-mismatch`; model requests **0**, remote certified pairs **0**, file effects **0**. This is an actual target observation, not a request to migrate secrets.
 

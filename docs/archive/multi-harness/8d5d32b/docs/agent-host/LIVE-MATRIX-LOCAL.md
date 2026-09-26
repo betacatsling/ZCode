@@ -1,7 +1,5 @@
 # Local live harness × model matrix (source-level evidence only)
 
-Current-status correction (`8d5d32b`): the historical native bootstrap blocker below is superseded in source. `NativeProtocolBootstrapDependencies.startProviderRegistryRuntime` now provides the trusted in-process Registry seam. The old live fixture/results are not current Native certification; update/re-run through tasks M-02/M-04 rather than invent another Registry. The old typecheck missing-admission failure is also historical; current check results are in [BASELINE](BASELINE.md). Provider/model scope and the 100-call shared ceiling are defined in [ACCEPTANCE](ACCEPTANCE.md).
-
 Scope: gated, account-consuming local test of **native ZCode V4 runtime** and **Pi SDK harness** against exactly `stepfun/step-3.5-flash` and `axonhub/deepseek-v4-flash` (both `anthropic-messages`). No product GUI, packaged lifetime, or SSH claims. Reference: local Pi StepFun `LIVE-PI-V2.md` at `8e98119` (three turns, eight Model calls, three approvals); do not repeat solely to complete a table.
 
 ## Ownership and boundaries
@@ -24,7 +22,7 @@ For each required pair: bounded purposeful deny→approve native file/read/bash/
 
 Do not call P3/P4 complete from these component checks: GUI mounting, persistent packaged lifecycle, local+SSH eight combinations, disconnect/reconnect, concurrency, 8-hour load and user interaction are separate gates. Source version, Node, SDK and measured route/usage belong in the redacted report.
 
-## Historical redacted result (source `25f459d`, NOT current source status; pinned Node 24.14.0 / pnpm 10.33.2 / Pi SDK 0.87.1)
+## Redacted local result (source `25f459d`, pinned Node 24.14.0 / pnpm 10.33.2 / Pi SDK 0.87.1)
 
 - **Pi × axonhub/deepseek-v4-flash**, API `anthropic-messages`: one authorized local live execution passed, ~32 s; seven actual existing `AiSdkModelAdapter.streamText` calls; three finished turns and three approval requests. The first write was denied, `denied.txt` absent; a subsequent approved write yielded `output.txt` with the expected seed; `read`, `write`, `bash` each reported success, the test command confirmed the file, and a follow-up read returned the seed. A reply after termination was rejected. Cleanup removed only the disposable fixture. Token usage was **not captured** by this run; call count is the measured proxy count, not an upstream billing receipt. Active-turn cancellation and cross-epoch rejection were **not** tested. No unchanged paid retry.
 - **Pi × stepfun/step-3.5-flash**, API `anthropic-messages`: prior successful local evidence in `docs/agent-host/LIVE-PI-V2.md`, implementation/evidence commit `8e98119` (eight Model calls, three approvals, three finished turns). Reused, not rerun.

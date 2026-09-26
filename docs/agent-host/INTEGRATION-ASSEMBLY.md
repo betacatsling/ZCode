@@ -1,17 +1,49 @@
-# Multi-harness integration assembly (checkpoint)
+# 整合基线与分支处置
 
-This checkpoint combines the accepted component sources without mounting the new hierarchy or changing native V4 routing. `@zcode/shared/agent-host` and `@zcode/shared/project-workspaces` remain the wire/type boundaries. The browser-safe `@zcode/services` entrypoint exposes only service contracts; the Node-only entrypoint exposes concrete target/catalog, gateway and transport classes for later composition. `@zcode/ui` exposes the already-tested presentation components and scoped V4 facade for a later host-backed mount. The sidebar asset resolver returns a trusted PNG descriptor for Harness icons or a same-origin string for Project icons; only the Project icon path can accept the latter, and both paths validate before rendering. The server-side harness asset resolver is Node-only, asynchronous, and never turns an untrusted asset ID into a filesystem path. None of these exports installs a second owner or starts an agent.
+## 本轮交付范围
 
-The profile catalog remains the only writer of presentation metadata, the target worktree service the only writer of Git/generation facts, and the target Host the only writer of accepted external commands. The native V4 owner is unchanged. Composition must supply a real `WorkspaceAdmissionPort`; a missing target authority must fail closed, not authorize a path-based fallback. Gateway tokens must be issued asynchronously against the selected prepared model; use synthetic fixtures until an explicitly authorized live lane is assigned.
+先整合已有成果、清理状态文档和定位真实 gap；不继续增加功能，不启用未认证 Harness，不调用付费模型，不部署/重启现有 SSH 服务。
+
+- 原工作目录：`main@438c257`，已有未提交改动保留。
+- 已有汇总：`goal/5be7ed74-convergence-assembly@8d5d32b`，相对 main 多 309 个提交（含合并/文档，不是 309 个已验收功能）。
+- 本轮候选：`work/multi-harness-completion`，目录 `.worktrees/multi-harness-completion`，从 `8d5d32b` 创建。
+- 本轮在候选树整理文档；**尚未合入 main、尚未发布**。原分支、脏 worktree、用户配置均未删除或覆盖。
+
+107 个 `goal/5be7ed74-*` 分支进行了 Git 等价性盘点；重点项有源码/patch-ID 核对。非重点分支不是全部语义审计通过。`git branch --no-merged` / `git cherry +` 不能独自证明源码未合入：早期成果大量通过 cherry-pick、拆分提交或后续替代整合。
+
+## 重点处置表
+
+| 来源 | 核对事实 | 本轮决定 |
+|---|---|---|
+| convergence-assembly `8d5d32b` | 最新现有汇总，包含 Core、层级、UI、适配器、恢复及多类测试 | 作为候选基线，不从旧主目录重新实现 |
+| protocol-compat 脏树 | 16 个脏/未跟踪文件与 `268c997` 捕获内容相同；该提交等价于汇总内 `0a6b4dc` | **不再合入**；它是 WIP，后续 `af6a64a` / `5b1e8a8` 已改进 developer/cache/private-state 语义，回灌会回退 |
+| model-runtime 已提交部分 | 5 个分歧提交均有等价 patch，例如 `7bd755a` → `54592c4` | 已整合，不重复 cherry-pick |
+| model-runtime 未提交测试 | `openai-developer-role.test.ts` 多一条“顶层 instructions 与两个 system 消息冲突”拒绝断言 | 原处保留，TASKS I-02 单独评审；不是缺失模型 runtime |
+| pi-portable-mount | `a14dd4b` / `1e62cb6` 的源码 patch 分别等价于 `75318e1` / `579e96a`；`284358d` 又更新父进程 effect 所有权 | 已整合/被替代，不能从旧 tip 恢复 worker-only 清理 |
+| native-private-final | 前置 `5e96141` 等价于 `096db29`；`d7b6f7b`、`8d06d09`、`b82107b`、`6d84856` 的部分安全 runner/usage/权限身份改动确实缺失 | **待独立复核** I-03/I-04；不整支合并，不把历史 synthetic 报告当当前验收 |
+| brand-assets | `ab5d7d4` / `eac1584` 的 Pi PNG 与 provenance/validator 不在候选内；分发授权仍待确认 | **暂不导入品牌图像**，保持中性 fallback；验证器代码与资产授权分别审查 |
+| 旧 `.tmp` 报告 | 阶段报告混合互相覆盖的“当前状态”，部分外部日志已不存在 | 移到不可变 [archive](../archive/multi-harness/README.md)，当前结论统一到 ACCEPTANCE |
+
+以上是处置清单，不是未审改动的合并许可。尤其不能为了得到“已整合”状态盲合 protocol WIP 或未获授权图像。
+
+## 当前装配已经存在
+
+旧版本文描述的“仅导出、不挂载、必须等待缺失 Core 工厂”已过期：
+
+- `packages/services/src/coreAuthority.ts` 已提供 Core authority。
+- `workspace-hierarchy/lazyComposition.ts` 装配真实 Catalog、Target admission、Host、hierarchy 和维护栅栏。
+- `packages/desktop/src/host/targetCoreMount.ts` 将 Core 服务挂入现有 window Host，而非复制可写业务所有者。
+- `packages/ui/src/app-shell/WorkspaceShellLayout.tsx` 已有 hierarchy/owner 路由；Native 新建与桌面 Core 接入仍受专门门控。
+- `actualShellReadonlyJoin.spec.ts` 等 joined E2E 已存在；源码存在/历史运行不等于正式启用及完整产品认证。
 
 ```text
-future host composition → target worktree admission → Host command journal → adapter → event journal
-                   └── profile catalog reads target facts and persisted session summaries
-native V4 owner remains separate; no UI/component export changes its event or write path
+Project Catalog（元数据） → Target（Git / generation / admission）
+                                  ↓
+                     Core maintenance / owner fence
+                        ├─ Native CLI CommandInbox / SQLite
+                        └─ External SessionHost / journals → adapter
+Desktop continuous ─────┐
+Mobile replayable ───────┴─ 同一 owner，经 facade/projector 形成只读 UI 视图
 ```
 
-The facade transport requires `IAgentHostService` to structurally implement its complete port including `create(specV2,commandId)` and global `queryCreationCommand(commandId)` before it can be mounted. Compile-check this assignment instead of casting or keeping a second create allocator. A missing method is a Host component dependency, not a reason to fall back to native or weaken the port.
-
-Assembly publishes the existing browser-safe Catalog/Target RPC descriptors and types through the service root and publishes the Node-only target bridge, native index/directory, ACP trusted factory, and captured Pi model binding through the Node root. Exports do not register channels or grant target authority. The Catalog owns metadata; the target owns Git/generation/admission; Host owns accepted commands; native CLI retains native session truth. Calls follow catalog → target gate → Host durable admission → adapter → journal; retries read receipts rather than replay effects. History reads remain scoped without requiring the old worktree. Until a real target service and trusted native/external activity fence are mounted, production `createLazyTargetAgentHostService` must continue to fail typecheck at its missing `admission` argument; do not pass a fabricated adapter, `any`, or a path fallback. The current `ProjectCatalogTargetBridge`/`CatalogWorkspaceAdmission` are exported for that subsequent real composition, not silently activated here.
-
-Verification at this checkpoint is source export smoke, focused synthetic component tests, pinned typecheck/lint/architecture; component evidence does not certify production mounting, provider access, migration or remote execution. Root lock must contain the exact `@anthropic-ai/claude-agent-sdk@0.3.263` dependency from `packages/services/package.json`; no temporary SDK installation or credentials may be committed.
+共享协议、owner/lease、工作区代际和 accepted queue 不因文档清理改变。完整当前差距见 [ACCEPTANCE](ACCEPTANCE.md)，独立工作包见 [TASKS](TASKS.md)。
