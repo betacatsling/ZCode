@@ -2862,13 +2862,6 @@ const zhCN: Record<string, string> = {
   "settings.usage.toolChartDescription":
     "来自当前供应商工具用量接口，统计联网搜索 / Web Reader / Zread 等工具调用次数。",
   "settings.usage.sourceProvider": "来源：{provider}",
-  "settings.usage.billingBanner.title": "{provider} 编程套餐",
-  "settings.usage.billingBanner.description":
-    "连接 {provider} 账号后查询编程套餐权益，购买或配置后回到 ZCode 即可继续编码。",
-  "settings.usage.billingBanner.compactDescription": "连接 {provider} 账号后即可同步用量。",
-  "settings.usage.billingBanner.buy": "购买编程套餐",
-  "settings.usage.billingBanner.apiKeys": "API 密钥",
-  "settings.usage.billingBanner.usageDetails": "用量详情",
   "settings.usage.entitlementTitle": "编程套餐权益",
   "settings.usage.entitlementDescription":
     "使用已连接的编程套餐账号同步真实套餐等级、5 小时 Prompt 池、每周额度与工具月额度。",
@@ -3070,9 +3063,6 @@ const zhCN: Record<string, string> = {
   "settings.usage.toolUsageTitle": "工具用量",
   "settings.usage.tokenTotal": "Token 消耗总量",
   "settings.usage.timesUnit": "次",
-  "settings.usage.codingPlanNotConfiguredTitle": "尚未连接编程套餐",
-  "settings.usage.codingPlanNotConfiguredDescription":
-    "请先在模型设置中连接 Z.ai 或 BigModel 编程套餐，即可查看套餐额度、模型用量和工具用量。",
   "settings.usage.codingPlanCurrentConnectionTitle": "当前连接方式未使用编程套餐",
   "settings.usage.codingPlanCurrentConnectionDescription":
     "将当前工作区模型连接方式切换为个人套餐或团队套餐后，即可在这里查看对应额度和用量。",
@@ -5115,8 +5105,6 @@ const zhCN: Record<string, string> = {
   "chat.error.processExited": "代理进程意外退出",
   "chat.error.dismiss": "关闭错误提示",
   "chat.error.retry": "重试",
-  "chat.error.reloginProvider": "重新登录 {provider}",
-  "chat.error.action.relogin": "重新登录",
   "chat.error.action.refreshQuota": "刷新额度",
   "chat.error.action.switchModel": "切换模型",
   "chat.error.action.retryLater": "稍后重试",
@@ -5152,7 +5140,6 @@ const zhCN: Record<string, string> = {
   "chat.quota.plan.productLoginRemoved":
     "产品登录已移除。请在设置中配置 API Key 后查看额度。",
   "chat.quota.action.upgrade": "升级",
-  "chat.quota.action.renew": "续期",
   "chat.quota.action.switchModel": "切换模型",
   "chat.quota.action.switchProvider": "切换供应商",
   "chat.quota.action.refresh": "刷新额度",
@@ -5788,7 +5775,6 @@ const zhCN: Record<string, string> = {
   "offPeak.create.remaining.hours": "{hours} 小时",
   "offPeak.create.remaining.minutes": "{minutes} 分钟",
   "offPeak.create.remaining.lessThanMinute": "不到 1 分钟",
-  "offPeak.create.codingPlanToast": "闲时任务仅向 Coding Plan 订阅用户开放。",
   "automations.moreIdeas": "定时任务模板",
   "automations.templates.unavailable": "无可用模板",
   "automations.runNow": "立即运行",
