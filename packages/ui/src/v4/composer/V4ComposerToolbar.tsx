@@ -277,20 +277,19 @@ function resolveContextCodingPlanUsageSource(params: {
     | typeof BUILTIN_MODEL_PROVIDER_IDS.bigmodelTeamCodingPlan
     | typeof BUILTIN_MODEL_PROVIDER_IDS.zaiTeamCodingPlan;
   teamSelection?: Extract<ProviderFamilyConnectionSelection, { kind: "team-coding-plan" }>;
-  subscribedTeamProducts: Parameters<
-    typeof buildCodingPlanUsageSources
-  >[0]["subscribedTeamProducts"];
 }): CodingPlanUsageSource | null {
   if (!params.teamSelection) return null;
   if (!params.accountAccess) return null;
 
+  // 企业 productList 已恒空（#128）；保留 subscribedTeamProducts: [] 满足签名/guard。
+  // Team context 用量走 cachedTeamSources / entitlement snapshot。
   return (
     buildCodingPlanUsageSources({
       accountAccesses: {
         [resolveModelProviderFamilySpecByProviderId(params.providerId ?? "")?.id ?? "bigmodel"]:
           params.accountAccess,
       },
-      subscribedTeamProducts: params.subscribedTeamProducts,
+      subscribedTeamProducts: [],
     }).find(
       (source) =>
         "planKind" in source.accountAccess &&
@@ -506,8 +505,8 @@ function V4ComposerModelControlsImpl({
     ? contextStartPlanBalanceConfig
     : undefined;
 
-  // 企业 pricing 已拆除；Team context 用量靠 entitlement snapshot，不再拼空 productList。
-  const subscribedTeamProducts = useMemo(() => [], []);
+  // 企业 productList 已恒空（#128/#131）；Team context 用量靠 entitlement snapshot，
+  // 不再拼空 productList / named subscribedTeamProducts stub。
   const contextTeamUsageSourceCacheRef = useRef<CodingPlanUsageSource[]>([]);
   const contextCodingPlanUsageProviderId =
     contextPlanConnection.kind === "personalCoding" || contextPlanConnection.kind === "teamCoding"
@@ -524,14 +523,12 @@ function V4ComposerModelControlsImpl({
             entitlementSnapshot: entitlements[contextPlanConnection.providerId]?.snapshot ?? null,
             providerId: contextPlanConnection.providerId,
             teamSelection: contextPlanConnection.selection,
-            subscribedTeamProducts,
           })
         : null,
     [
       contextAccountProviderAccess?.access,
       contextPlanConnection,
       entitlements,
-      subscribedTeamProducts,
     ],
   );
   useEffect(() => {
