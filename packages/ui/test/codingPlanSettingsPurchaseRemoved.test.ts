@@ -233,3 +233,50 @@ test("codingPlanUsageSources collapses dead team flatMap to return [] (#128)", (
   assert.equal(usage.includes("formatTeamPlanDisplayName"), false);
   assert.equal(usage.includes("resolveEnterpriseCodingPlanProductFamily"), false);
 });
+
+test("Settings/V4/sidebar/MPS drop named empty subscribedTeamProducts useMemo (#131–#135)", () => {
+  // Named dead stub: const subscribedTeamProducts = useMemo(() => [], [])
+  // (or usageSubscribedTeamProducts / typed useMemo<...>). Literal call-site
+  // subscribedTeamProducts: [] is OK for signature/guard shape.
+  const emptyTeamProductsUseMemoRe =
+    /\b(?:usage)?[Ss]ubscribedTeamProducts\s*=\s*useMemo(?:<[^>]*>)?\s*\(\s*\(\s*\)\s*=>\s*\[\s*\]\s*,\s*\[\s*\]\s*\)/;
+  const files = [
+    new URL("../src/SettingsPage.tsx", import.meta.url),
+    new URL("../src/v4/composer/V4ComposerToolbar.tsx", import.meta.url),
+    new URL("../src/WorkspaceSidebarFooterUsageSummary.tsx", import.meta.url),
+    new URL("ModelProviderSection.tsx", settingsRoot),
+  ];
+  for (const fileUrl of files) {
+    const source = readFileSync(fileUrl, "utf8");
+    assert.equal(
+      emptyTeamProductsUseMemoRe.test(source),
+      false,
+      `${fileUrl.pathname} must not revive named empty subscribedTeamProducts useMemo stub`,
+    );
+    assert.match(
+      source,
+      /subscribedTeamProducts\s*:\s*\[\s*\]/,
+      `${fileUrl.pathname} must keep literal subscribedTeamProducts: [] call site`,
+    );
+  }
+
+  // KEEP: entitlement / Display / manage · planCard / productPurchaseRemoved body
+  const en = readFileSync(new URL("../src/i18n/locales/en-US.ts", import.meta.url), "utf8");
+  assert.match(en, /"settings\.modelProvider\.codingPlan\.manage"/);
+  assert.match(en, /"settings\.modelProvider\.codingPlan\.productPurchaseRemoved"/);
+  assert.match(en, /"settings\.modelProvider\.planCard\.codingPlan"/);
+  assert.equal(en.includes('"settings.modelProvider.codingPlan.productPurchaseRemovedTitle"'), false);
+
+  const display = readFileSync(
+    new URL("model-provider-section/enterpriseCodingPlanProducts.ts", settingsRoot),
+    "utf8",
+  );
+  assert.match(display, /export type EnterpriseCodingPlanProductDisplay/);
+
+  const entitlements = readFileSync(
+    new URL("model-provider-section/useCodingPlanEntitlements.ts", settingsRoot),
+    "utf8",
+  );
+  assert.match(entitlements, /useCodingPlanEntitlements/);
+});
+
