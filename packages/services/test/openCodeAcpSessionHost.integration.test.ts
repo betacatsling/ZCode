@@ -3,7 +3,7 @@
  *
  * Proves same-protocol Agents register via explicit factory + loadExplicit trust list
  * without changing lazy Host defaults or the shared ACP session machine. Goose SessionHost
- * path is symmetric to OpenCode (#75). Late prompt + transport fault/disconnect still journal via SessionHost (OpenCode + Goose). Resume-after-disconnect: SessionHost.open attach via negotiated session/load then send again.
+ * path is symmetric to OpenCode (#75). Late prompt + transport fault/disconnect still journal via SessionHost (OpenCode + Goose). Resume-after-disconnect: SessionHost.open attach via negotiated session/load then send again. Cancel-after-disconnect: after fault fence, cancel of the dead turn is stale; after reopen+session/load, cancel mid-prompt journals cancelled (OpenCode + Goose).
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -39,6 +39,11 @@ interface FakePeerOptions {
   readonly disconnectOnPrompt?: boolean;
   /** Advertise agentCapabilities.loadSession so SessionHost.open → attach can resume. */
   readonly loadSession?: boolean;
+  /**
+   * Emit a partial chunk, then wait for session/cancel before answering with stopReason cancelled
+   * (SessionHost cancelTurn mid-prompt path).
+   */
+  readonly holdUntilCancel?: boolean;
 }
 
 /** Minimal fake ACP peer: initialize / session/new / session/prompt. */
@@ -48,6 +53,8 @@ class FakePeer {
   readonly #sessionId: string;
   readonly #agentName: string;
   readonly #options: FakePeerOptions;
+  #cancelled = false;
+  #cancelWaiters: Array<() => void> = [];
 
   constructor(transport: AcpTransport, sessionId: string, agentName: string, options: FakePeerOptions = {}) {
     this.#transport = transport;
@@ -61,6 +68,11 @@ class FakePeer {
 
   async #receive(message: AcpJsonRpcMessage): Promise<void> {
     if (message.method) this.methods.push(message.method);
+    if (message.method === "session/cancel") {
+      this.#cancelled = true;
+      for (const wake of this.#cancelWaiters) wake();
+      this.#cancelWaiters = [];
+    }
     if (message.id === undefined || message.id === null) return;
     if (message.method === "initialize") {
       await this.#transport.send({
@@ -97,6 +109,30 @@ class FakePeer {
     if (message.method === "session/prompt") {
       const delay = this.#options.promptDelayMs ?? 0;
       if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+      if (this.#options.holdUntilCancel) {
+        await this.#transport.send({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: this.#sessionId,
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: { type: "text", text: "partial before cancel" },
+            },
+          },
+        });
+        if (!this.#cancelled) {
+          await new Promise<void>((resolve) => {
+            this.#cancelWaiters.push(resolve);
+          });
+        }
+        await this.#transport.send({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: { stopReason: "cancelled" },
+        });
+        return;
+      }
       if (this.#options.disconnectOnPrompt) {
         await this.#transport.send({
           jsonrpc: "2.0",
@@ -767,6 +803,192 @@ test("SessionHost + opt-in OpenCode ACP: resume-after-disconnect via session/loa
 
 test("SessionHost + opt-in Goose ACP: resume-after-disconnect via session/load then send (symmetric)", async (t) => {
   await assertSessionHostResumeAfterDisconnect({
+    t,
+    label: "goose",
+    harnessId: "goose",
+    agentName: "Goose",
+    createHarness: (openTransport) =>
+      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+  });
+});
+
+async function assertSessionHostCancelAfterDisconnect(input: {
+  t: { after: (fn: () => void | Promise<void>) => void };
+  label: string;
+  harnessId: "opencode" | "goose";
+  agentName: string;
+  createHarness: (openTransport: () => AcpTransport) => ReturnType<
+    typeof createExperimentalRegistryOpenCodeAcpHarness
+  >;
+}): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-cad-`));
+  const worktree = join(root, "worktree");
+  const journalRoot = join(root, "journal");
+  await mkdir(worktree, { recursive: true });
+  input.t.after(() => rm(root, { recursive: true, force: true }));
+
+  const backendSessionId = `${input.harnessId}-cad-session`;
+  const hostSessionId = `${input.harnessId}-cad-1`;
+  const spec = {
+    schemaVersion: 1 as const,
+    hostSessionId,
+    execution: {
+      targetId: "local",
+      workspaceIdentity: `workspace-${input.harnessId}-cad`,
+      worktreePath: worktree,
+    },
+    harness: { id: input.harnessId, adapterVersion: ACP_ADAPTER_VERSION },
+    modelBinding: { kind: "harness-managed" as const },
+  };
+  const target = {
+    id: "local",
+    kind: "local" as const,
+    platform: process.platform as "darwin" | "linux" | "win32",
+    available: true,
+  };
+  const catalog = {
+    fingerprint: "registry-v1",
+    validateSelection: () => ({ ok: true as const }),
+  };
+
+  // Connection 1: disconnect mid-prompt → fault fence; cancel of the dead turn is stale.
+  const registryLive = new HarnessRegistry();
+  registryLive.register(
+    input.createHarness(() =>
+      openFakeTransport(input.agentName, backendSessionId, {
+        loadSession: true,
+        disconnectOnPrompt: true,
+      }),
+    ),
+  );
+
+  const host = await SessionHost.create({
+    root: journalRoot,
+    spec,
+    target,
+    catalog,
+    registry: registryLive,
+  });
+
+  const faultReceipt = await host.dispatch({
+    type: "send",
+    commandId: `${input.harnessId}-cad-fault`,
+    hostSessionId,
+    turnId: "turn-cad-fault",
+    text: "die mid-prompt",
+  });
+  assert.equal(faultReceipt.status, "accepted");
+  await host.whenIdle();
+  assert.ok(host.eventsSince(0).some((event) => event.kind === "session.error"));
+
+  const staleCancel = await host.dispatch({
+    type: "cancelTurn",
+    commandId: `${input.harnessId}-cad-stale-cancel`,
+    hostSessionId,
+    runtimeEpoch: host.binding.runtimeEpoch!,
+    turnId: "turn-cad-fault",
+  });
+  assert.equal(staleCancel.status, "rejected");
+  assert.equal(staleCancel.reasonCode, "stale-turn");
+  await host.close();
+
+  // Connection 2: reopen + session/load, then cancel mid-prompt journals cancelled.
+  const peersAfter: FakePeer[] = [];
+  const registryReopen = new HarnessRegistry();
+  registryReopen.register(
+    input.createHarness(() =>
+      openFakeTransport(
+        input.agentName,
+        backendSessionId,
+        { loadSession: true, holdUntilCancel: true },
+        peersAfter,
+      ),
+    ),
+  );
+
+  const resumed = await SessionHost.open({
+    root: journalRoot,
+    spec,
+    target,
+    catalog,
+    registry: registryReopen,
+  });
+
+  assert.ok(
+    peersAfter.some((peer) => peer.methods.includes("session/load")),
+    "attach must call session/load after disconnect",
+  );
+
+  const sendReceipt = await resumed.dispatch({
+    type: "send",
+    commandId: `${input.harnessId}-cad-send`,
+    hostSessionId,
+    turnId: "turn-cad-live",
+    text: "cancel me after resume",
+  });
+  assert.equal(sendReceipt.status, "accepted");
+
+  // Wait until the peer has emitted the pre-cancel partial (turn is live).
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const partial = resumed.eventsSince(0).some(
+      (event) => event.kind === "text.delta" && event.text === "partial before cancel",
+    );
+    if (partial) break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.ok(
+    resumed.eventsSince(0).some(
+      (event) => event.kind === "text.delta" && event.text === "partial before cancel",
+    ),
+    "expected partial before cancel",
+  );
+
+  const cancelReceipt = await resumed.dispatch({
+    type: "cancelTurn",
+    commandId: `${input.harnessId}-cad-cancel`,
+    hostSessionId,
+    runtimeEpoch: resumed.binding.runtimeEpoch!,
+    turnId: "turn-cad-live",
+  });
+  assert.equal(cancelReceipt.status, "completed");
+  await resumed.whenIdle();
+
+  assert.ok(
+    peersAfter.some((peer) => peer.methods.includes("session/cancel")),
+    "cancel must reach the ACP peer after resume",
+  );
+  const finished = resumed.eventsSince(0).find(
+    (event) => event.kind === "turn.finished" && event.turnId === "turn-cad-live",
+  );
+  assert.ok(finished && finished.kind === "turn.finished");
+  assert.equal(finished.outcome, "cancelled");
+
+  await resumed.close();
+  const persisted = await SessionHost.eventsSinceHistory(journalRoot, spec, 0);
+  assert.ok(
+    persisted.some(
+      (event) =>
+        event.kind === "turn.finished" &&
+        event.turnId === "turn-cad-live" &&
+        event.outcome === "cancelled",
+    ),
+  );
+}
+
+test("SessionHost + opt-in OpenCode ACP: cancel-after-disconnect (stale then mid-prompt cancel)", async (t) => {
+  await assertSessionHostCancelAfterDisconnect({
+    t,
+    label: "opencode",
+    harnessId: "opencode",
+    agentName: "OpenCode",
+    createHarness: (openTransport) =>
+      createExperimentalRegistryOpenCodeAcpHarness({ openTransport }),
+  });
+});
+
+test("SessionHost + opt-in Goose ACP: cancel-after-disconnect (stale then mid-prompt cancel, symmetric)", async (t) => {
+  await assertSessionHostCancelAfterDisconnect({
     t,
     label: "goose",
     harnessId: "goose",
