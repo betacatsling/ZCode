@@ -29,19 +29,9 @@ test("coding plan login recovery and upgrade dialog modules are removed", () => 
     new URL("model-provider-section/codingPlanPricingCards.ts", settingsRoot),
     "utf8",
   );
-  assert.match(
-    pricingCards,
-    /export function shouldOfferCodingPlanOAuthPurchase[\s\S]*?return !CODING_PLAN_PRODUCT_PURCHASE_CARDS_REMOVED;/,
-  );
-
-  const purchaseAuth = readFileSync(
-    new URL("model-provider-section/codingPlanPurchaseAuth.ts", settingsRoot),
-    "utf8",
-  );
-  assert.match(
-    purchaseAuth,
-    /export function isCodingPlanPurchaseAuthPending[\s\S]*?return false;/,
-  );
+  assert.match(pricingCards, /export type CodingPlanLoginOptions/);
+  assert.equal(pricingCards.includes("shouldOfferCodingPlanOAuthPurchase"), false);
+  assert.equal(pricingCards.includes("resolveCodingPlanUpgradeProductsProviderId"), false);
 });
 
 test("CodingPlanEmbeddedWebviewDialog and helpers are removed", () => {
@@ -58,11 +48,27 @@ test("CodingPlanEmbeddedWebviewDialog and helpers are removed", () => {
   assert.equal(existsSync(embeddedHelpersPath), false);
 });
 
+test("codingPlanPurchaseAuth module is removed", () => {
+  const purchaseAuthPath = fileURLToPath(
+    new URL("model-provider-section/codingPlanPurchaseAuth.ts", settingsRoot),
+  );
+  assert.equal(existsSync(purchaseAuthPath), false);
+});
+
+test("Detail no longer renders Coding Plan purchase choice banners", () => {
+  const detail = readFileSync(
+    new URL("model-provider-section/Detail.tsx", settingsRoot),
+    "utf8",
+  );
+  assert.equal(detail.includes("CodingPlanPurchaseChoiceBanners"), false);
+  assert.equal(detail.includes("purchaseChoiceBannersVisible"), false);
+  assert.equal(detail.includes("PurchaseChoiceBannerPrice"), false);
+});
+
 test("settings coding plan surface does not call product login entry", () => {
   const files = [
     "ModelProviderSection.tsx",
     "AutomationsSection.tsx",
-    "model-provider-section/codingPlanPurchaseAuth.ts",
     "model-provider-section/CodingPlanStatusActions.tsx",
     "model-provider-section/CodingPlanStatusMeta.tsx",
     "model-provider-section/StatusCards.tsx",
