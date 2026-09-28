@@ -139,8 +139,8 @@ export function useWorkspaceSidebarFooterUsageSummaryState({
       ? null
       : selectedProviderIdFromSupplierKey;
   const bigmodelFamilyAllowed = providerFamilyDomain !== "zai";
-  // 企业 pricing 已拆除；Team 用量来源靠 team account access + entitlement，不再拼空 productList。
-  const subscribedTeamProducts = useMemo(() => [], []);
+  // 企业 productList 已恒空（#128）；保留 subscribedTeamProducts: [] 满足签名/guard。
+  // Team 用量展示走 team account access + entitlement，不再拼空 team products。
   const teamSources = useMemo(
     () =>
       buildCodingPlanUsageSources({
@@ -156,9 +156,9 @@ export function useWorkspaceSidebarFooterUsageSummaryState({
               }
             : {}),
         },
-        subscribedTeamProducts,
+        subscribedTeamProducts: [],
       }),
-    [bigmodelTeamProvider?.access, subscribedTeamProducts, zaiTeamProvider?.access],
+    [bigmodelTeamProvider?.access, zaiTeamProvider?.access],
   );
   const currentUsageSource = useMemo(
     () =>
