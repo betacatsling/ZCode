@@ -54,11 +54,6 @@ import { resolveStartPlanEntitlementSummary } from "./StartPlanCard.js";
 import { useCodingPlanProducts } from "./useCodingPlanProducts.js";
 import { useEnterpriseCodingPlanProducts } from "./useEnterpriseCodingPlanProducts.js";
 import { useUsageEntitlement } from "@/hooks/useUsageEntitlement.js";
-import {
-  createCodingPlanFunnelContext,
-  resolveCodingPlanEntryPlanState,
-} from "@/lib/codingPlanFunnelTelemetry.js";
-import { useCodingPlanUpgradeDialog } from "@/settings/CodingPlanUpgradeDialogProvider.js";
 import { useProviderSettingsView } from "@/hooks/useProviderSettingsView.js";
 import type { ProviderSettingsView } from "@zcode/services";
 import type { SavePersonalModelDraftInput } from "@zcode/provider";
@@ -303,7 +298,6 @@ export function ModelProviderSectionDetail({
   providerSettingsView?: ProviderSettingsView | null;
 }) {
   const { intl } = useZCodeIntl();
-  const { openCodingPlanUpgrade } = useCodingPlanUpgradeDialog();
   const loadingLabel = intl.formatMessage({ id: "common.loading" });
   const [upgradePlansVisibleProviderId, setUpgradePlansVisibleProviderId] =
     useState<BuiltinModelProviderId | null>(null);
@@ -528,8 +522,8 @@ export function ModelProviderSectionDetail({
         selectedNavItem.oauthProviderId === ZAI_PROVIDER_ID) &&
       statusPanelViewState.displayStatus === "disconnected";
     const handlePurchaseChoiceSelect = (
-      audience: PurchaseAudience,
-      options: { initialTeamPlanKey?: string; eventText?: string } = {},
+      _audience: PurchaseAudience,
+      _options: { initialTeamPlanKey?: string; eventText?: string } = {},
     ) => {
       if (resolvePurchaseChoiceSelectionIntent(statusPanelViewState.displayStatus) === "login") {
         // 未登录时个人/团队套餐必须先建立对应 provider 的 OAuth 身份。
@@ -542,32 +536,7 @@ export function ModelProviderSectionDetail({
         );
         return;
       }
-      const nextFunnelContext = createCodingPlanFunnelContext({
-        providerId: selectedNavItem.presetId,
-        upgradeSource:
-          audience === "team" ? "setting_team_plan_banner" : "setting_personal_plan_banner",
-        eventRegion: "app.setting",
-        eventText:
-          options.eventText ??
-          intl.formatMessage({
-            id:
-              audience === "team"
-                ? "settings.modelProvider.codingPlan.purchaseBanner.teamTitle"
-                : "settings.modelProvider.codingPlan.purchaseBanner.personalTitle",
-          }),
-        entryPlanState: resolveCodingPlanEntryPlanState({
-          displayStatus: statusPanelViewState.displayStatus,
-          providerId: selectedNavItem.presetId,
-          planLevel: selectedNavItem.planLevel,
-        }),
-        purchaseAudience: audience,
-      });
-      openCodingPlanUpgrade({
-        providerId: selectedNavItem.presetId,
-        initialAudience: audience,
-        initialTeamPlanKey: options.initialTeamPlanKey,
-        funnelContext: nextFunnelContext,
-      });
+      // 产品套餐购买已下线：横幅保留登录分流，不再打开 Coding Plan 升级弹窗。
     };
     const codingPlanFamilyHeader = (
       <ProviderFamilyHeader selectedNavItem={selectedNavItem} trailingAction={planModeSwitch} />
@@ -679,17 +648,13 @@ export function ModelProviderSectionDetail({
               options,
             );
           }}
-          onOpenUpgradePlans={(options) => {
-            openCodingPlanUpgrade({
-              providerId: selectedNavItem.presetId,
-              initialAudience: options.initialAudience,
-              funnelContext: options.funnelContext ?? undefined,
-            });
+          onOpenUpgradePlans={() => {
+            // 产品套餐购买已下线：不再打开 Coding Plan 升级弹窗。
           }}
           upgradePlansVisible={upgradePlansVisible}
           onUpgradePlansVisibleChange={handleUpgradePlansVisibleChange}
           purchaseInitialAudience={selectedNavItem.type === "teamPlan" ? "team" : "personal"}
-          upgradeActionVisible={!isStartPlanProvider || !hasActivePaidPlan}
+          upgradeActionVisible={false}
           startPlanPreviewVisible={false}
         />
       );
@@ -799,17 +764,13 @@ export function ModelProviderSectionDetail({
                 : undefined
             }
             disconnectLoading={codingPlanDisconnectProviderId === selectedNavItem.presetId}
-            onOpenUpgradePlans={(options) => {
-              openCodingPlanUpgrade({
-                providerId: selectedNavItem.presetId,
-                initialAudience: options.initialAudience,
-                funnelContext: options.funnelContext ?? undefined,
-              });
+            onOpenUpgradePlans={() => {
+              // 产品套餐购买已下线：不再打开 Coding Plan 升级弹窗。
             }}
             upgradePlansVisible={upgradePlansVisible}
             onUpgradePlansVisibleChange={handleUpgradePlansVisibleChange}
             purchaseInitialAudience={selectedNavItem.type === "teamPlan" ? "team" : "personal"}
-            upgradeActionVisible={!isStartPlanProvider || !hasActivePaidPlan}
+            upgradeActionVisible={false}
             startPlanPreviewVisible={false}
           />
           {hidePlanModels ? null : providerSettingsView && !dedicatedProvider ? (
