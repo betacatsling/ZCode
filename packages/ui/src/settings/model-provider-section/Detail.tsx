@@ -408,7 +408,7 @@ export function ModelProviderSectionDetail({
           }
         : resolveCodingPlanStatusPanelViewState({
             status: selectedNavItem.status,
-            loginPending: codingPlanLoginPending || codingPlanStatusSyncPending,
+            statusPending: codingPlanLoginPending || codingPlanStatusSyncPending,
           });
     const visibleStatusLabelId =
       statusPanelViewState.displayStatus === "checking" ? undefined : selectedNavItem.statusLabelId;

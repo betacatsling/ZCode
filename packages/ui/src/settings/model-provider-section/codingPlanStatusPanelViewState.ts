@@ -9,12 +9,12 @@ export interface CodingPlanStatusPanelViewState {
 
 export function resolveCodingPlanStatusPanelViewState({
   status,
-  loginPending,
+  statusPending,
 }: {
   status: CodingPlanStatus;
-  loginPending: boolean;
+  statusPending: boolean;
 }): CodingPlanStatusPanelViewState {
-  if (!loginPending) {
+  if (!statusPending) {
     return buildStableCodingPlanStatusPanelViewState(status, false);
   }
 
