@@ -7,7 +7,7 @@
 
 ## 当前证据和环境
 
-- 计划固定的源码基线是 `328c1a0c0ffaa5a4f65e8fa199af5e4c20706e5f`；当前 checkout 是 `438c25720b7c922b7902b4c5de182b5804720bb8`，工作区还有大量本地改动。两者不能混称为同一基线，也不能清理与本任务无关的改动。
+- 计划固定的源码基线是 `328c1a0c0ffaa5a4f65e8fa199af5e4c20706e5f`。wave4 集成 tip（本台账对照用）以 `cursor/wave4-harness-integration-b7a9` 为准（撰写时含 P6/ACP ledger sync）；历史本地 checkout `438c257…` 与脏树记录不得与 tip 或计划基线混称，也不能清理与本任务无关的改动。
 - `mise.toml` 要求 Node 24.14.0、pnpm 10.33.2。当前 shell 实测 Node 24.18.1、pnpm 10.33.2，`mise` 不在 PATH；后续认证必须使用固定工具链并在记录中注明实际版本。
 - 当前主开发 shell 是 Ubuntu 20.04.6、Linux 5.15、x86_64；本机未运行 macOS GUI。远端 Mac 已完成只读 capability probe，但源码构建、local worker 和桌面退出恢复仍未认证。
 - 本地 CLI 版本实测为 Pi 0.86.1、Claude Code 2.1.263、Codex CLI 0.154.0。仓库 Pi 依赖固定为 0.87.1，Codex 计划/探针要求 0.156.1；本地 CLI 版本差异不能算兼容认证。
@@ -190,7 +190,7 @@ P5 必须按 Harness 拆成 control/event 认证和 host-managed model ingress �
 
 - 可复用 ACP transport/adapter 与 session machine：`packages/services/src/agent-adapters/acp/`（`COMPATIBILITY.md` / `SPEC.md`）。
 - 长尾示例：Devin **可选** ACP profile（`agent-adapters/acp/agents/devin.ts`，`devin acp`）；与 print-mode `devin` 同 harness id，**不得**在同一 `HarnessRegistry` 双注册（见 `devin/PROTOCOL.md` 与 exclusivity 测）。
-- lazy Host 默认 Devin 路径仍是 **print-mode `-p`**（`createExperimentalRegistryDevinHarness`），不是默认 ACP。
+- lazy Host 默认 Devin 路径仍是 **print-mode `-p`**（`createExperimentalRegistryDevinHarness`），不是默认 ACP；源码契约测：`packages/services/test/lazyDevinPrintModeDefault.contract.test.ts`。
 
 仍缺：能力协商/版本矩阵产品化、安装诊断与升级手册、长期压力测试、第二个生产 ACP Agent、把 lazy 默认切到 ACP、发布加固。历史 ACP retirement 测只保护 native 边界，不是完整 P6 验收。
 
