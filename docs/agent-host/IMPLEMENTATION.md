@@ -222,12 +222,12 @@ inventory/honesty/opt-in factory 已有 ≠ 生产第二 Agent。相对 tip：
 1. **仍未进 lazy 默认**：`lazyTargetService` 只注册 Pi/Codex/Claude + print-mode Devin；OpenCode/Goose ACP 仅 **显式 opt-in** 工厂（#75），契约测禁止 lazy 注册。
 2. **无产品 create/Picker 路径**：侧栏/Harness 选择不会把 OpenCode/Goose 当可选外部 Harness 挂上。
 3. **无 install/upgrade 手册与版本矩阵**：`COMPATIBILITY.md` 有档案说明；缺固定 CLI 版本、initialize 协商矩阵、故障降级手册。
-4. **无 live 认证**：honesty + SessionHost fake-transport（#75/#80/#83/#85/#90/#110/#115/#118/#122/#125/#129/#134/#136/#140/#143/#147/#149/#153/#155/#174/#177/#182/#187；含 resume/cancel/permission/reopen/load-then-*/disconnect-during-session-load）≠ 真实 `opencode acp` / `goose acp` / SSH 实跑。
+4. **无 live 认证**：honesty + SessionHost fake-transport（#75/#80/#83/#85/#90/#110/#115/#118/#122/#125/#129/#134/#136/#140/#143/#147/#149/#153/#155/#174/#177/#182/#187/#195/#202/#211/#217/#223/#229；含 resume/cancel/permission/reopen/load-then-*/disconnect-during-session-load/load-then-permission-*/permission-during-session-load/load-then-send/disconnect-during-permission/then-reopen）≠ 真实 `opencode acp` / `goose acp` / SSH 实跑。
 5. **验收口径未满足**：产品侧「第二同协议 Agent 只加 manifest/绑定」证明仍缺；当前为档案 + honesty + opt-in + SessionHost fake-transport 矩阵；#94/#102/#106 仅为 docs stub。
 
 #### install-diag / LIVE-CERT checklist（第二 ACP；相对 tip 证据）
 
-对照 tip 已有证据（#75 opt-in、SessionHost fake-transport #75/#80/#83/#85/#90/#110/#115/#118/#122/#125/#129/#134/#136/#140/#143/#147/#149/#153/#155/#174/#177/#182/#187（仍缺见上表）、#65 honesty、#94/#98/#100/#102/#106 I1–I4 + L1–L4 程序 stub、契约禁 lazy 注册）。下列为**仍缺**项，不是重写台账：
+对照 tip 已有证据（#75 opt-in、SessionHost fake-transport #75/#80/#83/#85/#90/#110/#115/#118/#122/#125/#129/#134/#136/#140/#143/#147/#149/#153/#155/#174/#177/#182/#187/#195/#202/#211/#217/#223/#229（仍缺见上表）、#65 honesty、#94/#98/#100/#102/#106 I1–I4 + L1–L4 程序 stub、契约禁 lazy 注册）。下列为**仍缺**项，不是重写台账：
 
 **Install / 诊断（缺手册与可复现步骤）**
 
