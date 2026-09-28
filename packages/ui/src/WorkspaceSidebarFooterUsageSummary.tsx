@@ -22,10 +22,7 @@ import {
   resolveEntitledAccountProviderAccessFingerprint,
 } from "@/lib/accountProviderAccess.js";
 import { buildUsageEntitlementCacheKey } from "@/lib/usageEntitlementCache.js";
-import {
-  buildCodingPlanUsageSources,
-  resolveSidebarCurrentCodingPlanUsageSource,
-} from "@/lib/codingPlanUsageSources.js";
+import { resolveSidebarCurrentCodingPlanUsageSource } from "@/lib/codingPlanUsageSources.js";
 import { selectWorkspaceZCodeState, useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
 import { parseCustomProviderIdFromSupplierKey } from "@/lib/modelConfigSync.js";
 import { setPendingSettingsUsageIntent } from "@/lib/settingsNavigation.js";
@@ -139,26 +136,9 @@ export function useWorkspaceSidebarFooterUsageSummaryState({
       ? null
       : selectedProviderIdFromSupplierKey;
   const bigmodelFamilyAllowed = providerFamilyDomain !== "zai";
-  // 企业 productList 已恒空（#128）；buildCodingPlanUsageSources 已卸 team-products 参数。
-  // Team 用量展示走 team account access + entitlement。
-  const teamSources = useMemo(
-    () =>
-      buildCodingPlanUsageSources({
-        accountAccesses: {
-          ...(zaiTeamProvider?.access
-            ? {
-                zai: zaiTeamProvider.access,
-              }
-            : {}),
-          ...(bigmodelTeamProvider?.access
-            ? {
-                bigmodel: bigmodelTeamProvider.access,
-              }
-            : {}),
-        },
-      }),
-    [bigmodelTeamProvider?.access, zaiTeamProvider?.access],
-  );
+  // 企业 productList 已恒空（#128）；Team source builder 已移除。
+  // 保留 sidebar resolver 以解析个人 account access；Team entitlement 路径仍由
+  // 其它 live snapshot/cached source consumers 提供。
   const currentUsageSource = useMemo(
     () =>
       resolveSidebarCurrentCodingPlanUsageSource({
@@ -188,13 +168,12 @@ export function useWorkspaceSidebarFooterUsageSummaryState({
               }
             : {}),
         },
-        teamSources,
+        teamSources: [],
       }),
     [
       scopedSelectedProviderId,
       bigmodelProvider?.accountAccess,
       sharedSettings?.providerFamilyConnectionSelections,
-      teamSources,
       zaiProvider?.accountAccess,
     ],
   );
