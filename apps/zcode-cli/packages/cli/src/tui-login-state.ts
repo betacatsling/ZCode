@@ -4,11 +4,8 @@ import { PRODUCT_LOGIN_REMOVED_MESSAGE } from "./login-command.js";
 
 export function loginRequiredResponse(locale?: string): string {
   const copy = getZCodeCopy(locale).tui.loginRequired;
-  // Prefer explicit removal copy; fall back to i18n help without pushing /login OAuth.
-  return [
-    PRODUCT_LOGIN_REMOVED_MESSAGE,
-    copy.help.replace(/\/login/g, "provider settings"),
-  ].join("\n");
+  // Gate means "no selectable models", not product account login.
+  return [PRODUCT_LOGIN_REMOVED_MESSAGE, copy.message, copy.help].join("\n");
 }
 
 /** Registry already applies provider/account availability, including personal providers. */

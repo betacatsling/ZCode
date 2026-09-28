@@ -18,8 +18,8 @@ export const zhCN: ZCodeCopy = {
   app-server 运行 ZCode Protocol stdio app server
   commands   列出自定义 slash commands（\`commands list\`）
   doctor     检查运行时和打包假设
-  login [zai|bigmodel]  通过浏览器授权登录
-  logout     删除共享的 Z.AI 登录凭据
+  login      产品账号登录已移除；请配置个人 Provider
+  logout     产品账号登出已移除；请配置个人 Provider
   plugins    管理插件与市场（\`plugins list|install|uninstall|enable|disable|update|validate|marketplace ...\`；别名 plugin）
   skills     列出本地 skills（\`skills list\`）
   tui        打开终端 UI
@@ -54,8 +54,8 @@ export const zhCN: ZCodeCopy = {
 
 Slash Commands:
   /help [command]       显示 slash command 帮助
-  /login                使用 Z.AI OAuth 登录
-  /logout               删除共享的 Z.AI 登录凭据
+  /login                产品账号登录已移除（请配置 Provider）
+  /logout               产品账号登出已移除
   /compact [instructions]  压缩当前对话
   /expert [status|resume|stop|<task>]  运行或管理 expert workflow
   /dwf [list|cancel|resume]  列出、取消或恢复 dynamic workflow run
@@ -96,9 +96,9 @@ Slash Commands:
       typePrompt: "输入问题后按 Enter。",
     },
     loginRequired: {
-      help: "输入 /model 查看模型，或输入 /login 连接 Coding Plan 账号。",
-      message: "没有可用模型，请配置 Provider 或输入 /login 登录。",
-      status: "没有可用模型，请配置 Provider 或输入 /login 登录。",
+      help: "输入 /model 查看模型，或在设置中配置个人 Provider。",
+      message: "没有可用模型，请配置个人模型 Provider。",
+      status: "没有可用模型，请配置个人模型 Provider。",
       title: "需要配置模型",
     },
     loginSetup: {
