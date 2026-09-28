@@ -1,7 +1,6 @@
 import { Loader2Icon } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
-import type { CodingPlanLoginOptions } from "./codingPlanPricingCards.js";
 
 export function CodingPlanProductPurchaseRemovedNotice() {
   const { intl } = useZCodeIntl();
@@ -32,7 +31,6 @@ export function CodingPlanStatusActions({
   loginVisible: boolean;
   canDisconnectProvider: boolean;
   disconnectLoading?: boolean;
-  onLogin?: (options?: CodingPlanLoginOptions) => void;
   onDisconnect?: () => void;
 }) {
   const { intl } = useZCodeIntl();

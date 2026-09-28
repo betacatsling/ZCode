@@ -38,7 +38,6 @@ import {
 import { ModelProviderSectionDetail } from "./model-provider-section/Detail.js";
 import { ModelProviderSectionLayout } from "./model-provider-section/SectionLayout.js";
 import { ProviderTemplatePicker } from "./model-provider-section/ProviderTemplatePicker.js";
-import type { CodingPlanLoginOptions } from "./model-provider-section/codingPlanPricingCards.js";
 import { useModelProviderNavigation } from "./model-provider-section/useModelProviderNavigation.js";
 import { reportPresetSubscriptionSuccess } from "./model-provider-section/oauthActions.js";
 import {
@@ -789,16 +788,14 @@ export function ModelProviderSection({
       providerId: OAuthProviderId,
       providerName: string,
       status: CodingPlanStatus,
-      options?: CodingPlanLoginOptions,
     ) => {
       logger.info("[ModelProviderSection] 产品登录已下线，不再连接 Coding Plan", {
         presetId,
         providerId,
         providerName,
         status,
-        forceOAuth: options?.forceOAuth === true,
       });
-      // 套餐横幅仍会调用本回调；产品登录与升级弹窗均已下线，仅保留日志。
+      // StatusCards 仍可能挂登录门控回调；产品登录与升级弹窗均已下线，仅保留日志。
     },
     [],
   );

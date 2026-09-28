@@ -27,7 +27,6 @@ import {
   PresetProviderPlaceholderCard,
   CodingPlanStatusPanel,
 } from "./StatusCards.js";
-import { type CodingPlanLoginOptions } from "./codingPlanPricingCards.js";
 import { resolveCodingPlanStatusPanelViewState } from "./codingPlanStatusPanelViewState.js";
 import {
   ProviderFamilyDetailShell,
@@ -254,7 +253,6 @@ export function ModelProviderSectionDetail({
     providerId: OAuthProviderId,
     providerName: string,
     status: CodingPlanStatus,
-    options?: CodingPlanLoginOptions,
   ) => number | void;
   onCodingPlanDisconnect: (
     presetId: BuiltinModelProviderId,
@@ -467,21 +465,10 @@ export function ModelProviderSectionDetail({
             await selectedTeamPlanEntitlement.refresh({ force: true, reason: "manual" });
           }
         : undefined;
-    const accessBanner =
-      isStartPlanProvider ||
-      (selectedNavItem.type === "teamPlan" &&
-        (selectedNavItem.availabilityReason === "not-allocated" ||
-          selectedNavItem.availabilityReason === "expired"))
-        ? null
-        : resolveCodingPlanAccessBanner(statusPanelViewState.displayStatus, intl, reloginOnFailure);
     const upgradePlansVisible = upgradePlansVisibleProviderId === selectedNavItem.presetId;
     const codingPlanFamilyHeader = (
       <ProviderFamilyHeader selectedNavItem={selectedNavItem} trailingAction={planModeSwitch} />
     );
-    // 产品套餐购买横幅已下线；仅保留连接/鉴权态提示。
-    const planSupplementalContent = accessBanner ? (
-      <CodingPlanAccessBanner title={accessBanner.title} description={accessBanner.description} />
-    ) : null;
 
     if (shouldShowDedicatedProviderDetail && dedicatedProvider) {
       const statusPanel = (
@@ -551,15 +538,13 @@ export function ModelProviderSectionDetail({
               ? onRetryCodingPlan
               : undefined)
           }
-          onLogin={(options) => {
+          onLogin={() => {
             return onCodingPlanLogin(
               selectedNavItem.presetId,
               selectedNavItem.oauthProviderId,
               selectedNavItem.providerName,
-              // 查看套餐接口要求业务 OAuth 仍有效；已购买状态下的“重新链接”不能只静默刷新 key，
-              // 否则 OAuth 过期时点击没有可见反馈。升级态的重连强制走重新登录路径。
+              // 产品登录已下线；回调仅用于 StatusCards 可见性门控与日志。
               upgradePlansVisible ? "unavailable" : selectedNavItem.status,
-              options,
             );
           }}
           upgradePlansVisible={upgradePlansVisible}
@@ -583,7 +568,6 @@ export function ModelProviderSectionDetail({
             statusSection={
               <div className="space-y-3">
                 {statusPanel}
-                {planSupplementalContent}
               </div>
             }
             headerActionsVisible={false}
@@ -632,13 +616,12 @@ export function ModelProviderSectionDetail({
             mcpQuotaLimit={selectedNavItem.mcpQuotaLimit ?? null}
             authError={codingPlanAuthError}
             onOpenRegistration={onOpenBigModelRegistration}
-            onLogin={(options) => {
+            onLogin={() => {
               return onCodingPlanLogin(
                 selectedNavItem.presetId,
                 selectedNavItem.oauthProviderId,
                 selectedNavItem.providerName,
                 selectedNavItem.status,
-                options,
               );
             }}
             reloginOnFailure={!upgradePlansVisible && reloginOnFailure}
@@ -684,7 +667,6 @@ export function ModelProviderSectionDetail({
             selectedNavItem.provider.providerId !== selectedNavItem.presetId ? (
             <ModelProviderLoadingCard loadingLabel={loadingLabel} />
           ) : null}
-          {planSupplementalContent}
         </div>
       </ProviderFamilyDetailShell>
     );
@@ -728,38 +710,4 @@ export function ModelProviderSectionDetail({
       }
     />
   );
-}
-
-function CodingPlanAccessBanner({ title, description }: { title: string; description: string }) {
-  return (
-    <div className="rounded-xl border border-border bg-surface p-4">
-      <div className="text-ui-base font-medium text-foreground">{title}</div>
-      <p className="mt-1 text-ui-sm leading-6 text-foreground-subtle">{description}</p>
-    </div>
-  );
-}
-
-function resolveCodingPlanAccessBanner(
-  status: CodingPlanStatus,
-  intl: ReturnType<typeof useZCodeIntl>["intl"],
-  reloginOnFailure = false,
-): { title: string; description: string } | null {
-  if (
-    status !== "disconnected" &&
-    status !== "notPurchased" &&
-    !(status === "unavailable" && reloginOnFailure)
-  ) {
-    return null;
-  }
-  return {
-    title: intl.formatMessage({
-      id: `settings.modelProvider.codingPlan.status.${status}`,
-    }),
-    description: intl.formatMessage({
-      id:
-        status === "unavailable" && reloginOnFailure
-          ? "settings.modelProvider.codingPlan.description.credentialFailed"
-          : `settings.modelProvider.codingPlan.description.${status}`,
-    }),
-  };
 }

@@ -173,11 +173,20 @@ function assertDeletedSurfaces() {
       "codingPlanPurchaseAuth.ts must stay deleted (purchase auth stub unload)",
     );
   }
+  const pricingCards = join(
+    UI_SRC,
+    "settings/model-provider-section/codingPlanPricingCards.ts",
+  );
+  if (existsSync(pricingCards)) {
+    fails.push(
+      "codingPlanPricingCards.ts must stay deleted (CodingPlanLoginOptions unload)",
+    );
+  }
   const detailPath = join(UI_SRC, "settings/model-provider-section/Detail.tsx");
   if (existsSync(detailPath)) {
     const detailSrc = readFileSync(detailPath, "utf8");
-    if (/CodingPlanPurchaseChoiceBanners|purchaseChoiceBannersVisible/.test(detailSrc)) {
-      fails.push("Detail.tsx must not retain Coding Plan purchase choice banners");
+    if (/CodingPlanPurchaseChoiceBanners|purchaseChoiceBannersVisible|CodingPlanAccessBanner/.test(detailSrc)) {
+      fails.push("Detail.tsx must not retain Coding Plan purchase/access banners");
     }
   }
   const codingPlanWebviewPreload = join(

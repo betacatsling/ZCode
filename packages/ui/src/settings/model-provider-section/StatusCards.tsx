@@ -38,7 +38,6 @@ import {
   CodingPlanProductPurchaseRemovedNotice,
   CodingPlanStatusActions,
 } from "./CodingPlanStatusActions.js";
-import type { CodingPlanLoginOptions } from "./codingPlanPricingCards.js";
 import { StartPlanCard } from "./StartPlanCard.js";
 import { StartPlanQuotaStatusCard } from "./StartPlanQuotaStatusCard.js";
 import { resolveStartPlanQuotaCardEntries } from "./StartPlanBalanceCard.js";
@@ -180,7 +179,7 @@ export function CodingPlanStatusPanel({
   mcpQuotaLimit?: UsageQuotaLimit | null;
   authError?: string | null;
   onOpenRegistration?: () => void;
-  onLogin?: (options?: CodingPlanLoginOptions) => number | void | Promise<void>;
+  onLogin?: () => number | void | Promise<void>;
   /** 凭据获取失败提供主动重新登录，不据此自动退出账号。 */
   reloginOnFailure?: boolean;
   /** Start 套餐获取失败沿用 Host 手动刷新，不强制重新登录。 */
@@ -444,7 +443,6 @@ export function CodingPlanStatusPanel({
         }
         canDisconnectProvider={inlineDisconnectVisible ? false : canDisconnectProvider}
         disconnectLoading={disconnectLoading}
-        onLogin={onLogin}
         onDisconnect={onDisconnect}
       />
     </>
