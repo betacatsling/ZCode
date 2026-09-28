@@ -14,6 +14,14 @@
 
 Devin CLI 的编辑器控制面是官方 `devin acp`（stdio JSON-RPC）。档案 id 为 `devin`，参数只有 `acp`。它和 OpenCode、Goose 共用 `acp-session-machine/1`。模型绑定只接受 `harness-managed`，不把 Devin 的账号模型送进 Gateway。`hostManagedSupport` 是 `unsupported`，不是已完成的 host-managed。协议版本、续跑和认证仍只看当次 `initialize`。
 
+## OpenCode
+
+档案 id `opencode`，可执行文件 `opencode`，参数 `["acp"]`。与 Goose、Devin 共用 `acp-session-machine/1`。续跑只看当次 `initialize` 的 `loadSession` / `resume`，档案不声明 session/load。`hostManagedSupport` / `hostManagedModel` 为 `unsupported`。安装探测（可执行文件是否存在）不得升级 text/tools/resume 等会话能力。
+
+## Goose
+
+档案 id `goose`，可执行文件 `goose`，参数 `["acp"]`。同上：共用会话状态机、harness-managed、不提交凭据、不在档案里写死续跑。第二同协议 Agent 只加档案，不改 `AcpSessionMachine`。
+
 ## 增加另一个 ACP Agent
 
 1. 新增档案：`id`、`name`、`executableName`、`args`。
