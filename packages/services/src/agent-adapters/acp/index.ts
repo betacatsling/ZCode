@@ -34,3 +34,8 @@ export {
 export { devinAcpProfile } from "./agents/devin.js";
 export { gooseAcpProfile } from "./agents/goose.js";
 export { openCodeAcpProfile } from "./agents/opencode.js";
+export {
+  createExperimentalRegistryAcpHarness,
+  createExperimentalRegistryGooseAcpHarness,
+  createExperimentalRegistryOpenCodeAcpHarness,
+} from "./createAcpRegistryHarness.js";
