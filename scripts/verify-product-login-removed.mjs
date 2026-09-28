@@ -34,7 +34,7 @@
  *   manage / planCard / Display types / entitlement).
  * Hard (also): #126 refreshTeamPlanProducts must stay absent from modelProviderActions +
  *   ModelProviderSection (KEEP refreshModelProviderSection / refreshCodingPlanEntitlements).
- * Hard (also): #128 codingPlanUsageSources buildCodingPlanUsageSources must stay collapsed to
+ * Hard (also): #128/Ex1 codingPlanUsageSources buildCodingPlanUsageSources must stay hard-absent; was collapsed to
  *   return []; dead team flatMap helpers must stay absent (KEEP CodingPlanUsageSource /
  *   buildPersonalCodingPlanUsageSource / resolveSidebarCurrentCodingPlanUsageSource signature).
  * Hard (also): #131–#135+ SettingsPage / V4ComposerToolbar / WorkspaceSidebarFooterUsageSummary /
@@ -524,8 +524,8 @@ function assertDeletedSurfaces() {
     fails.push("codingPlanUsageSources.ts must exist");
   } else {
     const usageSrc = readFileSync(usageSourcesPath, "utf8");
-    if (!/\bexport function buildCodingPlanUsageSources\b/.test(usageSrc)) {
-      fails.push("codingPlanUsageSources must keep buildCodingPlanUsageSources signature");
+    if (/\bexport function buildCodingPlanUsageSources\b/.test(usageSrc)) {
+      fails.push("codingPlanUsageSources must drop always-empty buildCodingPlanUsageSources");
     }
     if (!/\bexport interface CodingPlanUsageSource\b/.test(usageSrc)) {
       fails.push("codingPlanUsageSources must keep CodingPlanUsageSource type");
@@ -539,11 +539,6 @@ function assertDeletedSurfaces() {
       );
     }
     // Collapsed body: return [] (allow whitespace / comment noise between braces).
-    if (!/buildCodingPlanUsageSources[\s\S]*?\{[\s\S]*?return\s*\[\s*\]\s*;/.test(usageSrc)) {
-      fails.push(
-        "buildCodingPlanUsageSources must stay collapsed to return [] (#128)",
-      );
-    }
     const deadUsageHelpers = [
       "buildTeamCodingPlanUsageSources",
       "formatTeamUsageSourceLabel",
@@ -706,7 +701,7 @@ function remainingUiInventory() {
   ].map(fileStatus);
 
   const note =
-    "Tip ea7762b (#135 / after #103–#134): Dialog/Provider/Entry/EmbeddedWebview + CLI loginRequired→modelSetupRequired hard. UI locale dead product loginRequired / Coding Plan login + orphan Welcome/login.* shell + #103–#107 upgrade/purchase/usage/enterprise acquisition i18n hard-gated. login.oauth.regionTag.* absent; KEEP settings.modelProvider.regionTag.* + share-import signInRequired + manage/planCard + productPurchaseRemoved body + live personal API-key / MCP OAuth copy. #114 slash-help /login+/logout off Coding Plan/Z.ai OAuth acquisition → model-setup/API-key guidance hard-gated (KEEP MCP help). #123 useEnterpriseCodingPlanProducts.ts hard-absent; #124 productPurchaseRemovedTitle absent; #126 refreshTeamPlanProducts hard-absent (KEEP entitlement refresh); #128 usageSources buildCodingPlanUsageSources → return [] / dead flatMap helpers absent (KEEP CodingPlanUsageSource / personal builder / sidebar resolver); #131–#135+ Settings/V4/sidebar/MPS subscribedTeamProducts useMemo stubs and call sites hard-absent. Soft inventory thinned — cleared symbol scans dropped. Inventory does not fail this gate.";
+    "Tip ea7762b (#135 / after #103–#134): Dialog/Provider/Entry/EmbeddedWebview + CLI loginRequired→modelSetupRequired hard. UI locale dead product loginRequired / Coding Plan login + orphan Welcome/login.* shell + #103–#107 upgrade/purchase/usage/enterprise acquisition i18n hard-gated. login.oauth.regionTag.* absent; KEEP settings.modelProvider.regionTag.* + share-import signInRequired + manage/planCard + productPurchaseRemoved body + live personal API-key / MCP OAuth copy. #114 slash-help /login+/logout off Coding Plan/Z.ai OAuth acquisition → model-setup/API-key guidance hard-gated (KEEP MCP help). #123 useEnterpriseCodingPlanProducts.ts hard-absent; #124 productPurchaseRemovedTitle absent; #126 refreshTeamPlanProducts hard-absent (KEEP entitlement refresh); #128/#Ex1 usageSources buildCodingPlanUsageSources hard-absent (KEEP CodingPlanUsageSource / personal builder / sidebar resolver); #131–#135+ Settings/V4/sidebar/MPS subscribedTeamProducts useMemo stubs and call sites hard-absent. Soft inventory thinned — cleared symbol scans dropped. Inventory does not fail this gate.";
 
   return {
     note,

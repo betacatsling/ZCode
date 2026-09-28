@@ -6,11 +6,15 @@ import test from "node:test";
 const readUi = (relativePath: string) =>
   readFileSync(new URL(relativePath, import.meta.url), "utf8");
 
-test("SettingsPage and V4ComposerToolbar drop empty useEnterpriseCodingPlanProducts callers", () => {
-  for (const file of ["../src/SettingsPage.tsx", "../src/v4/composer/V4ComposerToolbar.tsx"]) {
+test("SettingsPage/V4/sidebar drop dead usage-source builder callers", () => {
+  for (const file of [
+    "../src/SettingsPage.tsx",
+    "../src/v4/composer/V4ComposerToolbar.tsx",
+    "../src/WorkspaceSidebarFooterUsageSummary.tsx",
+  ]) {
     const source = readUi(file);
     assert.equal(source.includes("useEnterpriseCodingPlanProducts"), false, file);
-    // buildCodingPlanUsageSources no longer takes subscribedTeamProducts; callers must not stub it.
+    assert.equal(source.includes("buildCodingPlanUsageSources"), false, file);
     assert.equal(source.includes("subscribedTeamProducts"), false, file);
   }
 });
@@ -18,7 +22,7 @@ test("SettingsPage and V4ComposerToolbar drop empty useEnterpriseCodingPlanProdu
 test("quota entitlement wiring remains on SettingsPage and V4ComposerToolbar", () => {
   const settings = readUi("../src/SettingsPage.tsx");
   assert.match(settings, /useUsageEntitlement/);
-  assert.match(settings, /buildCodingPlanUsageSources/);
+  assert.match(settings, /buildPersonalCodingPlanUsageSource/);
   assert.match(settings, /UsageStatsSection/);
 
   const toolbar = readUi("../src/v4/composer/V4ComposerToolbar.tsx");

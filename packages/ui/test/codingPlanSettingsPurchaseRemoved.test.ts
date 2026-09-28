@@ -217,16 +217,15 @@ test("modelProviderActions drops refreshTeamPlanProducts after #126", () => {
   assert.equal(section.includes("refreshAuthenticatedEnterpriseProducts"), false);
 });
 
-test("codingPlanUsageSources collapses dead team flatMap to return [] (#128)", () => {
+test("codingPlanUsageSources removes the dead team builder (#128 follow-up)", () => {
   const usage = readFileSync(
     new URL("../src/lib/codingPlanUsageSources.ts", import.meta.url),
     "utf8",
   );
-  assert.match(usage, /export function buildCodingPlanUsageSources/);
+  assert.equal(usage.includes("buildCodingPlanUsageSources"), false);
   assert.match(usage, /export interface CodingPlanUsageSource/);
   assert.match(usage, /export function buildPersonalCodingPlanUsageSource/);
   assert.match(usage, /export function resolveSidebarCurrentCodingPlanUsageSource/);
-  assert.match(usage, /return\s*\[\s*\]\s*;/);
   assert.equal(usage.includes("buildTeamCodingPlanUsageSources"), false);
   assert.equal(usage.includes("formatTeamUsageSourceLabel"), false);
   assert.equal(usage.includes("subscribedTeamProducts.flatMap"), false);

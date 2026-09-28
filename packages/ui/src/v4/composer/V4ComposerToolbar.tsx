@@ -77,10 +77,7 @@ import { logger } from "@/logger.js";
 import { useCodingPlanEntitlements } from "@/settings/model-provider-section/useCodingPlanEntitlements.js";
 import { decodeCustomModelValue, encodeCustomModelValue } from "@/lib/zcodeCustomModelValue.js";
 import { buildRegistryModelSelectGroups } from "@/lib/modelSelectionGroups.js";
-import {
-  buildCodingPlanUsageSources,
-  type CodingPlanUsageSource,
-} from "@/lib/codingPlanUsageSources.js";
+import type { CodingPlanUsageSource } from "@/lib/codingPlanUsageSources.js";
 import {
   type SidebarUsageCodingPlanProviderId,
   type SidebarUsageCodingPlanSourceId,
@@ -281,22 +278,9 @@ function resolveContextCodingPlanUsageSource(params: {
   if (!params.teamSelection) return null;
   if (!params.accountAccess) return null;
 
-  // 企业 productList 已恒空（#128）；buildCodingPlanUsageSources 已卸 team-products 参数。
+  // 企业 productList / always-empty source builder 已移除。
   // Team context 用量走 cachedTeamSources / entitlement snapshot。
   return (
-    buildCodingPlanUsageSources({
-      accountAccesses: {
-        [resolveModelProviderFamilySpecByProviderId(params.providerId ?? "")?.id ?? "bigmodel"]:
-          params.accountAccess,
-      },
-    }).find(
-      (source) =>
-        "planKind" in source.accountAccess &&
-        source.accountAccess.planKind === "team-coding-plan" &&
-        source.accountAccess.productId === params.teamSelection?.productId &&
-        source.accountAccess.organizationId === params.teamSelection?.organizationId &&
-        source.accountAccess.projectId === params.teamSelection?.projectId,
-    ) ??
     params.cachedTeamSources?.find(
       (source) =>
         "planKind" in source.accountAccess &&

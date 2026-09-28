@@ -59,17 +59,6 @@ type CurrentSidebarCodingPlanUsageSource =
       teamSource: CodingPlanUsageSource;
     };
 
-/**
- * 企业 productList 已恒空（#119/#120/#123/#128）；Team 用量改走 entitlement /
- * personal source。team-products 参数已卸；保留 accountAccesses 供
- * Settings/侧栏/composer 调用形态。
- */
-export function buildCodingPlanUsageSources(_args: {
-  accountAccesses: Partial<Record<ProviderFamilyDomain, ZCodeProviderAccountAccess>>;
-}): CodingPlanUsageSource[] {
-  return [];
-}
-
 export function resolveSidebarCurrentCodingPlanUsageSource({
   selections,
   selectedProviderId,

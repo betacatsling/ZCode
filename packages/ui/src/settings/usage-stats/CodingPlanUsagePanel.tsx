@@ -53,12 +53,9 @@ import {
   formatSummaryCompactTokenUsage,
 } from "@/settings/usage-stats/usageStatsUiParts.js";
 import { formatAppUsageDuration } from "@/settings/usage-stats/AppUsagePanel.js";
-import {
-  buildCodingPlanUsageSources,
-  type CodingPlanUsageSource,
-} from "@/lib/codingPlanUsageSources.js";
+import { type CodingPlanUsageSource } from "@/lib/codingPlanUsageSources.js";
 
-export { buildCodingPlanUsageSources, type CodingPlanUsageSource };
+export type { CodingPlanUsageSource };
 
 /** Usage stats 独有的完整重置时刻格式；其它紧凑入口继续按各自规则展示。 */
 function formatUsageStatsQuotaResetTime(

@@ -55,10 +55,7 @@ import {
 import { buildUsageEntitlementCacheKey } from "@/lib/usageEntitlementCache.js";
 import { ModelProviderSection } from "@/settings/ModelProviderSection.js";
 import { UsageStatsSection, type UsageStatsSectionTab } from "@/settings/UsageStatsSection.js";
-import {
-  buildCodingPlanUsageSources,
-  type CodingPlanUsageSource,
-} from "@/settings/usage-stats/CodingPlanUsagePanel.js";
+import { type CodingPlanUsageSource } from "@/settings/usage-stats/CodingPlanUsagePanel.js";
 import { buildPersonalCodingPlanUsageSource } from "@/lib/codingPlanUsageSources.js";
 import { SubagentsSection } from "@/settings/SubagentsSection.js";
 import { AutomationsSection } from "@/settings/AutomationsSection.js";
@@ -447,19 +444,8 @@ export function SettingsPage({
     usageZaiProvider,
     usageZaiProviderAccess,
   ]);
-  // 企业 productList 已恒空（#128）；buildCodingPlanUsageSources 已卸 team-products 参数。
-  // Team 用量展示走 entitlement / personal source。
-  const usageTeamCodingPlanSources = useMemo(
-    () =>
-      buildCodingPlanUsageSources({
-        accountAccesses: {},
-      }),
-    [],
-  );
-  const usageCodingPlanSources = useMemo(
-    () => [...usagePersonalCodingPlanSources, ...usageTeamCodingPlanSources],
-    [usagePersonalCodingPlanSources, usageTeamCodingPlanSources],
-  );
+  // 企业 productList 已恒空（#128）；Team 用量展示走 entitlement / personal source。
+  const usageCodingPlanSources = usagePersonalCodingPlanSources;
   const selectedUsageCodingPlanSourceId =
     usageActiveTab === "codingPlan"
       ? (usageCodingPlanSources[0]?.id ?? null)
