@@ -161,6 +161,24 @@ function assertDeletedSurfaces() {
       "codingPlanEmbeddedWebview.ts must stay deleted (helpers only used by EmbeddedWebview Dialog)",
     );
   }
+  const codingPlanWebviewPreload = join(
+    ROOT,
+    "packages/desktop/src/preload/codingPlanWebview.ts",
+  );
+  if (existsSync(codingPlanWebviewPreload)) {
+    fails.push(
+      "codingPlanWebview.ts preload must stay deleted (Coding Plan embedded webview unload)",
+    );
+  }
+  const desktopChromePath = join(ROOT, "packages/desktop/src/main/desktopWindowChrome.ts");
+  if (existsSync(desktopChromePath)) {
+    const chromeSrc = readFileSync(desktopChromePath, "utf8");
+    if (/isCodingPlanEmbeddedWebviewSrc|codingPlanWebviewPreloadPath|isCodingPlanPaypalNavigationUrl/.test(chromeSrc)) {
+      fails.push(
+        "desktopWindowChrome.ts must not retain Coding Plan embedded/PayPal special cases",
+      );
+    }
+  }
   // Definition of useCodingPlanEntryGate must not reappear under packages/ui/src
   const entryGateHits = grepFiles(UI_SRC, /export\s+function\s+useCodingPlanEntryGate\b/, {
     extensions: [".ts", ".tsx"],
@@ -346,6 +364,9 @@ function remainingUiInventory() {
     "packages/ui/src/settings/CodingPlanUpgradeDialogProvider.tsx",
     "packages/ui/src/settings/CodingPlanEmbeddedWebviewDialog.tsx",
     "packages/ui/src/settings/model-provider-section/codingPlanEmbeddedWebview.ts",
+    "packages/desktop/src/preload/codingPlanWebview.ts",
+    "packages/desktop/src/main/desktopWindowChrome.ts",
+    "packages/desktop/src/main/desktopMainIpcRemote.ts",
     "packages/ui/src/settings/CodingPlanEntryButton.tsx",
     "packages/ui/src/login",
     "packages/ui/src/Root.tsx",
