@@ -29,7 +29,10 @@ import {
 } from "./session-hierarchy/index.js";
 import { createTaskIndexSessionSource } from "./session-hierarchy/app/taskIndexSource.js";
 import { buildLocalMediaPreviewUrl, type ProviderProvisioningTrigger } from "@zcode/shared";
-import { resolveWorkspaceAdmissionKey } from "@zcode/shared/agent-host";
+import {
+  isMultiHarnessNewSessionAdmissionEnabled,
+  resolveWorkspaceAdmissionKey,
+} from "@zcode/shared/agent-host";
 import type { IServiceAccessor } from "./accessor.js";
 
 export {
@@ -2679,7 +2682,7 @@ export function createLocalServices(options: {
         available: true,
       },
       registry: providerRuntime.registryService,
-      allowNewSessions: () => process.env.ZCODE_MULTI_HARNESS_ENABLED === "1",
+      allowNewSessions: () => isMultiHarnessNewSessionAdmissionEnabled(),
       worktrees: worktreeServiceForAdmission,
       nativeOwner: getNativeManagedWorkspaceSessionOwner(zcodeAgentService),
       ...(options.agentHostOwnerGeneration
