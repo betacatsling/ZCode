@@ -176,7 +176,7 @@ export function CodingPlanStatusPanel({
   onRetry?: () => void;
   onOpenPurchase?: (url: string) => void;
   onDisconnect?: () => void;
-  /** 未连接/不可用时展示 productPurchaseRemoved 说明（产品登录回调已卸）。 */
+  /** 未连接/不可用时展示 productPurchaseRemoved 说明。 */
   loginActionVisible?: boolean;
   usageDetailsVisible?: boolean;
   statusLabelId?: string;
@@ -263,7 +263,6 @@ export function CodingPlanStatusPanel({
   const teamPlanWarningVisible = !isChecking && teamPlanAvailabilityReason !== undefined;
   const recoverableUnavailable =
     effectiveViewState.actionStatus === "unavailable" && !teamPlanUnavailableStatusVisible;
-  // 产品登录回调已卸：不可用态优先 entitlement retry，不再用 noop onLogin 门控压制 Retry。
   const retryVisible =
     (recoverableUnavailable ||
       statusLabelId === "settings.modelProvider.codingPlan.status.unavailable") &&
