@@ -32,6 +32,8 @@ Pi 的 agent loop、上下文和工具执行留在传输对面的 Pi 进程。�
 
 生产 `hostManagedRoute` 仍是 `pi-sdk`。`PiHarnessAdapter.hostManagedSupport` 为 `supported` 且推理级别被 Responses 接受时，Gateway `openai-responses` 准入这条路由：`prepareModel` 调用注入的现有 Model runtime，再由 `POST /v1/responses` 进入 `Model.streamText`。假响应只来自 loopback。控制面 `PiAdapter` 的 `hostManagedModel` 和 `hostManagedSupport` 保持 `experimental`，因为它不调用 `Model.streamText`。测试不会用跳过执行层的假 Model 把 worker 标成已完成。
 
+平台验收只写 macOS 本地。执行层测试不增加 Linux SSH 或 Windows 矩阵。真实 SSH 和关掉整个 Electron 不在本切片里跑。
+
 ## 迁移
 
 现有 `PiHarnessAdapter` worker 仍由 `createPiHarness` 装配。本控制面是可替换的传输边界，这一轮不改 Host 注册。

@@ -138,6 +138,7 @@ function specFor(harness: HarnessAdapter): SessionSpec {
 }
 
 function target(): ExecutionTarget {
+  // 平台验收只记 macOS。此用例只跑当前进程上的本地调用栈，不展开 Linux SSH 或 Windows。
   return {
     id: "local-responses",
     kind: "local",

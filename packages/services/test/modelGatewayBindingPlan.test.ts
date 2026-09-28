@@ -373,10 +373,11 @@ test("compatibility matrix uses shared capability reports and refuses Chat Compl
     harnessId: "pi",
     harnessVersion: "0.87.1",
     modelSource: selection,
-    target,
+    target: { ...target, platform: "darwin" },
     route: "pi-sdk",
   });
   assert.equal(pi.report.support, "supported");
+  assert.equal(pi.targetPlatform, "darwin");
   const native = describeGatewayCompatibility({
     harnessId: "zcode",
     harnessVersion: "1.0.0",
