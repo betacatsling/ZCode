@@ -209,7 +209,29 @@ inventory/honesty/opt-in factory 已有 ≠ 生产第二 Agent。相对 tip：
 4. **无 live 认证**：honesty + SessionHost fake-transport（#75/#80/#83/#85 OpenCode+Goose，含 late prompt 对称）≠ 真实 `opencode acp` / `goose acp` / resume / SSH。
 5. **验收口径未满足**：产品侧「第二同协议 Agent 只加 manifest/绑定」证明仍缺；当前为档案 + honesty + opt-in factory + OpenCode/Goose SessionHost fake-transport（#75/#80/#83/#85）。
 
-下一薄刀候选（仍 Track A，需 Planner 另派）：opt-in 与 MULTI_HARNESS 交叉文档、或 live 探针——**勿**把 opt-in 改成 lazy 默认。
+#### install-diag / LIVE-CERT checklist（第二 ACP；相对 tip 证据）
+
+对照 tip 已有证据（#75 opt-in 工厂、#80/#83/#85 SessionHost fake-transport 含 late prompt、#65 honesty、契约禁 lazy 注册）。下列为**仍缺**项，不是重写台账：
+
+**Install / 诊断（缺手册与可复现步骤）**
+
+| # | 项 | tip 已有 | 仍缺 |
+| --- | --- | --- | --- |
+| I1 | CLI 钉版与 PATH | 档案写 `opencode`/`goose` + `["acp"]`（`COMPATIBILITY.md`） | 固定可复现版本号、安装探测命令、失败时如何读日志 |
+| I2 | install/probe 边界 | honesty：可执行文件存在 ≠ 升级 text/tools/resume | 运维诊断步骤：探针结果如何解读、禁止把 probe 当会话能力 |
+| I3 | `initialize` 协商矩阵 | COMPATIBILITY：v1 / v2 降级、loadSession / resume → harness-managed vs unsupported | 产品侧对照表 + 未知版本 → experimental 的排障入口 |
+| I4 | 故障降级 | 适配器不跑 `opencode auth login` / `goose acp` 凭据提交 | 缺二进制、认证拒绝、协议实验态的升级/回滚手册 |
+
+**LIVE-CERT（缺真实进程；fake-transport ≠ live）**
+
+| # | 项 | tip 已有 | 仍缺 |
+| --- | --- | --- | --- |
+| L1 | 真实 ACP 子进程 | SessionHost **fake** transport 对称 create/send + late prompt | 隔离数据下真实 `opencode acp` / `goose acp` create→send（记 CLI 版本、无凭据 URL） |
+| L2 | resume / 只读历史 | 档案不硬编码 load/resume；honesty 不打开 transport | 当次协商允许时的 resume；不允许时历史只读的 live 证明 |
+| L3 | 第二 Agent 只加档案 | inventory + 共用 `acp-session-machine/1` | 产品路径上第二同协议 Agent **不改**公共状态机的 live/集成证明 |
+| L4 | Host 默认 | lazy **不**注册 OpenCode/Goose ACP | live 认证**不得**借机把 opt-in 改成 lazy 默认 |
+
+下一薄刀候选（仍 Track A，需 Planner 另派）：填 I1–I4 诊断草稿、或 L1 live 探针——**勿**把 opt-in 改成 lazy 默认。
 
 ### StatusCards / funnel × Track A 交界（只读 scout @ `2576a59`）
 
