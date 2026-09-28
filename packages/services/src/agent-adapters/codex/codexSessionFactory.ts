@@ -2,7 +2,10 @@ import type { Model } from "@zcode/contracts";
 import type { ModelSelection } from "@zcode/shared/model-selection";
 import type { BindingPlan, SessionSpec } from "@zcode/shared/agent-host";
 import type { ModelGateway } from "@zcode/services/model-gateway";
-import type { CodexAppServerProcess } from "./codexAppServerProcess.js";
+import type {
+  CodexAppServerLauncher,
+  CodexAppServerProcess,
+} from "./codexAppServerProcess.js";
 import {
   resolveCodexExecutable,
   type CodexApprovalPolicy,
@@ -44,6 +47,7 @@ export interface CodexSessionFactoryOptions extends LaunchPorts {
   readonly getGateway: (targetId: string) => Promise<ModelGateway> | ModelGateway;
   readonly sandboxMode: CodexSandboxMode;
   readonly approvalPolicy: CodexApprovalPolicy;
+  readonly launchAppServer?: CodexAppServerLauncher;
 }
 
 export interface CodexHarnessSessionOptions extends Omit<
@@ -144,6 +148,7 @@ export async function createCodexSession(
       grant,
       ...(options.onProcess ? { onProcess: options.onProcess } : {}),
       ...(options.onStderr ? { onStderr: options.onStderr } : {}),
+      ...(options.launchAppServer ? { launchAppServer: options.launchAppServer } : {}),
       createRuntime: options.createRuntime,
       onNotification: options.onNotification,
       onServerRequest: options.onServerRequest,
