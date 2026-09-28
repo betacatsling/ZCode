@@ -17,3 +17,19 @@ The Responses Model request contract preserves `instructions` and leading `syste
 Responses SSE events keep their existing increasing `sequence_number` and complete item lifecycle. Messages SSE events use the Anthropic `message_start`, content block start/delta/stop, `message_delta`, and `message_stop` lifecycle; text, tool argument JSON, finish reason and usage snapshots retain their protocol semantics. Messages requires exact Model-reported input usage before stream start and output usage at finish; it does not estimate tokens or fabricate a count if the bound executor omits one. Gateway settlement counts the Model executor usage once; it does not estimate Anthropic price or add CLI-side values to the Model executor's accounting.
 
 The transport binds only IPv4/IPv6 loopback. Closing the service revokes every grant and aborts active requests. A grant capability is unauthorized after its grant/active-turn lease expires, and an in-flight request aborts when its authorization window ends. Output budget reservation is settled to the terminal Model executor usage when available; an interrupted or unfinished request consumes its reservation.
+
+## BindingPlan admission
+
+When `createGrant` receives a `BindingPlan`, that plan is the only route and capability authority. The Gateway parses it with the shared `bindingPlanSchema` and accepts `sessionId` only when it is already a `hostSessionId` with no rewrite. It admits only `requested.kind = host-managed` when `support` is `supported`, `catalogFingerprint` matches the grant, and `effective` equals both the requested selection and the injected Model identity. `openai-responses` requires route `responses-gateway` and an explicit disabled reasoning level (`none`, `off`, or `disabled`). `anthropic-messages` requires route `messages-gateway`. A missing plan keeps the previous host-supplied grant fields so existing callers stay valid. The Gateway never reads a provider URL or API key from the plan. `credentialRef` is not copied onto the grant, into logs, or into the CLI overlay, and nothing in this module persists a secret.
+
+## CLI custom provider overlay
+
+`sessionResponsesProviderOverlay` renders an isolated Responses provider document for the external CLI. `base_url` is the loopback Gateway origin plus `/v1`. The bearer token is not written into the document; callers pass it through the environment variable `ZCODE_MODEL_GATEWAY_TOKEN`. Upstream provider URLs and keys are not inputs. This slice does not issue an Anthropic Messages provider document or a Claude adapter.
+
+## Compatibility matrix
+
+`describeGatewayCompatibility` reports one row with gateway version, harness id and version, model source, reasoning parameter, and target kind/platform. Support uses the shared `CapabilityReport` and does not add capability fields. Chat Completions is `unsupported` because no harness ingress requires it. Messages is `experimental`: the HTTP interface exists, and this slice does not certify a Claude adapter or a live Provider chain. An SSH row does not certify remote credentials.
+
+## Bound model limits
+
+Before `Model.streamText`, a Responses request is rejected when `max_output_tokens` exceeds the bound model's declared `contextWindow`, or when that model sets `supportsToolCall` to false and the request contains tools. The Gateway does not estimate tokens, compact context, or silently drop images, tools, or private reasoning.

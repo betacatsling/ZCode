@@ -1,3 +1,4 @@
+import type { BindingPlan } from "@zcode/shared/agent-host";
 import type { Model } from "@zcode/contracts";
 import { z } from "zod";
 
@@ -28,6 +29,8 @@ export interface ModelGatewayGrantInput {
   readonly modelBindingFingerprint: string;
   readonly publicModelId: string;
   readonly model: Model;
+  /** Host-owned admission plan. Request bodies cannot replace its route or model. */
+  readonly plan?: BindingPlan;
   readonly expiresInMs: number;
   readonly limits: ModelGatewayLimits;
 }
