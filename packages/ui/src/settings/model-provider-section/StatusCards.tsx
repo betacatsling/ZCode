@@ -298,7 +298,7 @@ export function CodingPlanStatusPanel({
     isChecking &&
     providerIcon === BIGMODEL_PROVIDER_ID &&
     isBigModelUnregisteredAuthError(authError);
-  // 产品 Coding Plan 升级 CTA 已移除；未购买时仅显示「购买已移除」说明。
+  // 产品获客升级 CTA 已卸；未购买时仅显示「购买已移除」说明。
   const buyAction =
     !isStartPlanProvider && isNotPurchased && !isChecking && !isUnsupported ? (
       <CodingPlanProductPurchaseRemovedNotice />
@@ -330,8 +330,8 @@ export function CodingPlanStatusPanel({
   });
   const statusMeta =
     isPurchased && isStartPlanProvider ? (
-      // 产品语义:体验套餐用量卡片不展示「管理」「解绑」操作(免费套餐无管理页,
-      // 登录态由 family 级连接方式管理),仅保留过期时间与右侧升级 Coding Plan 入口。
+      // 体验套餐用量卡片不展示「管理」「解绑」（免费套餐无管理页，
+      // 登录态由 family 级连接方式管理），仅保留过期时间。
       <StartPlanStatusMeta
         expireTime={subscriptionExpireTime}
         entitlements={subscriptionDetails?.[0]?.entitlements}

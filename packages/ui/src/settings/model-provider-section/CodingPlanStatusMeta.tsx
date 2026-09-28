@@ -125,8 +125,8 @@ export function StartPlanStatusMeta({
         },
       )
     : null;
-  // 产品语义：待生效时展示排期；到点但额度桶尚未同步时提供就地刷新；
-  // 对应额度桶出现后只保留过期日期。免费套餐无管理页，升级入口在卡片右侧。
+  // 待生效时展示排期；到点但额度桶尚未同步时提供就地刷新；
+  // 对应额度桶出现后只保留过期日期。免费套餐无管理页。
   return (
     <span className="flex flex-wrap items-center gap-1.5 text-ui-base text-foreground-subtle">
       {pendingEffectiveTimeLabel ? (

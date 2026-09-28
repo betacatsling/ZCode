@@ -153,3 +153,45 @@ test("StatusCards and Detail drop dead upgradePlansVisible acquisition gate", ()
   assert.equal(detail.includes("setUpgradePlansVisibleProviderId"), false);
 });
 
+test("settings StatusCards path drops dead Coding Plan upgrade/purchase CTA strings", () => {
+  const deadKeys = [
+    "settings.modelProvider.codingPlan.subscribe",
+    "settings.modelProvider.codingPlan.upgrade",
+    "settings.modelProvider.codingPlan.renew",
+    "settings.modelProvider.codingPlan.currentPlan",
+    "settings.modelProvider.codingPlan.cancelUpgrade",
+    "settings.modelProvider.codingPlan.purchase.individualsSectionTitle",
+    "settings.modelProvider.codingPlan.purchaseBanner.startPlanTitle",
+    "settings.modelProvider.codingPlan.purchase.selectPlan",
+  ];
+  for (const locale of ["en-US.ts", "zh-CN.ts"] as const) {
+    const source = readFileSync(new URL(`../src/i18n/locales/${locale}`, import.meta.url), "utf8");
+    for (const key of deadKeys) {
+      assert.equal(source.includes(`"${key}"`), false, `${locale}:${key}`);
+    }
+    assert.equal(source.includes('"settings.modelProvider.connection.selectPlan"'), true, locale);
+  }
+
+  const header = readFileSync(
+    new URL("model-provider-section/ProviderFamilyModeHeader.tsx", settingsRoot),
+    "utf8",
+  );
+  assert.equal(header.includes("codingPlan.purchase.selectPlan"), false);
+  assert.equal(header.includes("settings.modelProvider.connection.selectPlan"), true);
+
+  const notification = readFileSync(
+    new URL("../src/root/useAccountConnectionLossNotification.ts", import.meta.url),
+    "utf8",
+  );
+  assert.equal(notification.includes("purchaseBanner.startPlanTitle"), false);
+  assert.equal(notification.includes("purchase.individualsSectionTitle"), false);
+  assert.equal(notification.includes("settings.modelProvider.planCard.startPlan"), true);
+  assert.equal(notification.includes("settings.modelProvider.planCard.codingPlan"), true);
+
+  const statusCards = readFileSync(
+    new URL("model-provider-section/StatusCards.tsx", settingsRoot),
+    "utf8",
+  );
+  assert.equal(statusCards.includes("右侧升级 Coding Plan 入口"), false);
+  assert.equal(statusCards.includes("StartPlanQuotaStatusCard"), true);
+});
