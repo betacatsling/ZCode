@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
+  ACP_SESSION_MACHINE_ID,
   acpHarnessCapabilities,
   createAcpHarness,
   diagnoseAcpInstall,
@@ -8,9 +10,17 @@ import {
   linkAcpTransports,
 } from "../src/agent-adapters/acp/index.js";
 
+const localTarget = {
+  id: "local",
+  kind: "local" as const,
+  platform: process.platform as "darwin" | "linux" | "win32",
+  available: true,
+};
+
 /**
  * ACP Devin: install/probe must not upgrade session caps; host-managed stays unsupported.
- * Mirrors print-mode honesty (`devinCapabilitiesHonesty`) for the optional ACP profile path.
+ * Soft siblings mirror OpenCode/Goose honesty (#225): no transport open on support reads;
+ * profile stays brand-only (no session/load). ≠ print-mode honesty / SessionHost.
  */
 test("ACP Devin install probe does not certify session capabilities", () => {
   const missing = diagnoseAcpInstall({ profile: devinAcpProfile, executableFound: false });
@@ -37,13 +47,33 @@ test("ACP Devin install probe does not certify session capabilities", () => {
 });
 
 test("ACP Devin hostManagedSupport stays unsupported without opening transport", async () => {
+  let opened = 0;
   const adapter = createAcpHarness({
     profile: devinAcpProfile,
-    openTransport: () => linkAcpTransports().client,
+    openTransport: () => {
+      opened += 1;
+      return linkAcpTransports().client;
+    },
   });
   assert.equal(adapter.id, "devin");
-  // hostManagedSupport must not open ACP transport / initialize
+  assert.equal(adapter.sessionMachineId, ACP_SESSION_MACHINE_ID);
   const hostManaged = await adapter.hostManagedSupport();
   assert.equal(hostManaged.support, "unsupported");
   assert.match(hostManaged.reason ?? "", /host-managed/i);
+  assert.equal(opened, 0, "hostManagedSupport must not open ACP transport");
+
+  // Install-found ≠ harness-managed admission: unknown until initialize/probe.
+  const harnessManaged = await adapter.harnessManagedSupport(localTarget);
+  assert.equal(harnessManaged.support, "unknown");
+  assert.match(harnessManaged.reason ?? "", /initialize/i);
+  assert.equal(opened, 0, "harnessManagedSupport without probe must not open transport");
+});
+
+test("ACP Devin profile does not hardcode session/load", async () => {
+  const source = await readFile(
+    new URL("../src/agent-adapters/acp/agents/devin.ts", import.meta.url),
+    "utf8",
+  );
+  assert.equal(source.includes("session/load"), false);
+  assert.equal(source.includes("session/resume"), false);
 });
