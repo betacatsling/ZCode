@@ -32,7 +32,6 @@ import {
   PRESET_PROVIDER_SPECS,
   PRESET_SUBSCRIPTION_TIMEOUT_MS,
   BIGMODEL_REGISTRATION_URL,
-  type CodingPlanStatus,
   type ModelProviderNavGroup,
 } from "./model-provider-section/constants.js";
 import { ModelProviderSectionDetail } from "./model-provider-section/Detail.js";
@@ -734,24 +733,6 @@ export function ModelProviderSection({
     [platform],
   );
 
-  const handleCodingPlanLogin = useCallback(
-    (
-      presetId: BuiltinModelProviderId,
-      providerId: OAuthProviderId,
-      providerName: string,
-      status: CodingPlanStatus,
-    ) => {
-      logger.info("[ModelProviderSection] 产品登录已下线，不再连接 Coding Plan", {
-        presetId,
-        providerId,
-        providerName,
-        status,
-      });
-      // StatusCards 仍可能挂登录门控回调；产品登录与升级弹窗均已下线，仅保留日志。
-    },
-    [],
-  );
-
   const handleCodingPlanDisconnect = useCallback(
     async (presetId: BuiltinModelProviderId, providerId: OAuthProviderId, providerName: string) => {
       if (providerId !== BIGMODEL_PROVIDER_ID && providerId !== ZAI_PROVIDER_ID) {
@@ -1095,7 +1076,6 @@ export function ModelProviderSection({
           // Provider 的 Effective 模型无法写入 Personal modelOrder。模型调序独立于成员来源。
           onReorderProviderModels={reorderProviderModels}
           onTestModel={handleTestModel}
-          onCodingPlanLogin={handleCodingPlanLogin}
           onRetryCodingPlan={() => {
             // 取 Key 失败不等于登录失效；沿用 Host 手动刷新，不清除 OAuth 或重新登录。
             logger.info("[ModelProviderSection] 重试获取套餐状态");
