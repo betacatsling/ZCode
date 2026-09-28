@@ -41,7 +41,7 @@ export function shouldBlockRootRender(state: RootStartupGateState): boolean {
 }
 
 export function shouldRedirectStartupToProductLogin(input: StartupProductLoginInput): boolean {
-  // 没有产品账号、provider family 或可执行模型时，都不能打开产品登录。
+  // 产品登录页已卸：启动路径恒不重定向。保留入参校验形状，避免调用方误以为缺项会打开登录。
   // 模型目录读取失败保留数据错误提示，发送/创建入口自行解释缺项。
   if (input.modelSelectionFailed) return false;
   if (!input.providerFamilyDomain) return false;
@@ -50,8 +50,8 @@ export function shouldRedirectStartupToProductLogin(input: StartupProductLoginIn
 }
 
 export function shouldShowRootStartupLoading(state: RootStartupLoadingVisibilityState): boolean {
-  // 登录入口是启动门禁的结果，不是可继续被门禁遮挡的后台状态。
-  // 如果 WelcomeScreen 已经打开，继续返回启动 loading 会把未登录用户卡在黑屏 logo。
+  // 产品 Welcome 登录壳已卸；welcomeScreenOpen 仅作兼容门闩（调用方固定 false）。
+  // 桌面端启动仍按既有 restore/bootstrap 门禁展示 loading，不再与登录页互斥。
   return Boolean(state.isDesktop) && !state.welcomeScreenOpen && shouldBlockRootRender(state);
 }
 
