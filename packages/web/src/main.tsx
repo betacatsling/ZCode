@@ -13,7 +13,6 @@ import "@zcode/ui/styles.css";
 import { connectViaWebSocket } from "@zcode/client";
 import { WebCallbackPage } from "./auth/WebCallbackPage.js";
 import { createWebAuthService } from "./auth/webAuthService.js";
-import { WEB_ZAI_OAUTH_CONFIG, resolveWebAuthDevReturnTo } from "./auth/webZaiOAuthConfig.js";
 import { parseOAuthState, resolveSafeAppReturnTo } from "./auth/oauthStateCodec.js";
 import { resolveWebCommunityUrl, resolveWebHelpConfig } from "./communityUrl.js";
 import {
@@ -167,18 +166,16 @@ async function renderConversationSharePage(): Promise<void> {
       shareCode={shareCode}
       client={client}
       getAccessToken={() => getMockToken() ?? webAuthService.getZCodeJwtToken()}
-      onLogin={(provider) => {
+      onLogin={(_provider) => {
         if (mockMode) {
           window.sessionStorage.setItem("zcode:share:mock-auth", "owner");
           window.location.reload();
           return;
         }
-        webAuthService.startLogin({
-          provider,
-          appReturnTo: window.location.href,
-          redirectUri: WEB_ZAI_OAUTH_CONFIG.shareRedirectUri,
-          devReturnTo: resolveWebAuthDevReturnTo(WEB_ZAI_OAUTH_CONFIG),
-        });
+        // Product Web OAuth entry closed (P3). Do not start Z.ai authorize.
+        window.alert(
+          "Product account login was removed. Configure a personal model provider instead.",
+        );
       }}
       onLogout={onLogout}
       locale={routeLocale}
