@@ -17,7 +17,6 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import {
-  type CodingPlanStatus,
   type CodingPlanProviderId,
   type ModelProviderNavItem,
 } from "./constants.js";
@@ -211,7 +210,6 @@ export function ModelProviderSectionDetail({
   onDelete,
   onReorderProviderModels,
   onTestModel,
-  onCodingPlanLogin,
   onRetryCodingPlan,
   onCodingPlanDisconnect,
   onOpenApiKeyUrl,
@@ -248,12 +246,6 @@ export function ModelProviderSectionDetail({
   onReorderProviderModels?: (providerId: string, modelIds: string[]) => Promise<void>;
   onTestModel: (providerId: string, modelId: string) => Promise<ModelConnectivityResult>;
   onRetryCodingPlan?: () => void | Promise<void>;
-  onCodingPlanLogin: (
-    presetId: BuiltinModelProviderId,
-    providerId: OAuthProviderId,
-    providerName: string,
-    status: CodingPlanStatus,
-  ) => number | void;
   onCodingPlanDisconnect: (
     presetId: BuiltinModelProviderId,
     providerId: OAuthProviderId,
@@ -443,10 +435,6 @@ export function ModelProviderSectionDetail({
       dedicatedProvider !== null &&
       !hidePlanModels &&
       (!isStartPlanProvider || accountAvailable || selectedNavItem.status === "purchased");
-    const reloginOnFailure =
-      selectedNavItem.type === "codingPlan" &&
-      isIndividualCodingPlanModelProviderId(selectedNavItem.presetId) &&
-      selectedNavItem.provider?.accountState?.unavailableReason === "credential-failed";
     // 团队查询/取 Key 失败不是未登录：先刷新 Host 凭据，再刷新当前团队权益。
     const retryTeamPlan =
       selectedNavItem.type === "teamPlan" &&
@@ -513,11 +501,9 @@ export function ModelProviderSectionDetail({
               : undefined
           }
           disconnectLoading={codingPlanDisconnectProviderId === selectedNavItem.presetId}
-          // Plan Card 在未登录/登录失效时仍然是用户当前选中的入口。
-          // 之前详情页没有打开状态卡内置登录动作，导致用户能进入 Coding tab 却只能看到“未连接”文案。
+          // Plan Card 在未连接时仍是当前入口；loginActionVisible 驱动 StatusCards
+          // 展示 productPurchaseRemoved 说明（产品登录回调已卸）。
           loginActionVisible
-          loginActionPlacement="trailing"
-          reloginOnFailure={reloginOnFailure}
           onRetry={
             retryTeamPlan ??
             (selectedNavItem.type === "codingPlan" &&
@@ -530,15 +516,6 @@ export function ModelProviderSectionDetail({
               ? onRetryCodingPlan
               : undefined)
           }
-          onLogin={() => {
-            return onCodingPlanLogin(
-              selectedNavItem.presetId,
-              selectedNavItem.oauthProviderId,
-              selectedNavItem.providerName,
-              // 产品登录已下线；回调仅用于 StatusCards 可见性门控与日志。
-              selectedNavItem.status,
-            );
-          }}
         />
       );
 
@@ -574,10 +551,8 @@ export function ModelProviderSectionDetail({
             providerName={selectedNavItem.providerName}
             status={selectedNavItem.status}
             viewState={statusPanelViewState}
-            // 未登录状态下右侧只渲染 Plan Card，不再回退到 API Key 表单。
-            // 因此登录入口必须留在 Plan Card 本身，否则用户进入 Coding tab 后没有下一步动作。
+            // 未连接时右侧只渲染 Plan Card；loginActionVisible 保留 productPurchaseRemoved 说明。
             loginActionVisible
-            loginActionPlacement="trailing"
             purchaseUrl={selectedNavItem.purchaseUrl}
             planLevel={selectedNavItem.planLevel}
             inactivePlanTitle={selectedNavItem.inactivePlanTitle}
@@ -606,15 +581,6 @@ export function ModelProviderSectionDetail({
             mcpQuotaLimit={selectedNavItem.mcpQuotaLimit ?? null}
             authError={codingPlanAuthError}
             onOpenRegistration={onOpenBigModelRegistration}
-            onLogin={() => {
-              return onCodingPlanLogin(
-                selectedNavItem.presetId,
-                selectedNavItem.oauthProviderId,
-                selectedNavItem.providerName,
-                selectedNavItem.status,
-              );
-            }}
-            reloginOnFailure={reloginOnFailure}
             onRetry={
               retryTeamPlan ??
               (selectedNavItem.type === "codingPlan" &&

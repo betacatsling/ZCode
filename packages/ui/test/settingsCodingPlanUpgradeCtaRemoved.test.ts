@@ -17,14 +17,14 @@ test("settings model-provider Detail does not open Coding Plan upgrade", () => {
   assert.equal(detail.includes("purchaseInitialAudience"), false);
 });
 
-test("settings ModelProviderSection login stub does not open Coding Plan upgrade", () => {
+test("settings ModelProviderSection drops Coding Plan product-login noop chain", () => {
   assert.equal(section.includes("useOptionalCodingPlanUpgradeDialog"), false);
   assert.equal(section.includes("useCodingPlanUpgradeDialog"), false);
   assert.equal(section.includes("openCodingPlanUpgrade"), false);
-  assert.match(
-    section,
-    /\[ModelProviderSection\] 产品登录已下线，不再连接 Coding Plan/,
-  );
+  assert.equal(section.includes("handleCodingPlanLogin"), false);
+  assert.equal(section.includes("onCodingPlanLogin"), false);
+  assert.equal(section.includes("产品登录已下线，不再连接 Coding Plan"), false);
+  assert.equal(detail.includes("onCodingPlanLogin"), false);
 });
 
 test("settings model-provider Detail does not use CodingPlan entryGate", () => {

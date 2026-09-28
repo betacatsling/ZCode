@@ -143,12 +143,9 @@ export function CodingPlanStatusPanel({
   mcpQuotaLimit = null,
   authError,
   onOpenRegistration,
-  onLogin,
   onRetry,
-  reloginOnFailure = false,
   onOpenPurchase,
   onDisconnect,
-  loginActionPlacement = "inline",
   loginActionVisible = false,
   usageDetailsVisible = true,
   statusLabelId,
@@ -175,14 +172,11 @@ export function CodingPlanStatusPanel({
   mcpQuotaLimit?: UsageQuotaLimit | null;
   authError?: string | null;
   onOpenRegistration?: () => void;
-  onLogin?: () => number | void | Promise<void>;
-  /** 凭据获取失败提供主动重新登录，不据此自动退出账号。 */
-  reloginOnFailure?: boolean;
   /** Start 套餐获取失败沿用 Host 手动刷新，不强制重新登录。 */
   onRetry?: () => void;
   onOpenPurchase?: (url: string) => void;
   onDisconnect?: () => void;
-  loginActionPlacement?: "inline" | "trailing";
+  /** 未连接/不可用时展示 productPurchaseRemoved 说明（产品登录回调已卸）。 */
   loginActionVisible?: boolean;
   usageDetailsVisible?: boolean;
   statusLabelId?: string;
@@ -269,19 +263,11 @@ export function CodingPlanStatusPanel({
   const teamPlanWarningVisible = !isChecking && teamPlanAvailabilityReason !== undefined;
   const recoverableUnavailable =
     effectiveViewState.actionStatus === "unavailable" && !teamPlanUnavailableStatusVisible;
-  const reloginVisible = recoverableUnavailable && reloginOnFailure && Boolean(onLogin);
+  // 产品登录回调已卸：不可用态优先 entitlement retry，不再用 noop onLogin 门控压制 Retry。
   const retryVisible =
     (recoverableUnavailable ||
       statusLabelId === "settings.modelProvider.codingPlan.status.unavailable") &&
-    !reloginVisible &&
     Boolean(onRetry);
-  const trailingLoginVisible =
-    !reloginVisible &&
-    !retryVisible &&
-    loginActionVisible &&
-    loginActionPlacement === "trailing" &&
-    (actionIsDisconnected || recoverableUnavailable) &&
-    Boolean(onLogin);
   const rawPlanLevel = planLevel?.trim() ?? "";
   const normalizedPlanLevel = rawPlanLevel.toUpperCase();
   const displayPlanLevel = /^GLM[\s_-]+CODING\b/i.test(rawPlanLevel)
@@ -398,14 +384,10 @@ export function CodingPlanStatusPanel({
     usageDetailsVisible &&
     isPurchased &&
     (isStartPlanProvider || hasDisplayableCodingPlanUsageLimits(quotaLimits));
-  const trailingAction = reloginVisible ? (
-    <CodingPlanProductPurchaseRemovedNotice />
-  ) : retryVisible ? (
+  const trailingAction = retryVisible ? (
     <Button type="button" size="lg" onClick={onRetry} disabled={effectiveViewState.loginLoading}>
       {intl.formatMessage({ id: "common.retry" })}
     </Button>
-  ) : trailingLoginVisible ? (
-    <CodingPlanProductPurchaseRemovedNotice />
   ) : buyAction ? (
     buyAction
   ) : null;
@@ -424,9 +406,7 @@ export function CodingPlanStatusPanel({
         isPurchased={isPurchased}
         loginLoading={effectiveViewState.loginLoading}
         loginButtonId={loginButtonId}
-        loginVisible={
-          loginActionVisible && !trailingLoginVisible && !reloginVisible && !retryVisible
-        }
+        loginVisible={loginActionVisible && !retryVisible}
         canDisconnectProvider={inlineDisconnectVisible ? false : canDisconnectProvider}
         disconnectLoading={disconnectLoading}
         onDisconnect={onDisconnect}
