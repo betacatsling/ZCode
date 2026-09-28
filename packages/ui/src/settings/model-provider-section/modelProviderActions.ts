@@ -65,16 +65,16 @@ export async function refreshProviderPanelAfterAuthChange({
   refreshModelProviders,
   refreshCodingPlanEntitlements,
   refreshCodingPlanProducts,
-  refreshPurchaseTokenState,
+  refreshActiveOAuthProvider,
   refreshPlanSnapshots = true,
 }: {
   refreshModelProviders: () => Promise<void>;
   refreshCodingPlanEntitlements: () => Promise<void>;
   refreshCodingPlanProducts: () => void;
-  refreshPurchaseTokenState: () => Promise<unknown>;
+  refreshActiveOAuthProvider: () => Promise<unknown>;
   refreshPlanSnapshots?: boolean;
 }): Promise<void> {
-  await refreshPurchaseTokenState();
+  await refreshActiveOAuthProvider();
   if (refreshPlanSnapshots) {
     await Promise.all([
       refreshModelProviders(),

@@ -213,7 +213,7 @@ export function ModelProviderSectionDetail({
   onCodingPlanDisconnect,
   onOpenApiKeyUrl,
   onOpenBigModelRegistration,
-  onCodingPlanPurchaseComplete,
+  onQuotaResetEntitlementRefresh,
   onSelectNavItem,
   providerSettingsView: providerSettingsViewOverride,
 }: {
@@ -252,7 +252,7 @@ export function ModelProviderSectionDetail({
   ) => void;
   onOpenApiKeyUrl: (url: string) => void;
   onOpenBigModelRegistration: () => void;
-  onCodingPlanPurchaseComplete: () => void | Promise<void>;
+  onQuotaResetEntitlementRefresh: () => void | Promise<void>;
   onSelectNavItem?: (item: ModelProviderNavItem) => void;
   providerSettingsView?: ProviderSettingsView | null;
 }) {
@@ -483,7 +483,7 @@ export function ModelProviderSectionDetail({
                     force: true,
                     reason: "manual",
                   })
-              : onCodingPlanPurchaseComplete
+              : onQuotaResetEntitlementRefresh
           }
           onOpenPurchase={onOpenApiKeyUrl}
           onDisconnect={
@@ -571,7 +571,7 @@ export function ModelProviderSectionDetail({
                       force: true,
                       reason: "manual",
                     })
-                : onCodingPlanPurchaseComplete
+                : onQuotaResetEntitlementRefresh
             }
             subscriptionRenewTime={selectedNavItem.subscriptionRenewTime}
             subscriptionExpireTime={selectedNavItem.subscriptionExpireTime}
