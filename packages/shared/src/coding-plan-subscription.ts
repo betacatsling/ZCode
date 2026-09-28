@@ -1,7 +1,7 @@
 /* eslint-disable max-lines -- Coding Plan 订阅协议类型需要集中导出给 UI、services 和 RPC 共享，拆散会增加跨包类型入口复杂度。 */
 import type { BUILTIN_MODEL_PROVIDER_IDS } from "./model-provider-types.js";
 
-export type CodingPlanSubscriptionProviderId =
+export type CodingPlanCatalogProviderId =
   | typeof BUILTIN_MODEL_PROVIDER_IDS.zaiIndividualCodingPlan
   | typeof BUILTIN_MODEL_PROVIDER_IDS.zaiTeamCodingPlan
   | typeof BUILTIN_MODEL_PROVIDER_IDS.zaiStartPlan
@@ -44,7 +44,7 @@ export interface CodingPlanStaticProduct {
 }
 
 export type CodingPlanStaticProductsConfig = Partial<
-  Record<CodingPlanSubscriptionProviderId, CodingPlanStaticProduct[]>
+  Record<CodingPlanCatalogProviderId, CodingPlanStaticProduct[]>
 >;
 
 export interface CodingPlanStaticTeamProduct {
@@ -64,7 +64,7 @@ export interface CodingPlanStaticTeamProduct {
 }
 
 export type CodingPlanStaticTeamProductsConfig = Partial<
-  Record<CodingPlanSubscriptionProviderId, CodingPlanStaticTeamProduct[]>
+  Record<CodingPlanCatalogProviderId, CodingPlanStaticTeamProduct[]>
 >;
 
 export interface StartPlanPreviewEntitlement {
