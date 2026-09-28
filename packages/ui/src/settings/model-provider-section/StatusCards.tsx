@@ -172,7 +172,7 @@ export function CodingPlanStatusPanel({
   mcpQuotaLimit?: UsageQuotaLimit | null;
   authError?: string | null;
   onOpenRegistration?: () => void;
-  /** Start 套餐获取失败沿用 Host 手动刷新，不强制重新登录。 */
+  /** Start 套餐获取失败沿用 Host 手动刷新，不强制重新连接账号。 */
   onRetry?: () => void;
   onOpenPurchase?: (url: string) => void;
   onDisconnect?: () => void;
@@ -311,7 +311,7 @@ export function CodingPlanStatusPanel({
   const statusMeta =
     isPurchased && isStartPlanProvider ? (
       // 体验套餐用量卡片不展示「管理」「解绑」（免费套餐无管理页，
-      // 登录态由 family 级连接方式管理），仅保留过期时间。
+      // 连接态由 family 级连接方式管理），仅保留过期时间。
       <StartPlanStatusMeta
         expireTime={subscriptionExpireTime}
         entitlements={subscriptionDetails?.[0]?.entitlements}

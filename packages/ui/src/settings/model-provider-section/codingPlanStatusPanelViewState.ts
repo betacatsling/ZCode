@@ -25,9 +25,9 @@ export function resolveCodingPlanStatusPanelViewState({
   }
 
   return {
-    // 登录 pending 和权益查询 checking 是两个语义。
-    // 登录中状态文案需要反馈 checking，但按钮仍要按点击前状态保留并显示 spinner；
-    // Start Plan 余额卡也不能因为登录 pending 提前出现。
+    // status-sync pending 和权益查询 checking 是两个语义。
+    // sync 中状态文案需要反馈 checking，但动作区仍要按点击前状态保留并显示 spinner；
+    // Start Plan 余额卡也不能因为 status-sync pending 提前出现。
     displayStatus: "checking",
     actionStatus: status,
     balanceStatus: status,

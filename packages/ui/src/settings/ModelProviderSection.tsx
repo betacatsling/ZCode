@@ -302,7 +302,7 @@ export function ModelProviderSection({
   const [codingPlanDisconnectProviderId, setCodingPlanDisconnectProviderId] =
     useState<BuiltinModelProviderId | null>(null);
   // 死代码清理：refreshToken 只被已下线的原生购买面板消费，这里仅保留 setter 供
-  // 登录/解绑后的 refreshCodingPlanProducts 契约调用（保持共享 helper 签名不变）。
+  // 连接/解绑后的 refreshCodingPlanProducts 契约调用（保持共享 helper 签名不变）。
   const [, setCodingPlanProductsRefreshToken] = useState(0);
   const [pendingCreatedProviderId, setPendingCreatedProviderId] = useState<string | null>(null);
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
@@ -1052,7 +1052,7 @@ export function ModelProviderSection({
           onReorderProviderModels={reorderProviderModels}
           onTestModel={handleTestModel}
           onRetryCodingPlan={() => {
-            // 取 Key 失败不等于登录失效；沿用 Host 手动刷新，不清除 OAuth 或重新登录。
+            // 取 Key 失败不等于凭据失效；沿用 Host 手动刷新，不清除 OAuth 或强制重连。
             logger.info("[ModelProviderSection] 重试获取套餐状态");
             return refresh().then(() =>
               refreshCodingPlanEntitlements({ force: true, reason: "manual" }),
