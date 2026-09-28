@@ -2,10 +2,10 @@
 /**
  * Product-login removal gate (scripts-only knife; docs/inventory sync after Dialog unload).
  *
- * Tip state (origin/cursor/wave4-harness-integration-b7a9 @ ad22130 / #140–#174 (#155 SessionHost OUT; #156/#160/#163/#164/#168/#170/#172 hard-pins; #157 family team feed soft; #158/#159/#162 gated; #161/#165/#169/#171/#173 P6 docs; #174 load-then-cancel SessionHost OUT; #166 status-comment scrub; #167 ledger)):
+ * Tip state (origin/cursor/wave4-harness-integration-b7a9 @ 7015dcd / #140–#177 (#155 SessionHost OUT; #156/#160/#163/#164/#168/#170/#172/#176 hard-pins; #157 family team feed soft; #158/#159/#162 gated; #161/#165/#169/#171/#173 P6 docs; #174/#177 SessionHost OUT; #166 status-comment scrub; #167 ledger)):
  *   P1–P4 landed; CodingPlanUpgradeDialog / Provider + Root wrap unloaded (Ex1 /
  *   9ce3088); EntryGate CTA / CodingPlanEntryButton / useCodingPlanEntryGate gone;
- *   soft remainingUiInventory first landed in #57; #103–#172 clearances hard-gated below; #173 docs/#174 load-then-cancel are soft ledger OUT.
+ *   soft remainingUiInventory first landed in #57; #103–#176 clearances hard-gated below; #173 docs/#174/#177 SessionHost are soft ledger OUT.
  *
  * Hard gates (must exit 0 on tip):
  *   - CLI login-command / tui-auth / create.ts stubs (P3)
@@ -66,11 +66,14 @@
  * Hard (also): #172 sample dead Start Plan acquisition/preview/highlight + plan-access connectionMode
  *   locale keys must stay absent (KEEP live connectionMode labels, startPlan.status.* / balance.title /
  *   refreshEntitlement / expiresAt / pendingUntil, manage · planCard, productPurchaseRemoved).
- * Soft ledger also records SessionHost #140/#143/#147/#149/#153/#155 (OUT of this scripts gate) +
+ * Hard (also): #176 sample dead Coding Plan subscription purchase/payment/preview/sign DTOs
+ *   (CodingPlanPaypal* / CodingPlanStripe* / preview/sign family) must stay absent from
+ *   coding-plan-subscription.ts (KEEP ForceUpdateConfig + EnterpriseCodingPlanPricingProduct).
+ * Soft ledger also records SessionHost #140/#143/#147/#149/#153/#155/#174/#177 (OUT of this scripts gate) +
  *   #144/#151 productList comment scrubs + #157 family team products feed drop
  *   (resolveFirstSubscribedTeamPlanConnectionWithContext / teamProducts) + #161/#165/#169/#171 P6 tip
  *   docs + #166 status-comment scrub + #167 tip-ledger sync + #168/#170 purchase-locale pins +
- *   #172 plan-mode/access/pricing dead i18n.
+ *   #172 plan-mode/access/pricing dead i18n + #176 dead subscription DTO pins.
  *
  * Run from repo root: node scripts/verify-product-login-removed.mjs
  */
@@ -989,6 +992,57 @@ function assertDeletedSurfaces() {
     }
   }
 
+  // #176: sample dead Coding Plan subscription purchase/payment/preview/sign DTOs hard-absent.
+  // KEEP ForceUpdateConfig + EnterpriseCodingPlanPricingProduct (Display deps stay elsewhere).
+  const subscriptionTypesPath = join(
+    ROOT,
+    "packages/shared/src/coding-plan-subscription.ts",
+  );
+  if (!existsSync(subscriptionTypesPath)) {
+    fails.push(
+      "coding-plan-subscription.ts must exist (#176 KEEP ForceUpdateConfig / EnterpriseCodingPlanPricingProduct)",
+    );
+  } else {
+    const subscriptionTypesSrc = readFileSync(subscriptionTypesPath, "utf8");
+    // Representative sample of #176 unloaded surfaces (full drop list in squash #176).
+    const deadSubscriptionDtoSamples = [
+      "CodingPlanPayType",
+      "CodingPlanOverseasPaymentChannel",
+      "CodingPlanProductPreviewPayment",
+      "CodingPlanBatchPreviewRequest",
+      "CodingPlanPreviewRequest",
+      "CodingPlanPreviewResponse",
+      "CodingPlanCreateSignRequest",
+      "CodingPlanUpdateSignRequest",
+      "CodingPlanPaymentCheckRequest",
+      "CodingPlanStripeCard",
+      "CodingPlanStripeBindRequest",
+      "CodingPlanStripePayRequest",
+      "CodingPlanPaypalSupportRequest",
+      "CodingPlanPaypalSetupTokenRequest",
+      "CodingPlanPaypalSubscribeRequest",
+      "EnterpriseCodingPlanCreateOrderRequest",
+      "EnterpriseCodingPlanOrderStatusResponse",
+    ];
+    for (const dead of deadSubscriptionDtoSamples) {
+      if (subscriptionTypesSrc.includes(dead)) {
+        fails.push(
+          `coding-plan-subscription.ts must not revive dead subscription DTO: ${dead} (#176)`,
+        );
+      }
+    }
+    if (!/\bForceUpdateConfig\b/.test(subscriptionTypesSrc)) {
+      fails.push(
+        "coding-plan-subscription.ts must keep ForceUpdateConfig (#176)",
+      );
+    }
+    if (!/\bEnterpriseCodingPlanPricingProduct\b/.test(subscriptionTypesSrc)) {
+      fails.push(
+        "coding-plan-subscription.ts must keep EnterpriseCodingPlanPricingProduct (#176)",
+      );
+    }
+  }
+
   return fails;
 }
 
@@ -1059,7 +1113,7 @@ function remainingUiInventory() {
   ].map(fileStatus);
 
   const note =
-    "Tip ad22130 (#174 / after #103–#174): Dialog/Provider/Entry/EmbeddedWebview + CLI loginRequired→modelSetupRequired hard. UI locale dead product loginRequired / Coding Plan login + orphan Welcome/login.* shell + #103–#107 upgrade/purchase/usage/enterprise acquisition i18n hard-gated. login.oauth.regionTag.* absent; KEEP settings.modelProvider.regionTag.* + share-import signInRequired + manage/planCard + productPurchaseRemoved body + live personal API-key / MCP OAuth copy. #114 slash-help /login+/logout off Coding Plan/Z.ai OAuth acquisition → model-setup/API-key guidance hard-gated (KEEP MCP help). #123 useEnterpriseCodingPlanProducts.ts hard-absent; #124 productPurchaseRemovedTitle absent; #126 refreshTeamPlanProducts hard-absent (KEEP entitlement refresh); #128/#Ex1/#142 usageSources buildCodingPlanUsageSources hard-absent (KEEP CodingPlanUsageSource / personal builder / sidebar resolver); #131–#135+/#141 Settings/V4/sidebar/MPS/visibility subscribedTeamProducts stubs+wiring hard-absent; #145 teamSources/team audience hard-absent; #146/#148 codingPlanLogin noop (onCodingPlanLogin/handleCodingPlanLogin) hard-absent (KEEP codingPlanLoginPending); #150 onCodingPlanPurchaseComplete/codingPlanPurchaseToken/refreshPurchaseTokenState hard-absent (KEEP quota/OAuth refresh); #152/#156 oauthTeamPricing.ts + account-loss getEnterprisePricingProducts/productList team fallback hard-absent (KEEP prepareAccountConnectionSwitch + individual-coding-plan); soft ledger #140/#143/#147/#149/#153/#155 SessionHost OUT + #144/#151 productList comment scrubs + #157 family team feed (resolveFirstSubscribedTeamPlanConnectionWithContext/teamProducts) soft; #158/#160 loginActionVisible→productPurchaseRemovedVisible hard-gated (KEEP productPurchaseRemovedVisible + body); #159/#163 codingPlanOwnedEntryPlans/buildOwnedEntryPlanList hard-absent (KEEP Display); #162/#164 teamPlanDisplayName/codingPlanErrorMessage hard-absent (KEEP Display); #161/#165 P6 tip docs; #168/#170 sample dead purchase/webview/pricing locale + zai/bigmodel plan|purchase prefixes hard-gated (KEEP manage/planCard/productPurchaseRemoved); #166 status-comment scrub; #167 tip-ledger; #169/#171 P6 tip docs; #173 docs + #174 load-then-cancel SessionHost OUT; #172 sample Start Plan acquisition/preview/highlight + dead connectionMode plan-access i18n hard-gated (KEEP live connectionMode labels + startPlan.status/balance.title/refreshEntitlement/expiresAt/pendingUntil). Soft inventory thinned — cleared symbol scans dropped. Inventory does not fail this gate.";
+    "Tip 7015dcd (#177 / after #103–#177): Dialog/Provider/Entry/EmbeddedWebview + CLI loginRequired→modelSetupRequired hard. UI locale dead product loginRequired / Coding Plan login + orphan Welcome/login.* shell + #103–#107 upgrade/purchase/usage/enterprise acquisition i18n hard-gated. login.oauth.regionTag.* absent; KEEP settings.modelProvider.regionTag.* + share-import signInRequired + manage/planCard + productPurchaseRemoved body + live personal API-key / MCP OAuth copy. #114 slash-help /login+/logout off Coding Plan/Z.ai OAuth acquisition → model-setup/API-key guidance hard-gated (KEEP MCP help). #123 useEnterpriseCodingPlanProducts.ts hard-absent; #124 productPurchaseRemovedTitle absent; #126 refreshTeamPlanProducts hard-absent (KEEP entitlement refresh); #128/#Ex1/#142 usageSources buildCodingPlanUsageSources hard-absent (KEEP CodingPlanUsageSource / personal builder / sidebar resolver); #131–#135+/#141 Settings/V4/sidebar/MPS/visibility subscribedTeamProducts stubs+wiring hard-absent; #145 teamSources/team audience hard-absent; #146/#148 codingPlanLogin noop (onCodingPlanLogin/handleCodingPlanLogin) hard-absent (KEEP codingPlanLoginPending); #150 onCodingPlanPurchaseComplete/codingPlanPurchaseToken/refreshPurchaseTokenState hard-absent (KEEP quota/OAuth refresh); #152/#156 oauthTeamPricing.ts + account-loss getEnterprisePricingProducts/productList team fallback hard-absent (KEEP prepareAccountConnectionSwitch + individual-coding-plan); soft ledger #140/#143/#147/#149/#153/#155/#174/#177 SessionHost OUT + #144/#151 productList comment scrubs + #157 family team feed (resolveFirstSubscribedTeamPlanConnectionWithContext/teamProducts) soft; #158/#160 loginActionVisible→productPurchaseRemovedVisible hard-gated (KEEP productPurchaseRemovedVisible + body); #159/#163 codingPlanOwnedEntryPlans/buildOwnedEntryPlanList hard-absent (KEEP Display); #162/#164 teamPlanDisplayName/codingPlanErrorMessage hard-absent (KEEP Display); #161/#165 P6 tip docs; #168/#170 sample dead purchase/webview/pricing locale + zai/bigmodel plan|purchase prefixes hard-gated (KEEP manage/planCard/productPurchaseRemoved); #166 status-comment scrub; #167 tip-ledger; #169/#171 P6 tip docs; #173 docs; #172 sample Start Plan acquisition/preview/highlight + dead connectionMode plan-access i18n hard-gated (KEEP live connectionMode labels + startPlan.status/balance.title/refreshEntitlement/expiresAt/pendingUntil); #176 sample dead CodingPlanPaypal*/Stripe*/preview/sign subscription DTOs hard-absent (KEEP ForceUpdateConfig + EnterpriseCodingPlanPricingProduct). Soft inventory thinned — cleared symbol scans dropped. Inventory does not fail this gate.";
 
   return {
     note,
