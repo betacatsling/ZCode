@@ -24,7 +24,7 @@ import {
   formatSlashCommandHelp,
   parseSlashCommand,
 } from "./slash-commands.js";
-import { loginRequiredResponse } from "../tui-login-state.js";
+import { modelSetupRequiredResponse } from "../tui-login-state.js";
 import { PRODUCT_LOGIN_REMOVED_MESSAGE } from "../login-command.js";
 import type { CommandCenterDeps } from "./types.js";
 
@@ -39,7 +39,7 @@ export function createCommandCenter(deps: CommandCenterDeps): TuiSubmitPrompt {
         return {
           loginRequired: true,
           mode: deps.getMode?.(),
-          response: loginRequiredResponse(deps.getLocale?.()),
+          response: modelSetupRequiredResponse(deps.getLocale?.()),
         };
       }
       const app = await deps.getApp();

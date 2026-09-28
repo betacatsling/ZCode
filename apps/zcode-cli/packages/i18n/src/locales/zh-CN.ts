@@ -95,18 +95,11 @@ Slash Commands:
       restorePreviousInputFailed: "无法恢复上一条输入。",
       typePrompt: "输入问题后按 Enter。",
     },
-    loginRequired: {
+    modelSetupRequired: {
       help: "输入 /model 查看模型，或在设置中配置个人 Provider。",
       message: "没有可用模型，请配置个人模型 Provider。",
       status: "没有可用模型，请配置个人模型 Provider。",
       title: "需要配置模型",
-    },
-    loginSetup: {
-      emptyMessage: "产品账号登录配置已移除。",
-      help: "请配置个人模型 Provider，不要使用 /login。",
-      prompt: "产品登录配置不可用。",
-      response: "产品账号登录已移除。请改为配置个人模型 Provider。",
-      title: "登录配置已移除",
     },
     model: {
       requestFailed: (message) => `模型请求失败：${message}`,

@@ -81,6 +81,6 @@
 | `/login` OAuth + `*-coding-plan-api-key` | **已卸**：一律 `PRODUCT_LOGIN_REMOVED_MESSAGE` |
 | `configureApiKeyForTui` | **已删**（`tui-auth` 仅 login/logout throw） |
 | bootstrap `configureCodingPlanApiKey` | **保留**（库函数；未迁个人 Provider 入口前不删） |
-| `loginRequired` 文案 | 已改为无模型→配 Provider（不再推 Coding Plan `/login`） |
-| `loginSetup` i18n | 已瘦身为 removed 提示（无 OAuth/API Key option 树） |
+| `loginRequired` 文案 | 已改为无模型→配 Provider；i18n 键已改名 `modelSetupRequired` |
+| `loginSetup` i18n | 已删除（零生产消费者；removed 语义由 login stubs / PRODUCT_LOGIN_REMOVED_MESSAGE 覆盖） |
 | 仍非本清单刀 | MCP OAuth；shared-credentials 产品键只读停写（P4）；Desktop/Web Dialog 他轨 |

@@ -77,7 +77,7 @@ export function TuiApp({
   const [loginRequired, setLoginRequired] = useState(initialLoginRequired);
   const [status, setStatus] = useState(
     initialResult?.selection?.prompt ??
-      (initialLoginRequired ? initialCopy.loginRequired.status : initialCopy.status.ready),
+      (initialLoginRequired ? initialCopy.modelSetupRequired.status : initialCopy.status.ready),
   );
   const [statusDetails, setStatusDetails] = useState<string[]>([]);
   const [traceId, setTraceId] = useState<string | undefined>();
