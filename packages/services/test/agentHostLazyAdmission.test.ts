@@ -267,6 +267,46 @@ test("lazy admission off fails closed for ACP harness ids and sibling create API
   }
 });
 
+test("lazy target unavailable fails closed for capability without registering", async () => {
+  const root = await mkdtemp(join(tmpdir(), "zcode-lazy-target-cap-"));
+  const registeredIds: string[] = [];
+  const { service, dispose } = createLazyTargetAgentHostService({
+    root,
+    target: localTarget(false),
+    registry: fakeProviderRegistry(),
+    // Would admit externals if target were up — unavailable must still fail closed.
+    allowNewSessions: () => true,
+    nativeOwner: {
+      createWorkspaceSession: async () => {
+        throw new Error("native-not-used");
+      },
+    } as never,
+    observeRegisteredHarness: (harness) => {
+      registeredIds.push(harness.id);
+    },
+  });
+  try {
+    const availability = await service.getAvailability();
+    assert.equal(availability.admissionEnabled, false);
+
+    // #238 pinned admission-disabled; residual — target-unavailable is a distinct
+    // short-circuit that must not warm getTarget() / register CLI or ACP.
+    for (const harnessId of ["pi", "opencode", "goose", "codex", "claude-code", "devin"] as const) {
+      const capability = await service.getWorkspaceSessionCapability({
+        harnessId,
+        modelBinding: { kind: "harness-managed" },
+      });
+      assert.equal(capability.targetId, "local", harnessId);
+      assert.equal(capability.report.support, "unsupported", harnessId);
+      assert.equal(capability.report.reason, "target-unavailable", harnessId);
+    }
+    assert.deepEqual(registeredIds, []);
+  } finally {
+    await dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("lazy getDirectory keeps all five entries when target is unavailable", async () => {
   const root = await mkdtemp(join(tmpdir(), "zcode-lazy-target-down-"));
   const { service, dispose } = createLazyTargetAgentHostService({
