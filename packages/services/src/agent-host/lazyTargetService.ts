@@ -1,4 +1,4 @@
-import { isAbsolute, join } from "node:path";
+import { join } from "node:path";
 import { Emitter } from "@zcode/rpc";
 import { AiSdkModelAdapter } from "@zcode/adapters/model";
 import type { ProviderRegistryService } from "@zcode/provider";
@@ -18,6 +18,7 @@ import { createRegistryModelCatalog } from "./registryCatalog.js";
 import { createRpcAgentHostService } from "./rpcTargetService.js";
 import type { IAgentHostService } from "./serviceContract.js";
 import { readHarnessStaticAsset } from "./harnessAssets.js";
+import { authorizeLazyWorktreeAdmission } from "./lazyAuthorizeWorktree.js";
 import {
   AgentHostTargetService,
   type TargetHostEvent,
@@ -25,6 +26,7 @@ import {
   type NativeWorkspaceSessionOwnerPort,
   type WorkspaceAdmissionFenceChecker,
 } from "./targetService.js";
+
 
 /** Lazy registration avoids loading Pi/Codex/Claude/Devin CLI adapters during native-only startup. */
 export function createLazyTargetAgentHostService(input: {
@@ -59,39 +61,13 @@ export function createLazyTargetAgentHostService(input: {
   let disposed = false;
   const events = new Emitter<TargetHostEvent>();
   const conversationFrames = new Emitter<AgentHostConversationFrame>();
-  const authorizeWorktree = async (spec: SessionSpec, realPath: string) => {
-    if (
-      !input.worktrees ||
-      !isAbsolute(spec.execution.worktreePath) ||
-      realPath !== spec.execution.worktreePath
-    ) {
-      return false;
-    }
-    const catalog = await input.worktrees.read();
-    const workspace = catalog.workspaces.find(
-      (candidate) => candidate.id === spec.execution.workspaceId,
-    );
-    if (!workspace) return false;
-    const revalidated = await input.worktrees.revalidate(workspace.id);
-    if (
-      revalidated.status !== "verified" ||
-      revalidated.workspace.id !== workspace.id ||
-      revalidated.workspace.worktreePath !== realPath ||
-      revalidated.workspace.worktreeGeneration !== spec.execution.worktreeGeneration
-    ) {
-      return false;
-    }
-    const key = workspace.workspaceIdentity?.trim() || workspace.worktreePath;
-    return (
-      spec.execution.targetId === input.target.id &&
-      spec.execution.workspaceId === workspace.id &&
-      spec.execution.worktreeGeneration === workspace.worktreeGeneration &&
-      spec.execution.workspaceIdentity === key &&
-      spec.execution.worktreePath === workspace.worktreePath &&
-      workspace.lifecycle === "active" &&
-      workspace.verification === "verified"
-    );
-  };
+  const authorizeWorktree = async (spec: SessionSpec, realPath: string) =>
+    authorizeLazyWorktreeAdmission({
+      worktrees: input.worktrees,
+      targetId: input.target.id,
+      spec,
+      realPath,
+    });
   const historyOnly = new AgentHostTargetService({
     root: join(input.root, "sessions"),
     target: input.target,
