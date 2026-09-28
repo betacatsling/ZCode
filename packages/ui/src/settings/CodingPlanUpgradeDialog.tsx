@@ -1,12 +1,14 @@
 import { CodingPlanEmbeddedWebviewDialog } from "@/settings/CodingPlanEmbeddedWebviewDialog.js";
-import type { CodingPlanUpgradeDialogTarget } from "@/settings/codingPlanUpgradeLoginRecovery.js";
+import type { PurchaseAudience } from "@/settings/model-provider-section/codingPlanEnterpriseTiers.js";
 
 export { isCodingPlanPurchaseAuthPending } from "@/settings/model-provider-section/codingPlanPurchaseAuth.js";
-export {
-  beginCodingPlanUpgradeLogin,
-  resolvePendingCodingPlanUpgradeAfterLogin,
-} from "@/settings/codingPlanUpgradeLoginRecovery.js";
-export type { CodingPlanUpgradeDialogTarget } from "@/settings/codingPlanUpgradeLoginRecovery.js";
+
+export interface CodingPlanUpgradeDialogTarget {
+  providerId: string;
+  initialAudience?: PurchaseAudience;
+  initialTeamPlanKey?: string;
+  funnelContext?: import("@/lib/codingPlanFunnelTelemetry.js").CodingPlanFunnelContext;
+}
 
 interface CodingPlanUpgradeDialogProps {
   target?: CodingPlanUpgradeDialogTarget;

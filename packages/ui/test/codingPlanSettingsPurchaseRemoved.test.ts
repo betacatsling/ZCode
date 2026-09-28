@@ -1,11 +1,8 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { ZAI_PROVIDER_ID } from "@zcode/shared";
-import {
-  beginCodingPlanUpgradeLogin,
-  resolvePendingCodingPlanUpgradeAfterLogin,
-} from "../src/settings/codingPlanUpgradeLoginRecovery.js";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   createCodingPlanAuthInjectionScript,
   getCodingPlanCredentialKeys,
@@ -15,24 +12,12 @@ import { shouldOfferCodingPlanOAuthPurchase } from "../src/settings/model-provid
 
 const settingsRoot = new URL("../src/settings/", import.meta.url);
 
-test("coding plan login recovery never resumes a purchase", () => {
-  let closed = false;
-  const pending = beginCodingPlanUpgradeLogin({
-    target: { providerId: "builtin:zai-individual" },
-    oauthProviderId: ZAI_PROVIDER_ID,
-    audience: "personal",
-    onClose: () => {
-      closed = true;
-    },
-  });
-  assert.equal(closed, true);
-  assert.equal(
-    resolvePendingCodingPlanUpgradeAfterLogin({
-      pending,
-      loginAttempt: { id: pending.loginAttemptId, status: "succeeded" },
-    }).action,
-    "discard",
-  );
+test("coding plan login recovery module is removed", () => {
+  const recoveryPath = fileURLToPath(new URL("../src/settings/codingPlanUpgradeLoginRecovery.ts", import.meta.url));
+  assert.equal(existsSync(recoveryPath), false);
+  const dialogSource = readFileSync(new URL("CodingPlanUpgradeDialog.tsx", settingsRoot), "utf8");
+  assert.equal(dialogSource.includes("beginCodingPlanUpgradeLogin"), false);
+  assert.equal(dialogSource.includes("resolvePendingCodingPlanUpgradeAfterLogin"), false);
   assert.equal(shouldOfferCodingPlanOAuthPurchase({ forceOAuth: true }), false);
   assert.equal(isCodingPlanPurchaseAuthPending("loading"), false);
   assert.equal(isCodingPlanPurchaseAuthPending("authenticated"), false);
@@ -63,7 +48,6 @@ test("embedded coding plan script clears product credentials instead of injectin
 
 test("settings coding plan surface does not call product login entry", () => {
   const files = [
-    "codingPlanUpgradeLoginRecovery.ts",
     "CodingPlanUpgradeDialog.tsx",
     "CodingPlanUpgradeDialogProvider.tsx",
     "CodingPlanEmbeddedWebviewDialog.tsx",
