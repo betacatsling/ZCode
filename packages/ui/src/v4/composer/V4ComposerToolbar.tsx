@@ -281,7 +281,7 @@ function resolveContextCodingPlanUsageSource(params: {
   if (!params.teamSelection) return null;
   if (!params.accountAccess) return null;
 
-  // 企业 productList 已恒空（#128）；保留 subscribedTeamProducts: [] 满足签名/guard。
+  // 企业 productList 已恒空（#128）；buildCodingPlanUsageSources 已卸 team-products 参数。
   // Team context 用量走 cachedTeamSources / entitlement snapshot。
   return (
     buildCodingPlanUsageSources({
@@ -289,7 +289,6 @@ function resolveContextCodingPlanUsageSource(params: {
         [resolveModelProviderFamilySpecByProviderId(params.providerId ?? "")?.id ?? "bigmodel"]:
           params.accountAccess,
       },
-      subscribedTeamProducts: [],
     }).find(
       (source) =>
         "planKind" in source.accountAccess &&
@@ -506,7 +505,7 @@ function V4ComposerModelControlsImpl({
     : undefined;
 
   // 企业 productList 已恒空（#128/#131）；Team context 用量靠 entitlement snapshot，
-  // 不再拼空 productList / named subscribedTeamProducts stub。
+  // 不再拼空 productList / named team-products stub。
   const contextTeamUsageSourceCacheRef = useRef<CodingPlanUsageSource[]>([]);
   const contextCodingPlanUsageProviderId =
     contextPlanConnection.kind === "personalCoding" || contextPlanConnection.kind === "teamCoding"

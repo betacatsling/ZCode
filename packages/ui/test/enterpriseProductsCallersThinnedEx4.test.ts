@@ -6,14 +6,15 @@ const readUi = (relativePath: string) =>
   readFileSync(new URL(relativePath, import.meta.url), "utf8");
 
 test("ModelProviderSection and sidebar drop empty useEnterpriseCodingPlanProducts callers", () => {
-  for (const file of [
-    "../src/settings/ModelProviderSection.tsx",
-    "../src/WorkspaceSidebarFooterUsageSummary.tsx",
-  ]) {
-    const source = readUi(file);
-    assert.equal(source.includes("useEnterpriseCodingPlanProducts"), false, file);
-    assert.match(source, /subscribedTeamProducts/, file);
-  }
+  const section = readUi("../src/settings/ModelProviderSection.tsx");
+  assert.equal(section.includes("useEnterpriseCodingPlanProducts"), false);
+  // MPS still passes subscribedTeamProducts: [] into navigation (Ex3/Ex4 OUT of this knife).
+  assert.match(section, /subscribedTeamProducts/);
+
+  const sidebar = readUi("../src/WorkspaceSidebarFooterUsageSummary.tsx");
+  assert.equal(sidebar.includes("useEnterpriseCodingPlanProducts"), false);
+  // Sidebar usage-sources call no longer stubs subscribedTeamProducts.
+  assert.equal(sidebar.includes("subscribedTeamProducts"), false);
 });
 
 test("enterprise Display type and manage/planCard copy remain", () => {
