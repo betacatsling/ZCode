@@ -1631,7 +1631,8 @@ const zhCN: Record<string, string> = {
   "projectSidebar.error.inputRequired": "请输入项目名称和仓库路径。",
   "projectSidebar.error.targetRequired": "请先选择一个已连接的目标。",
   "projectSidebar.error.targetOffline": "请先重新连接此目标，再创建工作区。",
-  "projectSidebar.error.invalidBaseRef": "所选基准 ref 不包含有效提交。请选择有效基准；未创建工作区。",
+  "projectSidebar.error.invalidBaseRef":
+    "所选基准 ref 不包含有效提交。请选择有效基准；未创建工作区。",
   "projectSidebar.error.notGitRepository": "所选路径不是 Git 仓库。",
   "projectSidebar.error.pathMissing": "所选路径不存在。",
   "projectSidebar.error.noCandidates": "此仓库中没有发现可接管的工作区。",
@@ -2819,6 +2820,9 @@ const zhCN: Record<string, string> = {
     "暂时无法确认 Coding Plan 权益，请重新连接后再试。",
   "settings.modelProvider.codingPlan.description.unsupported":
     "当前供应商暂不支持 Coding Plan 状态检查。",
+  "settings.modelProvider.codingPlan.productPurchaseRemovedTitle": "产品登录与购买已下线",
+  "settings.modelProvider.codingPlan.productPurchaseRemoved":
+    "产品登录和套餐购买已移除。请在模型设置中配置个人 API Key。",
   "settings.modelProvider.codingPlan.login": "登录 {provider}",
   "settings.modelProvider.codingPlan.connect": "连接 {provider}",
   "settings.modelProvider.codingPlan.purchaseLoginRequiredShort": "登录后可购买",

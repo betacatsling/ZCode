@@ -1653,9 +1653,11 @@ const enUS: Record<string, string> = {
   "projectSidebar.repositoryBinding": "Repository target",
   "projectSidebar.chooseBinding": "Choose a target and repository",
   "projectSidebar.needsVerification": "Needs verification",
-  "projectSidebar.cachedReadOnly": "Cached workspace data is read-only until its target reconnects and verifies it.",
+  "projectSidebar.cachedReadOnly":
+    "Cached workspace data is read-only until its target reconnects and verifies it.",
   "projectSidebar.reconnectTarget": "Open remote connections",
-  "projectSidebar.reconnectTargetHint": "This target is offline. Reconnect it to verify workspaces and enable actions.",
+  "projectSidebar.reconnectTargetHint":
+    "This target is offline. Reconnect it to verify workspaces and enable actions.",
   "projectSidebar.discoverAgain": "Discover again",
   "projectSidebar.mainCheckout": "Main checkout",
   "projectSidebar.detachedHead": "Detached HEAD",
@@ -1674,27 +1676,35 @@ const enUS: Record<string, string> = {
   "projectSidebar.agentCreatePending": "Creating…",
   "projectSidebar.agentCreateCancel": "Cancel",
   "projectSidebar.agentCreateModelUnavailable": "No available model selection for this target.",
-  "projectSidebar.agentCreateNeedSelection": "Choose a Harness and model before creating the Agent.",
+  "projectSidebar.agentCreateNeedSelection":
+    "Choose a Harness and model before creating the Agent.",
   "projectSidebar.agentCreateCapabilityChecking": "Checking this Harness and model combination…",
   "projectSidebar.agentCreateCapabilitySupported": "Supported on this target",
   "projectSidebar.agentCreateCapabilityUnsupported": "Unsupported on this target",
   "projectSidebar.agentCreateCapabilityExperimental": "Experimental on this target",
   "projectSidebar.agentCreateCapabilityUnknown": "Support could not be verified",
-  "projectSidebar.agentCreateFailure": "The Agent could not be created. Your selections are still here; try again.",
+  "projectSidebar.agentCreateFailure":
+    "The Agent could not be created. Your selections are still here; try again.",
   "projectSidebar.agentCreateWorkspaceChanged":
     "This workspace changed while the form was open. Review the current workspace before creating the Agent.",
   "projectSidebar.agentUseCurrentWorkspace": "Use current workspace",
   "projectSidebar.capabilityReason.target-unavailable": "The target is offline.",
-  "projectSidebar.capabilityReason.admission-disabled": "This target is not accepting new sessions.",
-  "projectSidebar.capabilityReason.model-binding-mismatch": "This Harness does not accept that model binding.",
-  "projectSidebar.capabilityReason.harness-unavailable": "This Harness is not available on the target.",
+  "projectSidebar.capabilityReason.admission-disabled":
+    "This target is not accepting new sessions.",
+  "projectSidebar.capabilityReason.model-binding-mismatch":
+    "This Harness does not accept that model binding.",
+  "projectSidebar.capabilityReason.harness-unavailable":
+    "This Harness is not available on the target.",
   "projectSidebar.capabilityReason.harness-experimental": "This Harness support is experimental.",
   "projectSidebar.capabilityReason.harness-not-ready": "This Harness is not ready on the target.",
   "projectSidebar.capabilityReason.model-binding-experimental": "This model route is experimental.",
-  "projectSidebar.capabilityReason.model-binding-unsupported": "This model is not supported by the Harness.",
+  "projectSidebar.capabilityReason.model-binding-unsupported":
+    "This model is not supported by the Harness.",
   "projectSidebar.capabilityReason.model-unavailable": "This model is not available on the target.",
-  "projectSidebar.capabilityReason.model-route-unavailable": "The target has no certified route for this model.",
-  "projectSidebar.capabilityReason.capability-query-failed": "The target could not verify this combination.",
+  "projectSidebar.capabilityReason.model-route-unavailable":
+    "The target has no certified route for this model.",
+  "projectSidebar.capabilityReason.capability-query-failed":
+    "The target could not verify this combination.",
   "projectSidebar.historyWaitingTarget": "Reconnect this target to read its session history.",
   "projectSidebar.historyNeedsVerification":
     "This session owner is not verified yet. Open it after the target confirms its original owner.",
@@ -3012,6 +3022,10 @@ const enUS: Record<string, string> = {
     "Could not verify Coding Plan entitlement. Connect again and retry.",
   "settings.modelProvider.codingPlan.description.unsupported":
     "This provider does not support Coding Plan status checks yet.",
+  "settings.modelProvider.codingPlan.productPurchaseRemovedTitle":
+    "Product sign-in and purchase removed",
+  "settings.modelProvider.codingPlan.productPurchaseRemoved":
+    "Product sign-in and plan purchase have been removed. Configure a personal API Key in model settings.",
   "settings.modelProvider.codingPlan.login": "Sign in to {provider}",
   "settings.modelProvider.codingPlan.connect": "Connect to {provider}",
   "settings.modelProvider.codingPlan.purchaseLoginRequiredShort": "Sign in to purchase",

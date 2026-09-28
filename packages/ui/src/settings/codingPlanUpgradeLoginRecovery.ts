@@ -13,26 +13,27 @@ interface PendingCodingPlanUpgradeAfterLogin {
   target: CodingPlanUpgradeDialogTarget;
 }
 
+/**
+ * 产品登录恢复已下线。
+ * 购买中断不能再拉起产品 OAuth，也不会在登录成功后重开支付。
+ */
 export function beginCodingPlanUpgradeLogin(params: {
   target: CodingPlanUpgradeDialogTarget;
   oauthProviderId: OAuthProviderId;
   audience: PurchaseAudience;
-  requestLoginEntry: (providerId?: OAuthProviderId) => number;
   onClose: () => void;
 }): PendingCodingPlanUpgradeAfterLogin {
-  const loginAttemptId = params.requestLoginEntry(params.oauthProviderId);
-  const pending = {
-    loginAttemptId,
+  params.onClose();
+  return {
+    loginAttemptId: -1,
     target: {
       ...params.target,
       initialAudience: params.audience,
     },
   };
-  params.onClose();
-  return pending;
 }
 
-export function resolvePendingCodingPlanUpgradeAfterLogin(params: {
+export function resolvePendingCodingPlanUpgradeAfterLogin(_params: {
   pending: PendingCodingPlanUpgradeAfterLogin | null;
   loginAttempt: {
     id: number;
@@ -42,17 +43,6 @@ export function resolvePendingCodingPlanUpgradeAfterLogin(params: {
   | { action: "wait" }
   | { action: "discard" }
   | { action: "reopen"; target: CodingPlanUpgradeDialogTarget } {
-  if (!params.pending || !params.loginAttempt) {
-    return { action: "wait" };
-  }
-  if (params.loginAttempt.id !== params.pending.loginAttemptId) {
-    return { action: "discard" };
-  }
-  if (params.loginAttempt.status === "requested" || params.loginAttempt.status === "waiting") {
-    return { action: "wait" };
-  }
-  if (params.loginAttempt.status === "succeeded") {
-    return { action: "reopen", target: params.pending.target };
-  }
+  // 登录成功也不重开购买。调用方若仍轮询恢复结果，只能丢掉挂起的购买目标。
   return { action: "discard" };
 }

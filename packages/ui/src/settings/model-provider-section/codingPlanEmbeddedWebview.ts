@@ -1,11 +1,9 @@
 import {
-  BIGMODEL_PROVIDER_ID,
   BUILTIN_MODEL_PROVIDER_IDS,
   DEFAULT_ZCODE_ENDPOINT_ORIGIN,
   isTrustedCodingPlanWebviewOrigin,
   isZaiCodingPlanProviderId,
   normalizeZCodeEndpointOrigin,
-  ZAI_PROVIDER_ID,
 } from "@zcode/shared";
 import type { CodingPlanWebviewLocale } from "@zcode/shared";
 import type { CodingPlanFunnelContext } from "@/lib/codingPlanFunnelTelemetry.js";
@@ -162,7 +160,6 @@ export function isTrustedCodingPlanEmbeddedWebviewUrl(
 
 export function createCodingPlanAuthInjectionScript({
   provider,
-  credentials,
   theme,
   locale,
   reportContext,
@@ -175,28 +172,10 @@ export function createCodingPlanAuthInjectionScript({
   locale: CodingPlanWebviewLocale | null;
   reportContext?: CodingPlanEmbeddedReportContext | null;
 }): string {
-  const values: Record<string, string | null> =
-    provider === "zai"
-      ? {
-          "oauth:zai:access_token": credentials.zaiAccessToken?.trim() || null,
-          zcodejwttoken: credentials.zcodeJwtToken?.trim() || null,
-          "oauth:bigmodel:access_token": null,
-        }
-      : {
-          "oauth:zai:access_token": null,
-          // zcodejwttoken 是 zcode-plan 域通用凭证（BigModel OAuth callback 同样落盘），
-          // 官网用它查 billing/balance 判定 Start Plan 是否使用中；BigModel 分支缺失注入
-          // 会导致官网 Start Plan 卡因查不到权益而误显示「已过期」。业务接口仍走
-          // oauth:bigmodel:access_token，互不污染。
-          zcodejwttoken: credentials.zcodeJwtToken?.trim() || null,
-          "oauth:bigmodel:access_token": credentials.bigmodelAccessToken?.trim() || null,
-        };
-  const storageUpdates = Object.entries(values)
-    .map(([key, value]) =>
-      value
-        ? `localStorage.setItem(${JSON.stringify(key)}, ${JSON.stringify(value)});`
-        : `localStorage.removeItem(${JSON.stringify(key)});`,
-    )
+  // 设置页购买 webview 不再注入产品 OAuth access token 或 zcode JWT。
+  // 凭据参数保留给旧调用签名，但脚本里不能出现这些值，只能删除 key。
+  const storageUpdates = ["oauth:zai:access_token", "zcodejwttoken", "oauth:bigmodel:access_token"]
+    .map((key) => `localStorage.removeItem(${JSON.stringify(key)});`)
     .join("\n  ");
   const resolvedLocale: CodingPlanWebviewLocale = locale === "zh-CN" ? "zh-CN" : "en-US";
   const normalizedReportContext = normalizeCodingPlanEmbeddedReportContext(reportContext);
@@ -317,10 +296,7 @@ export function createCodingPlanLangInjectionScript(locale: CodingPlanWebviewLoc
 })()`;
 }
 
-export function getCodingPlanCredentialKeys(provider: CodingPlanWebsiteProvider): string[] {
-  // zcodejwttoken 对两个 provider 都加载：它是 zcode-plan 域通用凭证，
-  // BigModel OAuth callback 同样落盘（见 resolveBigModelStartPlanZcodeJwt）。
-  return provider === "zai"
-    ? [`oauth:${ZAI_PROVIDER_ID}:access_token`, "zcodejwttoken"]
-    : [`oauth:${BIGMODEL_PROVIDER_ID}:access_token`, "zcodejwttoken"];
+export function getCodingPlanCredentialKeys(_provider: CodingPlanWebsiteProvider): string[] {
+  // 不再从凭据库读取产品 OAuth access token 或 zcode JWT。
+  return [];
 }
