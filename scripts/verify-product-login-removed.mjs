@@ -75,12 +75,14 @@
  * Hard (also): #198/#199/#203 codingPlanStatusPanelViewState + Detail must not revive
  *   loginPending / codingPlanLoginPending (KEEP statusPending + codingPlanStatusGatePending +
  *   productPurchaseRemoved / productPurchaseRemovedVisible).
+ * Hard (also): #178/#205 Detail / StatusCards / codingPlanStatusPanelViewState must not revive
+ *   loginLoading (KEEP statusSyncLoading).
  * Soft ledger also records SessionHost #140/#143/#147/#149/#153/#155/#174/#177/#182/#187 (OUT of this scripts gate) +
  *   #144/#151 productList comment scrubs + #157 family team products feed drop
  *   (resolveFirstSubscribedTeamPlanConnectionWithContext / teamProducts) + #161/#165/#169/#171/#180/#188/#189 P6 tip
  *   docs + #166 status-comment scrub + #167/#185 tip-ledger sync + #168/#170 purchase-locale pins +
  *   #172 plan-mode/access/pricing dead i18n + #176/#181 dead subscription DTO pins + #186 entitlement alias pins +
- *   #178 loginLoading→statusSyncLoading rename + #179 billingBanner/relogin locale drop.
+ *   #179 billingBanner/relogin locale drop.
  *
  * Run from repo root: node scripts/verify-product-login-removed.mjs
  */
@@ -1170,6 +1172,39 @@ function assertDeletedSurfaces() {
     }
     if (!renameSrc.includes("presetCatalogProviderId")) {
       fails.push(`${label} must keep presetCatalogProviderId (#200/#204)`);
+    }
+  }
+
+  // #178/#205: loginLoading → statusSyncLoading rename hard-absent on Detail / StatusCards / viewState.
+  // KEEP statusSyncLoading (symmetric to #205/#178 rename; UI test pin lives in #205).
+  const statusSyncLoadingRenameFiles = [
+    [
+      "settings/model-provider-section/Detail.tsx",
+      "Detail.tsx",
+    ],
+    [
+      "settings/model-provider-section/StatusCards.tsx",
+      "StatusCards.tsx",
+    ],
+    [
+      "settings/model-provider-section/codingPlanStatusPanelViewState.ts",
+      "codingPlanStatusPanelViewState.ts",
+    ],
+  ];
+  for (const [rel, label] of statusSyncLoadingRenameFiles) {
+    const renamePath = join(UI_SRC, rel);
+    if (!existsSync(renamePath)) {
+      fails.push(`${label} must exist (#178/#205 gate)`);
+      continue;
+    }
+    const renameSrc = readFileSync(renamePath, "utf8");
+    if (renameSrc.includes("loginLoading")) {
+      fails.push(
+        `${label} must not revive loginLoading (#178/#205)`,
+      );
+    }
+    if (!renameSrc.includes("statusSyncLoading")) {
+      fails.push(`${label} must keep statusSyncLoading (#178/#205)`);
     }
   }
 
