@@ -198,7 +198,7 @@ export function ModelProviderSectionDetail({
   startPlanSubscriptionCount = 0,
   presetLoading,
   codingPlanAuthError,
-  presetSubscriptionProviderId,
+  presetCatalogProviderId,
   codingPlanStatusSyncProviderId,
   codingPlanDisconnectProviderId,
   onSave,
@@ -224,7 +224,7 @@ export function ModelProviderSectionDetail({
   startPlanSubscriptionCount?: number;
   presetLoading: boolean;
   codingPlanAuthError?: string | null;
-  presetSubscriptionProviderId: BuiltinModelProviderId | null;
+  presetCatalogProviderId: BuiltinModelProviderId | null;
   codingPlanStatusSyncProviderId: BuiltinModelProviderId | null;
   codingPlanDisconnectProviderId: BuiltinModelProviderId | null;
   onSave: (config: ProviderSettingsFormProvider) => void | Promise<void>;
@@ -391,7 +391,7 @@ export function ModelProviderSectionDetail({
       providerId: selectedNavItem.presetId,
       fallback: selectedNavItem.provider,
     });
-    const codingPlanStatusGatePending = presetSubscriptionProviderId === selectedNavItem.presetId;
+    const codingPlanStatusGatePending = presetCatalogProviderId === selectedNavItem.presetId;
     const codingPlanStatusSyncPending = codingPlanStatusSyncProviderId === selectedNavItem.presetId;
     const codingPlanDisconnectPending = codingPlanDisconnectProviderId === selectedNavItem.presetId;
     const hasResolvedEntitlementStatus =
