@@ -218,14 +218,14 @@ inventory/honesty/opt-in factory 已有 ≠ 生产第二 Agent。相对 tip：
 | # | 项 | tip 已有 | 仍缺 |
 | --- | --- | --- | --- |
 | I1 | CLI 钉版与 PATH | 档案写 `opencode`/`goose` + `["acp"]`（`COMPATIBILITY.md`） | **草稿：** [`SECOND-ACP-INSTALL-DIAG.md`](./SECOND-ACP-INSTALL-DIAG.md)（探测命令、`diagnoseAcpInstall` 对照、失败读日志模板）。仍缺产品钉死的最低 CLI 版本号 |
-| I2 | install/probe 边界 | honesty：可执行文件存在 ≠ 升级 text/tools/resume | 运维诊断步骤：探针结果如何解读、禁止把 probe 当会话能力 |
-| I3 | `initialize` 协商矩阵 | COMPATIBILITY：v1 / v2 降级、loadSession / resume → harness-managed vs unsupported | 产品侧对照表 + 未知版本 → experimental 的排障入口 |
-| I4 | 故障降级 | 适配器不跑 `opencode auth login` / `goose acp` 凭据提交 | 缺二进制、认证拒绝、协议实验态的升级/回滚手册 |
+| I2 | install/probe 边界 | honesty：可执行文件存在 ≠ 升级 text/tools/resume | **草稿：** [`SECOND-ACP-INSTALL-DIAG.md`](./SECOND-ACP-INSTALL-DIAG.md) §I2（解读顺序 + 禁止推断） |
+| I3 | `initialize` 协商矩阵 | COMPATIBILITY：v1 / v2 降级、loadSession / resume → harness-managed vs unsupported | **草稿：** 同文档 I3 版本表 + 待填能力矩阵；未知/v2 → experimental 排障入口 |
+| I4 | 故障降级 | 适配器不跑 `opencode auth login` / `goose acp` 凭据提交 | **草稿：** 同文档 I4 症状→动作与升级/回滚；仍缺 live 验证 |
 
 
-##### I1 诊断草稿（已落文档）
+##### I1–I4 诊断草稿（已落文档）
 
-可操作步骤见 [`SECOND-ACP-INSTALL-DIAG.md`](./SECOND-ACP-INSTALL-DIAG.md)：PATH/`--version`/`acp --help` 探测、`diagnoseAcpInstall` 对照、失败时读什么。本刀**只填 I1**；I2–I4 / L1–L4 仍缺。不改 lazy 默认、不做生产接线、不在此同步 tip SHA。
+可操作步骤见 [`SECOND-ACP-INSTALL-DIAG.md`](./SECOND-ACP-INSTALL-DIAG.md)：I1 PATH/version；I2 probe≠session-cap；I3 initialize 矩阵 stub；I4 故障/升级/回滚 stub。**L1–L4** 仍缺。不改 lazy 默认、不做生产接线、不在此同步 tip SHA。
 
 **LIVE-CERT（缺真实进程；fake-transport ≠ live）**
 
@@ -236,7 +236,7 @@ inventory/honesty/opt-in factory 已有 ≠ 生产第二 Agent。相对 tip：
 | L3 | 第二 Agent 只加档案 | inventory + 共用 `acp-session-machine/1` | 产品路径上第二同协议 Agent **不改**公共状态机的 live/集成证明 |
 | L4 | Host 默认 | lazy **不**注册 OpenCode/Goose ACP | live 认证**不得**借机把 opt-in 改成 lazy 默认 |
 
-下一薄刀候选（仍 Track A，需 Planner 另派）：I1 草稿已见 `SECOND-ACP-INSTALL-DIAG.md`；续填 I2–I4，或 L1 live 探针——**勿**把 opt-in 改成 lazy 默认。
+下一薄刀候选（仍 Track A，需 Planner 另派）：I1–I4 草稿已见 `SECOND-ACP-INSTALL-DIAG.md`；续 L1 live 探针或 SessionHost resume-after-disconnect——**勿**把 opt-in 改成 lazy 默认。
 
 ### StatusCards / funnel × Track A 交界（只读 scout @ `5ff4b68`）
 
