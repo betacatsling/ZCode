@@ -201,9 +201,9 @@ declare global {
       prepareCuaHelperPermissionDrag?(): Promise<PrepareCuaHelperPermissionDragResult>;
       /** 从权限浮窗拖拽 Helper.app 到 macOS 权限列表 */
       startCuaHelperPermissionDrag?(): void;
-      /** 上报 OAuth state 用于 deep link 路由 */
+      /** 产品 OAuth state 注册已卸；保留签名兼容 */
       registerOAuthState(payload: OAuthStateRegistration): void;
-      /** 注册 OAuth deep link 回调，返回 disposer */
+      /** 产品 OAuth deep-link 回调已卸；保留签名，返回 disposer */
       onOAuthCallback(cb: (url: string) => void): () => void;
       /** 注册支付 deep link 回调，返回 disposer */
       onPaymentCallback(cb: (url: string) => void): () => void;
