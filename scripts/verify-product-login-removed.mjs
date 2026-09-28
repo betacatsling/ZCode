@@ -2,10 +2,10 @@
 /**
  * Product-login removal gate (scripts-only knife; docs/inventory sync after Dialog unload).
  *
- * Tip state (origin/cursor/wave4-harness-integration-b7a9 @ 7bea389 / #112):
+ * Tip state (origin/cursor/wave4-harness-integration-b7a9 @ 8aa7792 / #114):
  *   P1–P4 landed; CodingPlanUpgradeDialog / Provider + Root wrap unloaded (Ex1 /
  *   9ce3088); EntryGate CTA / CodingPlanEntryButton / useCodingPlanEntryGate gone;
- *   soft remainingUiInventory first landed in #57; #103–#112 clearances hard-gated below.
+ *   soft remainingUiInventory first landed in #57; #103–#114 clearances hard-gated below.
  *
  * Hard gates (must exit 0 on tip):
  *   - CLI login-command / tui-auth / create.ts stubs (P3)
@@ -27,6 +27,8 @@
  *   keep conversationShare.import.signInRequired + live personal API-key / MCP OAuth copy.
  * Hard (also): #103–#107 dead upgrade/purchase / usage upgrade-renew / enterprise acquisition
  *   i18n must stay absent.
+ * Hard (also): #114 slash-help /login+/logout must not advertise Coding Plan / Z.ai OAuth
+ *   acquisition; require model-setup / personal API-key guidance (KEEP MCP help entry).
  *
  * Run from repo root: node scripts/verify-product-login-removed.mjs
  */
@@ -450,6 +452,52 @@ function assertDeletedSurfaces() {
     }
   }
 
+  // #114: slash-help /login+/logout rewritten off Coding Plan / Z.ai OAuth acquisition.
+  // KEEP MCP (and other non-login) help entries unchanged.
+  const slashHelpPath = join(ROOT, "packages/shared/src/zcode-slash-command-help.ts");
+  if (!existsSync(slashHelpPath)) {
+    fails.push("packages/shared/src/zcode-slash-command-help.ts must exist");
+  } else {
+    const slashHelpSrc = readFileSync(slashHelpPath, "utf8");
+    const forbiddenSlashHelpPhrases = [
+      "Opens a Coding Plan setup picker",
+      "Z.ai and BigModel browser login",
+      "Manual API key variants accept the API key as an argument",
+      "Set up a Coding Plan provider",
+      "Deletes Z.ai OAuth credentials",
+      "Remove the shared Z.ai login credentials",
+      "zai-coding-plan",
+      "bigmodel-coding-plan",
+      "zai-coding-plan-api-key",
+      "bigmodel-coding-plan-api-key",
+    ];
+    for (const phrase of forbiddenSlashHelpPhrases) {
+      if (slashHelpSrc.includes(phrase)) {
+        fails.push(
+          `slash-help must not retain Coding Plan / product OAuth acquisition phrase: ${phrase}`,
+        );
+      }
+    }
+    // Require model-setup / personal API-key style guidance (post-#114 rewrite).
+    const requiredSlashHelpSnippets = [
+      "Product account login was removed",
+      "model setup",
+      "API key",
+      "Product account logout was removed",
+    ];
+    for (const snippet of requiredSlashHelpSnippets) {
+      if (!slashHelpSrc.includes(snippet)) {
+        fails.push(
+          `slash-help must keep model-setup / API-key guidance snippet: ${snippet}`,
+        );
+      }
+    }
+    // KEEP MCP help entry (unchanged by #114).
+    if (!/name:\s*"mcp"/.test(slashHelpSrc) || !/\bMCP\b/.test(slashHelpSrc)) {
+      fails.push("slash-help must keep MCP command help entry");
+    }
+  }
+
   return fails;
 }
 
@@ -520,7 +568,7 @@ function remainingUiInventory() {
   ].map(fileStatus);
 
   const note =
-    "Tip 7bea389 (#112 / after #103–#111): Dialog/Provider/Entry/EmbeddedWebview + CLI loginRequired→modelSetupRequired hard. UI locale dead product loginRequired / Coding Plan login + orphan Welcome/login.* shell + #103–#107 upgrade/purchase/usage/enterprise acquisition i18n hard-gated. login.oauth.regionTag.* absent; KEEP settings.modelProvider.regionTag.* + share-import signInRequired + live personal API-key / MCP OAuth copy. Soft inventory thinned — cleared symbol scans dropped. Inventory does not fail this gate.";
+    "Tip 8aa7792 (#114 / after #103–#113): Dialog/Provider/Entry/EmbeddedWebview + CLI loginRequired→modelSetupRequired hard. UI locale dead product loginRequired / Coding Plan login + orphan Welcome/login.* shell + #103–#107 upgrade/purchase/usage/enterprise acquisition i18n hard-gated. login.oauth.regionTag.* absent; KEEP settings.modelProvider.regionTag.* + share-import signInRequired + manage/planCard + live personal API-key / MCP OAuth copy. #114 slash-help /login+/logout off Coding Plan/Z.ai OAuth acquisition → model-setup/API-key guidance hard-gated (KEEP MCP help). Soft inventory thinned — cleared symbol scans dropped. Inventory does not fail this gate.";
 
   return {
     note,
