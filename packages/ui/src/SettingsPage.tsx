@@ -402,8 +402,6 @@ export function SettingsPage({
     }),
     refreshOnMount: true,
   });
-  // 企业 pricing 已拆除；Team 用量来源靠 team account access + entitlement，不再拼空 productList。
-  const usageSubscribedTeamProducts = useMemo(() => [], []);
   const [usageActiveTab, setUsageActiveTab] = useState<UsageStatsSectionTab>(() => {
     const pendingTab = consumePendingSettingsUsageTab();
     return pendingTab === "codingPlan" ? "codingPlan" : (pendingTab ?? "app");
@@ -449,36 +447,15 @@ export function SettingsPage({
     usageZaiProvider,
     usageZaiProviderAccess,
   ]);
+  // 企业 productList 已恒空（#128）；保留 buildCodingPlanUsageSources 调用满足签名/guard。
+  // Team 用量展示走 entitlement / personal source，不再拼空 team products。
   const usageTeamCodingPlanSources = useMemo(
     () =>
       buildCodingPlanUsageSources({
-        accountAccesses: {
-          ...(resolveEntitledAccountProviderAccess(
-            usageProviderSettingsView,
-            BUILTIN_MODEL_PROVIDER_IDS.zaiTeamCodingPlan,
-          )?.access
-            ? {
-                zai: resolveEntitledAccountProviderAccess(
-                  usageProviderSettingsView,
-                  BUILTIN_MODEL_PROVIDER_IDS.zaiTeamCodingPlan,
-                )!.access,
-              }
-            : {}),
-          ...(resolveEntitledAccountProviderAccess(
-            usageProviderSettingsView,
-            BUILTIN_MODEL_PROVIDER_IDS.bigmodelTeamCodingPlan,
-          )?.access
-            ? {
-                bigmodel: resolveEntitledAccountProviderAccess(
-                  usageProviderSettingsView,
-                  BUILTIN_MODEL_PROVIDER_IDS.bigmodelTeamCodingPlan,
-                )!.access,
-              }
-            : {}),
-        },
-        subscribedTeamProducts: usageSubscribedTeamProducts,
+        accountAccesses: {},
+        subscribedTeamProducts: [],
       }),
-    [usageProviderSettingsView, usageSubscribedTeamProducts],
+    [],
   );
   const usageCodingPlanSources = useMemo(
     () => [...usagePersonalCodingPlanSources, ...usageTeamCodingPlanSources],
@@ -671,7 +648,6 @@ export function SettingsPage({
   }, [
     checkingUsageCodingPlanTab,
     showUsageCodingPlanTab,
-    usageSubscribedTeamProducts.length,
     usageActiveTab,
     usageProviderSettingsLoading,
   ]);
