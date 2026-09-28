@@ -278,7 +278,6 @@ function resolveContextCodingPlanUsageSource(params: {
   if (!params.teamSelection) return null;
   if (!params.accountAccess) return null;
 
-  // 企业 productList / always-empty source builder 已移除。
   // Team context 用量走 cachedTeamSources / entitlement snapshot。
   return (
     params.cachedTeamSources?.find(
@@ -488,8 +487,7 @@ function V4ComposerModelControlsImpl({
     ? contextStartPlanBalanceConfig
     : undefined;
 
-  // 企业 productList 已恒空（#128/#131）；Team context 用量靠 entitlement snapshot，
-  // 不再拼空 productList / named team-products stub。
+  // Team context 用量靠 entitlement snapshot。
   const contextTeamUsageSourceCacheRef = useRef<CodingPlanUsageSource[]>([]);
   const contextCodingPlanUsageProviderId =
     contextPlanConnection.kind === "personalCoding" || contextPlanConnection.kind === "teamCoding"

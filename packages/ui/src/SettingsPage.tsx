@@ -444,7 +444,7 @@ export function SettingsPage({
     usageZaiProvider,
     usageZaiProviderAccess,
   ]);
-  // 企业 productList 已恒空（#128）；Team 用量展示走 entitlement / personal source。
+  // Team 用量展示走 entitlement / personal source。
   const usageCodingPlanSources = usagePersonalCodingPlanSources;
   const selectedUsageCodingPlanSourceId =
     usageActiveTab === "codingPlan"
