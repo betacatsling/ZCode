@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "kind": "schema-shaped-command-samples",
+  "capturedFromLiveSession": false,
+  "containsCredentials": false,
+  "source": "packages/shared/src/zcode-protocol-v4/command.ts commandPayloadSchemas",
+  "note": "这些对象只复述当前命令形状，便于后续回归对照。本次没有启动桌面、没有发送模型请求、没有采集真实 trace。",
+  "commands": [
+    {
+      "type": "createSession",
+      "sessionId": null,
+      "commandId": "cmd-create-example",
+      "payload": {
+        "workspaceId": "remote:ssh:host-a.example.invalid:22:dev:/opt/sample/app",
+        "config": {
+          "mode": "code"
+        }
+      }
+    },
+    {
+      "type": "sendText",
+      "sessionId": "session-example",
+      "commandId": "cmd-send-example",
+      "payload": {
+        "text": "读取 README.txt 并追加一行 sample。",
+        "requestedDelivery": "startNow"
+      }
+    },
+    {
+      "type": "stop",
+      "sessionId": "session-example",
+      "commandId": "cmd-stop-example",
+      "payload": {
+        "expectedForegroundExecutionId": "execution-example"
+      }
+    },
+    {
+      "type": "resolveInteraction",
+      "sessionId": "session-example",
+      "commandId": "cmd-approval-example",
+      "payload": {
+        "interactionId": "interaction-example",
+        "answer": {
+          "action": "accept"
+        }
+      }
+    }
+  ]
+}

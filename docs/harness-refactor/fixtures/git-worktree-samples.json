@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "kind": "sanitized-git-capability-sample",
+  "capturedFromLiveSession": false,
+  "directoriesMoved": false,
+  "recordedAt": "2026-09-28",
+  "git": {
+    "executable": "/usr/bin/git",
+    "version": "2.43.0",
+    "worktreeListPorcelainZ": {
+      "exitCode": 0,
+      "machineParseable": true,
+      "note": "NUL 分隔。路径含空格或换行时不能按空白切分；解析器见 packages/services/src/worktree/domain/porcelain.ts 的 parsePorcelainZ。"
+    }
+  },
+  "sampleRoot": "/tmp/zcode-p0-git-samples",
+  "syntheticCommit": "fb0ef6c59ead68cd669aea053af2994d0e352f04",
+  "samples": [
+    {
+      "id": "main-checkout",
+      "path": "/tmp/zcode-p0-git-samples/main",
+      "revParse": {
+        "isBareRepository": "false",
+        "showToplevel": "/tmp/zcode-p0-git-samples/main",
+        "gitDir": ".git",
+        "gitCommonDir": ".git",
+        "dotGitIsDirectory": true
+      },
+      "currentClassifier": "main-tree",
+      "classifierSource": "packages/services/src/git/repo/gitCliRepo.ts getWorkspaceRepositoryInfo：.git 为目录时 kind=main-tree"
+    },
+    {
+      "id": "linked-worktree",
+      "path": "/tmp/zcode-p0-git-samples/linked",
+      "revParse": {
+        "isBareRepository": "false",
+        "showToplevel": "/tmp/zcode-p0-git-samples/linked",
+        "gitDir": "/tmp/zcode-p0-git-samples/main/.git/worktrees/linked",
+        "gitCommonDir": "/tmp/zcode-p0-git-samples/main/.git",
+        "dotGitFile": "gitdir: /tmp/zcode-p0-git-samples/main/.git/worktrees/linked"
+      },
+      "currentClassifier": "linked-worktree",
+      "classifierSource": "同函数：.git 文件的 gitdir 含 /.git/worktrees/ 时 kind=linked-worktree"
+    },
+    {
+      "id": "non-git",
+      "path": "/tmp/zcode-p0-git-samples/non-git",
+      "revParse": {
+        "command": "git rev-parse --is-bare-repository",
+        "exitCode": 128,
+        "stderr": "fatal: not a git repository (or any of the parent directories): .git"
+      },
+      "currentClassifier": "not-repository",
+      "worktreeDiscoverer": "kind=nonGit reason=not-git（packages/services/src/worktree/app/discovery.ts）"
+    }
+  ],
+  "porcelainZStdoutRepr": "worktree /tmp/zcode-p0-git-samples/main\\x00HEAD fb0ef6c59ead68cd669aea053af2994d0e352f04\\x00branch refs/heads/master\\x00\\x00worktree /tmp/zcode-p0-git-samples/linked\\x00HEAD fb0ef6c59ead68cd669aea053af2994d0e352f04\\x00branch refs/heads/sample-linked\\x00\\x00"
+}
