@@ -53,3 +53,17 @@ test("orphan useEnterpriseCodingPlanProducts hook is removed; Display/entitlemen
   const entitlements = readUi("../src/settings/model-provider-section/useCodingPlanEntitlements.ts");
   assert.match(entitlements, /export function useCodingPlanEntitlements|useCodingPlanEntitlements/);
 });
+
+test("oauth team pricing empty productList and account-loss team fallback are removed", () => {
+  const pricingPath = fileURLToPath(new URL("../src/root/oauthTeamPricing.ts", import.meta.url));
+  assert.equal(existsSync(pricingPath), false);
+
+  const suggestion = readUi("../src/root/accountConnectionLossSuggestion.ts");
+  assert.equal(suggestion.includes("oauthTeamPricing"), false);
+  assert.equal(suggestion.includes("getEnterprisePricingProducts"), false);
+  assert.equal(suggestion.includes("productList"), false);
+  assert.match(suggestion, /individual-coding-plan/);
+
+  const notification = readUi("../src/root/useAccountConnectionLossNotification.ts");
+  assert.match(notification, /prepareAccountConnectionSwitch/);
+});
