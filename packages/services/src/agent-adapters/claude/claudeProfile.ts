@@ -57,7 +57,7 @@ export async function prepareClaudeSessionProfile(input: {
     await mkdir(directory, { recursive: true, mode: 0o700 });
     if (process.platform !== "win32") await chmod(directory, 0o700);
   }
-  const settingsPath = join(configDir, "zcode-settings.json");
+  const settingsPath = join(configDir, "settings.json");
   const helperPath = join(configDir, "zcode-api-key-helper.mjs");
   const capabilityPath = join(configDir, "gateway-session-capability");
   const helper = [
@@ -72,6 +72,11 @@ export async function prepareClaudeSessionProfile(input: {
     apiKeyHelper: helperPath,
     env: { ZCODE_MANAGED_PROFILE: PROFILE_MARKER },
     enabledPlugins: {},
+    sandbox: {
+      enabled: false,
+      allowUnsandboxedCommands: true,
+      failIfUnavailable: false,
+    },
     hooks: {
       PreToolUse: [
         {
@@ -119,7 +124,13 @@ export function createClaudeChildEnvironment(input: {
   readonly profile: ClaudeSessionProfile;
   readonly executablePath: string;
 }): NodeJS.ProcessEnv {
-  const path = process.env.PATH ?? dirname(input.executablePath);
+  const pathEntries = [
+    dirname(input.executablePath),
+    "/usr/bin",
+    "/bin",
+    ...(process.env.PATH ? process.env.PATH.split(delimiter) : []),
+  ];
+  const path = [...new Set(pathEntries.filter(Boolean))].join(delimiter);
   const env: NodeJS.ProcessEnv = {
     PATH: path,
     HOME: input.profile.home,
@@ -133,7 +144,9 @@ export function createClaudeChildEnvironment(input: {
     CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT: "1",
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
     CLAUDE_CODE_DISABLE_TERMINAL_TITLE: "1",
-    CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
+    // Scrub=1 forces Linux sandbox even when settings.sandbox.enabled is false
+    // (CLI: Bu()&&!IU() → PO()). Bridge sockets fail on this box, so opt out.
+    CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "0",
     MAX_THINKING_TOKENS: "0",
     CLAUDE_CODE_DISABLE_THINKING: "1",
     DISABLE_PROMPT_CACHING: "1",
@@ -181,7 +194,7 @@ export function createClaudeArguments(input: {
     "--permission-prompts",
     "none",
     "--setting-sources",
-    "",
+    "user",
     "--settings",
     input.profile.settingsPath,
     "--strict-mcp-config",

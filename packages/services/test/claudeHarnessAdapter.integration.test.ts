@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { access, chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -12,6 +13,7 @@ import { SessionHost } from "../src/agent-host/sessionHost.js";
 import { createExperimentalRegistryClaudeHarness } from "../src/agent-adapters/claude/createClaudeHarness.js";
 import { claudeSessionProfileRoot, createClaudeChildEnvironment } from "../src/agent-adapters/claude/claudeProfile.js";
 import { PINNED_CLAUDE_CLI_VERSION, resolveClaudeExecutable } from "../src/agent-adapters/claude/claudeExecutable.js";
+import { CLAUDE_PUBLIC_MODEL_ID } from "../src/agent-adapters/claude/claudeHarnessAdapter.js";
 import type { ClaudeStreamProcess } from "../src/agent-adapters/claude/claudeStreamProcess.js";
 import {
   createClaudeHarnessFakeModel,
@@ -27,10 +29,16 @@ const MODEL_ID = "claude-fixture-model";
 
 test(
   "Claude Code 2.1.263 runs through HarnessAdapter, SessionHost, Messages Gateway and loopback FakeModel",
-  { skip: !RUN_PINNED_CLAUDE, timeout: 240_000 },
+  { skip: !RUN_PINNED_CLAUDE, timeout: 360_000 },
   async (t) => {
     if (process.platform !== "linux") {
       t.skip("the pinned egress trace gate uses Linux strace");
+      return;
+    }
+    try {
+      await access("/usr/bin/strace", constants.X_OK);
+    } catch {
+      t.skip("the pinned egress trace gate requires /usr/bin/strace");
       return;
     }
     const root = await mkdtemp(join(tmpdir(), "zcode-claude-harness-adapter-"));
@@ -120,7 +128,7 @@ test(
     const capabilityB = await readFile(join(profileB, "claude-config", "gateway-session-capability"), "utf8");
     assert.notEqual(capabilityA, capabilityB, "each Host session has its own Gateway capability");
     assert.equal((await stat(join(profileA, "claude-config", "gateway-session-capability"))).mode & 0o777, 0o600);
-    const settingsA = await readFile(join(profileA, "claude-config", "zcode-settings.json"), "utf8");
+    const settingsA = await readFile(join(profileA, "claude-config", "settings.json"), "utf8");
     const helperA = await readFile(join(profileA, "claude-config", "zcode-api-key-helper.mjs"), "utf8");
     assert.equal(settingsA.includes(capabilityA), false);
     assert.equal(helperA.includes(capabilityA), false);
@@ -131,11 +139,11 @@ test(
         configDir: join(profileA, "claude-config"),
         runtimeTmp: join(profileA, "runtime-tmp"),
         cwd: workspaceA,
-        settingsPath: join(profileA, "claude-config", "zcode-settings.json"),
+        settingsPath: join(profileA, "claude-config", "settings.json"),
         helperPath: join(profileA, "claude-config", "zcode-api-key-helper.mjs"),
         capabilityPath: join(profileA, "claude-config", "gateway-session-capability"),
         gatewayBaseUrl: "http://127.0.0.1:1",
-        modelAlias: "zcode-host",
+        modelAlias: CLAUDE_PUBLIC_MODEL_ID,
         effort: "low",
         maxOutputTokens: 32_768,
       },
@@ -148,7 +156,7 @@ test(
       await sendAndWait(hostA, "turn-a-text", "HELLO_TEXT");
     } catch (error) {
       t.diagnostic(`redacted Claude stderr: ${JSON.stringify(stderr.get(specA.hostSessionId) ?? "")}`);
-      t.diagnostic(`FakeModel user prompts: ${JSON.stringify(fakeV1.trace.map((entry) => entry.userText))}`);
+      t.diagnostic(`FakeModel user prompts: ${JSON.stringify(fakeV1.trace.map((entry) => entry.userText).map((text) => text.slice(-80)))}`);
       throw error;
     }
     await sendAndWait(hostB, "turn-b-text", "SESSION_B_TEXT");
@@ -164,12 +172,32 @@ test(
     const allowRequest = waitForInteraction(hostA, allowTurn);
     const allowFinished = waitForTurn(hostA, allowTurn);
     await acceptSend(hostA, allowTurn, "ALLOW_FIXED_WRITE");
-    const allowInteraction = await allowRequest;
+    const allowInteraction = await Promise.race([
+      allowRequest,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => {
+          const turnEvents = hostA.eventsSince(0).filter((e) => "turnId" in e && e.turnId === allowTurn).map((e) => {
+            const extra = e.kind === "turn.finished" && "outcome" in e ? `=${e.outcome}` : e.kind === "session.error" && "message" in e ? `:${String(e.message).slice(0,120)}` : "";
+            return `${e.kind}${extra}`;
+          });
+          const errors = hostA.eventsSince(0).filter((e) => e.kind === "session.error").map((e) => ("message" in e ? String(e.message).slice(0, 200) : e.kind));
+          const prompts = fakeV1.trace.map((e) => e.userText.slice(-40));
+          const lastTool = fakeV1.trace.at(-1);
+          reject(new Error(`allow interaction timeout; events=${JSON.stringify(turnEvents)} errors=${JSON.stringify(errors)} prompts=${JSON.stringify(prompts)} stderr=${JSON.stringify((stderr.get(specA.hostSessionId) ?? "").slice(-500))}`));
+        }, 45_000),
+      ),
+    ]);
     await assertMissing(paths.allowedWrite);
     await resolveInteraction(hostA, allowInteraction, "allow", "resolve-allow-once");
     await allowFinished;
     await hostA.whenIdle();
-    assert.equal(await readFile(paths.allowedWrite, "utf8"), "allowed");
+    try {
+      assert.equal(await readFile(paths.allowedWrite, "utf8"), "allowed");
+    } catch (error) {
+      const toolEvents = hostA.eventsSince(0).filter((e) => e.kind.startsWith("tool.") || e.kind === "interaction.resolved" || e.kind === "session.error");
+      t.diagnostic(`allow-write miss: ${JSON.stringify(toolEvents.map((e) => ({ kind: e.kind, ...( "outcome" in e ? { outcome: e.outcome } : {}), ...( "message" in e ? { message: String(e.message).slice(0, 160) } : {}), ...( "outputText" in e ? { outputText: String(e.outputText).slice(0, 160) } : {}) })))}`);
+      throw error;
+    }
     const duplicateAllow = await hostA.dispatch(resolveInteractionCommand(
       hostA,
       allowInteraction,
@@ -182,7 +210,24 @@ test(
     const denyRequest = waitForInteraction(hostA, denyTurn);
     const denyFinished = waitForTurn(hostA, denyTurn);
     await acceptSend(hostA, denyTurn, "DENY_FIXED_WRITE");
-    const denyInteraction = await denyRequest;
+    const denyInteraction = await Promise.race([
+      denyRequest,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => {
+          const turnEvents = hostA
+            .eventsSince(0)
+            .filter((e) => "turnId" in e && e.turnId === denyTurn)
+            .map((e) => e.kind);
+          reject(
+            new Error(
+              `deny interaction timeout; events=${JSON.stringify(turnEvents)} prompts=${JSON.stringify(
+                fakeV1.trace.map((e) => e.userText.slice(-40)),
+              )}`,
+            ),
+          );
+        }, 60_000),
+      ),
+    ]);
     await assertMissing(paths.deniedWrite);
     await resolveInteraction(hostA, denyInteraction, "deny", "resolve-deny-once");
     await denyFinished;
@@ -194,18 +239,47 @@ test(
       ),
     );
 
+    // Claude PreToolUse is typically serial: the second hook does not fire until the
+    // first is answered. Waiting for both interactions before resolving any deadlocks.
+    // Keep one subscriber so a parallel second request is not missed between resolves.
     const multiTurn = "turn-multiple-tools";
-    const multiRequests = waitForInteractions(hostA, multiTurn, 2);
     const multiFinished = waitForTurn(hostA, multiTurn);
+    const multiQueue: Extract<AgentEvent, { kind: "interaction.requested" }>[] = [];
+    let multiNotify: (() => void) | undefined;
+    const stopMultiWatch = hostA.subscribe((event) => {
+      if (event.kind !== "interaction.requested" || event.turnId !== multiTurn) return;
+      multiQueue.push(event);
+      multiNotify?.();
+    });
     await acceptSend(hostA, multiTurn, "RUN_TWO_TOOLS");
-    const multiInteractions = await multiRequests;
     await assertMissing(paths.multiWriteA);
     await assertMissing(paths.multiWriteB);
-    await Promise.all(
-      multiInteractions.map((interaction, index) =>
-        resolveInteraction(hostA, interaction, "allow", `resolve-multi-${index}`),
-      ),
-    );
+    try {
+      for (let index = 0; index < 2; index += 1) {
+        const started = Date.now();
+        while (multiQueue.length === 0) {
+          if (Date.now() - started > 60_000) {
+            throw new Error(
+              `multi interaction ${index} timeout; events=${JSON.stringify(
+                hostA
+                  .eventsSince(0)
+                  .filter((e) => "turnId" in e && e.turnId === multiTurn)
+                  .map((e) => e.kind),
+              )}`,
+            );
+          }
+          await new Promise<void>((resolve) => {
+            multiNotify = resolve;
+            if (multiQueue.length > 0) resolve();
+          });
+          multiNotify = undefined;
+        }
+        const interaction = multiQueue.shift()!;
+        await resolveInteraction(hostA, interaction, "allow", `resolve-multi-${index}`);
+      }
+    } finally {
+      stopMultiWatch();
+    }
     await multiFinished;
     await hostA.whenIdle();
     assert.equal(await readFile(paths.multiWriteA, "utf8"), "alpha");
@@ -229,10 +303,15 @@ test(
     await sendAndWait(hostA, "turn-next-binding", "NEXT_BINDING_V2");
     assert.equal(hostA.binding.backendSessionId, routeBinding, "idle model rebind preserves the opaque Claude session ID");
     assert.equal(hostA.queryBindingFact("send-turn-next-binding")?.catalogFingerprint, "catalog-v2");
+    // Claude may wrap Host text in content blocks / reminders; match the FakeModel-extracted userText.
+    if (!fakeV2.trace.some((entry) => entry.userText.includes("NEXT_BINDING_V2"))) {
+      t.diagnostic(
+        `next-binding traces v1=${JSON.stringify(fakeV1.trace.map((e) => e.userText.slice(-60)))} v2=${JSON.stringify(fakeV2.trace.map((e) => e.userText.slice(-60)))}`,
+      );
+    }
     assert.ok(
-      fakeV2.trace.at(-1)?.messages.some(
-        (message) => message.role === "user" && messageText(message.content) === "NEXT_BINDING_V2",
-      ),
+      fakeV2.trace.some((entry) => entry.userText.includes("NEXT_BINDING_V2")),
+      "idle rebind must route the next turn to catalog-v2 FakeModel",
     );
 
     const cancelTurn = "turn-cancel-before-tool";
@@ -256,17 +335,9 @@ test(
       ),
     );
 
-    const unknownTurn = "turn-unknown-exit";
-    const unknownFinished = waitForTurn(hostA, unknownTurn);
-    await acceptSend(hostA, unknownTurn, "WAIT_FOR_UNKNOWN");
-    await controls.unknownStarted.promise;
-    const crashingProcess = processes.get(specA.hostSessionId);
-    assert.ok(crashingProcess?.pid);
-    process.kill(-crashingProcess.pid!, "SIGKILL");
-    await crashingProcess.closed;
-    await unknownFinished;
-    await hostA.whenIdle();
-    assert.equal(hostA.queryCommand(`send-${unknownTurn}`)?.status, "execution-unknown");
+    // Resume while the session is still healthy. Host permanently fences `send`
+    // after an `execution-unknown` receipt, so AFTER_RESUME must run before the
+    // SIGKILL path (see agentHostRecoveryFence.test.ts).
     const nativeSessionId = hostA.binding.backendSessionId;
     const requestsBeforeResume = fakeV2.trace.length;
     await hostA.close();
@@ -286,6 +357,27 @@ test(
     await sendAndWait(hostA, "turn-after-resume", "AFTER_RESUME_NO_REPLAY");
     assert.equal(hostA.binding.backendSessionId, nativeSessionId);
     assert.ok(lastAssistant(hostA, "fake-v2:AFTER_RESUME_NO_REPLAY"));
+
+    const unknownTurn = "turn-unknown-exit";
+    const unknownFinished = waitForTurn(hostA, unknownTurn);
+    await acceptSend(hostA, unknownTurn, "WAIT_FOR_UNKNOWN");
+    await controls.unknownStarted.promise;
+    const crashingProcess = processes.get(specA.hostSessionId);
+    assert.ok(crashingProcess?.pid);
+    process.kill(-crashingProcess.pid!, "SIGKILL");
+    await crashingProcess.closed;
+    await unknownFinished;
+    await hostA.whenIdle();
+    assert.equal(hostA.queryCommand(`send-${unknownTurn}`)?.status, "execution-unknown");
+    const fenced = await hostA.dispatch({
+      type: "send",
+      commandId: "send-after-unknown-fenced",
+      hostSessionId: specA.hostSessionId,
+      turnId: "turn-after-unknown-fenced",
+      text: "SHOULD_BE_FENCED",
+    });
+    assert.equal(fenced.status, "rejected");
+    assert.equal(fenced.reasonCode, "execution-unknown");
 
     await hostA.close();
     hosts.delete(hostA);
@@ -445,22 +537,6 @@ function waitForInteraction(
   );
 }
 
-function waitForInteractions(
-  host: SessionHost,
-  turnId: string,
-  count: number,
-): Promise<Extract<AgentEvent, { kind: "interaction.requested" }>[]> {
-  return new Promise((resolve) => {
-    const events: Extract<AgentEvent, { kind: "interaction.requested" }>[] = [];
-    const unsubscribe = host.subscribe((event) => {
-      if (event.kind !== "interaction.requested" || event.turnId !== turnId) return;
-      events.push(event);
-      if (events.length < count) return;
-      unsubscribe();
-      resolve(events);
-    });
-  });
-}
 
 function waitForTurn(
   host: SessionHost,

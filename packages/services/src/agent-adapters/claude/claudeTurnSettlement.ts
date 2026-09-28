@@ -78,7 +78,7 @@ export function failClaudeRuntime(runtime: ClaudeSessionRuntime, error: Error): 
     markClaudeTurnUnknown(
       runtime,
       runtime.activeTurn,
-      "Claude Code stopped before confirming the accepted turn outcome.",
+      `Claude Code stopped before confirming the accepted turn outcome. (${error.message})`,
     );
   } else {
     runtime.emit("session.error", {

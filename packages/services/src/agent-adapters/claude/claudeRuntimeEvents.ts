@@ -55,7 +55,13 @@ function translateSystem(
     return;
   }
   if (message.subtype === "status") return;
-  failed(runtime, "Claude Code emitted an unsupported system event");
+  // Claude Code 2.1.x emits additional informational system subtypes during tool rounds
+  // (hooks/progress/tasks). Init is enforced above; ignore the rest so PreToolUse can proceed.
+  if (typeof message.subtype === "string") return;
+  failed(
+    runtime,
+    `Claude Code emitted an unsupported system event (${JSON.stringify(message.subtype)})`,
+  );
 }
 
 function translateStreamEvent(
@@ -208,7 +214,7 @@ function translateUser(runtime: ClaudeSessionRuntime, message: RecordValue): voi
   }
 }
 
-function upsertToolCall(
+export function upsertToolCall(
   runtime: ClaudeSessionRuntime,
   turn: ClaudeActiveTurn,
   nativeToolUseId: string,
