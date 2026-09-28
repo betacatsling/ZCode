@@ -40,6 +40,19 @@ test("quota entitlement wiring remains on SettingsPage and V4ComposerToolbar", (
   assert.match(toolbar, /teamEntitlement/);
 });
 
+test("orphan team/product-login helpers are removed", () => {
+  for (const relativePath of [
+    "../src/lib/teamPlanDisplayName.ts",
+    "../src/settings/model-provider-section/codingPlanErrorMessage.ts",
+  ]) {
+    assert.equal(
+      existsSync(fileURLToPath(new URL(relativePath, import.meta.url))),
+      false,
+      relativePath,
+    );
+  }
+});
+
 test("orphan useEnterpriseCodingPlanProducts hook is removed; Display/entitlement kept", () => {
   const hookPath = fileURLToPath(
     new URL("../src/settings/model-provider-section/useEnterpriseCodingPlanProducts.ts", import.meta.url),
