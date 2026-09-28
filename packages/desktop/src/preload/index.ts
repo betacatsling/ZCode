@@ -84,7 +84,6 @@ import {
   formatZCodeRendererProcessName,
   shouldEnableE2ETestBridge,
 } from "@zcode/shared";
-import { createOAuthCallbackHandler } from "./oauthCallbackBridge.js";
 
 if (shouldEnableE2ETestBridge(process.env)) {
   contextBridge.exposeInMainWorld("__zcodeFinalArmsCustomEventsE2E", {
@@ -601,17 +600,10 @@ contextBridge.exposeInMainWorld("zcode", {
   /** 从权限浮窗拖拽 Helper.app 到 macOS 权限列表。必须是 send —— invoke 的往返会错过手势。 */
   startCuaHelperPermissionDrag: () =>
     ipcRenderer.send(PlatformChannels.StartCuaHelperPermissionDrag),
-  /** 上报 OAuth state 用于 deep link 路由 */
-  registerOAuthState: (payload: OAuthStateRegistration) =>
-    ipcRenderer.send(PlatformChannels.OAuthRegisterState, payload),
-  /** 注册 OAuth deep link 回调，返回 disposer */
-  onOAuthCallback: (cb: (url: string) => void): (() => void) => {
-    const handler = createOAuthCallbackHandler(cb, () => {
-      ipcRenderer.send(PlatformChannels.OAuthCallbackHandled);
-    });
-    ipcRenderer.on(PlatformChannels.OAuthCallback, handler);
-    return () => ipcRenderer.removeListener(PlatformChannels.OAuthCallback, handler);
-  },
+  /** 产品 OAuth state 注册已卸；保留签名以免拖 IPlatformService 大改 */
+  registerOAuthState: (_payload: OAuthStateRegistration) => {},
+  /** 产品 OAuth deep-link 回调已卸；保留签名，返回空 disposer */
+  onOAuthCallback: (_cb: (url: string) => void): (() => void) => () => {},
   /** 注册支付 deep link 回调，返回 disposer */
   onPaymentCallback: (callback: (url: string) => void): (() => void) => {
     const handler = (_event: unknown, url: string) => callback(url);

@@ -1,4 +1,4 @@
-/* eslint-disable max-lines -- 远程连接、OAuth 回调、遥测和通知 IPC 共用窗口级上下文，集中注册避免跨文件状态漂移。 */
+/* eslint-disable max-lines -- 远程连接、deep link 投递、遥测和通知 IPC 共用窗口级上下文，集中注册避免跨文件状态漂移。 */
 import { app, BrowserWindow, ipcMain, shell } from "electron";
 import armsRum from "@arms/rum-electron";
 import {
@@ -21,8 +21,6 @@ import { dispatchTaskNotification } from "./desktopNotifications.js";
 import {
   clearOAuthRoutesForWindow,
   deliverPendingDeepLink,
-  parseOAuthStateRegistration,
-  registerOAuthState,
 } from "./desktopOAuthDeepLink.js";
 import {
   dispatchFinalArmsCustomEvent,
@@ -149,10 +147,7 @@ export function registerRemoteIpcHandlers(options: {
   appTelemetryRuntime: {
     onRendererReady(payload: { hasPendingOAuthCallback: boolean; rendererId: number }): void;
     syncRendererContext(payload: { rendererId: number; context: unknown }): void;
-    onOAuthCallbackHandled(payload: { rendererId: number }): void;
   };
-  /** OAuth 回调处理完成后的额外副作用（如刷新 ARMS user.id）；不影响既有 runtime 流程 */
-  onOAuthCallbackHandledSideEffect?: () => void;
   appTelemetryCore: {
     reportEvent(payload: unknown): Promise<void>;
   };
@@ -258,14 +253,9 @@ export function registerRemoteIpcHandlers(options: {
     );
   }
 
-  ipcMain.on(PlatformChannels.OAuthRegisterState, (event, payload: unknown) => {
-    const registration = parseOAuthStateRegistration(payload);
-    if (!registration) {
-      options.logger.warn("[oauth-register-state] invalid payload", payload);
-      return;
-    }
-
-    registerOAuthState(event.sender.id, registration);
+  // 产品 OAuth state 注册已卸：保留 channel 监听以免旧 renderer 报错，但不建路由表。
+  ipcMain.on(PlatformChannels.OAuthRegisterState, (_event, _payload: unknown) => {
+    options.logger.warn("[oauth-register-state] 产品 OAuth deep-link 路由已移除，忽略 registerOAuthState");
   });
 
   ipcMain.on(PlatformChannels.OpenExternal, (event, payload: unknown) => {
@@ -311,9 +301,9 @@ export function registerRemoteIpcHandlers(options: {
   );
 
   ipcMain.on(PlatformChannels.RendererReady, (event) => {
-    const hasPendingOAuthCallback = deliverPendingDeepLink(event.sender);
+    deliverPendingDeepLink(event.sender);
     options.appTelemetryRuntime.onRendererReady({
-      hasPendingOAuthCallback,
+      hasPendingOAuthCallback: false,
       rendererId: event.sender.id,
     });
   });
@@ -369,10 +359,8 @@ export function registerRemoteIpcHandlers(options: {
     }
   });
 
-  ipcMain.on(PlatformChannels.OAuthCallbackHandled, (event) => {
-    options.appTelemetryRuntime.onOAuthCallbackHandled({ rendererId: event.sender.id });
-    options.onOAuthCallbackHandledSideEffect?.();
-  });
+  // 产品 OAuth callback 已卸：旧 renderer 若仍回执 handled，忽略即可。
+  ipcMain.on(PlatformChannels.OAuthCallbackHandled, (_event) => {});
 
   ipcMain.on(PlatformChannels.ShowTaskNotification, (event, payload: unknown) => {
     dispatchTaskNotification({ event, payload, logger: options.logger });
