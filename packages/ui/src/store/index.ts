@@ -155,7 +155,7 @@ export interface ZCodeState {
     providerId?: OAuthProviderId;
     purpose?: LoginEntryPurpose;
   } | null;
-  /** 当前统一登录尝试；购买等后续动作通过 id 只续接自己发起的 OAuth。 */
+  /** 历史统一登录尝试槽；产品购买/Welcome 已卸，requestLoginEntry 不再发布 attempt。 */
   loginEntryAttempt: LoginEntryAttempt | null;
   requestLoginEntry: (providerId?: OAuthProviderId, purpose?: LoginEntryPurpose) => number;
   clearLoginEntryRequest: (requestId?: number) => void;

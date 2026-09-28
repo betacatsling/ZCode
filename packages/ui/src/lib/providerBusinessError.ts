@@ -218,7 +218,7 @@ export function resolveGlmQuotaBannerBusinessCode(
   const normalizedCode = code?.trim();
   if (normalizedCode && GLM_QUOTA_BANNER_BUSINESS_CODE_SET.has(normalizedCode)) {
     // GLM API 1308/1309/1310/1311/1313-1321 都是额度、
-    // 套餐或账号使用边界，不应被普通错误横幅盖住升级入口。
+    // 套餐或账号使用边界，应走额度横幅而非普通错误横幅（产品升级入口已卸）。
     return normalizedCode as GlmQuotaBannerBusinessCode;
   }
   return undefined;
