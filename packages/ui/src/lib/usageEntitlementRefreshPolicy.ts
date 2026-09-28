@@ -42,7 +42,7 @@ const entitlementFailureBackoff = new WeakMap<
 >();
 const entitlementAccessRequests = new WeakMap<IUsageStatsService, Map<string, number>>();
 
-// 购买使同一身份的所有旧请求失效，不能仅依赖单个 hook 的 requestVersion。
+// 世代递增使同一身份的所有旧请求失效，不能仅依赖单个 hook 的 requestVersion。
 const entitlementGenerations = new WeakMap<IUsageStatsService, Map<string, number>>();
 
 export function beginSharedEntitlementRequest(params: {
