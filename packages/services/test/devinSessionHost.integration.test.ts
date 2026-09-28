@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -24,13 +24,18 @@ test(
       executable,
       [
         "#!/usr/bin/env node",
+        "const fs = require('node:fs');",
+        "const path = require('node:path');",
         "const args = process.argv.slice(2);",
+        "const logPath = path.join(path.dirname(process.argv[1]), 'devin-argv.log');",
+        "fs.appendFileSync(logPath, JSON.stringify(args) + '\\n');",
         "if (args.includes('--version') || args[0] === 'version') {",
         "  process.stdout.write('devin 0.0.1\\n');",
         "  process.exit(0);",
         "}",
-        "if (!args.includes('-p')) {",
-        "  process.stderr.write('expected -p\\n');",
+        "const trust = args.indexOf('--respect-workspace-trust');",
+        "if (args[0] !== '-p' || trust < 0 || args[trust + 1] !== 'false' || !args.includes('--')) {",
+        "  process.stderr.write('expected print-mode argv\\n');",
         "  process.exit(2);",
         "}",
         "process.stdout.write('journaled from fake Devin');",
@@ -83,6 +88,24 @@ test(
     });
     assert.equal(host.plan.route, "harness-managed");
     assert.equal(host.plan.support.support, "supported");
+    assert.match(host.plan.support.reason ?? "", /print mode/i);
+    assert.match(host.plan.support.reason ?? "", /-p/);
+    assert.match(host.plan.support.reason ?? "", /does not certify/i);
+    for (const field of [
+      "tools",
+      "approvals",
+      "history",
+      "resumeExecution",
+      "images",
+      "modelSwitch",
+    ] as const) {
+      const report = host.plan.capabilities[field];
+      assert.equal(report?.support, "unsupported", field);
+      assert.match(report?.reason ?? "", /print mode/i, field);
+      assert.match(report?.reason ?? "", /-p/, field);
+    }
+    assert.equal(host.plan.capabilities.text?.support, "experimental");
+    assert.equal(host.plan.capabilities.cancelTurn?.support, "experimental");
     assert.match(host.binding.backendSessionId, /^devin-print-/);
 
     const receipt = await host.dispatch({
@@ -108,6 +131,19 @@ test(
     const turn = events.find((event) => event.kind === "turn.finished");
     assert.ok(turn && turn.kind === "turn.finished");
     assert.equal(turn.outcome, "success");
+
+    const logged = await readFile(join(root, "devin-argv.log"), "utf8");
+    const invocations = logged
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as string[]);
+    const print = invocations.find((args) => args.includes("-p"));
+    assert.ok(print);
+    assert.deepEqual(print.slice(0, 4), ["-p", "--respect-workspace-trust", "false", "--"]);
+    assert.equal(print.includes("-c"), false);
+    assert.equal(print.includes("-r"), false);
+    assert.equal(print.includes("acp"), false);
+    assert.equal(print.includes("--cloud"), false);
 
     await host.close();
 
