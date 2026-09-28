@@ -3,7 +3,7 @@
  *
  * Proves same-protocol Agents register via explicit factory + loadExplicit trust list
  * without changing lazy Host defaults or the shared ACP session machine. Goose SessionHost
- * path is symmetric to OpenCode (#75). Late prompt + transport fault/disconnect still journal via SessionHost (OpenCode + Goose). Resume-after-disconnect: SessionHost.open attach via negotiated session/load then send again. Cancel-after-disconnect: after fault fence, cancel of the dead turn is stale; after reopen+session/load, cancel mid-prompt journals cancelled (OpenCode + Goose). Double-fault/reopen: fault→reopen→fault→reopen stays idempotent (session/load, no session/new) then send succeeds (OpenCode + Goose). Mid-tool-call disconnect: tool_call + pending permission then fault → reopen session/load → send (OpenCode + Goose). Permission-denied-then-disconnect: Host denies permission, peer then faults the prompt (OpenCode + Goose). Cancel-during-permission: Host cancelTurn while permission pending journals cancelled (OpenCode + Goose). Permission-resolve-after-reopen: fault mid-permission → reopen → deny still clean (OpenCode + Goose). Allow-after-reopen: fault mid-permission → reopen → fresh allow completes send (OpenCode + Goose). Double-cancel: cancelTurn×2 mid-prompt is idempotent (one cancelled outcome; OpenCode + Goose). Allow-then-disconnect: Host allows permission then peer faults mid-turn (OpenCode + Goose).
+ * path is symmetric to OpenCode (#75). Late prompt + transport fault/disconnect still journal via SessionHost (OpenCode + Goose). Resume-after-disconnect: SessionHost.open attach via negotiated session/load then send again. Cancel-after-disconnect: after fault fence, cancel of the dead turn is stale; after reopen+session/load, cancel mid-prompt journals cancelled (OpenCode + Goose). Double-fault/reopen: fault→reopen→fault→reopen stays idempotent (session/load, no session/new) then send succeeds (OpenCode + Goose). Mid-tool-call disconnect: tool_call + pending permission then fault → reopen session/load → send (OpenCode + Goose). Permission-denied-then-disconnect: Host denies permission, peer then faults the prompt (OpenCode + Goose). Cancel-during-permission: Host cancelTurn while permission pending journals cancelled (OpenCode + Goose). Permission-resolve-after-reopen: fault mid-permission → reopen → deny still clean (OpenCode + Goose). Allow-after-reopen: fault mid-permission → reopen → fresh allow completes send (OpenCode + Goose). Double-cancel: cancelTurn×2 mid-prompt is idempotent (one cancelled outcome; OpenCode + Goose). Allow-then-disconnect: Host allows permission then peer faults mid-turn (OpenCode + Goose). Cancel-then-disconnect: Host cancel mid-prompt then peer faults (OpenCode + Goose).
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -44,6 +44,11 @@ interface FakePeerOptions {
    * (SessionHost cancelTurn mid-prompt path).
    */
   readonly holdUntilCancel?: boolean;
+  /**
+   * Emit a partial chunk, wait for session/cancel, then fault the prompt
+   * (Host cancel mid-prompt → peer disconnect; cancel-then-disconnect).
+   */
+  readonly disconnectAfterCancel?: boolean;
   /**
    * Mid-tool-call transport fault: emit tool_call + pending session/request_permission,
    * then JSON-RPC error + close (permission left unresolved).
@@ -177,6 +182,32 @@ class FakePeer {
           id: message.id,
           result: { stopReason: "cancelled" },
         });
+        return;
+      }
+      if (this.#options.disconnectAfterCancel) {
+        await this.#transport.send({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: this.#sessionId,
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: { type: "text", text: "partial before cancel-disconnect" },
+            },
+          },
+        });
+        if (!this.#cancelled) {
+          await new Promise<void>((resolve) => {
+            this.#cancelWaiters.push(resolve);
+          });
+        }
+        // Host already cancelled; peer faults instead of clean cancelled stopReason.
+        await this.#transport.send({
+          jsonrpc: "2.0",
+          id: message.id,
+          error: { code: -32000, message: "ACP transport closed" },
+        });
+        await this.#transport.close();
         return;
       }
       if (this.#options.awaitPermissionThenContinue) {
@@ -2555,6 +2586,155 @@ test("SessionHost + opt-in OpenCode ACP: allow-then-disconnect journals allow + 
 
 test("SessionHost + opt-in Goose ACP: allow-then-disconnect journals allow + fault (symmetric)", async (t) => {
   await assertSessionHostAllowThenDisconnect({
+    t,
+    label: "goose",
+    harnessId: "goose",
+    agentName: "Goose",
+    createHarness: (openTransport) =>
+      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+  });
+});
+
+async function assertSessionHostCancelThenDisconnect(input: {
+  t: { after: (fn: () => void | Promise<void>) => void };
+  label: string;
+  harnessId: "opencode" | "goose";
+  agentName: string;
+  createHarness: (openTransport: () => AcpTransport) => ReturnType<
+    typeof createExperimentalRegistryOpenCodeAcpHarness
+  >;
+}): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-ctd-`));
+  const worktree = join(root, "worktree");
+  const journalRoot = join(root, "journal");
+  await mkdir(worktree, { recursive: true });
+  input.t.after(() => rm(root, { recursive: true, force: true }));
+
+  const hostSessionId = `${input.harnessId}-ctd-1`;
+  const spec = {
+    schemaVersion: 1 as const,
+    hostSessionId,
+    execution: {
+      targetId: "local",
+      workspaceIdentity: `workspace-${input.harnessId}-ctd`,
+      worktreePath: worktree,
+    },
+    harness: { id: input.harnessId, adapterVersion: ACP_ADAPTER_VERSION },
+    modelBinding: { kind: "harness-managed" as const },
+  };
+  const target = {
+    id: "local",
+    kind: "local" as const,
+    platform: process.platform as "darwin" | "linux" | "win32",
+    available: true,
+  };
+  const catalog = {
+    fingerprint: "registry-v1",
+    validateSelection: () => ({ ok: true as const }),
+  };
+
+  const peers: FakePeer[] = [];
+  const registry = new HarnessRegistry();
+  registry.register(
+    input.createHarness(() =>
+      openFakeTransport(
+        input.agentName,
+        `${input.harnessId}-ctd-session`,
+        { disconnectAfterCancel: true },
+        peers,
+      ),
+    ),
+  );
+
+  const host = await SessionHost.create({
+    root: journalRoot,
+    spec,
+    target,
+    catalog,
+    registry,
+  });
+
+  const sendReceipt = await host.dispatch({
+    type: "send",
+    commandId: `${input.harnessId}-ctd-send`,
+    hostSessionId,
+    turnId: "turn-ctd",
+    text: "cancel then die",
+  });
+  assert.equal(sendReceipt.status, "accepted");
+
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    if (
+      host.eventsSince(0).some(
+        (event) =>
+          event.kind === "text.delta" && event.text === "partial before cancel-disconnect",
+      )
+    ) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.ok(
+    host.eventsSince(0).some(
+      (event) =>
+        event.kind === "text.delta" && event.text === "partial before cancel-disconnect",
+    ),
+    "expected partial before cancel-disconnect",
+  );
+
+  const cancelReceipt = await host.dispatch({
+    type: "cancelTurn",
+    commandId: `${input.harnessId}-ctd-cancel`,
+    hostSessionId,
+    runtimeEpoch: host.binding.runtimeEpoch!,
+    turnId: "turn-ctd",
+  });
+  assert.equal(cancelReceipt.status, "completed");
+  await host.whenIdle();
+
+  assert.ok(
+    peers.some((peer) => peer.methods.includes("session/cancel")),
+    "cancel must reach the ACP peer before disconnect",
+  );
+
+  const events = host.eventsSince(0);
+  const error = events.find((event) => event.kind === "session.error");
+  assert.ok(error && error.kind === "session.error");
+  assert.match(error.message, /ACP transport closed/);
+  const finished = events.find(
+    (event) => event.kind === "turn.finished" && event.turnId === "turn-ctd",
+  );
+  assert.ok(finished && finished.kind === "turn.finished");
+  // Host marked cancelled before the peer fault; outcome stays cancelled (not a hang).
+  assert.equal(finished.outcome, "cancelled");
+
+  await host.close();
+  const persisted = await SessionHost.eventsSinceHistory(journalRoot, spec, 0);
+  assert.ok(persisted.some((event) => event.kind === "session.error"));
+  assert.ok(
+    persisted.some(
+      (event) =>
+        event.kind === "turn.finished" &&
+        event.turnId === "turn-ctd" &&
+        event.outcome === "cancelled",
+    ),
+  );
+}
+
+test("SessionHost + opt-in OpenCode ACP: cancel-then-disconnect journals cancel + fault", async (t) => {
+  await assertSessionHostCancelThenDisconnect({
+    t,
+    label: "opencode",
+    harnessId: "opencode",
+    agentName: "OpenCode",
+    createHarness: (openTransport) =>
+      createExperimentalRegistryOpenCodeAcpHarness({ openTransport }),
+  });
+});
+
+test("SessionHost + opt-in Goose ACP: cancel-then-disconnect journals cancel + fault (symmetric)", async (t) => {
+  await assertSessionHostCancelThenDisconnect({
     t,
     label: "goose",
     harnessId: "goose",
