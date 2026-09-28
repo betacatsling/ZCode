@@ -124,11 +124,15 @@ test("lazy cold directory marks external harnesses unavailable when new sessions
 
 test("lazy warm path registers pi/codex/claude-code/devin without version mismatch", async () => {
   const root = await mkdtemp(join(tmpdir(), "zcode-lazy-warm-"));
+  const registeredIds: string[] = [];
   const { service, dispose } = createLazyTargetAgentHostService({
     root,
     target: localTarget(true),
     registry: fakeProviderRegistry(),
     allowNewSessions: () => true,
+    observeRegisteredHarness: (harness) => {
+      registeredIds.push(harness.id);
+    },
   });
   try {
     // Forces getTarget() → lazy register of all external factories.
@@ -142,6 +146,15 @@ test("lazy warm path registers pi/codex/claude-code/devin without version mismat
       `expected unsupported/experimental without Devin CLI, got ${capability.report.support}`,
     );
 
+    // Lazy warm admits only the four CLI externals — never ACP second agents.
+    assert.deepEqual(registeredIds, [...EXPECTED_EXTERNAL]);
+    assert.equal(registeredIds.includes("opencode"), false);
+    assert.equal(registeredIds.includes("goose"), false);
+
+    const availability = await service.getAvailability();
+    assert.equal(availability.harnesses.includes("opencode"), false);
+    assert.equal(availability.harnesses.includes("goose"), false);
+
     const directory = await service.getDirectory();
     assert.deepEqual(
       directory.entries.map((entry) => entry.manifest.id),
@@ -154,6 +167,49 @@ test("lazy warm path registers pi/codex/claude-code/devin without version mismat
         id,
       );
     }
+    assert.equal(
+      directory.entries.some((entry) => entry.manifest.id === "opencode" || entry.manifest.id === "goose"),
+      false,
+    );
+  } finally {
+    await dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+
+test("lazy admission off returns capability admission-disabled without registering ACP or CLI", async () => {
+  const root = await mkdtemp(join(tmpdir(), "zcode-lazy-admission-cap-"));
+  const registeredIds: string[] = [];
+  const { service, dispose } = createLazyTargetAgentHostService({
+    root,
+    target: localTarget(true),
+    registry: fakeProviderRegistry(),
+    allowNewSessions: () => false,
+    nativeOwner: {
+      createWorkspaceSession: async () => {
+        throw new Error("native-not-used");
+      },
+    } as never,
+    observeRegisteredHarness: (harness) => {
+      registeredIds.push(harness.id);
+    },
+  });
+  try {
+    const capability = await service.getWorkspaceSessionCapability({
+      harnessId: "pi",
+      modelBinding: { kind: "harness-managed" },
+    });
+    assert.equal(capability.targetId, "local");
+    assert.equal(capability.report.support, "unsupported");
+    assert.equal(capability.report.reason, "admission-disabled");
+    // Fail-closed: capability must not warm getTarget() / register any harness (incl. ACP).
+    assert.deepEqual(registeredIds, []);
+
+    await assert.rejects(
+      () => service.create({} as never),
+      /new external sessions disabled/,
+    );
   } finally {
     await dispose();
     await rm(root, { recursive: true, force: true });
