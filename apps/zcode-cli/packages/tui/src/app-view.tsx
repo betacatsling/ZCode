@@ -4,7 +4,7 @@ import { ApprovalPanel } from "./app-approval-panel.js";
 import {
   actionPanelContentWidthForTerminal,
   AppShell,
-  LoginRequiredPanel,
+  ModelSetupRequiredPanel,
   SlashSuggestionPanel,
 } from "./app-components.js";
 import { SelectionPanel } from "./app-selection-panel.js";
@@ -261,7 +261,7 @@ function ComposerInputArea(props: {
   return h(
     React.Fragment,
     null,
-    props.loginRequired ? h(LoginRequiredPanel, { copy: props.copy }) : null,
+    props.loginRequired ? h(ModelSetupRequiredPanel, { copy: props.copy }) : null,
     props.fileMention
       ? h(FileMentionPanel, {
           contentWidth: props.contentWidth,

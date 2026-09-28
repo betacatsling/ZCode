@@ -93,7 +93,7 @@ export function useTuiApplyResult(input: TuiApplyResultInput) {
         result.selection
           ? result.selection.prompt
           : activeLoginRequired
-            ? resultCopy.loginRequired.status
+            ? resultCopy.modelSetupRequired.status
             : resultCopy.status.ready,
       );
       input.setLastEvent(result.turnId ? `turn ${result.turnId}` : "complete");

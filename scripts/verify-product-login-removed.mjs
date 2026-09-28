@@ -16,7 +16,9 @@
  *
  * Soft inventory (print-only; does not fail exit):
  *   - funnel / pricing leftovers (isRestoringOAuthSession + EmbeddedWebview Dialog unloaded)
- *   - CLI TUI loginRequired / loginSetup residual naming
+ *
+ * Hard (also): CLI i18n tui.loginRequired / tui.loginSetup key names must stay absent
+ *   (renamed to modelSetupRequired / deleted dead loginSetup).
  *
  * Run from repo root: node scripts/verify-product-login-removed.mjs
  */
@@ -228,6 +230,26 @@ function assertDeletedSurfaces() {
     fails.push("IPlatformService.onOAuthCallback must stay deleted");
   }
 
+  // CLI i18n: loginRequired / loginSetup key names renamed/removed (Ex3 thin knife).
+  const i18nSrc = join(ROOT, "apps/zcode-cli/packages/i18n/src");
+  const staleKeyHits = [
+    ...grepFiles(i18nSrc, /\bloginRequired\s*:/, { extensions: [".ts"] }),
+    ...grepFiles(i18nSrc, /\bloginSetup\s*:/, { extensions: [".ts"] }),
+  ];
+  if (staleKeyHits.length) {
+    fails.push(
+      `CLI i18n must not keep loginRequired/loginSetup keys: ${staleKeyHits
+        .map((h) => h.file)
+        .join(", ")}`,
+    );
+  }
+  const modelSetupHits = grepFiles(i18nSrc, /\bmodelSetupRequired\s*:/, {
+    extensions: [".ts"],
+  });
+  if (!modelSetupHits.length) {
+    fails.push("CLI i18n must define modelSetupRequired (renamed from loginRequired)");
+  }
+
   return fails;
 }
 
@@ -286,9 +308,9 @@ function fileStatus(relPath) {
 
 /**
  * Soft inventory: residuals still present on tip after Dialog/Provider unload.
- * Cleared Dialog/Provider/Root-wrap/EmbeddedWebview are hard-gated above; this
- * prints leftovers (funnel/pricing helpers, CLI loginRequired/loginSetup
- * naming). Never flips results.ok by itself.
+ * Cleared Dialog/Provider/Root-wrap/EmbeddedWebview + CLI i18n loginRequired/
+ * loginSetup key rename are hard-gated above; this prints leftovers
+ * (funnel/pricing helpers). Never flips results.ok by itself.
  */
 function remainingUiInventory() {
   const symbolScans = [
@@ -321,24 +343,6 @@ function remainingUiInventory() {
       id: "CodingPlanEntryButton",
       pattern: /\bCodingPlanEntryButton\b/,
       roots: [UI_SRC],
-    },
-    {
-      id: "loginRequired_cli_tui",
-      pattern: /\bloginRequired\b/,
-      roots: [
-        join(ROOT, "apps/zcode-cli/packages/cli/src"),
-        join(ROOT, "apps/zcode-cli/packages/tui/src"),
-        join(ROOT, "apps/zcode-cli/packages/i18n/src"),
-      ],
-    },
-    {
-      id: "loginSetup_cli_tui",
-      pattern: /\bloginSetup\b/,
-      roots: [
-        join(ROOT, "apps/zcode-cli/packages/cli/src"),
-        join(ROOT, "apps/zcode-cli/packages/tui/src"),
-        join(ROOT, "apps/zcode-cli/packages/i18n/src"),
-      ],
     },
   ];
 
@@ -389,7 +393,7 @@ function remainingUiInventory() {
   };
 
   const note =
-    "Tip dc28b3d+: Dialog/Provider/Root-wrap + EmbeddedWebview Dialog/helpers + Root isRestoringOAuthSession cleared (hard/soft). Soft remaining = funnel/pricing leftovers + CLI TUI loginRequired/loginSetup rename. useCodingPlanEntryPlanList deleted (zero callers). Inventory does not fail this gate.";
+    "Tip d736a33+: Dialog/Provider/Root-wrap + EmbeddedWebview Dialog/helpers + Root isRestoringOAuthSession cleared (hard). CLI i18n loginRequired→modelSetupRequired + loginSetup deleted (hard). Soft remaining = funnel/pricing leftovers. useCodingPlanEntryPlanList deleted (zero callers). Inventory does not fail this gate.";
 
   return {
     note,

@@ -7,15 +7,8 @@ for (const [name, copy] of [
   ["en-US", enUS],
   ["zh-CN", zhCN],
 ] as const) {
-  test(`${name} loginSetup has no OAuth/API key option tree`, () => {
-    const setup = copy.tui.loginSetup as Record<string, unknown>;
-    assert.equal("options" in setup, false);
-    assert.equal("pending" in setup, false);
-    assert.equal("input" in setup, false);
-    for (const value of Object.values(setup)) {
-      assert.equal(typeof value, "string");
-      assert.equal(String(value).includes("browser login"), false);
-      assert.equal(String(value).includes("OAuth"), false);
-    }
+  test(`${name} loginSetup i18n key removed (folded into product-login-removed stubs)`, () => {
+    const tui = copy.tui as Record<string, unknown>;
+    assert.equal("loginSetup" in tui, false);
   });
 }

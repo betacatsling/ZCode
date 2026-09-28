@@ -96,18 +96,11 @@ Slash Commands:
       restorePreviousInputFailed: "Could not restore previous input.",
       typePrompt: "Type a question and press Enter.",
     },
-    loginRequired: {
+    modelSetupRequired: {
       help: "Use /model to list models, or configure a personal provider in settings.",
       message: "No available models. Configure a personal model provider.",
       status: "No available models. Configure a personal model provider.",
       title: "model setup required",
-    },
-    loginSetup: {
-      emptyMessage: "Product account login setup was removed.",
-      help: "Configure a personal model provider instead of /login.",
-      prompt: "Product login setup is unavailable.",
-      response: "Product account login was removed. Configure a personal model provider instead.",
-      title: "login setup removed",
     },
     model: {
       requestFailed: (message) => `Model request failed: ${message}`,

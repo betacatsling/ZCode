@@ -40,17 +40,10 @@ export interface TuiCopy {
     restorePreviousInputFailed: string;
     typePrompt: string;
   };
-  loginRequired: {
+  modelSetupRequired: {
     help: string;
     message: string;
     status: string;
-    title: string;
-  };
-  loginSetup: {
-    emptyMessage: string;
-    help: string;
-    prompt: string;
-    response: string;
     title: string;
   };
   model: {
