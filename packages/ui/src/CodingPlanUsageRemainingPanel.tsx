@@ -288,7 +288,7 @@ export function CodingPlanUsageRemainingPanel({
     unavailableReason === "not_configured"
       ? intl.formatMessage({ id: "sidebar.usage.plan.notConfigured" })
       : unavailableReason === "not_authenticated"
-        ? intl.formatMessage({ id: "sidebar.usage.plan.loginRequired" })
+        ? intl.formatMessage({ id: "chat.quota.plan.productLoginRemoved" })
         : unavailableReason === "no_plan"
           ? intl.formatMessage({ id: "sidebar.usage.plan.noPlan" })
           : intl.formatMessage({ id: "sidebar.usage.plan.unavailable" });
