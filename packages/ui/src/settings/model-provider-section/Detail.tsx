@@ -548,7 +548,6 @@ export function ModelProviderSectionDetail({
             );
           }}
           upgradePlansVisible={upgradePlansVisible}
-          startPlanPreviewVisible={false}
         />
       );
 
@@ -656,8 +655,7 @@ export function ModelProviderSectionDetail({
             }
             disconnectLoading={codingPlanDisconnectProviderId === selectedNavItem.presetId}
             upgradePlansVisible={upgradePlansVisible}
-            startPlanPreviewVisible={false}
-          />
+            />
           {hidePlanModels ? null : providerSettingsView && !dedicatedProvider ? (
             <PresetProviderPlaceholderCard
               displayName={selectedNavItem.providerName}

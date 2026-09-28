@@ -77,3 +77,47 @@ test("settings coding plan surface does not call product login entry", () => {
     assert.equal(source.includes("requestLoginEntry("), false, file);
   }
 });
+
+test("StartPlan acquisition preview and personal product list hooks are removed", () => {
+  assert.equal(
+    existsSync(fileURLToPath(new URL("model-provider-section/StartPlanCard.tsx", settingsRoot))),
+    false,
+  );
+  assert.equal(
+    existsSync(fileURLToPath(new URL("model-provider-section/useStartPlanPreview.ts", settingsRoot))),
+    false,
+  );
+  assert.equal(
+    existsSync(fileURLToPath(new URL("model-provider-section/useCodingPlanProducts.ts", settingsRoot))),
+    false,
+  );
+  assert.equal(
+    existsSync(
+      fileURLToPath(new URL("model-provider-section/codingPlanEnterpriseTiers.ts", settingsRoot)),
+    ),
+    false,
+  );
+
+  const statusCards = readFileSync(
+    new URL("model-provider-section/StatusCards.tsx", settingsRoot),
+    "utf8",
+  );
+  assert.equal(statusCards.includes("StartPlanCard"), false);
+  assert.equal(statusCards.includes("useStartPlanPreview"), false);
+  assert.equal(statusCards.includes("startPlanPreviewVisible"), false);
+
+  const detail = readFileSync(
+    new URL("model-provider-section/Detail.tsx", settingsRoot),
+    "utf8",
+  );
+  assert.equal(detail.includes("startPlanPreviewVisible"), false);
+
+  const presentation = readFileSync(
+    new URL("model-provider-section/codingPlanProductPresentation.ts", settingsRoot),
+    "utf8",
+  );
+  assert.equal(presentation.includes("pickProductPrice"), false);
+  assert.equal(presentation.includes("formatCodingPlanAmount"), false);
+  assert.match(presentation, /CODING_PLAN_PRODUCT_PURCHASE_CARDS_REMOVED\s*=\s*true/);
+});
+

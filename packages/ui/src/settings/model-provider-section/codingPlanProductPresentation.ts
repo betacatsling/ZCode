@@ -35,45 +35,5 @@ export type CodingPlanProductDisplay = CodingPlanProductPreviewPayment & {
   descriptionItems?: CodingPlanCardCopyItem[];
 };
 
-/** 设置页不再渲染可下单的 OAuth 套餐价卡。价格格式化只留给只读状态。 */
+/** 设置页不再渲染可下单的 OAuth 套餐价卡。 */
 export const CODING_PLAN_PRODUCT_PURCHASE_CARDS_REMOVED = true;
-
-const CODING_PLAN_CURRENCY_LABELS_ZH: Record<CodingPlanPriceCurrency, string> = {
-  CNY: "人民币",
-  USD: "美元",
-};
-
-export function pickProductPrice(product: CodingPlanProductPreviewPayment): number | null {
-  return product.payAmount ?? product.discountAmount ?? product.renewAmount ?? null;
-}
-
-function normalizeCodingPlanCurrency(currency: string | null | undefined): CodingPlanPriceCurrency {
-  return currency?.trim().toUpperCase() === "USD" ? "USD" : "CNY";
-}
-
-export function formatCodingPlanAmount(
-  amount: number,
-  currency: string | null | undefined,
-  locale: string,
-): string {
-  const resolvedCurrency = normalizeCodingPlanCurrency(currency);
-  const isChineseLocale = locale.toLowerCase().startsWith("zh");
-  const formattedAmount = new Intl.NumberFormat(locale, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(amount);
-  const currencyPrefix = isChineseLocale
-    ? resolvedCurrency === "USD"
-      ? "$"
-      : "¥"
-    : resolvedCurrency === "USD"
-      ? "US$"
-      : "CN¥";
-  const formatted = `${currencyPrefix}${formattedAmount}`;
-
-  // 套餐页需要同时展示中英文和跨币种价格；依赖 Intl currency 会在不同 locale 下输出
-  // 不一致的 ISO code/符号组合，因此这里按产品文案规范固定符号和中文币种名。
-  return isChineseLocale
-    ? `${formatted} ${CODING_PLAN_CURRENCY_LABELS_ZH[resolvedCurrency]}`
-    : formatted;
-}

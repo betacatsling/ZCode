@@ -38,10 +38,8 @@ import {
   CodingPlanProductPurchaseRemovedNotice,
   CodingPlanStatusActions,
 } from "./CodingPlanStatusActions.js";
-import { StartPlanCard } from "./StartPlanCard.js";
 import { StartPlanQuotaStatusCard } from "./StartPlanQuotaStatusCard.js";
 import { resolveStartPlanQuotaCardEntries } from "./StartPlanBalanceCard.js";
-import { useStartPlanPreview } from "./useStartPlanPreview.js";
 import {
   BigModelRegistrationHint,
   isBigModelUnregisteredAuthError,
@@ -154,7 +152,6 @@ export function CodingPlanStatusPanel({
   loginActionVisible = false,
   usageDetailsVisible = true,
   upgradePlansVisible: controlledUpgradePlansVisible,
-  startPlanPreviewVisible = true,
   statusLabelId,
   statusMessage,
   teamPlanAvailabilityReason,
@@ -190,7 +187,6 @@ export function CodingPlanStatusPanel({
   loginActionVisible?: boolean;
   usageDetailsVisible?: boolean;
   upgradePlansVisible?: boolean;
-  startPlanPreviewVisible?: boolean;
   statusLabelId?: string;
   statusMessage?: string | null;
   teamPlanAvailabilityReason?: TeamPlanAvailabilityReason;
@@ -301,13 +297,6 @@ export function CodingPlanStatusPanel({
     isPurchased &&
     Boolean(purchaseUrl) &&
     Boolean(onOpenPurchase);
-  const disconnectedStartPlanPricingVisible =
-    isStartPlanProvider && (isDisconnected || isNotPurchased);
-  const startPlanCardVisible =
-    startPlanPreviewVisible && disconnectedStartPlanPricingVisible && !upgradePlansVisible;
-  const startPlanPreview = useStartPlanPreview({
-    enabled: startPlanCardVisible,
-  });
   const shouldShowBigModelRegistrationHint =
     isChecking &&
     providerIcon === BIGMODEL_PROVIDER_ID &&
@@ -518,10 +507,6 @@ export function CodingPlanStatusPanel({
   return (
     <div className="space-y-3">
       {planCards}
-
-      {startPlanCardVisible && !startPlanPreview.loading && startPlanPreview.preview ? (
-        <StartPlanCard preview={startPlanPreview.preview} />
-      ) : null}
     </div>
   );
 }
