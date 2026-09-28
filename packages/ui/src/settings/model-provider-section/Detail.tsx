@@ -404,7 +404,7 @@ export function ModelProviderSectionDetail({
             displayStatus: "checking" as const,
             actionStatus: "checking" as const,
             balanceStatus: "checking" as const,
-            loginLoading: codingPlanStatusSyncPending,
+            statusSyncLoading: codingPlanStatusSyncPending,
           }
         : resolveCodingPlanStatusPanelViewState({
             status: selectedNavItem.status,
