@@ -72,6 +72,9 @@
  * Hard (also): #186 file-local PersonalCodingPlanSubscription / TeamCodingPlanSubscription
  *   type aliases must stay absent from codingPlanEntitlement.ts (renamed → *EntitlementRecord;
  *   KEEP CodingPlanEntitlement.subscription + ForceUpdateConfig + EnterpriseCodingPlanPricingProduct).
+ * Hard (also): #198/#199/#203 codingPlanStatusPanelViewState + Detail must not revive
+ *   loginPending / codingPlanLoginPending (KEEP statusPending + codingPlanStatusGatePending +
+ *   productPurchaseRemoved / productPurchaseRemovedVisible).
  * Soft ledger also records SessionHost #140/#143/#147/#149/#153/#155/#174/#177/#182/#187 (OUT of this scripts gate) +
  *   #144/#151 productList comment scrubs + #157 family team products feed drop
  *   (resolveFirstSubscribedTeamPlanConnectionWithContext / teamProducts) + #161/#165/#169/#171/#180/#188/#189 P6 tip
@@ -1077,6 +1080,65 @@ function assertDeletedSurfaces() {
     ) {
       fails.push(
         "codingPlanEntitlement.ts must keep CodingPlanEntitlement.subscription (#186)",
+      );
+    }
+  }
+
+
+  // #198/#199/#203: loginPending → statusPending rename hard-absent on viewState + Detail.
+  // KEEP statusPending + codingPlanStatusGatePending + productPurchaseRemoved*.
+  const statusPendingRenameFiles = [
+    [
+      "settings/model-provider-section/codingPlanStatusPanelViewState.ts",
+      "codingPlanStatusPanelViewState.ts",
+    ],
+    [
+      "settings/model-provider-section/Detail.tsx",
+      "Detail.tsx",
+    ],
+  ];
+  const deadStatusPendingSymbols = [
+    "loginPending",
+    "codingPlanLoginPending",
+  ];
+  for (const [rel, label] of statusPendingRenameFiles) {
+    const renamePath = join(UI_SRC, rel);
+    if (!existsSync(renamePath)) {
+      fails.push(`${label} must exist (#198/#199/#203 gate)`);
+      continue;
+    }
+    const renameSrc = readFileSync(renamePath, "utf8");
+    for (const dead of deadStatusPendingSymbols) {
+      // viewState never had codingPlanLoginPending; still assert absence on both.
+      if (renameSrc.includes(dead)) {
+        fails.push(
+          `${label} must not revive old status-pending symbol: ${dead} (#198/#199/#203)`,
+        );
+      }
+    }
+    if (!renameSrc.includes("statusPending")) {
+      fails.push(`${label} must keep statusPending (#198/#203)`);
+    }
+  }
+  const detailStatusPendingPath = join(
+    UI_SRC,
+    "settings/model-provider-section/Detail.tsx",
+  );
+  if (existsSync(detailStatusPendingPath)) {
+    const detailStatusPendingSrc = readFileSync(detailStatusPendingPath, "utf8");
+    if (!detailStatusPendingSrc.includes("codingPlanStatusGatePending")) {
+      fails.push(
+        "Detail.tsx must keep codingPlanStatusGatePending (#199/#203)",
+      );
+    }
+    if (!detailStatusPendingSrc.includes("productPurchaseRemoved")) {
+      fails.push(
+        "Detail.tsx must keep productPurchaseRemoved (#203 KEEP)",
+      );
+    }
+    if (!detailStatusPendingSrc.includes("productPurchaseRemovedVisible")) {
+      fails.push(
+        "Detail.tsx must keep productPurchaseRemovedVisible (#203 KEEP)",
       );
     }
   }
