@@ -1,6 +1,6 @@
 # 移除产品账号登录：实施计划
 
-状态：提案，尚未实现。此 PR 只提交计划，不改变运行时行为。
+状态：P1 启动解耦、侧栏「模型与 Harness 设置」和个人端点表单已落地。P2–P5 与 `packages/services/src/oauth/` 拆除尚未开始。
 
 调研基线：`cursor/wave4-harness-integration-b7a9`，提交 `5ae4353`。本仓库定位为自用、开源的多 harness 工作台，不再要求登录 ZCode/Z.ai/BigModel 产品账号。
 

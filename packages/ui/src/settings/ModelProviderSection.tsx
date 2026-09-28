@@ -52,6 +52,7 @@ import {
   refreshModelProviderSection,
   refreshProviderPanelAfterAuthChange as refreshModelProviderPanelAfterAuthChange,
 } from "./model-provider-section/modelProviderActions.js";
+import type { buildPersonalProviderInitialConfig } from "./model-provider-section/personalProviderSetup.js";
 import {
   useCodingPlanAccessRefresh,
   useCodingPlanEntitlements,
@@ -1003,6 +1004,44 @@ export function ModelProviderSection({
     [createPersonalProvider, locale],
   );
 
+  const handleCreateConfiguredProvider = useCallback(
+    async (input: {
+      providerName: string;
+      modelId: string;
+      initialConfig: ReturnType<typeof buildPersonalProviderInitialConfig>;
+    }) => {
+      setCreatingProvider(true);
+      let createdProviderId: string | null = null;
+      try {
+        const created = await createPersonalProvider({
+          providerName: input.providerName,
+          locale,
+          initialConfig: input.initialConfig,
+        });
+        createdProviderId = created.providerId;
+        await addPersonalModel(created.providerId, input.modelId, { enabled: true });
+        setPendingCreatedProviderId(created.providerId);
+        setSelectedNodeKey(createCustomProviderNodeKey(created.providerId));
+        setTemplatePickerOpen(false);
+      } catch (error) {
+        if (createdProviderId) {
+          // 模型没写上时删掉半成品，避免目录里留下没有模型、也无法发送的供应商。
+          await deleteProvider(createdProviderId).catch((deleteError) => {
+            logger.warn("[ModelProviderSection] 回滚未完成的自定义供应商失败", {
+              providerId: createdProviderId,
+              error: deleteError,
+            });
+          });
+        }
+        setPendingCreatedProviderId(null);
+        throw error;
+      } finally {
+        setCreatingProvider(false);
+      }
+    },
+    [addPersonalModel, createPersonalProvider, deleteProvider, locale],
+  );
+
   const handleReorderProviderIds = useCallback(
     async (orderedGroupProviderIds: string[]) => {
       const groupProviderIdSet = new Set(orderedGroupProviderIds);
@@ -1091,9 +1130,7 @@ export function ModelProviderSection({
           onCreateFromTemplate={(templateId) => {
             return handleCreateProvider({ templateId });
           }}
-          onCreateCustom={(label) => {
-            return handleCreateProvider({ providerName: label });
-          }}
+          onCreateConfiguredProvider={handleCreateConfiguredProvider}
         />
       ) : (
         <ModelProviderSectionDetail

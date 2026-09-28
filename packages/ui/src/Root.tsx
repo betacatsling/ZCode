@@ -203,11 +203,7 @@ function RootInner({
     update: updateAppSettings,
   } = useSettings();
   const [welcomeScreenOpenReason, setWelcomeScreenOpenReason] =
-    useState<WelcomeScreenOpenReason | null>(() =>
-      consumeZcodeJwtInvalidRestartMarker() ? "session-expired" : null,
-    );
-  const [providerFamilyDomainMigrationComplete, setProviderFamilyDomainMigrationComplete] =
-    useState(false);
+    useState<WelcomeScreenOpenReason | null>(null);
   const loginEntryRequest = useZCodeStore((state) => state.loginEntryRequest);
   const rootModelSelectionRead = useModelSelectionServiceView(services.modelSelectionService);
   const rootModelSelectionView =
@@ -388,27 +384,30 @@ function RootInner({
   const refreshProviderState = useRootProviderStateRefresh(services);
   useRootProviderSettingsSnapshot(services);
   useEffect(() => {
+    // 旧版本把过期 JWT 重启标记当成重新登录页。产品登录不再占用启动入口，只消费标记。
+    consumeZcodeJwtInvalidRestartMarker();
+  }, []);
+
+  useEffect(() => {
     let disposed = false;
 
     void (async () => {
       try {
         await ensureProviderFamilyDomainMigration(services);
       } catch (error) {
+        // 迁移失败必须留在日志里，不能改写成登录页；模型目录错误仍由下方错误条展示。
         logger.warn("[Root] provider family domain 迁移失败，继续启动", {
           error,
         });
-      } finally {
-        if (!disposed) {
-          setProviderFamilyDomainMigrationComplete(true);
-          try {
-            await refreshAppSettings();
-            await refreshProviderState();
-          } catch (refreshError) {
-            logger.warn("[Root] provider family domain 迁移后刷新状态失败", {
-              error: refreshError,
-            });
-          }
-        }
+      }
+      if (disposed) return;
+      try {
+        await refreshAppSettings();
+        await refreshProviderState();
+      } catch (refreshError) {
+        logger.warn("[Root] provider family domain 迁移后刷新状态失败", {
+          error: refreshError,
+        });
       }
     })();
 
@@ -419,12 +418,10 @@ function RootInner({
 
   const shouldPreferDirectoryBrowser = Boolean(preferDirectoryBrowser);
   const supportsEmbeddedBrowser = explicitSupportsEmbeddedBrowser ?? Boolean(isDesktop);
-  const isResolvingStartupAuthState = isRestoringOAuthSession;
   const rootProviderAvailability = resolveProviderAvailabilityState({
     modelSelectionView: rootModelSelectionView,
   });
   const providerStartupSyncPending = isProviderStartupSyncPending({
-    providerFamilyDomainMigrationComplete,
     modelSelectionViewHydrated:
       rootProviderAvailability.hydrated || rootModelSelectionRead.state.status === "error",
   });
@@ -434,7 +431,6 @@ function RootInner({
     useProviderAvailabilityLoginEntryGuard({
       enabled: providerAvailabilityLoginEntryGuardEnabled,
       user,
-      isRestoringOAuthSession: isResolvingStartupAuthState || providerStartupSyncPending,
       providerFamilyDomain: appSettings?.providerFamilyDomain,
       modelSelectionView: rootModelSelectionView,
       modelSelectionError:
@@ -444,15 +440,10 @@ function RootInner({
       refreshProviderState,
       readModelSelectionView: readRootModelSelectionView,
       setLoginEntryOpen: (open) => {
-        setWelcomeScreenOpenReason((currentReason) => {
-          if (open) {
-            return "startup-provider-required";
-          }
-          // JWT 过期提示确认后会先写入 session-expired，随后 provider
-          // 启动门禁以 open=false 收尾。这里若无条件清空，会覆盖重新登录页并回到工作区。
-          // 门禁只能关闭自己拥有的启动登录态，不能清理其它交互来源的 reason。
-          return currentReason === "startup-provider-required" ? null : currentReason;
-        });
+        if (open) return;
+        setWelcomeScreenOpenReason((currentReason) =>
+          currentReason === "startup-provider-required" ? null : currentReason,
+        );
       },
     });
   const isResolvingProviderStartupState = shouldResolveProviderStartupState({
@@ -460,12 +451,9 @@ function RootInner({
     providerAvailabilityStartupCheckCompleted,
   });
   const isStartupProviderLoginEntryOpen = welcomeScreenOpenReason === "startup-provider-required";
-  // 首次安装时 provider 登录入口判定晚于 workspace 注入，ChatView 会先 mount 并触发草稿预热。
-  // 这里把 provider 启动检查纳入 workspace 恢复门禁，避免未连接账号前启动 ZCode session。
-  const canRestoreWorkspaceSession =
-    !isResolvingStartupAuthState &&
-    !isResolvingProviderStartupState &&
-    !isStartupProviderLoginEntryOpen;
+  // 模型目录尚未读完时不恢复 workspace，避免用空目录预热会话。
+  // 产品账号恢复和登录页不再参与这个门禁。
+  const canRestoreWorkspaceSession = !isResolvingProviderStartupState;
 
   useEffect(() => {
     // 跨 workspace 任务列表需要一个稳定的“本地/root services”入口。
@@ -484,13 +472,13 @@ function RootInner({
     setDirectoryBrowserOpen(true);
   }, []);
   const handleReauthenticationRequired = useCallback(() => {
-    setWelcomeScreenOpenReason("session-expired");
+    // 产品 JWT 过期不再把整个应用切到登录页。缺模型只拦截发送/创建。
+    logger.info("[Root] 产品账号过期不再打开登录页");
   }, []);
   const {
     setWorkspaceActionError,
     startDraftInWorkspace,
     startNewTaskFromActiveWorkspace,
-    handleLogout,
     handleSelectProject,
     handleSelectConversationWorkspace,
     handleResolveConversationWorkspace,
@@ -518,7 +506,7 @@ function RootInner({
     setOAuthError,
     setUser,
     onProviderFamilyDomainClearedAfterLogout: () => {
-      setWelcomeScreenOpenReason("logout-provider-required");
+      logger.info("[Root] 产品账号退出不再打开登录页");
     },
     userId: user?.id,
     onOpenRemoteConnection: allowRemoteWorkspace ? handleOpenRemoteConnection : undefined,
@@ -611,7 +599,6 @@ function RootInner({
   const isStartupRenderBlocked = shouldShowRootStartupLoading({
     isDesktop,
     welcomeScreenOpen: Boolean(welcomeScreenOpenReason),
-    isResolvingStartupAuthState,
     isResolvingProviderStartupState,
     isRestoring,
     isBootstrappingInitialWorkspace: isBootstrappingInitialWorkspace || isCreatingFallbackWorkspace,
@@ -673,7 +660,7 @@ function RootInner({
     totalUnreadTaskCount,
     hasCompletedFullTabRestore: hasCompletedFullRestore,
     intl,
-    isRestoringOAuthSession: isResolvingStartupAuthState || providerStartupSyncPending,
+    isRestoringOAuthSession,
   });
 
   useEffect(() => {
@@ -784,7 +771,6 @@ function RootInner({
   useEffect(() => {
     if (
       shouldBlockRootRender({
-        isResolvingStartupAuthState,
         isResolvingProviderStartupState,
         isRestoring,
         isBootstrappingInitialWorkspace,
@@ -838,7 +824,6 @@ function RootInner({
     handleSelectConversationWorkspace,
     isBootstrappingInitialWorkspace,
     isResolvingProviderStartupState,
-    isResolvingStartupAuthState,
     isRestoring,
     isSettingsTabActive,
     isStartupProviderLoginEntryOpen,
@@ -867,9 +852,6 @@ function RootInner({
     setWelcomeScreenOpenReason("provider-request");
   }, [loginEntryRequest]);
 
-  const handleOpenLoginEntry = () => {
-    setWelcomeScreenOpenReason("manual-login");
-  };
   const handleWelcomeScreenComplete = useCallback(
     async (reason: LoginCompleteReason) => {
       await refreshAppSettings();
@@ -959,9 +941,6 @@ function RootInner({
     onCreateTask: handleCreateTask,
     onOpenWorkspace: handleOpenWorkspace,
     allowOpenWorkspace,
-    onLogin: !user ? handleOpenLoginEntry : undefined,
-    onLogout: user ? handleLogout : undefined,
-    user,
   };
 
   if (isStartupRenderBlocked) {
@@ -1056,8 +1035,6 @@ function RootInner({
             remoteWorkspaceSessions={remoteWorkspaceSessions}
             allowRemoteWorkspace={allowRemoteWorkspace}
             handleBackFromSettings={handleBackFromSettings}
-            handleLogout={user ? handleLogout : undefined}
-            onLogin={!user ? handleOpenLoginEntry : undefined}
             user={user}
             reconnectingRemoteWorkspaceKeys={reconnectingRemoteWorkspaceKeys}
             remoteWorkspaceErrorByWorkspaceKey={remoteWorkspaceErrorByWorkspaceKey}
