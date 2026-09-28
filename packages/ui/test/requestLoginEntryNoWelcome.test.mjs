@@ -48,3 +48,9 @@ test("product OAuth shell modules are removed", () => {
     assert.equal(exists, false, `${rel} should be deleted`);
   }
 });
+
+test("loginEntryGuard enable toggle stays absent from rootStartupGate", () => {
+  const gate = readFileSync(join(uiSrc, "lib/rootStartupGate.ts"), "utf8");
+  assert.equal(gate.includes("shouldEnableProviderAvailabilityLoginEntryGuard"), false);
+  assert.equal(gate.includes("shouldRedirectStartupToProductLogin"), false);
+});
