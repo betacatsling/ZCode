@@ -2,10 +2,10 @@
 /**
  * Product-login removal gate (scripts-only knife; docs/inventory sync after Dialog unload).
  *
- * Tip state (origin/cursor/wave4-harness-integration-b7a9 @ 3bf3626 / #124):
+ * Tip state (origin/cursor/wave4-harness-integration-b7a9 @ 2bbb0dc / #128):
  *   P1–P4 landed; CodingPlanUpgradeDialog / Provider + Root wrap unloaded (Ex1 /
  *   9ce3088); EntryGate CTA / CodingPlanEntryButton / useCodingPlanEntryGate gone;
- *   soft remainingUiInventory first landed in #57; #103–#124 clearances hard-gated below.
+ *   soft remainingUiInventory first landed in #57; #103–#128 clearances hard-gated below.
  *
  * Hard gates (must exit 0 on tip):
  *   - CLI login-command / tui-auth / create.ts stubs (P3)
@@ -32,6 +32,11 @@
  * Hard (also): #123 orphan useEnterpriseCodingPlanProducts.ts must stay deleted; #124
  *   productPurchaseRemovedTitle i18n must stay absent (KEEP productPurchaseRemoved body +
  *   manage / planCard / Display types / entitlement).
+ * Hard (also): #126 refreshTeamPlanProducts must stay absent from modelProviderActions +
+ *   ModelProviderSection (KEEP refreshModelProviderSection / refreshCodingPlanEntitlements).
+ * Hard (also): #128 codingPlanUsageSources buildCodingPlanUsageSources must stay collapsed to
+ *   return []; dead team flatMap helpers must stay absent (KEEP CodingPlanUsageSource /
+ *   buildPersonalCodingPlanUsageSource / resolveSidebarCurrentCodingPlanUsageSource signature).
  *
  * Run from repo root: node scripts/verify-product-login-removed.mjs
  */
@@ -467,6 +472,89 @@ function assertDeletedSurfaces() {
     }
   }
 
+  // #126: refreshTeamPlanProducts hard-absent after enterprise products removal.
+  // KEEP refreshModelProviderSection + refreshCodingPlanEntitlements / Display wiring.
+  const modelProviderActionsPath = join(
+    UI_SRC,
+    "settings/model-provider-section/modelProviderActions.ts",
+  );
+  if (!existsSync(modelProviderActionsPath)) {
+    fails.push("modelProviderActions.ts must exist");
+  } else {
+    const actionsSrc = readFileSync(modelProviderActionsPath, "utf8");
+    if (/\brefreshTeamPlanProducts\b/.test(actionsSrc)) {
+      fails.push(
+        "modelProviderActions.ts must not retain refreshTeamPlanProducts (#126)",
+      );
+    }
+    if (!/\brefreshModelProviderSection\b/.test(actionsSrc)) {
+      fails.push("modelProviderActions.ts must keep refreshModelProviderSection");
+    }
+    if (!/\brefreshCodingPlanEntitlements\b/.test(actionsSrc)) {
+      fails.push(
+        "modelProviderActions.ts must keep refreshCodingPlanEntitlements (entitlement KEPT)",
+      );
+    }
+  }
+  const modelProviderSectionPath = join(UI_SRC, "settings/ModelProviderSection.tsx");
+  if (existsSync(modelProviderSectionPath)) {
+    const sectionSrc = readFileSync(modelProviderSectionPath, "utf8");
+    if (/\brefreshTeamPlanProducts\b/.test(sectionSrc)) {
+      fails.push(
+        "ModelProviderSection.tsx must not wire refreshTeamPlanProducts (#126)",
+      );
+    }
+    if (/\brefreshAuthenticatedEnterpriseProducts\b/.test(sectionSrc)) {
+      fails.push(
+        "ModelProviderSection.tsx must not wire refreshAuthenticatedEnterpriseProducts (#126)",
+      );
+    }
+  }
+
+  // #128: codingPlanUsageSources dead team-products flatMap thinned to return [].
+  // Do not rewrite Ex1 source here — only gate tip reality. KEEP public signature /
+  // CodingPlanUsageSource / personal builder / sidebar resolver.
+  const usageSourcesPath = join(UI_SRC, "lib/codingPlanUsageSources.ts");
+  if (!existsSync(usageSourcesPath)) {
+    fails.push("codingPlanUsageSources.ts must exist");
+  } else {
+    const usageSrc = readFileSync(usageSourcesPath, "utf8");
+    if (!/\bexport function buildCodingPlanUsageSources\b/.test(usageSrc)) {
+      fails.push("codingPlanUsageSources must keep buildCodingPlanUsageSources signature");
+    }
+    if (!/\bexport interface CodingPlanUsageSource\b/.test(usageSrc)) {
+      fails.push("codingPlanUsageSources must keep CodingPlanUsageSource type");
+    }
+    if (!/\bexport function buildPersonalCodingPlanUsageSource\b/.test(usageSrc)) {
+      fails.push("codingPlanUsageSources must keep buildPersonalCodingPlanUsageSource");
+    }
+    if (!/\bexport function resolveSidebarCurrentCodingPlanUsageSource\b/.test(usageSrc)) {
+      fails.push(
+        "codingPlanUsageSources must keep resolveSidebarCurrentCodingPlanUsageSource",
+      );
+    }
+    // Collapsed body: return [] (allow whitespace / comment noise between braces).
+    if (!/buildCodingPlanUsageSources[\s\S]*?\{[\s\S]*?return\s*\[\s*\]\s*;/.test(usageSrc)) {
+      fails.push(
+        "buildCodingPlanUsageSources must stay collapsed to return [] (#128)",
+      );
+    }
+    const deadUsageHelpers = [
+      "buildTeamCodingPlanUsageSources",
+      "formatTeamUsageSourceLabel",
+      "subscribedTeamProducts.flatMap",
+      "formatTeamPlanDisplayName",
+      "resolveEnterpriseCodingPlanProductFamily",
+    ];
+    for (const dead of deadUsageHelpers) {
+      if (usageSrc.includes(dead)) {
+        fails.push(
+          `codingPlanUsageSources must not revive dead team flatMap helper/path: ${dead} (#128)`,
+        );
+      }
+    }
+  }
+
   // #114: slash-help /login+/logout rewritten off Coding Plan / Z.ai OAuth acquisition.
   // KEEP MCP (and other non-login) help entries unchanged.
   const slashHelpPath = join(ROOT, "packages/shared/src/zcode-slash-command-help.ts");
@@ -583,7 +671,7 @@ function remainingUiInventory() {
   ].map(fileStatus);
 
   const note =
-    "Tip 3bf3626 (#124 / after #103–#123): Dialog/Provider/Entry/EmbeddedWebview + CLI loginRequired→modelSetupRequired hard. UI locale dead product loginRequired / Coding Plan login + orphan Welcome/login.* shell + #103–#107 upgrade/purchase/usage/enterprise acquisition i18n hard-gated. login.oauth.regionTag.* absent; KEEP settings.modelProvider.regionTag.* + share-import signInRequired + manage/planCard + productPurchaseRemoved body + live personal API-key / MCP OAuth copy. #114 slash-help /login+/logout off Coding Plan/Z.ai OAuth acquisition → model-setup/API-key guidance hard-gated (KEEP MCP help). #123 useEnterpriseCodingPlanProducts.ts hard-absent; #124 productPurchaseRemovedTitle absent. Soft inventory thinned — cleared symbol scans dropped. Inventory does not fail this gate.";
+    "Tip 2bbb0dc (#128 / after #103–#127): Dialog/Provider/Entry/EmbeddedWebview + CLI loginRequired→modelSetupRequired hard. UI locale dead product loginRequired / Coding Plan login + orphan Welcome/login.* shell + #103–#107 upgrade/purchase/usage/enterprise acquisition i18n hard-gated. login.oauth.regionTag.* absent; KEEP settings.modelProvider.regionTag.* + share-import signInRequired + manage/planCard + productPurchaseRemoved body + live personal API-key / MCP OAuth copy. #114 slash-help /login+/logout off Coding Plan/Z.ai OAuth acquisition → model-setup/API-key guidance hard-gated (KEEP MCP help). #123 useEnterpriseCodingPlanProducts.ts hard-absent; #124 productPurchaseRemovedTitle absent; #126 refreshTeamPlanProducts hard-absent (KEEP entitlement refresh); #128 usageSources buildCodingPlanUsageSources → return [] / dead flatMap helpers absent (KEEP CodingPlanUsageSource / personal builder / sidebar resolver). Soft inventory thinned — cleared symbol scans dropped. Inventory does not fail this gate.";
 
   return {
     note,

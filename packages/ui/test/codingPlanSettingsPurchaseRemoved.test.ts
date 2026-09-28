@@ -202,3 +202,34 @@ test("settings StatusCards path drops dead Coding Plan upgrade/purchase CTA stri
   assert.equal(statusCards.includes("右侧升级 Coding Plan 入口"), false);
   assert.equal(statusCards.includes("StartPlanQuotaStatusCard"), true);
 });
+
+test("modelProviderActions drops refreshTeamPlanProducts after #126", () => {
+  const actions = readFileSync(
+    new URL("model-provider-section/modelProviderActions.ts", settingsRoot),
+    "utf8",
+  );
+  assert.equal(actions.includes("refreshTeamPlanProducts"), false);
+  assert.match(actions, /export async function refreshModelProviderSection/);
+  assert.match(actions, /refreshCodingPlanEntitlements/);
+
+  const section = readFileSync(new URL("ModelProviderSection.tsx", settingsRoot), "utf8");
+  assert.equal(section.includes("refreshTeamPlanProducts"), false);
+  assert.equal(section.includes("refreshAuthenticatedEnterpriseProducts"), false);
+});
+
+test("codingPlanUsageSources collapses dead team flatMap to return [] (#128)", () => {
+  const usage = readFileSync(
+    new URL("../src/lib/codingPlanUsageSources.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(usage, /export function buildCodingPlanUsageSources/);
+  assert.match(usage, /export interface CodingPlanUsageSource/);
+  assert.match(usage, /export function buildPersonalCodingPlanUsageSource/);
+  assert.match(usage, /export function resolveSidebarCurrentCodingPlanUsageSource/);
+  assert.match(usage, /return\s*\[\s*\]\s*;/);
+  assert.equal(usage.includes("buildTeamCodingPlanUsageSources"), false);
+  assert.equal(usage.includes("formatTeamUsageSourceLabel"), false);
+  assert.equal(usage.includes("subscribedTeamProducts.flatMap"), false);
+  assert.equal(usage.includes("formatTeamPlanDisplayName"), false);
+  assert.equal(usage.includes("resolveEnterpriseCodingPlanProductFamily"), false);
+});
