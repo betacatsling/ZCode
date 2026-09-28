@@ -1,23 +1,21 @@
 #!/usr/bin/env node
 /**
- * Product-login removal gate (scripts-only knife; does not unload UI Dialog).
+ * Product-login removal gate (scripts-only knife; docs/inventory sync after Dialog unload).
  *
- * Tip state (origin/cursor/wave4-harness-integration-b7a9 @ ed87906 / tip 860c4de):
- *   P1–P4 landed (CLI stubs, Web/Desktop OAuth entry, login/** deadcode,
- *   PlatformChannels.OAuth* / IPlatformService OAuth thin-clean, EntryGate CTA
- *   unload from Detail, etc.).
- *   Remaining Dialog / Provider / EntryGate leftovers in Root + settings are
- *   tracked by `remainingUiInventory` below (soft print; does not fail exit).
- *   Full Dialog/Provider/Root unload is Ex1 product work — not this script.
+ * Tip state (origin/cursor/wave4-harness-integration-b7a9 @ 8560df4 / #57):
+ *   P1–P4 landed; CodingPlanUpgradeDialog / Provider + Root wrap unloaded (Ex1 /
+ *   9ce3088); EntryGate CTA / CodingPlanEntryButton / useCodingPlanEntryGate gone;
+ *   soft remainingUiInventory first landed in #57 (this tip).
  *
  * Hard gates (must exit 0 on tip):
  *   - CLI login-command / tui-auth / create.ts stubs (P3)
- *   - Already-deleted UI/contract surfaces that tip has removed
- *     (login/**, CodingPlanEntryButton, PlatformChannels.OAuth*, registerOAuthState)
+ *   - Deleted UI/contract surfaces: login/**, CodingPlanEntryButton,
+ *     CodingPlanUpgradeDialog(.tsx)/Provider, PlatformChannels.OAuth*,
+ *     registerOAuthState / onOAuthCallback; Root must not remount Provider
  *
- * Soft inventory (print-only):
- *   - CodingPlanUpgradeDialog / Provider / Root mount / related helpers
- *   - CLI TUI loginRequired residual naming (semantic rename still pending)
+ * Soft inventory (print-only; does not fail exit):
+ *   - Root isRestoringOAuthSession; EmbeddedWebview / funnel / entry-plan leftovers
+ *   - CLI TUI loginRequired / loginSetup residual naming
  *
  * Run from repo root: node scripts/verify-product-login-removed.mjs
  */
@@ -137,6 +135,16 @@ function assertDeletedSurfaces() {
   if (existsSync(entryButton)) {
     fails.push("CodingPlanEntryButton.tsx must stay deleted (EntryGate CTA unloaded)");
   }
+  const upgradeDialog = join(UI_SRC, "settings/CodingPlanUpgradeDialog.tsx");
+  if (existsSync(upgradeDialog)) {
+    fails.push("CodingPlanUpgradeDialog.tsx must stay deleted (Dialog unload on tip)");
+  }
+  const upgradeProvider = join(UI_SRC, "settings/CodingPlanUpgradeDialogProvider.tsx");
+  if (existsSync(upgradeProvider)) {
+    fails.push(
+      "CodingPlanUpgradeDialogProvider.tsx must stay deleted (Dialog unload on tip)",
+    );
+  }
   // Definition of useCodingPlanEntryGate must not reappear under packages/ui/src
   const entryGateHits = grepFiles(UI_SRC, /export\s+function\s+useCodingPlanEntryGate\b/, {
     extensions: [".ts", ".tsx"],
@@ -147,6 +155,20 @@ function assertDeletedSurfaces() {
         .map((h) => h.file)
         .join(", ")}`,
     );
+  }
+  // Root must not remount the unloaded Provider (Ex1 / 9ce3088).
+  const rootPath = join(UI_SRC, "Root.tsx");
+  if (existsSync(rootPath)) {
+    const rootSrc = readFileSync(rootPath, "utf8");
+    if (/CodingPlanUpgradeDialogProvider/.test(rootSrc)) {
+      fails.push("Root.tsx must not reference CodingPlanUpgradeDialogProvider");
+    }
+    if (
+      /<CodingPlanUpgradeDialogProvider>/.test(rootSrc) ||
+      /<\/CodingPlanUpgradeDialogProvider>/.test(rootSrc)
+    ) {
+      fails.push("Root.tsx must not wrap with CodingPlanUpgradeDialogProvider");
+    }
   }
 
   const channelsSrc = readFileSync(CHANNELS, "utf8");
@@ -229,8 +251,10 @@ function fileStatus(relPath) {
 }
 
 /**
- * Soft inventory: remaining Dialog / Provider / Root / CLI loginRequired residuals.
- * Prints findings; never flips results.ok by itself.
+ * Soft inventory: residuals still present on tip after Dialog/Provider unload.
+ * Cleared Dialog/Provider/Root-wrap are hard-gated above; this prints leftovers
+ * (Root OAuth restore flag, EmbeddedWebview/funnel helpers, CLI loginRequired/
+ * loginSetup naming). Never flips results.ok by itself.
  */
 function remainingUiInventory() {
   const symbolScans = [
@@ -267,6 +291,15 @@ function remainingUiInventory() {
     {
       id: "loginRequired_cli_tui",
       pattern: /\bloginRequired\b/,
+      roots: [
+        join(ROOT, "apps/zcode-cli/packages/cli/src"),
+        join(ROOT, "apps/zcode-cli/packages/tui/src"),
+        join(ROOT, "apps/zcode-cli/packages/i18n/src"),
+      ],
+    },
+    {
+      id: "loginSetup_cli_tui",
+      pattern: /\bloginSetup\b/,
       roots: [
         join(ROOT, "apps/zcode-cli/packages/cli/src"),
         join(ROOT, "apps/zcode-cli/packages/tui/src"),
@@ -318,7 +351,7 @@ function remainingUiInventory() {
   };
 
   const note =
-    "P1–P4 landed on tip; soft remaining = Dialog/Provider/Root unload (Ex1) + CLI TUI loginRequired semantic rename. Inventory does not fail this gate.";
+    "Tip 8560df4/#57: Dialog/Provider/Root-wrap cleared (hard-gated). Soft remaining = Root isRestoringOAuthSession + EmbeddedWebview/funnel/entry-plan leftovers + CLI TUI loginRequired/loginSetup rename. Inventory does not fail this gate.";
 
   return {
     note,
