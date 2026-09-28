@@ -2,10 +2,10 @@
 /**
  * Product-login removal gate (scripts-only knife; docs/inventory sync after Dialog unload).
  *
- * Tip state (origin/cursor/wave4-harness-integration-b7a9 @ 8560df4 / #57):
+ * Tip state (origin/cursor/wave4-harness-integration-b7a9 @ 7bea389 / #112):
  *   P1–P4 landed; CodingPlanUpgradeDialog / Provider + Root wrap unloaded (Ex1 /
  *   9ce3088); EntryGate CTA / CodingPlanEntryButton / useCodingPlanEntryGate gone;
- *   soft remainingUiInventory first landed in #57 (this tip).
+ *   soft remainingUiInventory first landed in #57; #103–#112 clearances hard-gated below.
  *
  * Hard gates (must exit 0 on tip):
  *   - CLI login-command / tui-auth / create.ts stubs (P3)
@@ -22,8 +22,11 @@
  * Hard (also): CLI isLoginRequired gate must stay absent (renamed to isModelSetupRequired).
  * Hard (also): UI locale dead product loginRequired / Coding Plan login keys must stay absent
  *   (codingPlan.login, productsLoginRequired, start.loginEnable/Trial, entitlement*LoginRequired).
- * Hard (also): orphan Welcome / login.* shell locale keys must stay absent (keep regionTag +
- *   conversationShare.import.signInRequired; live personal API-key / MCP OAuth copy untouched).
+ * Hard (also): orphan Welcome / login.* shell locale keys must stay absent; old
+ *   login.oauth.regionTag.* must stay absent (#112 → settings.modelProvider.regionTag.*);
+ *   keep conversationShare.import.signInRequired + live personal API-key / MCP OAuth copy.
+ * Hard (also): #103–#107 dead upgrade/purchase / usage upgrade-renew / enterprise acquisition
+ *   i18n must stay absent.
  *
  * Run from repo root: node scripts/verify-product-login-removed.mjs
  */
@@ -319,7 +322,22 @@ function assertDeletedSurfaces() {
     "settings.usage.entitlementLoginRequired",
     "settings.usage.entitlementStatusLoginRequired",
     "sidebar.usage.plan.loginRequired",
-    // Orphan Welcome / login.* shell (Ex3 @ a2e3e5d); keep login.oauth.regionTag.*
+    // #104 usage-panel upgrade/renew residue
+    "sidebar.usage.plan.upgrade",
+    "sidebar.usage.plan.renew",
+    // #103 dead Coding Plan upgrade/purchase CTA strings
+    "settings.modelProvider.codingPlan.subscribe",
+    "settings.modelProvider.codingPlan.upgrade",
+    "settings.modelProvider.codingPlan.renew",
+    "settings.modelProvider.codingPlan.currentPlan",
+    "settings.modelProvider.codingPlan.cancelUpgrade",
+    "settings.modelProvider.codingPlan.purchase.individualsSectionTitle",
+    "settings.modelProvider.codingPlan.purchaseBanner.startPlanTitle",
+    "settings.modelProvider.codingPlan.purchase.selectPlan",
+    // #112: old botsUi regionTag path must stay absent (moved off login.oauth)
+    "login.oauth.regionTag.zai",
+    "login.oauth.regionTag.bigmodel",
+    // Orphan Welcome / login.* shell (Ex3 / #111); KEEP settings.modelProvider.regionTag.*
     "welcome.username",
     "welcome.password",
     "welcome.login",
@@ -378,13 +396,57 @@ function assertDeletedSurfaces() {
       "UI locales must keep conversationShare.import.signInRequired (ZCode account, not product login)",
     );
   }
-  // Live bot region tags (still referenced from botsUi) must remain under login.oauth.regionTag.*.
-  for (const keepKey of ["login.oauth.regionTag.zai", "login.oauth.regionTag.bigmodel"]) {
+  // Live bot region tags (#112): must remain under settings.modelProvider.regionTag.*.
+  for (const keepKey of [
+    "settings.modelProvider.regionTag.zai",
+    "settings.modelProvider.regionTag.bigmodel",
+  ]) {
     const keepHits = grepFiles(uiLocaleDir, new RegExp(`"${escapeRegExp(keepKey)}"`), {
       extensions: [".ts"],
     });
     if (keepHits.length < 2) {
       fails.push(`UI locales must keep live ${keepKey} (botsUi region tags)`);
+    }
+  }
+  // #107 enterprise / overseasPayment / paymentDialog / start / product / securityVerification
+  // acquisition prefixes must stay absent (keep manage / planCard / productPurchaseRemoved).
+  const deadAcquisitionPrefixes = [
+    "settings.modelProvider.codingPlan.enterprise.",
+    "settings.modelProvider.codingPlan.overseasPayment.",
+    "settings.modelProvider.codingPlan.paymentDialog.",
+    "settings.modelProvider.codingPlan.start.",
+    "settings.modelProvider.codingPlan.product.",
+    "settings.modelProvider.codingPlan.securityVerification",
+  ];
+  for (const localeFile of ["en-US.ts", "zh-CN.ts"]) {
+    const localePath = join(uiLocaleDir, localeFile);
+    if (!existsSync(localePath)) {
+      fails.push(`missing UI locale ${localeFile}`);
+      continue;
+    }
+    const localeSrc = readFileSync(localePath, "utf8");
+    for (const prefix of deadAcquisitionPrefixes) {
+      if (localeSrc.includes(`"${prefix}`)) {
+        fails.push(`UI locales must not keep dead acquisition prefix ${prefix} in ${localeFile}`);
+      }
+    }
+    for (const keepKey of [
+      "settings.modelProvider.codingPlan.manage",
+      "settings.modelProvider.codingPlan.productPurchaseRemoved",
+      "settings.modelProvider.planCard.codingPlan",
+      "settings.modelProvider.planCard.startPlan",
+    ]) {
+      if (!localeSrc.includes(`"${keepKey}"`)) {
+        fails.push(`UI locales must keep ${keepKey} in ${localeFile}`);
+      }
+    }
+  }
+  // #104: oauthProviderIcon unknown-provider fallback must not revive LogIn glyph.
+  const oauthIconPath = join(UI_SRC, "lib/oauthProviderIcon.tsx");
+  if (existsSync(oauthIconPath)) {
+    const oauthIconSrc = readFileSync(oauthIconPath, "utf8");
+    if (/\bLogInIcon\b/.test(oauthIconSrc)) {
+      fails.push("oauthProviderIcon must not use LogInIcon (usage-panel residue #104)");
     }
   }
 
@@ -458,7 +520,7 @@ function remainingUiInventory() {
   ].map(fileStatus);
 
   const note =
-    "Tip a2e3e5d (#108 / after #101–#107): Dialog/Provider/Entry/EmbeddedWebview + CLI loginRequired→modelSetupRequired hard. UI locale dead product loginRequired / Coding Plan login + orphan Welcome/login.* shell keys hard-gated (Ex3). Soft inventory thinned — cleared symbol scans dropped. KEEP share-import signInRequired + login.oauth.regionTag.* + live personal API-key / MCP OAuth copy. Inventory does not fail this gate.";
+    "Tip 7bea389 (#112 / after #103–#111): Dialog/Provider/Entry/EmbeddedWebview + CLI loginRequired→modelSetupRequired hard. UI locale dead product loginRequired / Coding Plan login + orphan Welcome/login.* shell + #103–#107 upgrade/purchase/usage/enterprise acquisition i18n hard-gated. login.oauth.regionTag.* absent; KEEP settings.modelProvider.regionTag.* + share-import signInRequired + live personal API-key / MCP OAuth copy. Soft inventory thinned — cleared symbol scans dropped. Inventory does not fail this gate.";
 
   return {
     note,
