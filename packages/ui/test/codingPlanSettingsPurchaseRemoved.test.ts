@@ -19,11 +19,12 @@ test("coding plan login recovery and upgrade dialog modules are removed", () => 
   assert.equal(existsSync(dialogPath), false);
   assert.equal(existsSync(providerPath), false);
 
-  const presentation = readFileSync(
-    new URL("model-provider-section/codingPlanProductPresentation.ts", settingsRoot),
-    "utf8",
+  assert.equal(
+    existsSync(
+      fileURLToPath(new URL("model-provider-section/codingPlanProductPresentation.ts", settingsRoot)),
+    ),
+    false,
   );
-  assert.match(presentation, /CODING_PLAN_PRODUCT_PURCHASE_CARDS_REMOVED\s*=\s*true/);
 
   assert.equal(
     existsSync(fileURLToPath(new URL("model-provider-section/codingPlanPricingCards.ts", settingsRoot))),
@@ -112,12 +113,28 @@ test("StartPlan acquisition preview and personal product list hooks are removed"
   );
   assert.equal(detail.includes("startPlanPreviewVisible"), false);
 
-  const presentation = readFileSync(
-    new URL("model-provider-section/codingPlanProductPresentation.ts", settingsRoot),
+  assert.equal(
+    existsSync(
+      fileURLToPath(new URL("model-provider-section/codingPlanProductPresentation.ts", settingsRoot)),
+    ),
+    false,
+  );
+
+  const enterprise = readFileSync(
+    new URL("model-provider-section/enterpriseCodingPlanProducts.ts", settingsRoot),
     "utf8",
   );
-  assert.equal(presentation.includes("pickProductPrice"), false);
-  assert.equal(presentation.includes("formatCodingPlanAmount"), false);
-  assert.match(presentation, /CODING_PLAN_PRODUCT_PURCHASE_CARDS_REMOVED\s*=\s*true/);
+  assert.equal(enterprise.includes("normalizeCodingPlanCardCopyItems"), false);
+  assert.equal(enterprise.includes("equity:"), false);
+  assert.equal(enterprise.includes("descriptionItems"), false);
+  assert.equal(enterprise.includes("CodingPlanStaticTeamProduct"), false);
+
+  const enterpriseHook = readFileSync(
+    new URL("model-provider-section/useEnterpriseCodingPlanProducts.ts", settingsRoot),
+    "utf8",
+  );
+  assert.equal(enterpriseHook.includes("staticOnly"), false);
+  assert.equal(enterpriseHook.includes("getStaticTeamProducts"), false);
+  assert.equal(enterpriseHook.includes("staticProductIds"), false);
 });
 
