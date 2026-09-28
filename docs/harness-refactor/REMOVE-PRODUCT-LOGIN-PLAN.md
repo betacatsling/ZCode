@@ -1,6 +1,6 @@
 # 移除产品账号登录：实施计划
 
-状态：P1 启动/UI 门禁解耦已落地（#20 一带）。P2 产品 OAuth / accountProvider / Coding Plan 服务装配拆除已落地（#27/#30 一带），见 `REMOVE-PRODUCT-LOGIN-P2.md`。P3 Web 浏览器 OAuth 栈（#33）、Desktop 产品 OAuth deeplink（#40）、CLI shared-credentials unload（#35）已落地；UI Root/Welcome OAuth shell（#37）、settings 登录/购买（#36）、toolbar（#38）、sidebar footer（#39）、SessionPane upgrade CTA（#42）、login/** deadcode、UsageRemainingPanel + StatusCards 文案、settings 停 upgrade、ChatErrorBanner + loginRecovery、PlatformChannels/IPlatformService OAuth 薄清（#47 一带）、CodingPlanUpgradeDialog / Provider + Root wrap 整卸（Ex1 / `9ce3088`）、EntryGate CTA / `CodingPlanEntryButton` / `useCodingPlanEntryGate` 已卸；verify soft UI inventory 已有（#57 / tip `8560df4`）。`loginRequired` 面板/帮助文案已改为「无模型→配 Provider」（不再推 `/login` Coding Plan）。仍剩：Root/`store` `isRestoringOAuthSession` 残留；`CodingPlanEmbeddedWebviewDialog`、funnel telemetry / pricing 卡类型残留；CLI TUI `loginRequired`/`loginSetup` 语义改名（OAuth/API Key `/login` 挂点已卸 #59）。`useCodingPlanEntryPlanList` 已随零调用方删除。
+状态：P1 启动/UI 门禁解耦已落地（#20 一带）。P2 产品 OAuth / accountProvider / Coding Plan 服务装配拆除已落地（#27/#30 一带），见 `REMOVE-PRODUCT-LOGIN-P2.md`。P3 Web 浏览器 OAuth 栈（#33）、Desktop 产品 OAuth deeplink（#40）、CLI shared-credentials unload（#35）已落地；UI Root/Welcome OAuth shell（#37）、settings 登录/购买（#36）、toolbar（#38）、sidebar footer（#39）、SessionPane upgrade CTA（#42）、login/** deadcode、UsageRemainingPanel + StatusCards 文案、settings 停 upgrade、ChatErrorBanner + loginRecovery、PlatformChannels/IPlatformService OAuth 薄清（#47 一带）、CodingPlanUpgradeDialog / Provider + Root wrap 整卸（Ex1 / `9ce3088`）、EntryGate CTA / `CodingPlanEntryButton` / `useCodingPlanEntryGate` 已卸；verify soft UI inventory 已有（#57 / tip `8560df4`）。`loginRequired` 面板/帮助文案已改为「无模型→配 Provider」（不再推 `/login` Coding Plan）。仍剩：`CodingPlanEmbeddedWebviewDialog`、funnel telemetry / pricing 卡类型残留；Root/`store` `isRestoringOAuthSession` 已卸；CLI TUI `loginRequired`/`loginSetup` 语义改名（OAuth/API Key `/login` 挂点已卸 #59）。`useCodingPlanEntryPlanList` 已随零调用方删除。
 
 调研基线：`cursor/wave4-harness-integration-b7a9`，提交 `5ae4353`。本仓库定位为自用、开源的多 harness 工作台，不再要求登录 ZCode/Z.ai/BigModel 产品账号。
 
@@ -124,7 +124,7 @@ flowchart TD
 
 ### P5：清理、回归和发布说明
 
-- 清理废弃导出、依赖、国际化字符串、test IDs、平台接口、说明和示例；不按 auth/oauth/login 关键词盲删第三方认证或 login shell。`PlatformChannels.OAuth*` 与 `IPlatformService.registerOAuthState`/`onOAuthCallback` 已薄清（#47 一带）；`CodingPlanUpgradeDialog`/`Provider` 与 Root wrap 已卸（`9ce3088`）；`oauth.ts` 领域类型与 Root `isRestoringOAuthSession` 残留仍保留待清。
+- 清理废弃导出、依赖、国际化字符串、test IDs、平台接口、说明和示例；不按 auth/oauth/login 关键词盲删第三方认证或 login shell。`PlatformChannels.OAuth*` 与 `IPlatformService.registerOAuthState`/`onOAuthCallback` 已薄清（#47 一带）；`CodingPlanUpgradeDialog`/`Provider` 与 Root wrap 已卸（`9ce3088`）；`oauth.ts` 领域类型残留仍保留待清；Root/`store` `isRestoringOAuthSession` 已卸。
 - 检查 Desktop、Web、CLI 构建、入口网络行为，以及下列验收矩阵；记录每个用例的 pass/fail/blocked，不以 skip 代替实机证据。
 - 发布说明列出账号功能移除、自有模型配置方式、旧配置处理和不再提供的托管功能。保留本地数据以支持回退，不承诺旧版可读未经验证的新 schema。
 
