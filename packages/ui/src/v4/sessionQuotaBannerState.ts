@@ -291,10 +291,6 @@ export function buildSessionQuotaBannerDismissKey(
   ].join(":");
 }
 
-export function resolveQuotaBannerUpgradeProviderId(providerId: string | null): string | null {
-  return providerId;
-}
-
 /**
  * 该提示是否应该带升级入口。
  *
