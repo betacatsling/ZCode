@@ -6,13 +6,14 @@ import {
   type ToolCallRow,
   type TurnHeaderRow,
 } from "@zcode/shared/zcode-protocol-v4";
-import type { AgentEvent, SessionSpec } from "@zcode/shared/agent-host";
+import type { AgentEvent, CompatibleSessionSpec } from "@zcode/shared/agent-host";
+import { createExternalEventProjection } from "./externalEventProjection.js";
 
 const unavailable = { allowed: false as const, reasonCode: "externalHarnessUnsupported" };
 
 /** Pure V4 read projection. Replay never sends a prompt, performs a tool, or resolves approval. */
 export function projectHostConversation(input: {
-  spec: SessionSpec;
+  spec: CompatibleSessionSpec;
   runtimeEpoch: string;
   events: readonly AgentEvent[];
   windowSize?: number;
@@ -37,7 +38,9 @@ export function projectHostConversation(input: {
   let activeTurn: string | undefined;
   let phase: ConversationSnapshot["control"]["phase"] = "draft";
   let errorCode: string | undefined;
+  let errorMessage = "";
   let lastErrorAt = 0;
+  const external = createExternalEventProjection();
   let inputTokens = 0;
   let outputTokens = 0;
   let revision = 0;
@@ -127,8 +130,12 @@ export function projectHostConversation(input: {
         break;
       }
       case "tool.started": {
-        if (event.turnId !== activeTurn || tools.has(event.toolCallId))
-          throw new Error("duplicate tool or wrong turn");
+        if (event.turnId !== activeTurn) throw new Error("duplicate tool or wrong turn");
+        if (external.hasFileSeed(event.toolCallId)) {
+          external.adoptFileSeed(event, tools);
+          break;
+        }
+        if (tools.has(event.toolCallId)) throw new Error("duplicate tool or wrong turn");
         const row: ToolCallRow = {
           ...base(event),
           kind: "toolCall",
@@ -202,21 +209,12 @@ export function projectHostConversation(input: {
         row.endedAt = event.at;
         if (event.outcome === "error")
           row.error = { code: "backend-tool-error", message: "Tool failed" };
-        if (event.outputText !== undefined) row.output = { text: event.outputText };
+        external.onToolFinished(event, row);
         break;
       }
-      case "file.changed": {
-        const header = headers.get(event.turnId);
-        if (header) {
-          const previous = header.fileChanges;
-          header.fileChanges = {
-            files: (previous?.files ?? 0) + 1,
-            additions: (previous?.additions ?? 0) + event.additions,
-            deletions: (previous?.deletions ?? 0) + event.deletions,
-          };
-        }
+      case "file.changed":
+        external.onFileChanged(event, { headers, tools, rows, base });
         break;
-      }
       case "usage.reported":
         inputTokens += event.inputTokens;
         outputTokens += event.outputTokens;
@@ -253,21 +251,29 @@ export function projectHostConversation(input: {
         if (event.state === "execution-unknown" || event.state === "error") phase = "error";
         break;
       case "session.error":
+        // 保留宿主给出的 message，不用固定文案盖掉。
         errorCode = event.code;
+        errorMessage = event.message;
         lastErrorAt = event.at;
         phase = "error";
         break;
       case "plan.updated":
+        if (!headers.has(event.turnId)) throw new Error("plan outside turn");
+        external.onPlan(event);
+        break;
       case "subagent.updated":
+        if (!headers.has(event.turnId)) throw new Error("subagent outside turn");
+        external.onSubagent(event, rows, base);
+        break;
       case "extension.event":
-        // Retained in the canonical journal. Uncertified rich UI is not fabricated here.
+        external.onExtension(event, rows, base);
         break;
     }
   }
   const lastError = errorCode
     ? {
         code: errorCode,
-        message: "External harness error; inspect target-host diagnostics",
+        message: errorMessage,
         recoverable: false,
         at: lastErrorAt,
         source: "runtime" as const,
@@ -341,9 +347,9 @@ export function projectHostConversation(input: {
     pendingInteractions: [...interactions.values()],
     pendingCommands: [],
     backgroundWorks: [],
-    subagents: { revision: 0, childSessionIds: [], running: [], endedTotal: 0 },
+    subagents: external.subagents(),
     goal: null,
-    plan: null,
+    plan: external.plan,
     workspaceHookAdmission: null,
     // firstRowId is the full projection's oldest row, not the tail window's
     // first row; the renderer uses it to decide whether rowsRange can page.
