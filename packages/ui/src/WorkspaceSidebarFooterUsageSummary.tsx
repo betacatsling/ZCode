@@ -136,7 +136,7 @@ export function useWorkspaceSidebarFooterUsageSummaryState({
       ? null
       : selectedProviderIdFromSupplierKey;
   const bigmodelFamilyAllowed = providerFamilyDomain !== "zai";
-  // 企业 productList 已恒空（#128）；保留 sidebar resolver 以解析个人 account access。
+  // 保留 sidebar resolver 以解析个人 account access。
   const currentUsageSource = useMemo(
     () =>
       resolveSidebarCurrentCodingPlanUsageSource({
