@@ -34,7 +34,8 @@ import {
 import { ClaudeStreamProcess, type ClaudeStructuredMessage } from "./claudeStreamProcess.js";
 import { ClaudeTurnLifecycle } from "./claudeTurnLifecycle.js";
 
-const CLAUDE_PUBLIC_MODEL_ID = "zcode-host";
+/** Public Messages alias must be a Claude Code–recognized model id; the grant still binds the Host Model. */
+export const CLAUDE_PUBLIC_MODEL_ID = "claude-sonnet-4-6";
 const CLAUDE_TOOL_ALLOWLIST = ["Bash", "Edit", "Read", "Write", "Glob", "Grep"] as const;
 const CLAUDE_MAX_OUTPUT_TOKENS = 32_000;
 
@@ -494,7 +495,7 @@ export class ClaudeHarnessAdapter implements HarnessAdapter {
       this.#markUnknown(
         runtime,
         runtime.activeTurn,
-        "Claude Code stopped before confirming the accepted turn outcome.",
+        `Claude Code stopped before confirming the accepted turn outcome. (${error.message})`,
       );
     } else {
       runtime.emit("session.error", {
