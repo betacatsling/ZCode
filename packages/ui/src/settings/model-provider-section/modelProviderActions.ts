@@ -53,27 +53,23 @@ export async function confirmAndDeleteModelProvider({
 
 export async function refreshModelProviderSection({
   refresh,
-  refreshTeamPlanProducts,
 }: {
   refresh: () => Promise<void>;
-  refreshTeamPlanProducts?: () => Promise<void>;
 }) {
-  // Model Provider 顶部刷新是账号权益刷新入口。
-  // Team Plan 连接方式来自企业 pricing/customerInfo，不会被普通 provider list refresh 更新。
-  await Promise.all([refresh(), refreshTeamPlanProducts?.()]);
+  // Model Provider 顶部刷新：企业 Team 产品列表已拆除，只刷 provider 列表。
+  // entitlement / quota 由调用方另行触发。
+  await refresh();
 }
 
 export async function refreshProviderPanelAfterAuthChange({
   refreshModelProviders,
   refreshCodingPlanEntitlements,
-  refreshTeamPlanProducts,
   refreshCodingPlanProducts,
   refreshPurchaseTokenState,
   refreshPlanSnapshots = true,
 }: {
   refreshModelProviders: () => Promise<void>;
   refreshCodingPlanEntitlements: () => Promise<void>;
-  refreshTeamPlanProducts: (options?: { force?: boolean }) => Promise<void>;
   refreshCodingPlanProducts: () => void;
   refreshPurchaseTokenState: () => Promise<unknown>;
   refreshPlanSnapshots?: boolean;
@@ -83,7 +79,6 @@ export async function refreshProviderPanelAfterAuthChange({
     await Promise.all([
       refreshModelProviders(),
       refreshCodingPlanEntitlements(),
-      refreshTeamPlanProducts({ force: true }),
     ]);
   } else {
     // 切换连接方式只是保存本地连接选择和刷新目标 provider key。
