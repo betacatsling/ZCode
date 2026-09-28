@@ -17,6 +17,6 @@ test("ModelProviderSection no longer wires enterprise products refresh noop", ()
   const section = readUi("../src/settings/ModelProviderSection.tsx");
   assert.equal(section.includes("refreshTeamPlanProducts"), false);
   assert.equal(section.includes("refreshAuthenticatedEnterpriseProducts"), false);
-  assert.match(section, /subscribedTeamProducts/);
+  assert.equal(section.includes("subscribedTeamProducts"), false);
   assert.match(section, /refreshCodingPlanEntitlements/);
 });
