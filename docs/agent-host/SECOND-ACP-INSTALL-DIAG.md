@@ -1,7 +1,7 @@
 # Second ACP — install / capability diagnosis drafts (I1–I4)
 
-**Scope:** I1–I4 install-diag drafts + **L1 live-probe procedure stub** (docs only; no real ACP child in this knife).  
-**Not in this note:** Executed L1 evidence, L2–L4 live cert, tip-SHA ledger sync (ex6), lazy default flip, production wiring.  
+**Scope:** I1–I4 install-diag drafts + **L1–L4 LIVE-CERT procedure stubs** (docs only; no real ACP child / no lazy flip in this knife).  
+**Not in this note:** Executed L1–L4 evidence, tip-SHA ledger sync (ex6), lazy default flip, production wiring.  
 **Hard rules:** docs-only; do **not** register OpenCode/Goose in `lazyTargetService`.
 
 Checklist: `IMPLEMENTATION.md` → P6 → install-diag / LIVE-CERT.  
@@ -227,10 +227,99 @@ result: not-run (docs stub) | pass | fail | aborted-experimental
 | **aborted-experimental** | I3 experimental — correctly refused create; still counts as a useful probe, not LIVE-CERT pass |
 | **not-run** | This docs stub only — **current state of this knife** |
 
+---
+
+## L2 — resume / read-only history (docs stub)
+
+**Tip already has:** profiles do **not** hardcode `session/load|resume`; honesty does not open transport for install (#65); resume comes only from **this** `initialize` (I3 / `COMPATIBILITY.md`).
+
+**This stub:** procedure for a future live (or stronger fake-transport) proof. Not executed here. Fake-transport SessionHost resume-after-disconnect remains a separate optional knife.
+
+### When resume is allowed (after a real L1-stable initialize)
+
+1. Confirm I3 row: `stability=stable` and (`loadSession` **or** `resumeSession`).
+2. Create→send once (L1 path) and record `backendSessionId` / Host session id from journal.
+3. Close transport cleanly.
+4. Re-open with opt-in factory + real (or test) transport; call only the **negotiated** method (`session/load` vs `session/resume`).
+5. Assert Host journal: history visible; execution continues only if negotiation said so.
+6. If negotiation had **neither** load nor resume: skip step 4–5 execution; prove **history-only** from Host journal without sending load/resume/new/prompt for resume.
+
+### Evidence template (blank until run)
+
+```text
+date:
+harness_id: opencode | goose
+initialize_stability:
+loadSession: yes|no
+resumeSession: yes|no
+resume_attempted: yes|no|n/a-history-only
+method_used: session/load | session/resume | none
+journal_history_readable: yes|no
+execution_continued: yes|no|n/a
+lazyTargetService_unchanged: yes
+result: not-run | pass-resume | pass-history-only | fail
+```
+
+---
+
+## L3 — second same-protocol Agent adds profile only (docs stub)
+
+**Tip already has:** OpenCode / Goose inventory profiles share `acp-session-machine/1`; opt-in factories (#75); coexistence rules with Devin print vs ACP exclusivity tests.
+
+**Still missing:** product-path proof that admitting a second ACP Agent does **not** fork `AcpSessionMachine` or add brand branches in Host/UI.
+
+### Intended proof outline (future)
+
+1. Baseline: machine + Host tests green with **one** opt-in ACP id registered.
+2. Register **second** id via the same `createAcpHarness` / profile pattern only (no machine edits).
+3. Diff gate: `AcpSessionMachine` / shared ACP protocol files unchanged in the admission PR (or only shared bugfixes pre-agreed).
+4. Run SessionHost fake-transport (or later live) create→send for **both** ids.
+5. Record: no `lazyTargetService` registration; no Picker/UI brand fork required for this cert row.
+
+### Evidence template
+
+```text
+date:
+agents_under_test: opencode, goose
+shared_machine: acp-session-machine/1
+machine_diff_in_admission: none | describe
+both_ids_create_send_ok: not-run | yes | no
+product_picker_path: not-in-scope-for-stub | exercised
+lazyTargetService_unchanged: yes
+result: not-run | pass | fail
+```
+
+---
+
+## L4 — Host default must stay opt-in (docs stub)
+
+**Tip already has:** contract tests that `lazyTargetService` does **not** register OpenCode/Goose ACP factories; Devin lazy default remains print-mode.
+
+**This stub:** live-cert / release checklist so a future L1–L3 run **cannot** “accidentally” promote opt-in to lazy default.
+
+### Mandatory assertions (every live or integration cert run)
+
+1. Before/after the run: source or contract test still proves OpenCode/Goose **absent** from lazy Host composition.
+2. Probe registry is constructed **explicitly** (opt-in factories / `enabledIds`), never by flipping lazy defaults.
+3. PR / patch touching live cert must **not** include `lazyTargetService` registration of `opencode` / `goose`.
+4. If a future product decision promotes ACP to default, that is a **separate** Planner-assigned knife with its own acceptance — not smuggled under L1–L3.
+
+### Evidence template
+
+```text
+date:
+lazy_opencode_registered: no
+lazy_goose_registered: no
+contract_test: lazyTargetService does not register OpenCode or Goose ACP opt-in factories
+probe_registration_path: opt-in-only
+result: not-run | pass | fail
+```
+
 ### Explicit non-goals
 
-- No real ACP process, network Provider call, or LIVE-CERT pass claim in this change.  
-- No L2 resume / L3 product-path / L4 lazy-default work here.  
+- No real ACP process, network Provider call, or LIVE-CERT **pass** claim in this change.  
+- No execution of L1–L4 runs; stubs + templates only.  
 - No tip-SHA mass rewrite (ex6).  
-- No UI / CLI / UsageRemaining / productPresentation edits.
+- No UI / CLI / UsageRemaining / productPresentation / sidebar badge edits.  
+- No lazy / production default flip.
 
