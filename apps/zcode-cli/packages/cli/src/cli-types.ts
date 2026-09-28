@@ -9,8 +9,6 @@ import type {
   createModelAdapter,
   createZCodeApp,
   CreateModelAdapterOptions,
-  configureCodingPlanApiKey,
-  ConfigureCodingPlanApiKeyOptions,
   inspectZCodeSkill,
   inspectWorkspaceHookTrust,
   grantWorkspaceHookTrust,
@@ -68,9 +66,6 @@ export interface RunDependencies extends PluginsCommandOverrides {
   inspectCustomCommand?: (
     options: InspectZCodeCustomCommandOptions,
   ) => ReturnType<typeof inspectZCodeCustomCommand>;
-  configureCodingPlanApiKey?: (
-    options: ConfigureCodingPlanApiKeyOptions,
-  ) => ReturnType<typeof configureCodingPlanApiKey>;
   loadDotenv?: (options?: LoadCliDotenvOptions) => DotenvLoadResult;
   prepareZCodeTelemetryEnv?: typeof prepareZCodeTelemetryEnv;
   projectConfigPath?: string;

@@ -35,3 +35,9 @@ test("tui-auth keeps login/logout removed throws and drops configureApiKeyForTui
   assert.equal(auth.includes("configureApiKeyForTui"), false);
   assert.equal(auth.includes("configureCodingPlanApiKey"), false);
 });
+
+test("cli-types RunDependencies no longer injects configureCodingPlanApiKey", () => {
+  const types = read("cli-types.ts");
+  assert.equal(types.includes("configureCodingPlanApiKey"), false);
+  assert.equal(types.includes("ConfigureCodingPlanApiKeyOptions"), false);
+});
