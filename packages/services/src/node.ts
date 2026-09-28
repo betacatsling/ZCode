@@ -481,7 +481,6 @@ import {
   DEFAULT_ZCODE_MODEL_CONTEXT_BUDGET_STRATEGY,
   resolveSafeEndpointHostname,
   formatLogPrefix,
-  isCredentialDecryptError,
   OFF_PEAK_PROVIDER_IDS,
   resolveDynamicWorkflowClientConfig,
   type ServiceAuthorityMode,
@@ -1273,9 +1272,7 @@ export function createLocalServices(options: {
   hostApiNetworkTransport?: HostApiNetworkTransport;
   /** Desktop Host 请求 Main 登记 Agent 已授权的精确本地视频路径。 */
   authorizeLocalMediaPreviewPath?: (path: string) => Promise<string>;
-  feedback?: Partial<
-    Omit<CreateFeedbackServiceOptions, "apiClient" | "credentialService">
-  >;
+  feedback?: Partial<Omit<CreateFeedbackServiceOptions, "apiClient" | "credentialService">>;
   processLifecycleReporter?: RuntimeProcessLifecycleReporter;
   taskRuntimeReporter?: RuntimeTaskReporter;
   /** workspace 文件搜索默认使用内置过滤器；后续规则来源只需在 Host 装配时注入最终实现。 */
@@ -2794,117 +2791,31 @@ export function createLocalServices(options: {
 }
 
 export function createTelemetryUserIdLoader(
-  credentialService: Pick<ICredentialService, "load">,
+  _credentialService: Pick<ICredentialService, "load">,
 ): () => Promise<string> {
-  const log = createServiceLogger("telemetry-user-id");
-  return async () => {
-    try {
-      const activeProvider = (await credentialService.load("oauth:active_provider"))?.trim() ?? "";
-      if (!activeProvider) {
-        return "";
-      }
-
-      const rawUserInfo = await credentialService.load(`oauth:${activeProvider}:user_info`);
-      return readTelemetryOAuthUserId(rawUserInfo);
-    } catch (error) {
-      if (!isCredentialDecryptError(error)) {
-        throw error;
-      }
-
-      // Bugfix: telemetry 只是只读 userId 上报入口，不能抢在 host OAuthService 前
-      // 对损坏凭据做半套清理；否则会漏掉派生模型 provider key 的 logout 收口。
-      log.warn(undefined, "skip telemetry user id: OAuth credential decrypt failed", error);
-      return "";
-    }
-  };
+  // 产品 OAuth 会话键已停读。闲时 userId 为空，不解密凭据、不触发登出。
+  return async () => "";
 }
 
-/** 仅给同一事件账号返回当前 ZCode JWT；不缓存、不修改登录凭据。 */
+/** 产品 ZCode JWT 已停读。遥测不再附带 Authorization，也不修改登录凭据。 */
 export function createTelemetryAuthorizationLoader(
-  credentialService: Pick<ICredentialService, "load">,
-): (userId: string) => Promise<string | null> {
-  return async (userId) => {
-    if (!userId) return null;
-    try {
-      const provider = (await credentialService.load("oauth:active_provider"))?.trim();
-      if (provider !== "zai" && provider !== "bigmodel") return null;
-      const readUserId = async () =>
-        readTelemetryOAuthUserId(await credentialService.load(`oauth:${provider}:user_info`));
-      if ((await readUserId()) !== userId) return null;
-      const jwt = (await credentialService.load("zcodejwttoken"))?.trim();
-      // 退出/切账号可能发生在异步读取期间；禁止将旧身份的 token 附到其他账号事件上。
-      if (
-        (await credentialService.load("oauth:active_provider"))?.trim() !== provider ||
-        (await readUserId()) !== userId
-      )
-        return null;
-      return jwt && /^[\x21-\x7e]+$/.test(jwt) ? `Bearer ${jwt}` : null;
-    } catch {
-      return null;
-    }
-  };
+  _credentialService: Pick<ICredentialService, "load">,
+): (_userId: string) => Promise<string | null> {
+  return async () => null;
 }
-
-const STORED_LOGIN_ATTRIBUTION_KEY = "oauth:login_attribution";
 
 export function createTelemetryMarketingParamsLoader(
-  credentialService: Pick<ICredentialService, "load">,
+  _credentialService: Pick<ICredentialService, "load">,
 ): () => Promise<import("@zcode/shared").OAuthLoginAttribution | null> {
-  // 只读历史渠道归因。产品 OAuth 仓库已拆除，解析失败时不改凭据库。
-  return async () => {
-    try {
-      const raw = await credentialService.load(STORED_LOGIN_ATTRIBUTION_KEY);
-      if (!raw) return null;
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-      const storedParams =
-        parsed.params && typeof parsed.params === "object"
-          ? (parsed.params as Record<string, unknown>)
-          : parsed;
-      const params = Object.fromEntries(
-        Object.entries(storedParams).flatMap(([key, value]) =>
-          (key === "channel_id" || key === "utm_source" || key === "utm_campaign") &&
-          typeof value === "string" &&
-          value.trim()
-            ? [[key, value.trim()]]
-            : [],
-        ),
-      ) as import("@zcode/shared").OAuthLoginAttribution;
-      return Object.keys(params).length > 0 ? params : null;
-    } catch (error) {
-      if (!isCredentialDecryptError(error) && !(error instanceof SyntaxError)) {
-        throw error;
-      }
-      return null;
-    }
-  };
+  // 同一段产品 OAuth 读者里的渠道归因键不再读取。闲时返回 null，不改凭据库。
+  return async () => null;
 }
 
 async function readStoredTelemetryUserId(
-  credentialService: Pick<ICredentialService, "load">,
+  _credentialService: Pick<ICredentialService, "load">,
 ): Promise<string> {
-  const activeProvider = (await credentialService.load("oauth:active_provider"))?.trim() ?? "";
-  if (!activeProvider) return "";
-  return readTelemetryOAuthUserId(
-    await credentialService.load(`oauth:${activeProvider}:user_info`),
-  );
-}
-
-function readTelemetryOAuthUserId(rawUserInfo: string | null): string {
-  if (!rawUserInfo) {
-    return "";
-  }
-
-  try {
-    const parsed = JSON.parse(rawUserInfo) as {
-      id?: unknown;
-      user_id?: unknown;
-    };
-    const id = typeof parsed.id === "string" ? parsed.id : "";
-    const userId = typeof parsed.user_id === "string" ? parsed.user_id : "";
-    return id.trim() || userId.trim();
-  } catch {
-    return "";
-  }
+  // Agent spawn 的遥测 userId 不再读取 oauth 会话键。
+  return "";
 }
 
 export function disposeServiceResources(services: ServiceCollection): void {

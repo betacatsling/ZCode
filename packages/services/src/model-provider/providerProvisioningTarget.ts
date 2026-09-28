@@ -69,6 +69,7 @@ export function createProviderProvisioningTarget(
         }
 
         validateCredentialEntries(envelope);
+        const persistedCredentialCount = countPersistableProvisioningCredentials(envelope);
         await options.providerRuntime.start();
         const before = await captureBeforeState(envelope, options);
         const personalUpdate = parsePersonalConfig(envelope);
@@ -93,6 +94,8 @@ export function createProviderProvisioningTarget(
             envelope.credentials.map((credential) => [credential.key, credential.value]),
           );
           for (const key of before.credentials.keys()) {
+            // 产品 OAuth / account-provider 键只兼容旧信封，不写入、不删除磁盘旧值。
+            if (isLegacyProductProvisioningCredentialKey(key)) continue;
             const value = incomingCredentials.get(key);
             applied.credentials.push({ key, value: value ?? null });
             if (value === undefined) await options.credentialService.delete(key);
@@ -124,7 +127,7 @@ export function createProviderProvisioningTarget(
             syncId: envelope.syncId,
             status: "applied" as const,
             personalProviderCount: personalUpdate.providers.keys().length,
-            credentialCount: envelope.credentials.length,
+            credentialCount: persistedCredentialCount,
             configRevision: snapshot.sourceRevisions.config,
             rolledBack: false,
           } satisfies ProviderProvisioningResult;
@@ -139,7 +142,7 @@ export function createProviderProvisioningTarget(
               syncId: envelope.syncId,
               status: "rollback_failed",
               personalProviderCount: before.personal.providers.keys().length,
-              credentialCount: envelope.credentials.length,
+              credentialCount: persistedCredentialCount,
               errorMessage: `${formatError(error)}；回滚失败：${formatError(rollbackError)}`,
               rolledBack: false,
             } satisfies ProviderProvisioningResult;
@@ -148,7 +151,7 @@ export function createProviderProvisioningTarget(
             syncId: envelope.syncId,
             status: "failed",
             personalProviderCount: before.personal.providers.keys().length,
-            credentialCount: envelope.credentials.length,
+            credentialCount: persistedCredentialCount,
             errorMessage: formatError(error),
             rolledBack: true,
           } satisfies ProviderProvisioningResult;
@@ -187,14 +190,12 @@ async function captureBeforeState(
   ]);
   const credentials = new Map<string, string | null>();
   const credentialKeys = new Set<string>([
-    ...OAUTH_CREDENTIAL_KEYS,
     ...((await options.listProvisioningCredentialKeys?.()) ?? []),
     ...envelope.credentials.map((entry) => entry.key),
   ]);
   for (const key of credentialKeys) {
-    if (!OAUTH_CREDENTIAL_KEYS.has(key) && !isProviderProvisioningAccountCredentialKey(key)) {
-      continue;
-    }
+    // 不把产品键放进替换集合，避免同步时读取或擦除旧登录缓存。
+    if (isLegacyProductProvisioningCredentialKey(key)) continue;
     credentials.set(key, await options.credentialService.load(key));
   }
   return {
@@ -298,6 +299,16 @@ function sameAccountSettings(
   expected: ProviderProvisioningEnvelope["accountSettings"],
 ): boolean {
   return JSON.stringify(toProvisioningAccountSettings(current)) === JSON.stringify(expected);
+}
+
+function isLegacyProductProvisioningCredentialKey(key: string): boolean {
+  return OAUTH_CREDENTIAL_KEYS.has(key) || isProviderProvisioningAccountCredentialKey(key);
+}
+
+function countPersistableProvisioningCredentials(envelope: ProviderProvisioningEnvelope): number {
+  return envelope.credentials.filter(
+    (entry) => !isLegacyProductProvisioningCredentialKey(entry.key),
+  ).length;
 }
 
 function validateCredentialEntries(envelope: ProviderProvisioningEnvelope): void {

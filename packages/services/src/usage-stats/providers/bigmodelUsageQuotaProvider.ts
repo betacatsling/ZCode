@@ -88,9 +88,6 @@ import { normalizeLimits, pickPrimaryLimit } from "./bigmodelUsageQuotaMapper.js
 
 const BIGMODEL_QUOTA_PATH = "/api/monitor/usage/quota/limit";
 const CODING_PLAN_RESET_BASE_PATH = "/api/v1/coding-plan/reset";
-const ZCODE_JWT_TOKEN_KEY = "zcodejwttoken";
-const ZAI_OAUTH_ACCESS_TOKEN_KEY = "oauth:zai:access_token";
-const BIGMODEL_OAUTH_ACCESS_TOKEN_KEY = "oauth:bigmodel:access_token";
 const REQUEST_TIMEOUT_MS = 15_000;
 const log = createServiceLogger("usage-stats");
 const EMPTY_MODEL_USAGE_PAYLOAD = {} satisfies BigModelUsageModelUsagePayload;
@@ -148,6 +145,7 @@ interface BigModelUsageQuotaProviderOptions {
   resolveApiAuthorization?: (
     request: UsageApiAuthorizationRequest,
   ) => Promise<UsageApiAuthorization | null>;
+  /** 保留装配入参。产品 OAuth / JWT 已停读，实现不再调用 load。 */
   credentialService?: Pick<ICredentialService, "load">;
   env?: NodeJS.ProcessEnv;
   /**
@@ -194,7 +192,6 @@ export class BigModelUsageQuotaProvider {
     "resolveAccessCurrent" | "resolveCurrent" | "assertCurrent"
   >;
   private readonly resolveApiAuthorization?: BigModelUsageQuotaProviderOptions["resolveApiAuthorization"];
-  private readonly credentialService?: Pick<ICredentialService, "load">;
   private readonly env: NodeJS.ProcessEnv;
   private readonly officialMcpCredentialSource?: OfficialMcpCredentialSource;
 
@@ -202,7 +199,6 @@ export class BigModelUsageQuotaProvider {
     this.apiClient = options.apiClient;
     this.accountRequestAuthService = options.accountRequestAuthService;
     this.resolveApiAuthorization = options.resolveApiAuthorization;
-    this.credentialService = options.credentialService;
     this.env = options.env ?? process.env;
     this.officialMcpCredentialSource = options.officialMcpCredentialSource;
   }
@@ -243,9 +239,8 @@ export class BigModelUsageQuotaProvider {
               ? buildZaiQuotaUrl(this.env)
               : buildBigModelQuotaUrl(this.env)),
           teamContext,
-          businessToken: await this.credentialService?.load(
-            `oauth:${teamContext.family}:access_token`,
-          ),
+          // 产品 oauth:*:access_token 已停读。没有业务 token 时订阅查询返回 unknown，不发授权请求。
+          businessToken: null,
           timeoutMs: REQUEST_TIMEOUT_MS,
         })
       : null;
@@ -663,34 +658,10 @@ export class BigModelUsageQuotaProvider {
   }
 
   private async resolveCodingPlanResetAuthorization(
-    request: CodingPlanResetScopeRequest,
+    _request: CodingPlanResetScopeRequest,
   ): Promise<CodingPlanResetAuthorization> {
-    const accountAccess = await this.resolveRequestAccountAccess(request.accountAccess);
-    if (!accountAccess) {
-      throw new Error("coding_plan_reset_account_access_required");
-    }
-    await this.accountRequestAuthService.assertCurrent({
-      providerId: request.preferredProviderId,
-      accountAccess,
-    });
-    const zcodeJwt = (await this.credentialService?.load(ZCODE_JWT_TOKEN_KEY))?.trim() ?? "";
-    if (!zcodeJwt) {
-      throw new Error("coding_plan_reset_zcode_jwt_required");
-    }
-    // reset 同时支持 Z.ai 与 BigModel Coding Plan。固定读取 oauth:bigmodel:access_token
-    // 会让只登录 Z.ai 的用户在请求发出前失败；业务 JWT 必须跟随当前 provider family
-    // 精确选择，禁止跨 family 回退。Header 仍按后端契约直传且不套 Bearer。
-    const codingPlanJwtKey =
-      accountAccess.family === "zai" ? ZAI_OAUTH_ACCESS_TOKEN_KEY : BIGMODEL_OAUTH_ACCESS_TOKEN_KEY;
-    const codingPlanJwt = (await this.credentialService?.load(codingPlanJwtKey))?.trim() ?? "";
-    if (!codingPlanJwt) {
-      throw new Error("coding_plan_reset_maas_jwt_required");
-    }
-    return {
-      zcodeAuthorization: /^Bearer\s/i.test(zcodeJwt) ? zcodeJwt : `Bearer ${zcodeJwt}`,
-      codingPlanAuthorization: codingPlanJwt,
-      teamContext: resolveTeamPlanContext(accountAccess),
-    };
+    // 产品 OAuth / zcodejwttoken 重置入口已关闭：不读凭据、不调用账号鉴权、不发 reset 请求。
+    throw new Error("product_oauth_credential_unavailable");
   }
 
   async getCodingPlanUsageSnapshot(
