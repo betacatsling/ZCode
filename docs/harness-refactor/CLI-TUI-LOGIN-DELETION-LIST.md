@@ -61,3 +61,13 @@
 - P1/#20 前置已解除；**仍不抢** P2 `node.ts`/oauth 装配（ex6）。
 - Ex1 入口断点 + gate 验证见 `/workspace/ex1-cli-gate-verify.md`。
 - bootstrap `auth-login*` / 产品 oauth 适配器：等 P2 拆完同批或 P3 卸调用方。
+
+## P3 实现（#27 合入后）
+
+所有者：bootstrap 不再提供产品浏览器 OAuth。`/login` API Key 的写入所有者仍是 `configureCodingPlanApiKey`，由 `configureApiKeyForTui` 调用。
+
+- 删除 `bootstrap/src/auth-login.ts`、`auth-login-polling.ts`、`auth-login-abort.ts`，以及 `index.ts` 的 `export * from "./auth-login.js"`。
+- `loginZCodeCli` / `loginBigmodelCodingPlan` / `logoutZCodeCli` 与 `cli-types.ts` 上对应 DI 钩子一并删除。入口 stub（#21）不回滚。
+- API Key 持久化抽到 `bootstrap/src/coding-plan-api-key-config.ts`。空 key 仍抛 `ZCodeCliLoginError`（`config_update_failed`）。
+- `adapters/src/auth/cli-oauth.ts`、`bigmodel-oauth.ts` 仅被已删的 auth-login 引用，已删。MCP 不引用它们。
+- 保留：`localhost-callback.ts`、`shared-credentials.ts`、`coding-plan-api-key.ts`（token 换 key 的 resolver，登录删除后暂无调用方）、MCP oauth、`configureApiKeyForTui`。不改 `packages/services` oauth / `node.ts`。
