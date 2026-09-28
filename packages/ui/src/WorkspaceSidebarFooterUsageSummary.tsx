@@ -136,9 +136,7 @@ export function useWorkspaceSidebarFooterUsageSummaryState({
       ? null
       : selectedProviderIdFromSupplierKey;
   const bigmodelFamilyAllowed = providerFamilyDomain !== "zai";
-  // 企业 productList 已恒空（#128）；Team source builder 已移除。
-  // 保留 sidebar resolver 以解析个人 account access；Team entitlement 路径仍由
-  // 其它 live snapshot/cached source consumers 提供。
+  // 企业 productList 已恒空（#128）；保留 sidebar resolver 以解析个人 account access。
   const currentUsageSource = useMemo(
     () =>
       resolveSidebarCurrentCodingPlanUsageSource({
@@ -168,7 +166,6 @@ export function useWorkspaceSidebarFooterUsageSummaryState({
               }
             : {}),
         },
-        teamSources: [],
       }),
     [
       scopedSelectedProviderId,
@@ -218,33 +215,14 @@ export function useWorkspaceSidebarFooterUsageSummaryState({
     }),
     refreshOnMount: false,
   });
-  const teamEntitlement = useUsageEntitlement({
-    // 原硬绑 bigmodelCodingPlan providerId 判断，zai team source 的 providerId
-    // 是 zaiCodingPlan，永远进不到 team 分支，导致 zai team 额度不查询、badge 不显示。
-    // 改为按 currentUsageSource.audience === "team" 路由，providerId 动态取。
-    enabled: enabled && !providerSourcesLoading && currentUsageSource?.audience === "team",
-    includeSubscription: true,
-    preferredProviderId:
-      currentUsageSource?.providerId ?? BUILTIN_MODEL_PROVIDER_IDS.bigmodelIndividualCodingPlan,
-    accountAccess: currentUsageSource?.teamSource?.accountAccess,
-    allowDisabledPreferredProvider: true,
-    requirePreferredProvider: true,
-    allowEnvApiKey: false,
-    cacheKey: currentUsageSource?.teamSource?.id,
-    refreshOnMount: false,
-  });
   // footer 是常驻入口，refreshOnMount: false 后冷启动没有其它
   // 入口预热 entitlement，个人计划徽标缺失。可见时触发一次 access 刷新，复用共享
   // 1 分钟 freshness window、失败退避和 in-flight 合并；hook disabled 时 refresh 是 no-op。
   useEffect(() => {
-    for (const refresh of [
-      zaiEntitlement.refresh,
-      bigmodelEntitlement.refresh,
-      teamEntitlement.refresh,
-    ]) {
+    for (const refresh of [zaiEntitlement.refresh, bigmodelEntitlement.refresh]) {
       void refresh({ silent: true, reason: "access" });
     }
-  }, [zaiEntitlement.refresh, bigmodelEntitlement.refresh, teamEntitlement.refresh]);
+  }, [zaiEntitlement.refresh, bigmodelEntitlement.refresh]);
   const profilePlanBadge = resolveSidebarFooterProfilePlanBadge({
     individualEntitlements: [
       ...(providerFamilyDomain !== "bigmodel"
@@ -295,19 +273,6 @@ export function useWorkspaceSidebarFooterUsageSummaryState({
             providerId: BUILTIN_MODEL_PROVIDER_IDS.bigmodelIndividualCodingPlan,
             accountAccess: currentUsageSource.accountAccess,
             ...bigmodelEntitlement,
-          },
-        ]
-      : []),
-    // 原 team 分支硬判 bigmodelCodingPlan providerId，zai team source 走不进来。
-    // 改为统一按 audience === "team" 路由，覆盖 zai/bigmodel 两种 family 的 team source。
-    ...(currentUsageSource?.audience === "team" && currentUsageSource.teamSource
-      ? [
-          {
-            sourceId: currentUsageSource.teamSource.id,
-            providerId: currentUsageSource.teamSource.providerId,
-            accountAccess: currentUsageSource.teamSource.accountAccess,
-            label: currentUsageSource.teamSource.label,
-            ...teamEntitlement,
           },
         ]
       : []),
