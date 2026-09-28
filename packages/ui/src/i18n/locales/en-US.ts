@@ -3040,14 +3040,6 @@ const enUS: Record<string, string> = {
   "settings.usage.toolChartDescription":
     "From the selected provider tool-usage API: Network Search / Web Reader / Zread call counts.",
   "settings.usage.sourceProvider": "Source: {provider}",
-  "settings.usage.billingBanner.title": "{provider} Coding Plan",
-  "settings.usage.billingBanner.description":
-    "Connect your {provider} account to query Coding Plan entitlement, then keep coding in ZCode after purchase or setup.",
-  "settings.usage.billingBanner.compactDescription":
-    "Connect your {provider} account to sync usage.",
-  "settings.usage.billingBanner.buy": "Buy Coding Plan",
-  "settings.usage.billingBanner.apiKeys": "API keys",
-  "settings.usage.billingBanner.usageDetails": "Usage details",
   "settings.usage.entitlementTitle": "Coding Plan entitlement",
   "settings.usage.entitlementDescription":
     "Sync exact plan level, 5-hour prompt pool, weekly quota, and monthly tool quota from the connected Coding Plan account.",
@@ -3258,9 +3250,6 @@ const enUS: Record<string, string> = {
   "settings.usage.toolUsageTitle": "Tool usage",
   "settings.usage.tokenTotal": "Total token usage",
   "settings.usage.timesUnit": " times",
-  "settings.usage.codingPlanNotConfiguredTitle": "Coding Plan is not connected",
-  "settings.usage.codingPlanNotConfiguredDescription":
-    "Connect a Z.ai or BigModel Coding Plan provider in Model Settings to view plan quota, model usage, and tool usage.",
   "settings.usage.codingPlanCurrentConnectionTitle": "Current connection is not using Coding Plan",
   "settings.usage.codingPlanCurrentConnectionDescription":
     "Switch the workspace model connection to an Individual Plan or Team Plan to view its quota and usage here.",
@@ -5341,8 +5330,6 @@ const enUS: Record<string, string> = {
   "chat.error.processExited": "Agent process exited unexpectedly",
   "chat.error.dismiss": "Dismiss error",
   "chat.error.retry": "Retry",
-  "chat.error.reloginProvider": "Sign in to {provider}",
-  "chat.error.action.relogin": "Sign in again",
   "chat.error.action.refreshQuota": "Refresh quota",
   "chat.error.action.switchModel": "Switch model",
   "chat.error.action.retryLater": "Try again later",
@@ -5385,7 +5372,6 @@ const enUS: Record<string, string> = {
   "chat.quota.plan.productLoginRemoved":
     "Product sign-in has been removed. Configure an API Key in Settings to view quota.",
   "chat.quota.action.upgrade": "Upgrade",
-  "chat.quota.action.renew": "Renew",
   "chat.quota.action.switchModel": "Switch model",
   "chat.quota.action.switchProvider": "Switch provider",
   "chat.quota.action.refresh": "Refresh quota",
@@ -6074,8 +6060,6 @@ const enUS: Record<string, string> = {
   "offPeak.create.remaining.hours": "{hours} hr",
   "offPeak.create.remaining.minutes": "{minutes} min",
   "offPeak.create.remaining.lessThanMinute": "less than 1 min",
-  "offPeak.create.codingPlanToast":
-    "Idle-time tasks are available for Coding Plan subscribers only.",
   "automations.moreIdeas": "Scheduled task template",
   "automations.templates.unavailable": "No templates available",
   "automations.runNow": "Run now",
