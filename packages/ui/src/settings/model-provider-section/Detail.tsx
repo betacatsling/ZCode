@@ -343,8 +343,8 @@ export function ModelProviderSectionDetail({
 
   if (selectedNavItem.type === "preset") {
     if (!selectedNavItem.provider) {
-      // 首屏慢网时预置供应商配置尚未返回，之前这里会直接展示“尚未同步，请先完成 OAuth 登录”，
-      // 用户会把“还在下载”误判成“当前账号未登录”。首刷期间改为明确显示 loading，等请求结束后再决定是否展示未同步占位。
+      // 首屏慢网时预置供应商配置尚未返回，之前这里会直接展示“尚未同步”类占位，
+      // 用户会把“还在下载”误判成“当前账号未连接”。首刷期间改为明确显示 loading，等请求结束后再决定是否展示未同步占位。
       if (presetLoading) {
         return <ModelProviderLoadingCard loadingLabel={loadingLabel} />;
       }
@@ -399,7 +399,7 @@ export function ModelProviderSectionDetail({
     const statusPanelViewState =
       codingPlanDisconnectPending || (codingPlanStatusSyncPending && !hasResolvedEntitlementStatus)
         ? {
-            // 登录/登出后的 provider key 与权益刷新是异步链路。
+            // 连接/断开后的 provider key 与权益刷新是异步链路。
             // 刷新落定前继续展示旧的未连接/已连接状态会让用户误以为操作失败。
             displayStatus: "checking" as const,
             actionStatus: "checking" as const,
@@ -434,7 +434,7 @@ export function ModelProviderSectionDetail({
       dedicatedProvider !== null &&
       !hidePlanModels &&
       (!isStartPlanProvider || accountAvailable || selectedNavItem.status === "purchased");
-    // 团队查询/取 Key 失败不是未登录：先刷新 Host 凭据，再刷新当前团队权益。
+    // 团队查询/取 Key 失败不是未连接：先刷新 Host 凭据，再刷新当前团队权益。
     const retryTeamPlan =
       selectedNavItem.type === "teamPlan" &&
       selectedNavItem.status === "unavailable" &&
