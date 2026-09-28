@@ -3,7 +3,7 @@
  *
  * Proves same-protocol Agents register via explicit factory + loadExplicit trust list
  * without changing lazy Host defaults or the shared ACP session machine. Goose SessionHost
- * path is symmetric to OpenCode (#75). Late prompt + transport fault/disconnect still journal via SessionHost (OpenCode + Goose). Resume-after-disconnect: SessionHost.open attach via negotiated session/load then send again. Cancel-after-disconnect: after fault fence, cancel of the dead turn is stale; after reopen+session/load, cancel mid-prompt journals cancelled (OpenCode + Goose). Double-fault/reopen: fault→reopen→fault→reopen stays idempotent (session/load, no session/new) then send succeeds (OpenCode + Goose). Mid-tool-call disconnect: tool_call + pending permission then fault → reopen session/load → send (OpenCode + Goose). Permission-denied-then-disconnect: Host denies permission, peer then faults the prompt (OpenCode + Goose). Cancel-during-permission: Host cancelTurn while permission pending journals cancelled (OpenCode + Goose). Permission-resolve-after-reopen: fault mid-permission → reopen → deny still clean (OpenCode + Goose). Allow-after-reopen: fault mid-permission → reopen → fresh allow completes send (OpenCode + Goose).
+ * path is symmetric to OpenCode (#75). Late prompt + transport fault/disconnect still journal via SessionHost (OpenCode + Goose). Resume-after-disconnect: SessionHost.open attach via negotiated session/load then send again. Cancel-after-disconnect: after fault fence, cancel of the dead turn is stale; after reopen+session/load, cancel mid-prompt journals cancelled (OpenCode + Goose). Double-fault/reopen: fault→reopen→fault→reopen stays idempotent (session/load, no session/new) then send succeeds (OpenCode + Goose). Mid-tool-call disconnect: tool_call + pending permission then fault → reopen session/load → send (OpenCode + Goose). Permission-denied-then-disconnect: Host denies permission, peer then faults the prompt (OpenCode + Goose). Cancel-during-permission: Host cancelTurn while permission pending journals cancelled (OpenCode + Goose). Permission-resolve-after-reopen: fault mid-permission → reopen → deny still clean (OpenCode + Goose). Allow-after-reopen: fault mid-permission → reopen → fresh allow completes send (OpenCode + Goose). Double-cancel: cancelTurn×2 mid-prompt is idempotent (one cancelled outcome; OpenCode + Goose).
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -2223,6 +2223,164 @@ test("SessionHost + opt-in OpenCode ACP: allow-after-reopen succeeds send", asyn
 
 test("SessionHost + opt-in Goose ACP: allow-after-reopen succeeds send (symmetric)", async (t) => {
   await assertSessionHostAllowAfterReopen({
+    t,
+    label: "goose",
+    harnessId: "goose",
+    agentName: "Goose",
+    createHarness: (openTransport) =>
+      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+  });
+});
+
+async function assertSessionHostDoubleCancel(input: {
+  t: { after: (fn: () => void | Promise<void>) => void };
+  label: string;
+  harnessId: "opencode" | "goose";
+  agentName: string;
+  createHarness: (openTransport: () => AcpTransport) => ReturnType<
+    typeof createExperimentalRegistryOpenCodeAcpHarness
+  >;
+}): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-dc-`));
+  const worktree = join(root, "worktree");
+  const journalRoot = join(root, "journal");
+  await mkdir(worktree, { recursive: true });
+  input.t.after(() => rm(root, { recursive: true, force: true }));
+
+  const backendSessionId = `${input.harnessId}-dc-session`;
+  const hostSessionId = `${input.harnessId}-dc-1`;
+  const spec = {
+    schemaVersion: 1 as const,
+    hostSessionId,
+    execution: {
+      targetId: "local",
+      workspaceIdentity: `workspace-${input.harnessId}-dc`,
+      worktreePath: worktree,
+    },
+    harness: { id: input.harnessId, adapterVersion: ACP_ADAPTER_VERSION },
+    modelBinding: { kind: "harness-managed" as const },
+  };
+  const target = {
+    id: "local",
+    kind: "local" as const,
+    platform: process.platform as "darwin" | "linux" | "win32",
+    available: true,
+  };
+  const catalog = {
+    fingerprint: "registry-v1",
+    validateSelection: () => ({ ok: true as const }),
+  };
+
+  const peers: FakePeer[] = [];
+  const registry = new HarnessRegistry();
+  registry.register(
+    input.createHarness(() =>
+      openFakeTransport(
+        input.agentName,
+        backendSessionId,
+        { holdUntilCancel: true },
+        peers,
+      ),
+    ),
+  );
+
+  const host = await SessionHost.create({
+    root: journalRoot,
+    spec,
+    target,
+    catalog,
+    registry,
+  });
+
+  const sendReceipt = await host.dispatch({
+    type: "send",
+    commandId: `${input.harnessId}-dc-send`,
+    hostSessionId,
+    turnId: "turn-dc-1",
+    text: "cancel me twice",
+  });
+  assert.equal(sendReceipt.status, "accepted");
+
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    if (
+      host.eventsSince(0).some(
+        (event) => event.kind === "text.delta" && event.text === "partial before cancel",
+      )
+    ) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.ok(
+    host.eventsSince(0).some(
+      (event) => event.kind === "text.delta" && event.text === "partial before cancel",
+    ),
+    "expected partial before cancel",
+  );
+
+  const epoch = host.binding.runtimeEpoch!;
+  const first = await host.dispatch({
+    type: "cancelTurn",
+    commandId: `${input.harnessId}-dc-cancel-1`,
+    hostSessionId,
+    runtimeEpoch: epoch,
+    turnId: "turn-dc-1",
+  });
+  assert.equal(first.status, "completed");
+
+  // Second cancel while/after the first: must not hang or crash.
+  // Idempotent notify (completed) or already-finished (stale-turn) are both safe.
+  const second = await host.dispatch({
+    type: "cancelTurn",
+    commandId: `${input.harnessId}-dc-cancel-2`,
+    hostSessionId,
+    runtimeEpoch: epoch,
+    turnId: "turn-dc-1",
+  });
+  assert.ok(
+    second.status === "completed" ||
+      (second.status === "rejected" && second.reasonCode === "stale-turn"),
+    `second cancel must be idempotent-safe, got ${second.status}/${second.reasonCode}`,
+  );
+
+  await host.whenIdle();
+
+  assert.ok(
+    peers.some((peer) => peer.methods.includes("session/cancel")),
+    "at least one session/cancel must reach the peer",
+  );
+
+  const finished = host
+    .eventsSince(0)
+    .filter((event) => event.kind === "turn.finished" && event.turnId === "turn-dc-1");
+  assert.equal(finished.length, 1, "exactly one turn.finished for the cancelled turn");
+  assert.equal(finished[0]!.kind, "turn.finished");
+  assert.equal(finished[0]!.outcome, "cancelled");
+
+  await host.close();
+  const persisted = await SessionHost.eventsSinceHistory(journalRoot, spec, 0);
+  const persistedFinished = persisted.filter(
+    (event) => event.kind === "turn.finished" && event.turnId === "turn-dc-1",
+  );
+  assert.equal(persistedFinished.length, 1);
+  assert.equal(persistedFinished[0]!.kind, "turn.finished");
+  assert.equal(persistedFinished[0]!.outcome, "cancelled");
+}
+
+test("SessionHost + opt-in OpenCode ACP: double-cancel is idempotent", async (t) => {
+  await assertSessionHostDoubleCancel({
+    t,
+    label: "opencode",
+    harnessId: "opencode",
+    agentName: "OpenCode",
+    createHarness: (openTransport) =>
+      createExperimentalRegistryOpenCodeAcpHarness({ openTransport }),
+  });
+});
+
+test("SessionHost + opt-in Goose ACP: double-cancel is idempotent (symmetric)", async (t) => {
+  await assertSessionHostDoubleCancel({
     t,
     label: "goose",
     harnessId: "goose",
