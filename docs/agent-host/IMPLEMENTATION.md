@@ -163,22 +163,24 @@ P4 完成前不得标为首个可用版本。下一步依赖 P1 Catalog/identity
 
 ## P5：Model Gateway、Codex 和 Claude Code
 
-状态：**只有协议探针和既有 native 功能，新的 Gateway/adapter 未实现**。
+状态：**部分完成，仅 FakeModel / experimental。P5 未完成。** Gateway core、Responses，以及 Codex FakeModel 控制/绑定已在 tip；真实 SSH 与 live Provider 未认证。
 
-已有但不能计入产品完成：
+已在 tip 上，但不能计入 P5 完成：
 
-- `packages/services/test/fixtures/probeCodexAppServer.mjs` 和 `probeClaudeMessages.mjs` 是隔离 fake Gateway/protocol probe；计划文档记录了 Codex initialize/thread/turn、Responses fake SSE、usage 和 Claude Messages 观察。
-- 现有 ZCode `app-server`、Claude 原生历史导入和 provider API-format 设置属于 ZCode 既有能力，不是“Codex app-server adapter + Claude structured Harness”交付。
-- 生成产物和本地 Codex/Claude 二进制存在，但版本分别与计划 pin 有差异；没有真实 Provider、模型质量、工具循环或辅助调用认证。
+- `packages/services/src/model-gateway/` 已存在。Gateway core、route authorization、Responses ingress/egress 与兼容矩阵已落地。Codex app-server 的 FakeModel 控制/绑定已接入 Agent Host（active-turn 绑定冻结、idle rebind、短 TTL 续期、target-side turn lease、审批单赢家）。证据是 loopback FakeModel，不是 live Provider 或模型质量认证。
+- #26：SSH kind 上 Codex 使用共享 `TargetModelGateway`。`packages/services/test/modelGatewaySshAdmission.test.ts` 覆盖 FakeModel admission：`kind: "ssh"`、共享 owner 注入，以及 tunnel drop 之后同一 loopback 仍可服务。SSH 执行目标上的 Gateway 是 **remote Core loopback**；关闭 SSH tunnel **不等于** 关闭 Gateway，也不撤销 grant。
+- 兼容矩阵在 `target.kind === "ssh"` 时仍为 **experimental**（远端凭据路径未认证）。FakeModel 只证明 Codex 共享 Gateway 注入，不认证远端凭据。
+- Claude 已有 structured control 与 Messages 实验路径（pinned CLI stream-json、loopback FakeModel；见 `CLAUDE-CODE.md` 与 `packages/services/src/agent-adapters/claude/SPEC.md`）。该路径的 Gateway 仍是 **adapter-local**（未注入时 `new TargetModelGateway(...)`）。Claude **不是** 共享 `TargetModelGateway` owner；`lazyTargetService` 只把共享 owner 注入 Codex。
+- 历史隔离探针 `probeCodexAppServer.mjs` / `probeClaudeMessages.mjs` 与 Codex 0.156.1 观察仍单独保留，不改写成 0.157.1 或 live 认证。
 
-未实现：
+未完成（下列项保持未认证，P5 不得标完成）：
 
-- `packages/services/src/model-gateway/` 目录、route authorization、Responses ingress/egress、Anthropic Messages ingress/egress、兼容矩阵均不存在。
-- 没有 Codex app-server client adapter：`thread/start`、`turn/start`、interrupt/resume、item/turn/usage、server approval request、RPC request ID durable response 尚未接入 Agent Host。
-- 没有 Claude structured SDK/ACP control adapter、PreToolUse 等可证明的后端阻止点、隔离 `CLAUDE_CONFIG_DIR` 和 Messages host-managed ingress。
-- 没有针对 auxiliary model/count/model routes、tool-call/result pairing、system/developer hierarchy、reasoning/signature/cache/unsupported field 的正式 compatibility tests。
+- 真实 SSH / remote credentials 未认证。`packages/services/test/runtimeOwnerFence.test.ts` 的「真实 SSH 断线后 Core 仍在运行」保持 skip（当前没有可授权的真实 SSH 目标）。
+- live Provider、实际模型身份与模型质量未认证。
+- Claude → 共享 `TargetModelGateway` owner 未接线。
+- auxiliary endpoint 矩阵、可用的 `workspace-write` sandbox、生产组合与跨 target 部署未认证。
 
-P5 必须按 Harness 拆成 control/event 认证和 host-managed model ingress 认证。控制面 fake 成功只能标 experimental/harness-managed，不能标 host-managed。
+P5 必须按 Harness 拆成 control/event 认证和 host-managed model ingress 认证。FakeModel 控制面成功只能标 experimental，不能标 live certified，也不能把 P5 标成完成。
 
 ## P6：通用 ACP、长尾 Harness 和发布加固
 
@@ -246,8 +248,8 @@ Worktree 服务现有 archive 元数据/fence 与确认式 remove；remove 会�
 | 07   | 外部 journal、V4 projector、Pi 双模式、多会话 E2E                             | journal/projector 有，UI/E2E 无                                                                       | 依赖 04A + 06；共享 worktree 多会话和 UI                       |
 | 08   | Runtime Host、SSH 生命周期、目标继承、恢复/fencing                            | target-local 基础与通用 supervisor/service manager 已有；Harness lifecycle/SSH restore 未接线         | 依赖 07；八组合、断线/GUI exit/crash                           |
 | 08A  | worktree removal admission、重建、离线重同步、archive/hide                    | Worktree 移除/fence/native+external 准入与隔离 Git/CLI 测试已实现；UI/SSH 离线重同步未验收            | 依赖 08；UI/E2E、SSH 离线恢复及删除竞态矩阵                    |
-| 09   | Gateway core + Responses + Codex                                              | 未实现，只有 fake probe                                                                               | 依赖 08；固定 Codex app-server + Gateway control/model         |
-| 10   | Messages + Claude structured adapter                                          | 未实现，既有 Claude import 不计入                                                                     | 依赖 09/Gateway contract；固定 SDK、PreToolUse、Messages route |
+| 09   | Gateway core + Responses + Codex                                              | 部分完成 / FakeModel only：core + Responses + Codex 控制/绑定已在 tip；#26 SSH 共享 TargetModelGateway 仅为 FakeModel admission，兼容仍 experimental | 依赖 08；live Provider、真实 SSH 凭据与生产组合仍未认证        |
+| 10   | Messages + Claude structured adapter                                          | 部分完成 / FakeModel only：structured/Messages 实验路径已有，Gateway 仍 adapter-local，不是共享 owner | 依赖 09；共享 TargetModelGateway owner 与 live Provider 未认证 |
 | 11   | 通用 ACP + 一个长尾 Agent                                                     | 未实现                                                                                                | 依赖 08 和已验证 model binding                                 |
 | 12   | 层级/并发/focus 压测、迁移回滚、版本锁定发布                                  | 未实现                                                                                                | 依赖 08A/09/10/11；50 worktree、10 session、8h、fault matrix   |
 
