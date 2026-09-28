@@ -8,12 +8,10 @@ const readUi = (relativePath: string) =>
 test("ModelProviderSection and sidebar drop empty useEnterpriseCodingPlanProducts callers", () => {
   const section = readUi("../src/settings/ModelProviderSection.tsx");
   assert.equal(section.includes("useEnterpriseCodingPlanProducts"), false);
-  // MPS still passes subscribedTeamProducts: [] into navigation (Ex3/Ex4 OUT of this knife).
-  assert.match(section, /subscribedTeamProducts/);
+  assert.equal(section.includes("subscribedTeamProducts"), false);
 
   const sidebar = readUi("../src/WorkspaceSidebarFooterUsageSummary.tsx");
   assert.equal(sidebar.includes("useEnterpriseCodingPlanProducts"), false);
-  // Sidebar usage-sources call no longer stubs subscribedTeamProducts.
   assert.equal(sidebar.includes("subscribedTeamProducts"), false);
 });
 

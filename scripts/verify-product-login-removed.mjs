@@ -37,11 +37,11 @@
  * Hard (also): #128 codingPlanUsageSources buildCodingPlanUsageSources must stay collapsed to
  *   return []; dead team flatMap helpers must stay absent (KEEP CodingPlanUsageSource /
  *   buildPersonalCodingPlanUsageSource / resolveSidebarCurrentCodingPlanUsageSource signature).
- * Hard (also): #131–#135 SettingsPage / V4ComposerToolbar / WorkspaceSidebarFooterUsageSummary /
+ * Hard (also): #131–#135+ SettingsPage / V4ComposerToolbar / WorkspaceSidebarFooterUsageSummary /
  *   ModelProviderSection must not revive named empty subscribedTeamProducts =
- *   useMemo(() => [], []) (or usageSubscribedTeamProducts / typed equivalent). Literal
- *   subscribedTeamProducts: [] at call sites is OK (KEEP entitlement / Display / manage ·
- *   planCard / productPurchaseRemoved body).
+ *   useMemo(() => [], []) (or usageSubscribedTeamProducts / typed equivalent) and must not
+ *   keep subscribedTeamProducts call-site / signature wiring (KEEP entitlement / Display /
+ *   manage · planCard / productPurchaseRemoved body).
  *
  * Run from repo root: node scripts/verify-product-login-removed.mjs
  */
@@ -560,8 +560,8 @@ function assertDeletedSurfaces() {
     }
   }
 
-  // #131–#135: named empty subscribedTeamProducts useMemo stubs must stay unloaded.
-  // Literal subscribedTeamProducts: [] at vestigial call sites is OK.
+  // #131–#135+: named empty subscribedTeamProducts useMemo stubs and literal
+  // subscribedTeamProducts call sites must stay unloaded (nav/visibility params dropped).
   // KEEP entitlement / Display / manage · planCard / productPurchaseRemoved body.
   const emptyTeamProductsUseMemoRe =
     /\b(?:usage)?[Ss]ubscribedTeamProducts\s*=\s*useMemo(?:<[^>]*>)?\s*\(\s*\(\s*\)\s*=>\s*\[\s*\]\s*,\s*\[\s*\]\s*\)/;
@@ -583,10 +583,9 @@ function assertDeletedSurfaces() {
         `${label} must not contain named empty subscribedTeamProducts useMemo stub (#131–#135)`,
       );
     }
-    // Call-site literal [] (or prop default) may remain for signature/guard shape.
-    if (!/subscribedTeamProducts\s*:\s*\[\s*\]/.test(stubSrc) && !/\bsubscribedTeamProducts\b/.test(stubSrc)) {
+    if (/\bsubscribedTeamProducts\b/.test(stubSrc)) {
       fails.push(
-        `${label} must keep subscribedTeamProducts call-site / signature wiring (#131–#135)`,
+        `${label} must not keep subscribedTeamProducts call-site / signature wiring`,
       );
     }
   }
@@ -707,7 +706,7 @@ function remainingUiInventory() {
   ].map(fileStatus);
 
   const note =
-    "Tip ea7762b (#135 / after #103–#134): Dialog/Provider/Entry/EmbeddedWebview + CLI loginRequired→modelSetupRequired hard. UI locale dead product loginRequired / Coding Plan login + orphan Welcome/login.* shell + #103–#107 upgrade/purchase/usage/enterprise acquisition i18n hard-gated. login.oauth.regionTag.* absent; KEEP settings.modelProvider.regionTag.* + share-import signInRequired + manage/planCard + productPurchaseRemoved body + live personal API-key / MCP OAuth copy. #114 slash-help /login+/logout off Coding Plan/Z.ai OAuth acquisition → model-setup/API-key guidance hard-gated (KEEP MCP help). #123 useEnterpriseCodingPlanProducts.ts hard-absent; #124 productPurchaseRemovedTitle absent; #126 refreshTeamPlanProducts hard-absent (KEEP entitlement refresh); #128 usageSources buildCodingPlanUsageSources → return [] / dead flatMap helpers absent (KEEP CodingPlanUsageSource / personal builder / sidebar resolver); #131–#135 Settings/V4/sidebar/MPS named empty subscribedTeamProducts useMemo stubs hard-absent (literal subscribedTeamProducts: [] OK). Soft inventory thinned — cleared symbol scans dropped. Inventory does not fail this gate.";
+    "Tip ea7762b (#135 / after #103–#134): Dialog/Provider/Entry/EmbeddedWebview + CLI loginRequired→modelSetupRequired hard. UI locale dead product loginRequired / Coding Plan login + orphan Welcome/login.* shell + #103–#107 upgrade/purchase/usage/enterprise acquisition i18n hard-gated. login.oauth.regionTag.* absent; KEEP settings.modelProvider.regionTag.* + share-import signInRequired + manage/planCard + productPurchaseRemoved body + live personal API-key / MCP OAuth copy. #114 slash-help /login+/logout off Coding Plan/Z.ai OAuth acquisition → model-setup/API-key guidance hard-gated (KEEP MCP help). #123 useEnterpriseCodingPlanProducts.ts hard-absent; #124 productPurchaseRemovedTitle absent; #126 refreshTeamPlanProducts hard-absent (KEEP entitlement refresh); #128 usageSources buildCodingPlanUsageSources → return [] / dead flatMap helpers absent (KEEP CodingPlanUsageSource / personal builder / sidebar resolver); #131–#135+ Settings/V4/sidebar/MPS subscribedTeamProducts useMemo stubs and call sites hard-absent. Soft inventory thinned — cleared symbol scans dropped. Inventory does not fail this gate.";
 
   return {
     note,

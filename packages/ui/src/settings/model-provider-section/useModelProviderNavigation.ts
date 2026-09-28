@@ -31,7 +31,6 @@ import {
   sortModelProvidersForDisplay,
   type ProviderOrderView,
 } from "@/lib/modelProviderOrdering.js";
-import type { EnterpriseCodingPlanProductDisplay } from "@/settings/model-provider-section/enterpriseCodingPlanProducts.js";
 import {
   buildVisibleFamilyConnectionItems,
   resolveCodingPlanEntitlementState,
@@ -56,7 +55,6 @@ interface UseModelProviderNavigationOptions {
   pendingConnectionSelections?: ProviderFamilyConnectionSelectionSettings;
   familyConnectionSettingsLoading?: boolean;
   familyConnectionSettingsFailed?: boolean;
-  subscribedTeamProducts?: EnterpriseCodingPlanProductDisplay[];
   showPurchasedTeamPlanFallback?: boolean;
   selectedNodeKey: string | null;
   setSelectedNodeKey: (key: string | null) => void;
@@ -75,7 +73,6 @@ export function useModelProviderNavigation({
   pendingConnectionSelections = {},
   familyConnectionSettingsLoading = false,
   familyConnectionSettingsFailed = false,
-  subscribedTeamProducts = [],
   showPurchasedTeamPlanFallback = false,
   selectedNodeKey,
   setSelectedNodeKey,
@@ -155,7 +152,6 @@ export function useModelProviderNavigation({
       buildVisibleFamilyConnectionItems({
         items: codingPlanItems.filter((item) => !isStartPlanModelProviderId(item.presetId)),
         codingPlanEntitlements,
-        subscribedTeamProducts,
         showPurchasedTeamPlanFallback,
         connectionSelections: {
           ...connectionSelections,
@@ -173,7 +169,6 @@ export function useModelProviderNavigation({
       codingPlanItems,
       connectionSelections,
       pendingConnectionSelections,
-      subscribedTeamProducts,
     ],
   );
 

@@ -15,7 +15,6 @@ import {
 } from "@zcode/shared";
 import { resolveMcpQuotaLimit } from "@/lib/codingPlanQuotaPresentation.js";
 import { resolveUsageEntitlementOutcome } from "@/lib/codingPlanProvider.js";
-import type { EnterpriseCodingPlanProductDisplay } from "@/settings/model-provider-section/enterpriseCodingPlanProducts.js";
 import {
   type CodingPlanEntitlementState,
   type CodingPlanStatus,
@@ -242,14 +241,12 @@ export function resolveCodingPlanEntitlementState({
 export function buildVisibleFamilyConnectionItems({
   items,
   codingPlanEntitlements = {},
-  subscribedTeamProducts,
   connectionSelections,
   teamPlanSelections,
   showPurchasedTeamPlanFallback,
 }: {
   items: Array<Extract<ModelProviderNavGroup["items"][number], { type: "codingPlan" }>>;
   codingPlanEntitlements?: Partial<Record<string, CodingPlanEntitlementState>>;
-  subscribedTeamProducts: EnterpriseCodingPlanProductDisplay[];
   showPurchasedTeamPlanFallback: boolean;
   connectionSelections?: ProviderFamilyConnectionSelectionSettings;
   teamPlanSelections?: Partial<
@@ -259,9 +256,7 @@ export function buildVisibleFamilyConnectionItems({
     >
   >;
 }): ModelProviderNavGroup["items"] {
-  // subscribedTeamProducts 已恒空（enterprise productList 拆除）；
-  // 保留参数以兼容 Settings/导航签名，Team nav 只走 entitlement + fallback。
-  void subscribedTeamProducts;
+  // Team nav 只走 entitlement snapshot + 本地 fallback selectedKey。
   return appendSubscribedTeamPlanItems({
     items: filterStartPlanItemsByEntitlement({
       items,
@@ -348,8 +343,7 @@ function appendSubscribedTeamPlanItems({
   >;
   showPurchasedTeamPlanFallback: boolean;
 }): ModelProviderNavGroup["items"] {
-  // 企业 productList 已恒空；不再从 subscribedTeamProducts flatMap 生成 team nav。
-  // entitlement snapshot + 本地 fallback selectedKey 仍负责 Team 连接项。
+  // entitlement snapshot + 本地 fallback selectedKey 负责 Team 连接项。
   const entitlementTeamItems: TeamPlanNavItem[] = MODEL_PROVIDER_FAMILY_SPECS.flatMap(
     ({ id: family }) => {
       const codingPlanItem = resolveCodingPlanItemForFamily(items, family);

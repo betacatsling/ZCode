@@ -389,8 +389,7 @@ export function ModelProviderSection({
     error: sharedSettingsError,
     update: updateSharedSettings,
   } = useSettings();
-  // 企业 productList 已恒空（#128/#131–#133）；Team 已购身份走 entitlement，
-  // 不再拼空 productList / named subscribedTeamProducts stub。导航签名用内联 []。
+  // 企业 productList / Team 产品导航形参已拆除；Team 已购身份走 entitlement。
   const connectionSelections = sharedSettings?.providerFamilyConnectionSelections ?? {};
   const familyConnectionSettingsFailed = sharedSettingsError !== null && sharedSettings === null;
   const effectiveConnectionSelections = useMemo(
@@ -639,7 +638,6 @@ export function ModelProviderSection({
       modelProvidersLoading: loading,
       displayOrder,
       codingPlanEntitlements,
-      subscribedTeamProducts: [],
       providerFamilyDomain: effectiveProviderFamilyDomain,
       connectionSelections: effectiveConnectionSelections,
       pendingConnectionSelections,

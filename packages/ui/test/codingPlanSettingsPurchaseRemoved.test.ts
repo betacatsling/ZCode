@@ -234,10 +234,8 @@ test("codingPlanUsageSources collapses dead team flatMap to return [] (#128)", (
   assert.equal(usage.includes("resolveEnterpriseCodingPlanProductFamily"), false);
 });
 
-test("Settings/V4/sidebar/MPS drop named empty subscribedTeamProducts useMemo (#131–#135)", () => {
-  // Named dead stub: const subscribedTeamProducts = useMemo(() => [], [])
-  // (or usageSubscribedTeamProducts / typed useMemo<...>). Literal call-site
-  // subscribedTeamProducts: [] is OK for signature/guard shape.
+test("Settings/V4/sidebar/MPS drop subscribedTeamProducts stubs and call sites", () => {
+  // Named useMemo stubs and literal subscribedTeamProducts: [] nav wiring are both gone.
   const emptyTeamProductsUseMemoRe =
     /\b(?:usage)?[Ss]ubscribedTeamProducts\s*=\s*useMemo(?:<[^>]*>)?\s*\(\s*\(\s*\)\s*=>\s*\[\s*\]\s*,\s*\[\s*\]\s*\)/;
   const files = [
@@ -253,10 +251,10 @@ test("Settings/V4/sidebar/MPS drop named empty subscribedTeamProducts useMemo (#
       false,
       `${fileUrl.pathname} must not revive named empty subscribedTeamProducts useMemo stub`,
     );
-    assert.match(
-      source,
-      /subscribedTeamProducts\s*:\s*\[\s*\]/,
-      `${fileUrl.pathname} must keep literal subscribedTeamProducts: [] call site`,
+    assert.equal(
+      source.includes("subscribedTeamProducts"),
+      false,
+      `${fileUrl.pathname} must not keep subscribedTeamProducts call-site / stub`,
     );
   }
 
