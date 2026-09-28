@@ -3349,8 +3349,6 @@ const zhCN: Record<string, string> = {
   "settings.usage.entitlementStatusNotConfigured": "未配置",
   "sidebar.usage.summaryTitle": "最近 30 天",
   "sidebar.usage.plan.title": "剩余额度",
-  "sidebar.usage.plan.upgrade": "升级",
-  "sidebar.usage.plan.renew": "续期",
   "sidebar.usage.plan.codingPlanTitle": "编程套餐",
   "sidebar.usage.plan.audienceIndividual": "个人",
   "sidebar.usage.plan.audienceTeam": "团队",
