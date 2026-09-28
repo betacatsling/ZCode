@@ -14,7 +14,9 @@ export async function resolveClaudeExecutable(explicitPath?: string): Promise<st
     : (process.env.PATH ?? "")
         .split(delimiter)
         .filter(Boolean)
-        .map((directory) => join(directory, process.platform === "win32" ? "claude.exe" : "claude"));
+        .map((directory) =>
+          join(directory, process.platform === "win32" ? "claude.exe" : "claude"),
+        );
   for (const candidate of candidates) {
     try {
       await access(candidate, constants.X_OK);
@@ -27,7 +29,12 @@ export async function resolveClaudeExecutable(explicitPath?: string): Promise<st
 }
 
 export async function readClaudeCliVersion(executablePath: string): Promise<string> {
-  const scratch = await mkdtemp(join(process.platform === "win32" ? process.env.TEMP ?? "." : "/tmp", "zcode-claude-version-"));
+  const scratch = await mkdtemp(
+    join(
+      process.platform === "win32" ? (process.env.TEMP ?? ".") : "/tmp",
+      "zcode-claude-version-",
+    ),
+  );
   try {
     const { stdout } = await execFile(executablePath, ["--version"], {
       cwd: scratch,
@@ -63,9 +70,17 @@ export async function probeClaudeTarget(target: ExecutionTarget, executablePath?
   try {
     const executable = await resolveClaudeExecutable(executablePath);
     const version = await readClaudeCliVersion(executable);
+    // 版本探针通过只说明 pinned CLI 可执行，不能把控制面能力读成已认证。
     return version === PINNED_CLAUDE_CLI_VERSION
-      ? { support: "supported" as const }
-      : { support: "unsupported" as const, reason: "Claude Code CLI version is not pinned 2.1.263" };
+      ? {
+          support: "supported" as const,
+          reason:
+            "Pinned Claude Code CLI version probe succeeded. It does not certify tools, approvals, history, resumeExecution, images, or modelSwitch.",
+        }
+      : {
+          support: "unsupported" as const,
+          reason: "Claude Code CLI version is not pinned 2.1.263",
+        };
   } catch {
     return {
       support: "unsupported" as const,
