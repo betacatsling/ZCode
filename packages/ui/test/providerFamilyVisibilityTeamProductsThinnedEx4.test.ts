@@ -15,6 +15,8 @@ test("providerFamilyConnectionVisibility drops subscribedTeamProducts param and 
   assert.equal(source.includes("isTeamPlanQuotaUnavailable"), false);
   assert.match(source, /buildEntitlementTeamPlanItems/);
   assert.match(source, /buildSelectedTeamPlanFallbackItems/);
+  assert.equal(source.includes("appendSubscribedTeamPlanItems"), false);
+  assert.match(source, /appendTeamPlanItems/);
 });
 
 test("useModelProviderNavigation drops subscribedTeamProducts param", () => {

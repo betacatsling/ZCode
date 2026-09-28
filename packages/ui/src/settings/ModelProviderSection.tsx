@@ -389,7 +389,7 @@ export function ModelProviderSection({
     error: sharedSettingsError,
     update: updateSharedSettings,
   } = useSettings();
-  // 企业 productList / Team 产品导航形参已拆除；Team 已购身份走 entitlement。
+  // Team 已购身份走 entitlement 导航。
   const connectionSelections = sharedSettings?.providerFamilyConnectionSelections ?? {};
   const familyConnectionSettingsFailed = sharedSettingsError !== null && sharedSettings === null;
   const effectiveConnectionSelections = useMemo(
