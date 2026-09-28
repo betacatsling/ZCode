@@ -22,6 +22,8 @@
  * Hard (also): CLI isLoginRequired gate must stay absent (renamed to isModelSetupRequired).
  * Hard (also): UI locale dead product loginRequired / Coding Plan login keys must stay absent
  *   (codingPlan.login, productsLoginRequired, start.loginEnable/Trial, entitlement*LoginRequired).
+ * Hard (also): orphan Welcome / login.* shell locale keys must stay absent (keep regionTag +
+ *   conversationShare.import.signInRequired; live personal API-key / MCP OAuth copy untouched).
  *
  * Run from repo root: node scripts/verify-product-login-removed.mjs
  */
@@ -317,6 +319,42 @@ function assertDeletedSurfaces() {
     "settings.usage.entitlementLoginRequired",
     "settings.usage.entitlementStatusLoginRequired",
     "sidebar.usage.plan.loginRequired",
+    // Orphan Welcome / login.* shell (Ex3 @ a2e3e5d); keep login.oauth.regionTag.*
+    "welcome.username",
+    "welcome.password",
+    "welcome.login",
+    "welcome.loggingIn",
+    "welcome.loginFailed",
+    "login.title",
+    "login.description",
+    "login.oauth.activeProviderHint",
+    "login.oauth.loadingProviders",
+    "login.oauth.noProviders",
+    "login.oauth.button",
+    "login.oauth.button.zai",
+    "login.oauth.button.bigmodel",
+    "login.oauth.waiting",
+    "login.oauth.loginFailure",
+    "login.oauth.cancel",
+    "login.oauth.retry",
+    "login.expired.title",
+    "login.expired.description",
+    "login.expired.action",
+    "login.expired.restart",
+    "login.useApiKey",
+    "login.apiKey.title",
+    "login.apiKey.placeholder",
+    "login.apiKey.providerLabel",
+    "login.apiKey.provider.zai",
+    "login.apiKey.provider.bigmodel",
+    "login.apiKey.getApiKey",
+    "login.apiKey.cancel",
+    "login.apiKey.continue",
+    "login.apiKey.emptyError",
+    "login.apiKey.providerMissingError",
+    "login.apiKey.saveError",
+    "login.apiKey.skipError",
+    "login.skip",
   ];
   const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   for (const key of deadUiLoginKeys) {
@@ -339,6 +377,15 @@ function assertDeletedSurfaces() {
     fails.push(
       "UI locales must keep conversationShare.import.signInRequired (ZCode account, not product login)",
     );
+  }
+  // Live bot region tags (still referenced from botsUi) must remain under login.oauth.regionTag.*.
+  for (const keepKey of ["login.oauth.regionTag.zai", "login.oauth.regionTag.bigmodel"]) {
+    const keepHits = grepFiles(uiLocaleDir, new RegExp(`"${escapeRegExp(keepKey)}"`), {
+      extensions: [".ts"],
+    });
+    if (keepHits.length < 2) {
+      fails.push(`UI locales must keep live ${keepKey} (botsUi region tags)`);
+    }
   }
 
   return fails;
@@ -411,7 +458,7 @@ function remainingUiInventory() {
   ].map(fileStatus);
 
   const note =
-    "Tip 5ff4b68+: Dialog/Provider/Entry/EmbeddedWebview + CLI loginRequired→modelSetupRequired hard. UI locale dead product loginRequired / Coding Plan login keys hard-gated (Ex3). Soft inventory thinned — cleared symbol scans dropped. Inventory does not fail this gate.";
+    "Tip a2e3e5d (#108 / after #101–#107): Dialog/Provider/Entry/EmbeddedWebview + CLI loginRequired→modelSetupRequired hard. UI locale dead product loginRequired / Coding Plan login + orphan Welcome/login.* shell keys hard-gated (Ex3). Soft inventory thinned — cleared symbol scans dropped. KEEP share-import signInRequired + login.oauth.regionTag.* + live personal API-key / MCP OAuth copy. Inventory does not fail this gate.";
 
   return {
     note,
