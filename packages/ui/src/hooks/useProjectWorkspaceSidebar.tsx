@@ -185,14 +185,13 @@ export function useProjectWorkspaceSidebar(input: UseProjectWorkspaceSidebarInpu
   }, [
     enqueueTarget,
     isCurrentSource,
-    profileCatalog: profileCatalog ?? null,
+    profileCatalog,
     publishModel,
     input.theme,
     resolution.remoteSessionId,
     resolution.isRemoteTarget,
     resolution.services,
     readProfileCatalog,
-    scheduleProjectSidebarTargetRefreshes,
   ]);
 
   useEffect(() => {
@@ -268,7 +267,7 @@ export function useProjectWorkspaceSidebar(input: UseProjectWorkspaceSidebarInpu
 
   const sessionActions = useProjectSidebarSessionActions({
     theme: input.theme,
-    profileCatalog,
+    profileCatalog: profileCatalog ?? null,
     targetSourcesRef,
     targetViewsRef,
     targetObservedAtRef,
