@@ -24,25 +24,25 @@ export function CodingPlanStatusMeta({
   onUnlink?: () => void;
 }) {
   const { intl, locale } = useZCodeIntl();
-  const subscriptionTime = resolveCodingPlanSubscriptionTime({
+  const entitlementTime = resolveCodingPlanEntitlementTime({
     renewTime,
     expireTime,
   });
-  const subscriptionTimeLabel = subscriptionTime
+  const entitlementTimeLabel = entitlementTime
     ? intl.formatMessage(
         {
           id:
-            subscriptionTime.kind === "renew"
+            entitlementTime.kind === "renew"
               ? "settings.modelProvider.codingPlan.renewsAt"
               : "settings.modelProvider.codingPlan.expiresAt",
         },
         {
-          date: formatCodingPlanSubscriptionDate(subscriptionTime.value, locale),
+          date: formatCodingPlanEntitlementDate(entitlementTime.value, locale),
         },
       )
     : null;
   const hasMetaContent = Boolean(
-    statusLabel || subscriptionTimeLabel || extraAction || (unlinkLabel && onUnlink),
+    statusLabel || entitlementTimeLabel || extraAction || (unlinkLabel && onUnlink),
   );
   const fallbackStatusLabel =
     statusLabel ??
@@ -55,12 +55,12 @@ export function CodingPlanStatusMeta({
   return (
     <span className="flex flex-wrap items-center gap-1.5 text-ui-base text-foreground-subtle">
       {fallbackStatusLabel ? <span>{fallbackStatusLabel}</span> : null}
-      {subscriptionTimeLabel ? <span>{subscriptionTimeLabel}</span> : null}
-      <CodingPlanMetaSeparator visible={Boolean(subscriptionTimeLabel && extraAction)} />
+      {entitlementTimeLabel ? <span>{entitlementTimeLabel}</span> : null}
+      <CodingPlanMetaSeparator visible={Boolean(entitlementTimeLabel && extraAction)} />
       {extraAction}
       <CodingPlanMetaSeparator
         visible={Boolean(
-          (subscriptionTimeLabel || extraAction || fallbackStatusLabel) && unlinkLabel,
+          (entitlementTimeLabel || extraAction || fallbackStatusLabel) && unlinkLabel,
         )}
       />
       {unlinkLabel && onUnlink ? (
@@ -270,7 +270,7 @@ function CodingPlanMetaAction({
   );
 }
 
-function resolveCodingPlanSubscriptionTime({
+function resolveCodingPlanEntitlementTime({
   renewTime,
   expireTime,
 }: {
@@ -290,7 +290,7 @@ function resolveCodingPlanSubscriptionTime({
   return null;
 }
 
-function formatCodingPlanSubscriptionDate(value: string, locale: string): string {
+function formatCodingPlanEntitlementDate(value: string, locale: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
     return value;
@@ -301,7 +301,7 @@ function formatCodingPlanSubscriptionDate(value: string, locale: string): string
     ...(isCurrentYear ? {} : { year: "numeric" }),
     month: "short",
     day: "numeric",
-    // 订阅接口返回的是日期语义，按本地时区格式化 ISO 零点会让美国时区显示成前一天。
+    // 权益到期/续期时间是日期语义，按本地时区格式化 ISO 零点会让美国时区显示成前一天。
     // 同一年隐藏年份时也要按 UTC 判断，否则临界时区会把“今年”误判成去年/明年。
     timeZone: "UTC",
   }).format(date);
