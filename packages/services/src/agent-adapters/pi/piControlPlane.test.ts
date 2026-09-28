@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { AgentEvent, ExecutionTarget, SessionSpec } from "@zcode/shared/agent-host";
 import { agentEventSchema } from "@zcode/shared/agent-host";
+import { piControlPlaneCapabilities } from "./piCapabilities.js";
 import { PiAdapter } from "./piAdapter.js";
 import {
   createLinkedPiTurnTransport,
@@ -761,18 +762,45 @@ test("harness-managed does not claim unified routing, and a secret credential re
 test("capabilities name the unsupported slice instead of pretending it works", async () => {
   const { adapter } = harness();
   const report = await adapter.capabilities(target);
-  assert.equal(report.text.support, "supported");
-  assert.equal(report.tools.support, "supported");
-  assert.equal(report.approvals.support, "supported");
-  assert.equal(report.cancelTurn.support, "supported");
-  assert.equal(report.history.support, "supported");
+  assert.deepEqual(report, piControlPlaneCapabilities(adapter.hostManagedRoute));
+  for (const field of ["text", "tools", "approvals", "cancelTurn", "history"] as const) {
+    assert.equal(report[field].support, "supported", field);
+    assert.match(report[field].reason ?? "", /.+/, field);
+  }
+  assert.deepEqual(report.tools.constraints, { read: true, write: true, exec: true });
+  assert.match(report.tools.reason ?? "", /read/);
+  assert.match(report.tools.reason ?? "", /write/);
+  assert.match(report.tools.reason ?? "", /exec/);
+  assert.doesNotMatch(report.tools.reason ?? "", /bash/);
+  for (const field of ["resumeExecution", "images", "modelSwitch"] as const) {
+    assert.equal(report[field].support, "unsupported", field);
+    assert.equal(report[field].reason, report.resumeExecution.reason);
+    for (const named of ["resumeExecution", "images", "modelSwitch"] as const) {
+      assert.match(report[field].reason ?? "", new RegExp(named), field);
+    }
+    assert.match(report[field].reason ?? "", /does not upgrade/);
+  }
+  assert.match(report.resumeExecution.reason ?? "", /viewHistory/);
+  assert.match(report.modelSwitch.reason ?? "", /later turn/);
+  assert.equal(report.detach?.support, "supported");
+  assert.match(report.detach?.reason ?? "", /detach/);
+  assert.match(report.detach?.reason ?? "", /does not close/);
+  assert.equal(report.terminateSession?.support, "supported");
+  assert.match(report.terminateSession?.reason ?? "", /terminateSession/);
   assert.equal(report.viewHistory?.support, "supported");
-  assert.equal(report.resumeExecution.support, "unsupported");
-  assert.ok(report.resumeExecution.reason);
-  assert.equal(report.images.support, "unsupported");
-  assert.equal(report.modelSwitch.support, "unsupported");
+  assert.match(report.viewHistory?.reason ?? "", /viewHistory/);
+  assert.match(report.viewHistory?.reason ?? "", /does not send a new prompt/);
   assert.equal(report.hostManagedModel?.support, "experimental");
   assert.match(report.hostManagedModel?.reason ?? "", /does not call Model\.streamText/);
+  assert.match(report.hostManagedModel?.reason ?? "", /resumeExecution/);
+  assert.equal(report.hostManagedModel?.constraints?.route, adapter.hostManagedRoute);
+  const probed = await adapter.probe(target);
+  assert.equal(probed.support, "supported");
+  assert.match(probed.reason ?? "", /does not certify/);
+  assert.notEqual(report.resumeExecution.support, probed.support);
+  assert.notEqual(report.images.support, probed.support);
+  assert.notEqual(report.modelSwitch.support, probed.support);
+  assert.notEqual(report.hostManagedModel?.support, probed.support);
   const modelSupport = await adapter.hostManagedSupport(target, {
     providerId: "provider-a",
     modelId: "model-a",
@@ -780,8 +808,12 @@ test("capabilities name the unsupported slice instead of pretending it works", a
   });
   assert.equal(modelSupport.support, "experimental");
   assert.equal(modelSupport.constraints?.execution, "not-this-adapter");
+  assert.equal(modelSupport.constraints?.route, adapter.hostManagedRoute);
+  assert.match(modelSupport.reason ?? "", /does not certify/);
+  assert.notEqual(report.resumeExecution.support, modelSupport.support);
   const ssh = await adapter.probe({ ...target, kind: "ssh", id: "ssh-1" });
   assert.equal(ssh.support, "unsupported");
+  assert.deepEqual(await adapter.capabilities(target), report);
 });
 
 test(

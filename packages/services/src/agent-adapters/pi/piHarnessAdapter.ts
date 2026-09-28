@@ -15,6 +15,7 @@ import type {
   SessionSpec,
 } from "@zcode/shared/agent-host";
 import type { HarnessAdapter, PreparedHostBinding } from "../../agent-host/harnessRegistry.js";
+import { piHarnessCapabilities, piHarnessHostManagedSupport } from "./piCapabilities.js";
 import type { FromPiWorker, PiWorkerBoot } from "./piProtocol.js";
 import { PiSessionStartupReservations, waitForPiWorkerReady } from "./piSessionStartup.js";
 import {
@@ -22,7 +23,6 @@ import {
   routePiWorkerMessage,
   sendPiWorkerCommand,
 } from "./piWorkerMessageRouter.js";
-
 
 /** Source-mode Workers need Node >=24 so `--import tsx` loads `.ts` (and deps like node:sqlite). */
 function assertPiWorkerNodeRuntime(): void {
@@ -92,34 +92,17 @@ export class PiHarnessAdapter implements HarnessAdapter {
         support: "unsupported" as const,
         reason: "Pi worker must run on the execution target, not across an SSH stdio attachment",
       };
-    return { support: "supported" as const };
+    return {
+      support: "supported" as const,
+      reason:
+        "Pi worker probe only checks an available macOS or Linux target on this process platform. It does not certify resumeExecution, images, or modelSwitch.",
+    };
   }
   async hostManagedSupport(target: ExecutionTarget, selection: ModelSelection) {
-    const report = await this.probe(target);
-    if (report.support !== "supported") return report;
-    if (
-      !selection.options?.reasoningLevel ||
-      !["off", "low"].includes(selection.options.reasoningLevel)
-    )
-      return {
-        support: "unsupported" as const,
-        reason: "Pi host bridge certifies only reasoningLevel=off or low",
-      };
-    return report;
+    return piHarnessHostManagedSupport(await this.probe(target), selection);
   }
   async capabilities(_target: ExecutionTarget): Promise<HarnessCapabilities> {
-    const yes = { support: "supported" as const };
-    const no = { support: "unsupported" as const, reason: "not certified by the Pi host bridge" };
-    return {
-      text: yes,
-      tools: yes,
-      approvals: yes,
-      cancelTurn: yes,
-      history: yes,
-      resumeExecution: no,
-      images: no,
-      modelSwitch: no,
-    };
+    return piHarnessCapabilities();
   }
   async prepareModel(spec: SessionSpec, plan: BindingPlan): Promise<Model> {
     return this.#modelFactory(spec, plan);
