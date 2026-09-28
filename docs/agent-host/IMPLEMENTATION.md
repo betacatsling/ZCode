@@ -154,7 +154,7 @@ P3 的真实验收必须包含两个不同 Provider、本地 macOS、Linux SSH�
 
 - 仓库已有通用 server supervisor、platform service manager、`cli serve --daemon`、launchd/systemd 与 runtime/lock 入口；外部 Harness 的活动计数、owner 生命周期、GUI 断开恢复和 SSH 持久化仍未接线验证，不应另造第二 daemon。
 - owner/lease/fencing 仍主要是内存 map 和按 journal 文件的锁。`AgentHostTargetService.#owners` 在异步 create mount 前存在竞态；Pi adapter 的 `#sessions` 也在异步 spawn 后写入。需要跨请求/跨进程的唯一 owner reservation、stale generation 和 crash recovery 测试。
-- Worktree Catalog 已提供 realpath/filesystem evidence、generation、discovery/adopt/revalidate；lazy AgentHost 的默认 `authorizeWorktree` 仍只检查绝对路径，Project/Worktree binding 与 external Session admission 的 generation recheck 尚未接线。
+- Worktree Catalog 已提供 realpath/filesystem evidence、generation、discovery/adopt/revalidate；lazy AgentHost 的 `authorizeWorktree`（`authorizeLazyWorktreeAdmission`）已做 catalog 查找 + `revalidate` + `worktreeGeneration` recheck，generation / path / lifecycle 不匹配则拒绝 admission。UI 接管、跨 target 映射与真实 SSH/删除竞态仍未验收。
 - SSH upload/install/attach/resume、远端事件持续消费、GUI 完全退出、SSH 断开/重连、审批中断线和服务崩溃恢复均未实测。`IRemoteBackend.exec()` 的 stdio 连接不能当作持久化 Host。
 - 没有工作区删除期间冻结新 admission、运行/审批/未知状态预检、目录消失/重建和离线重同步流程。
 - P3 四个本地组合加四个 SSH 组合、真实 Provider、owner crash/process fault 均未认证。
