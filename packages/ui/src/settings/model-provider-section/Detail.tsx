@@ -1,4 +1,3 @@
-import { useCodingPlanEntryGate } from "@/settings/CodingPlanEntryButton.js";
 /* eslint-disable max-lines -- Model Provider 详情页当前集中编排 Plan Card、API Key 表单和 OAuth 套餐态；后续稳定后再按 family/API/OAuth 拆分。 */
 import {
   BIGMODEL_PROVIDER_ID,
@@ -561,7 +560,6 @@ export function ModelProviderSectionDetail({
         <CodingPlanPurchaseChoiceBanners
           providerId={selectedNavItem.presetId}
           soldOutVisible={codingPlanPurchaseTokenAuthenticated}
-          accountDisconnected={statusPanelViewState.displayStatus === "disconnected"}
           onSelect={handlePurchaseChoiceSelect}
           teamVisible={selectedNavItem.oauthProviderId !== ZAI_PROVIDER_ID}
         />
@@ -838,7 +836,6 @@ function CodingPlanPurchaseChoiceBanners({
   personalVisible = true,
   teamVisible = true,
   soldOutVisible = false,
-  accountDisconnected = false,
   onSelect,
   onSelectStartPlan,
 }: {
@@ -847,14 +844,12 @@ function CodingPlanPurchaseChoiceBanners({
   personalVisible?: boolean;
   teamVisible?: boolean;
   soldOutVisible?: boolean;
-  accountDisconnected?: boolean;
   onSelect: (
     audience: PurchaseAudience,
     options?: { initialTeamPlanKey?: string; eventText?: string },
   ) => void;
   onSelectStartPlan?: () => void;
 }) {
-  const entryGate = useCodingPlanEntryGate();
   const { intl, locale } = useZCodeIntl();
   const startPlanSummary = startPlanPreview
     ? resolveStartPlanEntitlementSummary(startPlanPreview, intl, locale)
@@ -961,14 +956,7 @@ function CodingPlanPurchaseChoiceBanners({
           key={item.key}
           type="button"
           className={item.className}
-          disabled={
-            !accountDisconnected && item.key !== "startPlan" && entryGate.status === "loading"
-          }
           onClick={() => {
-            if (!accountDisconnected && item.key !== "startPlan" && entryGate.status !== "ready") {
-              entryGate.retry?.();
-              return;
-            }
             item.onClick?.();
           }}
         >
@@ -977,9 +965,7 @@ function CodingPlanPurchaseChoiceBanners({
             <span className="min-w-0 flex-1">
               <span className="flex min-w-0 flex-wrap items-center gap-2">
                 <span className="text-ui-lg font-medium leading-6 text-foreground">
-                  {!accountDisconnected && item.key !== "startPlan"
-                    ? (entryGate.label ?? item.label)
-                    : item.label}
+                  {item.label}
                 </span>
               </span>
               {item.metric ? (
