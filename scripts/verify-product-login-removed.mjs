@@ -10,11 +10,12 @@
  * Hard gates (must exit 0 on tip):
  *   - CLI login-command / tui-auth / create.ts stubs (P3)
  *   - Deleted UI/contract surfaces: login/**, CodingPlanEntryButton,
- *     CodingPlanUpgradeDialog(.tsx)/Provider, PlatformChannels.OAuth*,
+ *     CodingPlanUpgradeDialog(.tsx)/Provider, CodingPlanEmbeddedWebviewDialog
+ *     (+ codingPlanEmbeddedWebview helpers), PlatformChannels.OAuth*,
  *     registerOAuthState / onOAuthCallback; Root must not remount Provider
  *
  * Soft inventory (print-only; does not fail exit):
- *   - EmbeddedWebview / funnel / pricing leftovers (isRestoringOAuthSession unloaded)
+ *   - funnel / pricing leftovers (isRestoringOAuthSession + EmbeddedWebview Dialog unloaded)
  *   - CLI TUI loginRequired / loginSetup residual naming
  *
  * Run from repo root: node scripts/verify-product-login-removed.mjs
@@ -145,6 +146,21 @@ function assertDeletedSurfaces() {
       "CodingPlanUpgradeDialogProvider.tsx must stay deleted (Dialog unload on tip)",
     );
   }
+  const embeddedWebviewDialog = join(UI_SRC, "settings/CodingPlanEmbeddedWebviewDialog.tsx");
+  if (existsSync(embeddedWebviewDialog)) {
+    fails.push(
+      "CodingPlanEmbeddedWebviewDialog.tsx must stay deleted (orphan EmbeddedWebview Dialog unload)",
+    );
+  }
+  const embeddedWebviewHelpers = join(
+    UI_SRC,
+    "settings/model-provider-section/codingPlanEmbeddedWebview.ts",
+  );
+  if (existsSync(embeddedWebviewHelpers)) {
+    fails.push(
+      "codingPlanEmbeddedWebview.ts must stay deleted (helpers only used by EmbeddedWebview Dialog)",
+    );
+  }
   // Definition of useCodingPlanEntryGate must not reappear under packages/ui/src
   const entryGateHits = grepFiles(UI_SRC, /export\s+function\s+useCodingPlanEntryGate\b/, {
     extensions: [".ts", ".tsx"],
@@ -252,9 +268,9 @@ function fileStatus(relPath) {
 
 /**
  * Soft inventory: residuals still present on tip after Dialog/Provider unload.
- * Cleared Dialog/Provider/Root-wrap are hard-gated above; this prints leftovers
- * (Root OAuth restore flag, EmbeddedWebview/funnel helpers, CLI loginRequired/
- * loginSetup naming). Never flips results.ok by itself.
+ * Cleared Dialog/Provider/Root-wrap/EmbeddedWebview are hard-gated above; this
+ * prints leftovers (funnel/pricing helpers, CLI loginRequired/loginSetup
+ * naming). Never flips results.ok by itself.
  */
 function remainingUiInventory() {
   const symbolScans = [
@@ -329,6 +345,7 @@ function remainingUiInventory() {
     "packages/ui/src/settings/CodingPlanUpgradeDialog.tsx",
     "packages/ui/src/settings/CodingPlanUpgradeDialogProvider.tsx",
     "packages/ui/src/settings/CodingPlanEmbeddedWebviewDialog.tsx",
+    "packages/ui/src/settings/model-provider-section/codingPlanEmbeddedWebview.ts",
     "packages/ui/src/settings/CodingPlanEntryButton.tsx",
     "packages/ui/src/login",
     "packages/ui/src/Root.tsx",
@@ -351,7 +368,7 @@ function remainingUiInventory() {
   };
 
   const note =
-    "Tip c7d1a07+: Dialog/Provider/Root-wrap cleared; Root isRestoringOAuthSession unloaded (hard-gated clear). Soft remaining = EmbeddedWebview/funnel/pricing leftovers + CLI TUI loginRequired/loginSetup rename. useCodingPlanEntryPlanList deleted (zero callers). Inventory does not fail this gate.";
+    "Tip dc28b3d+: Dialog/Provider/Root-wrap + EmbeddedWebview Dialog/helpers + Root isRestoringOAuthSession cleared (hard/soft). Soft remaining = funnel/pricing leftovers + CLI TUI loginRequired/loginSetup rename. useCodingPlanEntryPlanList deleted (zero callers). Inventory does not fail this gate.";
 
   return {
     note,
