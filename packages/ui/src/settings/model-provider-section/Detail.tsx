@@ -391,7 +391,7 @@ export function ModelProviderSectionDetail({
       providerId: selectedNavItem.presetId,
       fallback: selectedNavItem.provider,
     });
-    const codingPlanLoginPending = presetSubscriptionProviderId === selectedNavItem.presetId;
+    const codingPlanStatusGatePending = presetSubscriptionProviderId === selectedNavItem.presetId;
     const codingPlanStatusSyncPending = codingPlanStatusSyncProviderId === selectedNavItem.presetId;
     const codingPlanDisconnectPending = codingPlanDisconnectProviderId === selectedNavItem.presetId;
     const hasResolvedEntitlementStatus =
@@ -408,7 +408,7 @@ export function ModelProviderSectionDetail({
           }
         : resolveCodingPlanStatusPanelViewState({
             status: selectedNavItem.status,
-            statusPending: codingPlanLoginPending || codingPlanStatusSyncPending,
+            statusPending: codingPlanStatusGatePending || codingPlanStatusSyncPending,
           });
     const visibleStatusLabelId =
       statusPanelViewState.displayStatus === "checking" ? undefined : selectedNavItem.statusLabelId;
