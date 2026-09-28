@@ -1,13 +1,13 @@
 # ZCode 多 Harness v0.3 实施台账
 
-更新时间：2026-09-28（P6 tip 对照同步至 `57f161f`）
+更新时间：2026-09-28（P6 tip 对照同步至 `e27dcce`）
 
 本台账以仓库当前源码、`package.json`、测试文件和
 `ZCode_Multi_Harness_Refactor_Plan_v0.3_Orca_Hierarchy.md` 为准。它记录“代码存在、确定性测试通过、真实环境认证通过”三种不同证据，不把契约、Mock、构建产物或协议探针当作产品完成。计划规定 P4 完成后才称为首个可用版本。
 
 ## 当前证据和环境
 
-- 计划固定的源码基线是 `328c1a0c0ffaa5a4f65e8fa199af5e4c20706e5f`。wave4 集成 tip（本台账对照用）以 `cursor/wave4-harness-integration-b7a9` @ `57f161f` 为准（含 #61–#73：ACP honesty / MULTI_HARNESS #69 / P6 ledger；Ex2 opt-in ACP 尚未合入）；历史本地 checkout `438c257…` 与脏树记录不得与 tip 或计划基线混称，也不能清理与本任务无关的改动。
+- 计划固定的源码基线是 `328c1a0c0ffaa5a4f65e8fa199af5e4c20706e5f`。wave4 集成 tip（本台账对照用）以 `cursor/wave4-harness-integration-b7a9` @ `e27dcce` 为准（含 #61–#76：#75 opt-in OpenCode/Goose ACP factories、#76 desktop Coding Plan chrome unload、MULTI_HARNESS #69、P6 ledger）；历史本地 checkout `438c257…` 与脏树记录不得与 tip 或计划基线混称，也不能清理与本任务无关的改动。
 - `mise.toml` 要求 Node 24.14.0、pnpm 10.33.2。当前 shell 实测 Node 24.18.1、pnpm 10.33.2，`mise` 不在 PATH；后续认证必须使用固定工具链并在记录中注明实际版本。
 - 当前主开发 shell 是 Ubuntu 20.04.6、Linux 5.15、x86_64；本机未运行 macOS GUI。远端 Mac 已完成只读 capability probe，但源码构建、local worker 和桌面退出恢复仍未认证。
 - 本地 CLI 版本实测为 Pi 0.86.1、Claude Code 2.1.263、Codex CLI 0.154.0。仓库 Pi 依赖固定为 0.87.1，Codex 计划/探针要求 0.156.1；本地 CLI 版本差异不能算兼容认证。
@@ -186,38 +186,39 @@ P5 必须按 Harness 拆成 control/event 认证和 host-managed model ingress �
 
 状态：**部分完成（脚手架 + 一个可选 Agent）；P6 未完成**。
 
-已在 tip `57f161f` 上、但不能标 P6 完成：
+已在 tip `e27dcce` 上、但不能标 P6 完成：
 
 - 可复用 ACP transport/adapter 与 session machine：`packages/services/src/agent-adapters/acp/`（`COMPATIBILITY.md` / `SPEC.md`；SPEC 已写明 print-mode `agent-adapters/devin` 与可选 ACP 同 id）。
 - 长尾示例：Devin **可选** ACP profile（`agent-adapters/acp/agents/devin.ts`，`devin acp`）；与 print-mode `devin` 同 harness id，**不得**在同一 `HarnessRegistry` 双注册（`devinPrintAcpCoexistence.test.ts` / `devin/PROTOCOL.md`）。
 - 同协议第二批档案（inventory，非生产认证）：OpenCode / Goose（`acp/agents/opencode.ts`、`goose.ts`；`COMPATIBILITY.md`）— 共用 `acp-session-machine/1`，只加档案不改公共状态机。
+- **Opt-in 注册工厂（#75，非 lazy 默认）**：`createExperimentalRegistryOpenCodeAcpHarness` / `createExperimentalRegistryGooseAcpHarness`（`createAcpRegistryHarness.ts`；调用方注入 `openTransport`）。SessionHost fake-transport：`openCodeAcpSessionHost.integration.test.ts`。契约：`lazyTargetService` **不**注册上述工厂。
 - lazy Host 默认 Devin 路径仍是 **print-mode `-p`**（`createExperimentalRegistryDevinHarness`），不是默认 ACP；源码契约测：`lazyDevinPrintModeDefault.contract.test.ts`（#61）。
 - Honesty：print-mode `devinCapabilitiesHonesty.test.ts`；ACP Devin `devinAcpCapabilitiesHonesty.test.ts`（#62）；ACP OpenCode/Goose `acpOpenCodeGooseHonesty.test.ts`（#65）— install/probe `supported` **不**升级 text/tools/resume；`hostManagedSupport` 保持 `unsupported` 且不打开 transport；档案不硬编码 `session/load|resume`。
 
-仍缺：能力协商/版本矩阵产品化、安装诊断与升级手册、长期压力测试、OpenCode/Goose（及更多）生产接线与 live 认证、把 lazy 默认切到 ACP、发布加固。历史 ACP retirement 测只保护 native 边界，不是完整 P6 验收。勿把 honesty/exclusivity/inventory 契约当 live ACP 认证。
+仍缺：能力协商/版本矩阵产品化、安装诊断与升级手册、长期压力测试、OpenCode/Goose **生产**接线与 live 认证（opt-in factory ≠ 产品默认）、把 lazy 默认切到 ACP、发布加固。历史 ACP retirement 测只保护 native 边界，不是完整 P6 验收。勿把 honesty/exclusivity/inventory/opt-in factory 当 live ACP 认证。
 
 交付依赖 P1 manifest/factory、P3/P4 已验证 model binding/target Host，以及至少一个真实可用 ACP Agent。验收必须证明第二个同协议 Agent 只增加 manifest、绑定配置和必要扩展，不修改公共会话状态机；不支持 resume 的 Agent 只能历史只读；未知扩展安全降级；协议升级回到实验状态。
 
-### P6「第二生产 ACP」缺口（scout；tip 对照 `57f161f`）
+### P6「第二生产 ACP」缺口（scout；tip 对照 `e27dcce`）
 
-inventory/honesty 已有 ≠ 生产第二 Agent。相对 tip：
+inventory/honesty/opt-in factory 已有 ≠ 生产第二 Agent。相对 tip：
 
-1. **未进 lazy Host**：`lazyTargetService` 只注册 Pi/Codex/Claude + print-mode Devin；`openCodeAcpProfile` / `gooseAcpProfile` / ACP Devin 均未默认 `register`。
+1. **仍未进 lazy 默认**：`lazyTargetService` 只注册 Pi/Codex/Claude + print-mode Devin；OpenCode/Goose ACP 仅 **显式 opt-in** 工厂（#75），契约测禁止 lazy 注册。
 2. **无产品 create/Picker 路径**：侧栏/Harness 选择不会把 OpenCode/Goose 当可选外部 Harness 挂上。
 3. **无 install/upgrade 手册与版本矩阵**：`COMPATIBILITY.md` 有档案说明；缺固定 CLI 版本、initialize 协商矩阵、故障降级手册。
-4. **无 live 认证**：honesty 测锁 install≠caps / hostManaged；缺真实 `opencode acp` / `goose acp` 会话、resume 协商、跨 target SSH。
-5. **验收口径未满足**：计划要求「第二同协议 Agent 只加 manifest/绑定、不改公共状态机」的 **产品** 证明；当前只有档案 + 契约测。
+4. **无 live 认证**：honesty + SessionHost fake-transport（#75）≠ 真实 `opencode acp` / `goose acp` / resume / SSH。
+5. **验收口径未满足**：产品侧「第二同协议 Agent 只加 manifest/绑定」证明仍缺；当前为档案 + honesty + opt-in factory + fake-transport。
 
-下一薄刀候选（仍 Track A）：lazy 可选 opt-in 注册（显式 flag，非改默认）、或 OpenCode/Goose SessionHost fake-transport 集成测——均需 Planner 另派，勿在本 docs 刀里改默认。
+下一薄刀候选（仍 Track A，需 Planner 另派）：Goose SessionHost 对称集成、opt-in 与 MULTI_HARNESS 交叉文档、或 live 探针——**勿**把 opt-in 改成 lazy 默认。
 
-### StatusCards / funnel × Track A 交界（只读 scout @ `57f161f`）
+### StatusCards / funnel × Track A 交界（只读 scout @ `e27dcce`）
 
 UI/REMOVE 侧（**非 Track A 默认刀**；交界说明以免误抢）：
 
 - **已卸（契约测锁）**：Upgrade Dialog/Provider、EntryButton、EmbeddedWebview（#72）、sidebar upgrade、toolbar CTA；`statusCardsUpgradeCtaRemoved` 等。
+- **Desktop chrome（#76）**：去掉 Coding Plan embedded webview / PayPal 特例（guest preload 切换、payment-callback keep-in-webview、OpenExternal bypass）；删 `codingPlanWebview` preload + tsup entry；verify/unit 硬门禁缺席。普通 browser-pane will/did-attach 硬化保留。
 - **StatusCards 现状**：升级 CTA 走「购买已移除」说明；`upgradeActionVisible` 入参已 void；仍保留 quota/status/login 编排与 `codingPlanFunnelTelemetry` **类型**残留（上报助手已删）。
-- **与 Track A**：Agent Host / ACP / MULTI_HARNESS 不依赖 StatusCards；勿在 Host 台账刀里改 UI funnel。剩余 funnel/pricing 类型清理属 REMOVE/Track B。
-- **等待**：Ex2 **opt-in ACP** 合入后再做下一轮 P6 台账同步（本 tip 无该改动）。
+- **与 Track A**：Agent Host / ACP / MULTI_HARNESS 不依赖 StatusCards/desktop chrome；#75 opt-in ACP 已合入本 tip，P6 台账已同步。剩余 funnel/pricing 类型清理属 REMOVE/Track B。
 
 
 
@@ -281,7 +282,7 @@ Worktree 服务现有 archive 元数据/fence 与确认式 remove；remove 会�
 | 08A  | worktree removal admission、重建、离线重同步、archive/hide                    | Worktree 移除/fence/native+external 准入与隔离 Git/CLI 测试已实现；UI/SSH 离线重同步未验收            | 依赖 08；UI/E2E、SSH 离线恢复及删除竞态矩阵                    |
 | 09   | Gateway core + Responses + Codex                                              | 部分完成 / FakeModel only：core + Responses + Codex 控制/绑定已在 tip；#26 SSH 共享 TargetModelGateway 仅为 FakeModel admission，兼容仍 experimental | 依赖 08；live Provider、真实 SSH 凭据与生产组合仍未认证        |
 | 10   | Messages + Claude structured adapter                                          | 部分完成 / FakeModel only：structured/Messages 实验路径已有，Gateway 仍 adapter-local，不是共享 owner | 依赖 09；共享 TargetModelGateway owner 与 live Provider 未认证 |
-| 11   | 通用 ACP + 一个长尾 Agent                                                     | 部分完成 @ tip `57f161f`：Devin 可选 ACP + exclusivity/honesty（#61/#62）；OpenCode/Goose inventory + honesty（#65）；#69 Pi/Codex MULTI_HARNESS；Ex2 opt-in ACP 未合；生产接线/发布加固未做 | 依赖 08 和已验证 model binding；勿把 print-mode/honesty/inventory 写成 ACP 完成 |
+| 11   | 通用 ACP + 一个长尾 Agent                                                     | 部分完成 @ tip `e27dcce`：Devin ACP honesty；OpenCode/Goose inventory+honesty+#75 opt-in factories（非 lazy 默认）；#69 MULTI_HARNESS；生产接线/发布加固未做 | 依赖 08 和已验证 model binding；勿把 print-mode/honesty/opt-in 写成 ACP 完成 |
 | 12   | 层级/并发/focus 压测、迁移回滚、版本锁定发布                                  | 未实现                                                                                                | 依赖 08A/09/10/11；50 worktree、10 session、8h、fault matrix   |
 
 建议执行顺序：
