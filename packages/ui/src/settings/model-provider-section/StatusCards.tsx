@@ -27,7 +27,6 @@ import {
   mergeCodingPlanQuotaResetOpportunityBadges,
   resolveCodingPlanQuotaResetLimit,
 } from "@/lib/codingPlanQuotaResetUi.js";
-import { type CodingPlanFunnelContext } from "@/lib/codingPlanFunnelTelemetry.js";
 import {
   type CodingPlanStatus,
   type CodingPlanProviderId,
@@ -40,7 +39,6 @@ import {
   CodingPlanStatusActions,
 } from "./CodingPlanStatusActions.js";
 import type { CodingPlanLoginOptions } from "./codingPlanPricingCards.js";
-import type { PurchaseAudience } from "./codingPlanEnterpriseTiers.js";
 import { StartPlanCard } from "./StartPlanCard.js";
 import { StartPlanQuotaStatusCard } from "./StartPlanQuotaStatusCard.js";
 import { resolveStartPlanQuotaCardEntries } from "./StartPlanBalanceCard.js";
@@ -156,7 +154,6 @@ export function CodingPlanStatusPanel({
   loginActionPlacement = "inline",
   loginActionVisible = false,
   usageDetailsVisible = true,
-  upgradeActionVisible: _upgradeActionVisible = true,
   upgradePlansVisible: controlledUpgradePlansVisible,
   startPlanPreviewVisible = true,
   statusLabelId,
@@ -190,18 +187,10 @@ export function CodingPlanStatusPanel({
   onRetry?: () => void;
   onOpenPurchase?: (url: string) => void;
   onDisconnect?: () => void;
-  onOpenUpgradePlans?: (options: {
-    initialAudience: PurchaseAudience;
-    funnelContext: CodingPlanFunnelContext | null;
-  }) => void;
-  /** 原生面板移除后，Team 状态卡仍须把购买对象传给统一升级入口。 */
-  purchaseInitialAudience?: PurchaseAudience;
   loginActionPlacement?: "inline" | "trailing";
   loginActionVisible?: boolean;
   usageDetailsVisible?: boolean;
-  upgradeActionVisible?: boolean;
   upgradePlansVisible?: boolean;
-  onUpgradePlansVisibleChange?: (visible: boolean) => void;
   startPlanPreviewVisible?: boolean;
   statusLabelId?: string;
   statusMessage?: string | null;
@@ -306,7 +295,6 @@ export function CodingPlanStatusPanel({
   const displayPlanLevel = /^GLM[\s_-]+CODING\b/i.test(rawPlanLevel)
     ? formatQuotaModelDisplayName(rawPlanLevel)
     : normalizedPlanLevel;
-  void _upgradeActionVisible;
   const canManageCodingPlan =
     !isDisconnected &&
     !isChecking &&

@@ -12,7 +12,9 @@ const section = readUi("../src/settings/ModelProviderSection.tsx");
 test("settings model-provider Detail does not open Coding Plan upgrade", () => {
   assert.equal(detail.includes("useCodingPlanUpgradeDialog"), false);
   assert.equal(detail.includes("openCodingPlanUpgrade"), false);
-  assert.match(detail, /upgradeActionVisible=\{false\}/);
+  assert.equal(detail.includes("upgradeActionVisible"), false);
+  assert.equal(detail.includes("onOpenUpgradePlans"), false);
+  assert.equal(detail.includes("purchaseInitialAudience"), false);
 });
 
 test("settings ModelProviderSection login stub does not open Coding Plan upgrade", () => {

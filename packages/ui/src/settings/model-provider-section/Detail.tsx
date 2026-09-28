@@ -508,9 +508,6 @@ export function ModelProviderSectionDetail({
         ? null
         : resolveCodingPlanAccessBanner(statusPanelViewState.displayStatus, intl, reloginOnFailure);
     const upgradePlansVisible = upgradePlansVisibleProviderId === selectedNavItem.presetId;
-    const handleUpgradePlansVisibleChange = (visible: boolean) => {
-      setUpgradePlansVisibleProviderId(visible ? selectedNavItem.presetId : null);
-    };
     const purchaseChoiceBannersVisible =
       statusPanelViewState.displayStatus === "notPurchased" &&
       (selectedNavItem.oauthProviderId === ZAI_PROVIDER_ID ||
@@ -646,13 +643,7 @@ export function ModelProviderSectionDetail({
               options,
             );
           }}
-          onOpenUpgradePlans={() => {
-            // 产品套餐购买已下线：不再打开 Coding Plan 升级弹窗。
-          }}
           upgradePlansVisible={upgradePlansVisible}
-          onUpgradePlansVisibleChange={handleUpgradePlansVisibleChange}
-          purchaseInitialAudience={selectedNavItem.type === "teamPlan" ? "team" : "personal"}
-          upgradeActionVisible={false}
           startPlanPreviewVisible={false}
         />
       );
@@ -762,13 +753,7 @@ export function ModelProviderSectionDetail({
                 : undefined
             }
             disconnectLoading={codingPlanDisconnectProviderId === selectedNavItem.presetId}
-            onOpenUpgradePlans={() => {
-              // 产品套餐购买已下线：不再打开 Coding Plan 升级弹窗。
-            }}
             upgradePlansVisible={upgradePlansVisible}
-            onUpgradePlansVisibleChange={handleUpgradePlansVisibleChange}
-            purchaseInitialAudience={selectedNavItem.type === "teamPlan" ? "team" : "personal"}
-            upgradeActionVisible={false}
             startPlanPreviewVisible={false}
           />
           {hidePlanModels ? null : providerSettingsView && !dedicatedProvider ? (
