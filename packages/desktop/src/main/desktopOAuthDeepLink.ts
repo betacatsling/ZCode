@@ -63,8 +63,8 @@ function enqueuePendingShareImport(
 
 function focusDeepLinkTargetWindow(targetWindow: BrowserWindow): void {
   // macOS 的 open-url 回调只会把 URL 投递给当前实例，不会自动把窗口带回前台。
-  // 之前这里只做了 IPC 转发，用户从系统服务打开目录或支付回跳后仍停留在外部应用。
-  // 这里在路由成功后显式激活并聚焦目标窗口，统一多平台回跳体验。
+  // 之前这里只做了 IPC 转发，用户从系统服务打开目录后仍停留在外部应用。
+  // 这里在路由成功后显式激活并聚焦目标窗口，统一多平台回跳体验（产品支付回跳已卸）。
   if (targetWindow.isMinimized()) {
     targetWindow.restore();
   }
