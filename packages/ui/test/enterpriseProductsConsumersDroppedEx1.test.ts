@@ -19,6 +19,15 @@ test("SettingsPage/V4/sidebar drop dead usage-source builder callers", () => {
   }
 });
 
+test("sidebar resolver drops the always-empty team source plumbing", () => {
+  const resolver = readUi("../src/lib/codingPlanUsageSources.ts");
+  const sidebar = readUi("../src/WorkspaceSidebarFooterUsageSummary.tsx");
+  assert.equal(resolver.includes("teamSources"), false);
+  assert.equal(sidebar.includes("teamSources"), false);
+  assert.match(resolver, /buildPersonalCodingPlanUsageSource/);
+  assert.match(resolver, /accountAccesses/);
+});
+
 test("quota entitlement wiring remains on SettingsPage and V4ComposerToolbar", () => {
   const settings = readUi("../src/SettingsPage.tsx");
   assert.match(settings, /useUsageEntitlement/);
