@@ -87,7 +87,6 @@ import {
   writeSidebarUsageCodingPlanProviderPreference,
 } from "@/lib/sidebarUsageCodingPlanProviderPreference.js";
 import { resolveEntitledAccountProviderAccess } from "@/lib/accountProviderAccess.js";
-import { useEnterpriseCodingPlanProducts } from "@/settings/model-provider-section/useEnterpriseCodingPlanProducts.js";
 import {
   resolveDraftDisplayedConfig,
   resolveDraftModelThoughtOption,
@@ -507,23 +506,8 @@ function V4ComposerModelControlsImpl({
     ? contextStartPlanBalanceConfig
     : undefined;
 
-  // 原 hook 不传 family，默认只拉 bigmodel 企业 pricing，
-  // zai team plan 拿不到订阅产品，模型选择器里的 team 模型组建不出来。
-  // 按 contextPlanConnection.family 让 hook 拉对应 family 的 team products。
-  const enterpriseProducts = useEnterpriseCodingPlanProducts({
-    enabled:
-      !providerSourcesLoading &&
-      contextPlanConnection.kind === "teamCoding" &&
-      Boolean(contextAccountProviderAccess),
-    authenticated: true,
-    family: contextPlanConnection.kind === "teamCoding" ? contextPlanConnection.family : undefined,
-  });
-  const subscribedTeamProducts = useMemo(
-    () =>
-      enterpriseProducts.snapshot?.productList.filter((product) => product.subscribed === true) ??
-      [],
-    [enterpriseProducts.snapshot?.productList],
-  );
+  // 企业 pricing 已拆除；Team context 用量靠 entitlement snapshot，不再拼空 productList。
+  const subscribedTeamProducts = useMemo(() => [], []);
   const contextTeamUsageSourceCacheRef = useRef<CodingPlanUsageSource[]>([]);
   const contextCodingPlanUsageProviderId =
     contextPlanConnection.kind === "personalCoding" || contextPlanConnection.kind === "teamCoding"
