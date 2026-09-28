@@ -1,8 +1,9 @@
 /**
- * P6 thin knife — OpenCode ACP opt-in factory through SessionHost (fake transport).
+ * P6 thin knife — OpenCode/Goose ACP opt-in factories through SessionHost (fake transport).
  *
- * Proves a second same-protocol Agent can register via explicit factory + loadExplicit
- * trust list without changing lazy Host defaults or the shared ACP session machine.
+ * Proves same-protocol Agents register via explicit factory + loadExplicit trust list
+ * without changing lazy Host defaults or the shared ACP session machine. Goose SessionHost
+ * path is symmetric to OpenCode (#75).
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -139,9 +140,23 @@ test("opt-in OpenCode ACP factory registers only when caller enables the id", ()
   assert.deepEqual(disabled.loaded, []);
   assert.equal(disabled.skipped.length, 2);
 
-  const enabled = loadExplicitHarnessPlugins(new HarnessRegistry(), plugins, new Set(["opencode"]));
-  assert.deepEqual(enabled.loaded, ["opencode"]);
-  assert.equal(enabled.skipped.some((s) => s.id === "goose" && s.reason === "disabled"), true);
+  const enabledOpenCode = loadExplicitHarnessPlugins(
+    new HarnessRegistry(),
+    plugins,
+    new Set(["opencode"]),
+  );
+  assert.deepEqual(enabledOpenCode.loaded, ["opencode"]);
+  assert.equal(
+    enabledOpenCode.skipped.some((s) => s.id === "goose" && s.reason === "disabled"),
+    true,
+  );
+
+  const enabledGoose = loadExplicitHarnessPlugins(new HarnessRegistry(), plugins, new Set(["goose"]));
+  assert.deepEqual(enabledGoose.loaded, ["goose"]);
+  assert.equal(
+    enabledGoose.skipped.some((s) => s.id === "opencode" && s.reason === "disabled"),
+    true,
+  );
 });
 
 test("SessionHost + opt-in OpenCode ACP: create/send journals a fake-transport turn", async (t) => {
@@ -218,6 +233,86 @@ test("SessionHost + opt-in OpenCode ACP: create/send journals a fake-transport t
   const message = events.find((event) => event.kind === "message.finished");
   assert.ok(message && message.kind === "message.finished");
   assert.equal(message.text, "hello from SessionHost");
+
+  await host.close();
+  const persisted = await SessionHost.eventsSinceHistory(journalRoot, spec, 0);
+  assert.ok(persisted.some((event) => event.kind === "message.finished"));
+});
+
+test("SessionHost + opt-in Goose ACP: create/send journals a fake-transport turn (symmetric)", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "zcode-goose-acp-host-"));
+  const worktree = join(root, "worktree");
+  const journalRoot = join(root, "journal");
+  await mkdir(worktree, { recursive: true });
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  let connection = 0;
+  const registry = new HarnessRegistry();
+  registry.register(
+    createExperimentalRegistryGooseAcpHarness({
+      openTransport: () => {
+        connection += 1;
+        return openFakeTransport("Goose", `goose-session-${connection}`);
+      },
+    }),
+  );
+
+  const hostSessionId = "goose-host-1";
+  const spec = {
+    schemaVersion: 1 as const,
+    hostSessionId,
+    execution: {
+      targetId: "local",
+      workspaceIdentity: "workspace-goose",
+      worktreePath: worktree,
+    },
+    harness: { id: "goose", adapterVersion: ACP_ADAPTER_VERSION },
+    modelBinding: { kind: "harness-managed" as const },
+  };
+  const target = {
+    id: "local",
+    kind: "local" as const,
+    platform: process.platform as "darwin" | "linux" | "win32",
+    available: true,
+  };
+  const catalog = {
+    fingerprint: "registry-v1",
+    validateSelection: () => ({ ok: true as const }),
+  };
+
+  const host = await SessionHost.create({
+    root: journalRoot,
+    spec,
+    target,
+    catalog,
+    registry,
+  });
+  assert.equal(host.plan.route, "harness-managed");
+  assert.equal(host.plan.support.support, "supported");
+  assert.equal(host.plan.harnessId, "goose");
+  assert.equal(host.plan.adapterVersion, ACP_ADAPTER_VERSION);
+  assert.equal(host.plan.capabilities.hostManagedModel?.support, "unsupported");
+
+  const receipt = await host.dispatch({
+    type: "send",
+    commandId: "goose-cmd-1",
+    hostSessionId,
+    turnId: "turn-1",
+    text: "hello from Goose SessionHost",
+  });
+  assert.equal(receipt.status, "accepted");
+  await host.whenIdle();
+  assert.equal(host.queryCommand("goose-cmd-1")?.status, "completed");
+
+  const events = host.eventsSince(0);
+  const kinds = events.map((event) => event.kind);
+  assert.ok(kinds.includes("turn.started"));
+  assert.ok(kinds.includes("text.delta"));
+  assert.ok(kinds.includes("message.finished"));
+  assert.ok(kinds.includes("turn.finished"));
+  const message = events.find((event) => event.kind === "message.finished");
+  assert.ok(message && message.kind === "message.finished");
+  assert.equal(message.text, "hello from Goose SessionHost");
 
   await host.close();
   const persisted = await SessionHost.eventsSinceHistory(journalRoot, spec, 0);
