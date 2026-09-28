@@ -17,6 +17,7 @@ import type {
   PiModelRouteRecord,
   PiTurnBindContext,
 } from "./piControlProtocol.js";
+import { piControlPlaneCapabilities, piControlPlaneHostManagedSupport } from "./piCapabilities.js";
 import { PiHarnessSession } from "./piHarnessSession.js";
 import { PiRpcSession } from "./piRpcSession.js";
 import type { PiTurnTransport } from "./piTurnTransport.js";
@@ -62,50 +63,26 @@ export class PiAdapter {
     }
     if (target.platform === "win32")
       return { support: "unsupported", reason: "Pi control plane is not certified on Windows" };
-    return { support: "supported" };
+    return {
+      support: "supported",
+      reason:
+        "Pi control plane probe only checks a local non-Windows target. It does not certify resumeExecution, images, or modelSwitch.",
+    };
   }
 
   async capabilities(_target: ExecutionTarget): Promise<HarnessCapabilities> {
-    const yes = { support: "supported" as const };
-    const no = (reason: string) => ({ support: "unsupported" as const, reason });
-    return {
-      text: yes,
-      tools: { support: "supported", constraints: { read: true, write: true, exec: true } },
-      approvals: yes,
-      cancelTurn: yes,
-      history: yes,
-      resumeExecution: no(
-        "resumeExecution is unsupported; viewHistory reads the recorded host log",
-      ),
-      images: no("images are outside the first Pi control slice"),
-      modelSwitch: no("model switch applies on a later turn, not the active one"),
-      detach: yes,
-      terminateSession: yes,
-      viewHistory: yes,
-      hostManagedModel: {
-        support: "experimental",
-        reason:
-          "Pi control plane records the route only. It does not call Model.streamText; the Pi worker does.",
-        constraints: { route: this.hostManagedRoute, credentialInjection: "refused" },
-      },
-    };
+    return piControlPlaneCapabilities(this.hostManagedRoute);
   }
 
   async hostManagedSupport(
     target: ExecutionTarget,
     selection: ModelSelection,
   ): Promise<CapabilityReport> {
-    const probe = await this.probe(target);
-    if (probe.support !== "supported") return probe;
-    if (!selection.providerId || !selection.modelId) {
-      return { support: "unsupported", reason: "host-managed selection is missing" };
-    }
-    return {
-      support: "experimental",
-      reason:
-        "Pi control plane has no model factory. Host-managed execution stays on PiHarnessAdapter.prepareModel and Model.streamText.",
-      constraints: { route: this.hostManagedRoute, execution: "not-this-adapter" },
-    };
+    return piControlPlaneHostManagedSupport(
+      await this.probe(target),
+      selection,
+      this.hostManagedRoute,
+    );
   }
 
   async harnessManagedSupport(target: ExecutionTarget): Promise<CapabilityReport> {
