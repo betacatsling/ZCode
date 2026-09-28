@@ -1,8 +1,34 @@
+import { realpath } from "node:fs/promises";
 import type { ExecutionTarget } from "@zcode/shared/agent-host";
 import { createRpcAgentHostService } from "./rpcTargetService.js";
 import { AgentHostTargetService } from "./targetService.js";
 import { HarnessRegistry } from "./harnessRegistry.js";
 import { MockHarness } from "./mockHarness.js";
+
+/**
+ * Linux 与 Windows 继续用路径字符串严格相等。
+ * macOS 上 /tmp 是符号链接，targetService 交给授权回调的是 realpath。
+ * 与 fixture 记下的原始路径严格比较会误拒，报 unauthorized execution target or worktree。
+ */
+export async function mockWorktreeAuthorized(
+  platform: NodeJS.Platform,
+  expectedPath: string,
+  specifiedPath: string,
+  observedRealPath: string,
+): Promise<boolean> {
+  if (platform !== "darwin") {
+    return specifiedPath === expectedPath && observedRealPath === expectedPath;
+  }
+  try {
+    const [expected, specified] = await Promise.all([
+      realpath(expectedPath),
+      realpath(specifiedPath),
+    ]);
+    return specified === expected && observedRealPath === expected;
+  } catch {
+    return false;
+  }
+}
 
 /** Fixed credential-free Runtime Host fixture for independent-process tests. */
 export function createMockAgentHostRuntime(input: {
@@ -29,8 +55,13 @@ export function createMockAgentHostRuntime(input: {
       fingerprint: "mock-runtime",
       validateSelection: () => ({ ok: true }),
     },
-    authorizeWorktree: async (spec, realPath) =>
-      spec.execution.worktreePath === input.worktreePath && realPath === input.worktreePath,
+    authorizeWorktree: (spec, realPath) =>
+      mockWorktreeAuthorized(
+        process.platform,
+        input.worktreePath,
+        spec.execution.worktreePath,
+        realPath,
+      ),
   });
   const rpc = createRpcAgentHostService(host, () => true);
   return {

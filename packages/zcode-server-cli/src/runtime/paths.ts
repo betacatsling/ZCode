@@ -43,7 +43,7 @@ export function resolveServerLayout(serverRoot = getDefaultServerDataRoot()): Se
     controlEndpoint:
       process.platform === "win32"
         ? `\\\\.\\pipe\\zcode-server-${stablePathId(root)}`
-        : join(runDir, "control.sock"),
+        : controlSocketPath(root, runDir),
     serviceDir: join(root, "service"),
     uninstalledFile: join(root, "uninstalled.json"),
     updateTransactionFile: join(root, "update-transaction.json"),
@@ -75,6 +75,18 @@ export async function resolveCanonicalServerLayout(
   serverRoot = getDefaultServerDataRoot(),
 ): Promise<ServerLayout> {
   return resolveServerLayout(await resolveCanonicalServerRoot(serverRoot));
+}
+
+/** macOS sockaddr_un.sun_path 含结尾 NUL 共 104 字节。超长时 listen 返回 EINVAL。 */
+const DARWIN_SOCKET_PATH_MAX = 103;
+
+function controlSocketPath(serverRoot: string, runDir: string): string {
+  const alongside = join(runDir, "control.sock");
+  if (process.platform !== "darwin") return alongside;
+  if (Buffer.byteLength(alongside) <= DARWIN_SOCKET_PATH_MAX) return alongside;
+  // 默认临时目录在 /var/folders 下，再拼 server/run/control.sock 会超过 sun_path。
+  // 放得下时仍用 run 目录里的套接字；只有放不下才换短路径。Linux 不进入这里。
+  return join("/tmp", `zcode-${stablePathId(serverRoot)}.sock`);
 }
 
 function inferDataBaseDir(serverRoot: string): string {

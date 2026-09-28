@@ -1,0 +1,223 @@
+{
+  "sourceCommit": "468ef1f",
+  "behaviorSourceCommit": "fc3222818595b9c751e04ce1b57005e16f034c12",
+  "runtimeKind": "diagnostic build; packaging workarounds required; see accompanying report",
+  "os": "macOS 27.0 (26A428)",
+  "electron": "41.0.3",
+  "serverNode": "22.16.0",
+  "provider": "AxonHub",
+  "model": "deepseek-v4-flash",
+  "harness": "native ZCode",
+  "observations": [
+    {
+      "phase": "pending_before_window_close",
+      "at": "2026-09-28T16:30:48.846048",
+      "launchdJobPresent": true,
+      "state": "ready",
+      "pid": 78444,
+      "generation": 1,
+      "serviceRegistered": true,
+      "runningTaskCount": 1,
+      "progressLines": null
+    },
+    {
+      "phase": "pending_after_window_close",
+      "at": "2026-09-28T16:31:12.198581",
+      "launchdJobPresent": true,
+      "state": "ready",
+      "pid": 78444,
+      "generation": 1,
+      "serviceRegistered": true,
+      "runningTaskCount": 1,
+      "progressLines": null
+    },
+    {
+      "phase": "pending_after_quit_request",
+      "at": "2026-09-28T16:31:46.412922",
+      "launchdJobPresent": true,
+      "state": "ready",
+      "pid": 78444,
+      "generation": 1,
+      "serviceRegistered": true,
+      "runningTaskCount": 1,
+      "progressLines": null
+    },
+    {
+      "phase": "pending_after_reopen",
+      "at": "2026-09-28T16:32:38.149106",
+      "launchdJobPresent": true,
+      "state": "ready",
+      "pid": 78444,
+      "generation": 1,
+      "serviceRegistered": true,
+      "runningTaskCount": 1,
+      "progressLines": null
+    },
+    {
+      "phase": "running_before_quit",
+      "at": "2026-09-28T16:32:59.951367",
+      "launchdJobPresent": true,
+      "state": "ready",
+      "pid": 78444,
+      "generation": 1,
+      "serviceRegistered": true,
+      "runningTaskCount": 1,
+      "progressLines": 2
+    },
+    {
+      "phase": "running_after_quit",
+      "at": "2026-09-28T16:33:29.156977",
+      "launchdJobPresent": true,
+      "state": "ready",
+      "pid": 78444,
+      "generation": 1,
+      "serviceRegistered": true,
+      "runningTaskCount": 1,
+      "progressLines": 8
+    },
+    {
+      "phase": "running_without_electron_second_observation",
+      "at": "2026-09-28T16:33:49.499578",
+      "launchdJobPresent": true,
+      "state": "ready",
+      "pid": 78444,
+      "generation": 1,
+      "serviceRegistered": true,
+      "runningTaskCount": 1,
+      "progressLines": 12
+    },
+    {
+      "phase": "running_after_reopen",
+      "at": "2026-09-28T16:34:48.116904",
+      "launchdJobPresent": true,
+      "state": "ready",
+      "pid": 78444,
+      "generation": 1,
+      "serviceRegistered": true,
+      "runningTaskCount": 1,
+      "progressLines": 24
+    },
+    {
+      "phase": "final_task_observation",
+      "at": "2026-09-28T16:36:08.192667",
+      "launchdJobPresent": true,
+      "state": "ready",
+      "pid": 78444,
+      "generation": 1,
+      "serviceRegistered": true,
+      "runningTaskCount": 0,
+      "progressLines": 36
+    }
+  ],
+  "snapshots": {
+    "before-close": {
+      "taskId": "sess_d7600cc4-6384-45d2-9978-30e7a8cbfef1",
+      "status": "running",
+      "userMessageCount": 1,
+      "pendingRequestIds": ["perm_f71a80bc-4545-4f99-8d25-e842004fabed"]
+    },
+    "after-close": {
+      "taskId": "sess_d7600cc4-6384-45d2-9978-30e7a8cbfef1",
+      "status": "running",
+      "userMessageCount": 1,
+      "pendingRequestIds": ["perm_f71a80bc-4545-4f99-8d25-e842004fabed"]
+    },
+    "pending-after-quit": {
+      "taskId": "sess_d7600cc4-6384-45d2-9978-30e7a8cbfef1",
+      "status": "running",
+      "userMessageCount": 1,
+      "pendingRequestIds": ["perm_f71a80bc-4545-4f99-8d25-e842004fabed"]
+    },
+    "pending-after-reopen": {
+      "taskId": "sess_d7600cc4-6384-45d2-9978-30e7a8cbfef1",
+      "status": "running",
+      "userMessageCount": 1,
+      "pendingRequestIds": ["perm_f71a80bc-4545-4f99-8d25-e842004fabed"]
+    },
+    "running-after-quit": {
+      "taskId": "sess_d7600cc4-6384-45d2-9978-30e7a8cbfef1",
+      "status": "running",
+      "userMessageCount": 1,
+      "pendingRequestIds": []
+    },
+    "running-after-reopen": {
+      "taskId": "sess_d7600cc4-6384-45d2-9978-30e7a8cbfef1",
+      "status": "running",
+      "userMessageCount": 1,
+      "pendingRequestIds": []
+    },
+    "final": {
+      "taskId": "sess_d7600cc4-6384-45d2-9978-30e7a8cbfef1",
+      "status": "completed",
+      "userMessageCount": 1,
+      "pendingRequestIds": []
+    }
+  },
+  "commandReceipt": {
+    "results": [
+      {
+        "key": {
+          "sessionId": "sess_d7600cc4-6384-45d2-9978-30e7a8cbfef1",
+          "commandId": "53c7a577-c552-4d54-8517-6bfccd780268"
+        },
+        "result": {
+          "memoryEnabled": false,
+          "commandId": "53c7a577-c552-4d54-8517-6bfccd780268",
+          "status": "accepted",
+          "revisionAtDecision": 0,
+          "result": {
+            "type": "inputAccepted",
+            "delivery": "startNow",
+            "inputId": "53c7a577-c552-4d54-8517-6bfccd780268"
+          }
+        }
+      }
+    ]
+  },
+  "acceptedInputs": [
+    {
+      "id": "queue_53c7a577-c552-4d54-8517-6bfccd780268",
+      "kind": "sendText",
+      "delivery": "startNow",
+      "admitted_sequence": 0,
+      "promoted_sequence": 0,
+      "promoted_message_id": "msg_mukzl43w_0bcf2b19-9900-4ed8-82bb-f3c5ce7d9243",
+      "status": "promoted",
+      "status_reason": null,
+      "time_created": 1790584175345,
+      "time_updated": 1790584175373
+    }
+  ],
+  "electronExitChecks": [
+    {
+      "pid": 81590,
+      "exitConfirmedAt": "2026-09-28T16:31:46+08:00"
+    },
+    {
+      "pid": 85197,
+      "exitConfirmedAt": "2026-09-28T16:33:29+08:00"
+    }
+  ],
+  "finalProgressLines": 36,
+  "cleanup": {
+    "electronExited": true,
+    "stopCommandExitCode": 0,
+    "launchdJobAbsent": true,
+    "corePidAbsent": true,
+    "persistedStatusAfterCleanup": "ready (stale; process absent)",
+    "secondStopAfterUnloadExitCode": 1,
+    "note": "launchd bootout followed the asynchronous stopping acknowledgement before final status persistence; stale file is not evidence of normal stop failure"
+  },
+  "remoteUpdateValidation": {
+    "commit": "067cddfc1fcaea55ab70e58960843815a3a34712",
+    "tests": 5,
+    "pass": 5,
+    "fail": 0,
+    "skipped": 0,
+    "tmpdirOverride": false,
+    "rootTypecheckExitCode": 0,
+    "lintErrors": 3,
+    "lintWarnings": 84,
+    "electronLiveRerun": false
+  }
+}
