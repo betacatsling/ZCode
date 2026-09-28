@@ -1,6 +1,6 @@
 # 聊天工具栏额度：卸掉 Coding Plan 升级与产品登录
 
-状态：只切断 composer 工具栏 / context 额度浮层上的购买升级和产品登录文案。升级弹窗 Dialog/Provider 已在后续刀整卸；本刀不改设置页、Root/Welcome、侧栏用量摘要。
+状态：只切断 composer 工具栏 / context 额度浮层上的购买升级和产品登录文案。升级弹窗 Dialog/Provider 已整卸；本刀不改设置页、Root/Welcome、侧栏用量摘要。
 
 ## 行为
 
@@ -17,7 +17,7 @@
 | --- | --- | --- |
 | 工具栏是否打开购买升级 | `V4ComposerToolbar` 接线 | 不再发出升级命令 |
 | 额度快照与刷新 | 既有 entitlement hook | 只读展示，不改请求 |
-| 升级弹窗实现 | 原设置页 `CodingPlanUpgradeDialog*`（已整卸） | 本刀不改；整卸见后续 Dialog 刀 |
+| 升级弹窗实现 | 原设置页 `CodingPlanUpgradeDialog*`（已整卸） | 已整卸；本刀不涉及 |
 | 侧栏用量摘要文案 | `WorkspaceSidebarFooterUsageSummary` / 共享剩余面板 | 不改 |
 
 ## 事件顺序
