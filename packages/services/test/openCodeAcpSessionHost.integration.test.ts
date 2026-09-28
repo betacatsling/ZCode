@@ -3,7 +3,7 @@
  *
  * Proves same-protocol Agents register via explicit factory + loadExplicit trust list
  * without changing lazy Host defaults or the shared ACP session machine. Goose SessionHost
- * path is symmetric to OpenCode (#75). Late prompt + transport fault/disconnect still journal via SessionHost (OpenCode + Goose).
+ * path is symmetric to OpenCode (#75). Late prompt + transport fault/disconnect still journal via SessionHost (OpenCode + Goose). Resume-after-disconnect: SessionHost.open attach via negotiated session/load then send again.
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -37,6 +37,8 @@ interface FakePeerOptions {
    * (mirrors ACP transport closed without hanging the Host wait).
    */
   readonly disconnectOnPrompt?: boolean;
+  /** Advertise agentCapabilities.loadSession so SessionHost.open → attach can resume. */
+  readonly loadSession?: boolean;
 }
 
 /** Minimal fake ACP peer: initialize / session/new / session/prompt. */
@@ -66,7 +68,10 @@ class FakePeer {
         id: message.id,
         result: {
           protocolVersion: 1,
-          agentCapabilities: { promptCapabilities: {} },
+          agentCapabilities: {
+            promptCapabilities: {},
+            ...(this.#options.loadSession ? { loadSession: true } : {}),
+          },
           authMethods: [],
           agentInfo: { name: this.#agentName, version: "1.0.0" },
         },
@@ -74,6 +79,14 @@ class FakePeer {
       return;
     }
     if (message.method === "session/new") {
+      await this.#transport.send({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: { sessionId: this.#sessionId },
+      });
+      return;
+    }
+    if (message.method === "session/load" || message.method === "session/resume") {
       await this.#transport.send({
         jsonrpc: "2.0",
         id: message.id,
@@ -139,9 +152,11 @@ function openFakeTransport(
   agentName: string,
   sessionId: string,
   options: FakePeerOptions = {},
+  peers?: FakePeer[],
 ): AcpTransport {
   const link = linkAcpTransports();
-  new FakePeer(link.agent, sessionId, agentName, options);
+  const peer = new FakePeer(link.agent, sessionId, agentName, options);
+  peers?.push(peer);
   return link.client;
 }
 
@@ -598,6 +613,160 @@ test("SessionHost + opt-in OpenCode ACP: transport disconnect mid-prompt journal
 
 test("SessionHost + opt-in Goose ACP: transport disconnect mid-prompt journals fault fence (symmetric)", async (t) => {
   await assertSessionHostTransportDisconnect({
+    t,
+    label: "goose",
+    harnessId: "goose",
+    agentName: "Goose",
+    createHarness: (openTransport) =>
+      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+  });
+});
+
+async function assertSessionHostResumeAfterDisconnect(input: {
+  t: { after: (fn: () => void | Promise<void>) => void };
+  label: string;
+  harnessId: "opencode" | "goose";
+  agentName: string;
+  createHarness: (openTransport: () => AcpTransport) => ReturnType<
+    typeof createExperimentalRegistryOpenCodeAcpHarness
+  >;
+}): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-rad-`));
+  const worktree = join(root, "worktree");
+  const journalRoot = join(root, "journal");
+  await mkdir(worktree, { recursive: true });
+  input.t.after(() => rm(root, { recursive: true, force: true }));
+
+  // Stable backend session id across recreate/open (attach must resume this id).
+  const backendSessionId = `${input.harnessId}-rad-session`;
+  const peers: FakePeer[] = [];
+
+  const hostSessionId = `${input.harnessId}-rad-1`;
+  const spec = {
+    schemaVersion: 1 as const,
+    hostSessionId,
+    execution: {
+      targetId: "local",
+      workspaceIdentity: `workspace-${input.harnessId}-rad`,
+      worktreePath: worktree,
+    },
+    harness: { id: input.harnessId, adapterVersion: ACP_ADAPTER_VERSION },
+    modelBinding: { kind: "harness-managed" as const },
+  };
+  const target = {
+    id: "local",
+    kind: "local" as const,
+    platform: process.platform as "darwin" | "linux" | "win32",
+    available: true,
+  };
+  const catalog = {
+    fingerprint: "registry-v1",
+    validateSelection: () => ({ ok: true as const }),
+  };
+
+  // Connection 1: negotiate loadSession, disconnect mid-prompt.
+  const registryLive = new HarnessRegistry();
+  registryLive.register(
+    input.createHarness(() =>
+      openFakeTransport(
+        input.agentName,
+        backendSessionId,
+        { loadSession: true, disconnectOnPrompt: true },
+        peers,
+      ),
+    ),
+  );
+
+  const host = await SessionHost.create({
+    root: journalRoot,
+    spec,
+    target,
+    catalog,
+    registry: registryLive,
+  });
+
+  const faultReceipt = await host.dispatch({
+    type: "send",
+    commandId: `${input.harnessId}-rad-fault`,
+    hostSessionId,
+    turnId: "turn-rad-fault",
+    text: "die mid-prompt",
+  });
+  assert.equal(faultReceipt.status, "accepted");
+  await host.whenIdle();
+  assert.ok(host.eventsSince(0).some((event) => event.kind === "session.error"));
+  await host.close();
+
+  // Fresh adapter registry simulates Host reopen after transport death (same journal + binding).
+  const peersAfter: FakePeer[] = [];
+  const registryReopen = new HarnessRegistry();
+  registryReopen.register(
+    input.createHarness(() =>
+      openFakeTransport(
+        input.agentName,
+        backendSessionId,
+        { loadSession: true },
+        peersAfter,
+      ),
+    ),
+  );
+
+  const resumed = await SessionHost.open({
+    root: journalRoot,
+    spec,
+    target,
+    catalog,
+    registry: registryReopen,
+  });
+
+  assert.ok(
+    peersAfter.some((peer) => peer.methods.includes("session/load")),
+    "attach must call session/load after disconnect",
+  );
+  assert.ok(
+    peersAfter.every((peer) => !peer.methods.includes("session/new")),
+    "resume must not open a replacement session/new",
+  );
+
+  const resumeReceipt = await resumed.dispatch({
+    type: "send",
+    commandId: `${input.harnessId}-rad-resume`,
+    hostSessionId,
+    turnId: "turn-rad-resume",
+    text: "after resume",
+  });
+  assert.equal(resumeReceipt.status, "accepted");
+  await resumed.whenIdle();
+
+  const after = resumed.eventsSince(0);
+  assert.ok(after.some((event) => event.kind === "session.error"));
+  assert.ok(
+    after.some((event) => event.kind === "message.finished" && event.text === "after resume"),
+  );
+  assert.ok(
+    after.some(
+      (event) => event.kind === "turn.finished" && event.turnId === "turn-rad-resume",
+    ),
+  );
+
+  await resumed.close();
+  const persisted = await SessionHost.eventsSinceHistory(journalRoot, spec, 0);
+  assert.ok(persisted.some((event) => event.kind === "message.finished" && event.text === "after resume"));
+}
+
+test("SessionHost + opt-in OpenCode ACP: resume-after-disconnect via session/load then send", async (t) => {
+  await assertSessionHostResumeAfterDisconnect({
+    t,
+    label: "opencode",
+    harnessId: "opencode",
+    agentName: "OpenCode",
+    createHarness: (openTransport) =>
+      createExperimentalRegistryOpenCodeAcpHarness({ openTransport }),
+  });
+});
+
+test("SessionHost + opt-in Goose ACP: resume-after-disconnect via session/load then send (symmetric)", async (t) => {
+  await assertSessionHostResumeAfterDisconnect({
     t,
     label: "goose",
     harnessId: "goose",
