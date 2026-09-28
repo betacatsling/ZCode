@@ -3683,7 +3683,6 @@ const enUS: Record<string, string> = {
   "sidebar.usage.plan.open": "More",
   "sidebar.usage.plan.loading": "Syncing...",
   "sidebar.usage.plan.unavailable": "No available entitlement data yet.",
-  "sidebar.usage.plan.loginRequired": "Login to view plan usage.",
   "sidebar.usage.plan.notConfigured": "No connected Coding Plan account found.",
   "sidebar.usage.plan.noPlanShort": "No plan",
   "sidebar.usage.plan.remainingShort": "{value} left",

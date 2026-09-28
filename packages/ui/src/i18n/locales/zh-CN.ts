@@ -3460,7 +3460,6 @@ const zhCN: Record<string, string> = {
   "sidebar.usage.plan.open": "更多",
   "sidebar.usage.plan.loading": "同步中...",
   "sidebar.usage.plan.unavailable": "暂无可展示的权益数据。",
-  "sidebar.usage.plan.loginRequired": "登录后查看剩余额度。",
   "sidebar.usage.plan.notConfigured": "未找到已连接的编程套餐账号。",
   "sidebar.usage.plan.noPlanShort": "无套餐",
   "sidebar.usage.plan.remainingShort": "剩 {value}",
