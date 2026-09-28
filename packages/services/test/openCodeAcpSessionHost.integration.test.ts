@@ -3,7 +3,7 @@
  *
  * Proves same-protocol Agents register via explicit factory + loadExplicit trust list
  * without changing lazy Host defaults or the shared ACP session machine. Goose SessionHost
- * path is symmetric to OpenCode (#75). Late prompt reply still journals via SessionHost.
+ * path is symmetric to OpenCode (#75). Late prompt reply still journals via SessionHost (OpenCode + Goose symmetric).
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -397,5 +397,73 @@ test("SessionHost + opt-in OpenCode ACP: late prompt reply still journals the tu
   const message = host.eventsSince(0).find((event) => event.kind === "message.finished");
   assert.ok(message && message.kind === "message.finished");
   assert.equal(message.text, "late reply please");
+  await host.close();
+});
+
+test("SessionHost + opt-in Goose ACP: late prompt reply still journals the turn (symmetric)", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "zcode-goose-acp-late-"));
+  const worktree = join(root, "worktree");
+  const journalRoot = join(root, "journal");
+  await mkdir(worktree, { recursive: true });
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  let connection = 0;
+  const registry = new HarnessRegistry();
+  registry.register(
+    createExperimentalRegistryGooseAcpHarness({
+      openTransport: () => {
+        connection += 1;
+        return openFakeTransport("Goose", `goose-late-${connection}`, { promptDelayMs: 40 });
+      },
+    }),
+  );
+
+  const hostSessionId = "goose-late-1";
+  const spec = {
+    schemaVersion: 1 as const,
+    hostSessionId,
+    execution: {
+      targetId: "local",
+      workspaceIdentity: "workspace-goose-late",
+      worktreePath: worktree,
+    },
+    harness: { id: "goose", adapterVersion: ACP_ADAPTER_VERSION },
+    modelBinding: { kind: "harness-managed" as const },
+  };
+  const target = {
+    id: "local",
+    kind: "local" as const,
+    platform: process.platform as "darwin" | "linux" | "win32",
+    available: true,
+  };
+  const catalog = {
+    fingerprint: "registry-v1",
+    validateSelection: () => ({ ok: true as const }),
+  };
+
+  const host = await SessionHost.create({
+    root: journalRoot,
+    spec,
+    target,
+    catalog,
+    registry,
+  });
+
+  const started = Date.now();
+  const receipt = await host.dispatch({
+    type: "send",
+    commandId: "goose-late-1",
+    hostSessionId,
+    turnId: "turn-late",
+    text: "late reply from Goose",
+  });
+  assert.equal(receipt.status, "accepted");
+  await host.whenIdle();
+  assert.ok(Date.now() - started >= 35, "expected prompt delay to elapse before idle");
+  assert.equal(host.queryCommand("goose-late-1")?.status, "completed");
+
+  const message = host.eventsSince(0).find((event) => event.kind === "message.finished");
+  assert.ok(message && message.kind === "message.finished");
+  assert.equal(message.text, "late reply from Goose");
   await host.close();
 });
