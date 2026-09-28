@@ -19,19 +19,21 @@ export const BUILTIN_ZCODE_SLASH_COMMAND_HELP_ENTRIES: readonly BuiltinZCodeSlas
     },
     {
       details: [
-        "Opens a Coding Plan setup picker when called without arguments.",
-        "Z.ai and BigModel browser login poll for authorization, then securely save credentials and refresh available models.",
-        "Manual API key variants accept the API key as an argument.",
+        "Product account login was removed.",
+        "Configure a personal model provider or API key via model setup / settings instead of /login.",
+        "Once a provider is configured, use /model to list or switch the current session model.",
       ],
       name: "login",
-      summary: "Set up a Coding Plan provider.",
-      usage:
-        "/login [zai-coding-plan|bigmodel-coding-plan|zai-coding-plan-api-key <api-key>|bigmodel-coding-plan-api-key <api-key>]",
+      summary: "Product login removed; use model setup / API key instead.",
+      usage: "/login",
     },
     {
-      details: ["Deletes Z.ai OAuth credentials from the shared ZCode credential store."],
+      details: [
+        "Product account logout was removed.",
+        "Manage or clear personal provider credentials from model setup / settings instead.",
+      ],
       name: "logout",
-      summary: "Remove the shared Z.ai login credentials.",
+      summary: "Product logout removed; manage credentials in model setup.",
       usage: "/logout",
     },
     {
