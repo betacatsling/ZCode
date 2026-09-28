@@ -25,7 +25,7 @@ import {
   type WorkspaceAdmissionFenceChecker,
 } from "./targetService.js";
 
-/** Lazy registration avoids loading Pi/CLI model adapters during native-only startup. */
+/** Lazy registration avoids loading Pi/Codex/Claude/Devin CLI adapters during native-only startup. */
 export function createLazyTargetAgentHostService(input: {
   root: string;
   target: ExecutionTarget;
@@ -35,6 +35,7 @@ export function createLazyTargetAgentHostService(input: {
   withWorkspaceAdmission?: WorkspaceAdmissionRunner;
   nativeOwner?: NativeWorkspaceSessionOwnerPort;
   checkAdmissionFence?: WorkspaceAdmissionFenceChecker;
+  // 继续透传 owner generation，避免懒加载 Host 丢掉已有 owner fence。
   ownerGeneration?: number;
 }): { service: IAgentHostService; dispose(): Promise<void> } {
   let target: AgentHostTargetService | undefined;
@@ -97,13 +98,42 @@ export function createLazyTargetAgentHostService(input: {
       flight = (async () => {
         await input.registry.start();
         const { createRegistryPiHarness } = await import("../agent-adapters/pi/createPiHarness.js");
+        const { createExperimentalRegistryCodexHarness } = await import(
+          "../agent-adapters/codex/createCodexHarness.js"
+        );
+        const { createExperimentalRegistryClaudeHarness } = await import(
+          "../agent-adapters/claude/createClaudeHarness.js"
+        );
+        const { createExperimentalRegistryDevinHarness } = await import(
+          "../agent-adapters/devin/createDevinHarness.js"
+        );
         const modelAdapter = new AiSdkModelAdapter({});
         const harnesses = new HarnessRegistry();
+        const workerRoot = join(input.root, "workers");
         harnesses.register(
           createRegistryPiHarness({
-            root: join(input.root, "workers"),
+            root: workerRoot,
             registry: input.registry,
             adapter: modelAdapter,
+          }),
+        );
+        harnesses.register(
+          createExperimentalRegistryCodexHarness({
+            root: workerRoot,
+            registry: input.registry,
+            adapter: modelAdapter,
+          }),
+        );
+        harnesses.register(
+          createExperimentalRegistryClaudeHarness({
+            root: workerRoot,
+            registry: input.registry,
+            adapter: modelAdapter,
+          }),
+        );
+        harnesses.register(
+          createExperimentalRegistryDevinHarness({
+            root: workerRoot,
           }),
         );
         const instance = new AgentHostTargetService({
@@ -159,7 +189,9 @@ export function createLazyTargetAgentHostService(input: {
       target: input.target,
       harnesses: [
         ...(input.nativeOwner ? ["zcode"] : []),
-        ...(input.allowNewSessions() ? ["pi"] : []),
+        ...(input.allowNewSessions()
+          ? ["pi", "codex", "claude-code", "devin"]
+          : []),
       ],
       admissionEnabled:
         input.target.available && (Boolean(input.nativeOwner) || input.allowNewSessions()),
@@ -171,7 +203,9 @@ export function createLazyTargetAgentHostService(input: {
       const directory = await (target ?? historyOnly).getDirectory();
       const availableHarnesses = new Set([
         ...(input.target.available && input.nativeOwner ? ["zcode"] : []),
-        ...(input.target.available && input.allowNewSessions() ? ["pi"] : []),
+        ...(input.target.available && input.allowNewSessions()
+          ? ["pi", "codex", "claude-code", "devin"]
+          : []),
       ]);
       return harnessDirectorySnapshotSchema.parse({
         schemaVersion: 1,

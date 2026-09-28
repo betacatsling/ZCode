@@ -104,7 +104,8 @@ function parseMetadata(value: unknown): void {
   if (value === undefined) return;
   const metadata = object(value, "metadata");
   exactKeys(metadata, ["user_id"], "metadata");
-  if (metadata.user_id !== undefined) boundedString(metadata.user_id, "metadata.user_id", 128);
+  // Claude Code embeds a JSON device/session blob in user_id (often >128 chars).
+  if (metadata.user_id !== undefined) boundedString(metadata.user_id, "metadata.user_id", 512);
 }
 
 function appendUserOrToolMessages(
@@ -239,12 +240,17 @@ export function decodeMessagesRequest(
   beta: ReadonlySet<string>,
 ): DecodedMessagesRequest {
   const request = object(value, "request");
+  // Claude Code 2.1.263 sends temperature on Messages; Host ignores it (effort is frozen on the binding).
   exactKeys(
     request,
-    ["max_tokens", "messages", "metadata", "model", "output_config", "stream", "system", "tools"],
+    ["max_tokens", "messages", "metadata", "model", "output_config", "stream", "system", "temperature", "tools"],
     "request",
     ["max_tokens", "messages", "model", "output_config", "stream", "system", "tools"],
   );
+  if (Object.hasOwn(request, "temperature")) {
+    if (typeof request.temperature !== "number" || !Number.isFinite(request.temperature))
+      invalidRequest("temperature must be a finite number");
+  }
   if (request.model !== expectedModelId) invalidRequest("model does not match the session binding");
   if (request.stream !== true) unsupportedFeature("only streaming Messages are supported");
   if (
