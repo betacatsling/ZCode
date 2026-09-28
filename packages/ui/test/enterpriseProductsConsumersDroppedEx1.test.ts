@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 const readUi = (relativePath: string) =>
@@ -25,8 +26,16 @@ test("quota entitlement wiring remains on SettingsPage and V4ComposerToolbar", (
   assert.match(toolbar, /teamEntitlement/);
 });
 
-test("Ex1 leaves hook definition and Ex4 caller files untouched", () => {
-  // Presence-only sanity: hook stub still exists for remaining signature consumers.
-  const hook = readUi("../src/settings/model-provider-section/useEnterpriseCodingPlanProducts.ts");
-  assert.match(hook, /export function useEnterpriseCodingPlanProducts/);
+test("orphan useEnterpriseCodingPlanProducts hook is removed; Display/entitlement kept", () => {
+  const hookPath = fileURLToPath(
+    new URL("../src/settings/model-provider-section/useEnterpriseCodingPlanProducts.ts", import.meta.url),
+  );
+  assert.equal(existsSync(hookPath), false);
+
+  const display = readUi("../src/settings/model-provider-section/enterpriseCodingPlanProducts.ts");
+  assert.match(display, /export type EnterpriseCodingPlanProductDisplay/);
+  assert.equal(display.includes("resolveEnterpriseCodingPlanProductList"), false);
+
+  const entitlements = readUi("../src/settings/model-provider-section/useCodingPlanEntitlements.ts");
+  assert.match(entitlements, /export function useCodingPlanEntitlements|useCodingPlanEntitlements/);
 });

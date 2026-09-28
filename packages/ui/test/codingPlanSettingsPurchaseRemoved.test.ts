@@ -130,16 +130,12 @@ test("StartPlan acquisition preview and personal product list hooks are removed"
   assert.equal(enterprise.includes("CodingPlanStaticTeamProduct"), false);
   assert.equal(enterprise.includes("resolveEnterpriseCodingPlanProductList"), false);
 
-  const enterpriseHook = readFileSync(
-    new URL("model-provider-section/useEnterpriseCodingPlanProducts.ts", settingsRoot),
-    "utf8",
+  assert.equal(
+    existsSync(
+      fileURLToPath(new URL("model-provider-section/useEnterpriseCodingPlanProducts.ts", settingsRoot)),
+    ),
+    false,
   );
-  assert.equal(enterpriseHook.includes("staticOnly"), false);
-  assert.equal(enterpriseHook.includes("getStaticTeamProducts"), false);
-  assert.equal(enterpriseHook.includes("staticProductIds"), false);
-  assert.equal(enterpriseHook.includes("removedEnterpriseCodingPlanService"), false);
-  assert.equal(enterpriseHook.includes("getEnterprisePricing"), false);
-  assert.equal(enterpriseHook.includes("resolveEnterpriseCodingPlanProductList"), false);
 });
 
 test("StatusCards and Detail drop dead upgradePlansVisible acquisition gate", () => {
