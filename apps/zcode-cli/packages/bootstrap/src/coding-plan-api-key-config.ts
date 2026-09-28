@@ -17,7 +17,7 @@ import {
 
 /**
  * 产品浏览器 OAuth（auth-login）已删除。`/login` 下的 API Key 仍由
- * `configureApiKeyForTui` 调用本模块，写入个人 Provider 与凭证。
+ * 原 TUI `/login …-api-key` 挂点已卸；本模块仍可供后续「个人 Provider 配置」入口复用。
  * 空 key 继续抛 `ZCodeCliLoginError` / `config_update_failed`，失败形态与拆分前一致。
  */
 export type CodingPlanProviderId = "bigmodel" | "zai";

@@ -1,6 +1,6 @@
 # 移除产品账号登录：实施计划
 
-状态：P1 启动/UI 门禁解耦已落地（#20 一带）。P2 产品 OAuth / accountProvider / Coding Plan 服务装配拆除已落地（#27/#30 一带），见 `REMOVE-PRODUCT-LOGIN-P2.md`。P3 Web 浏览器 OAuth 栈（#33）、Desktop 产品 OAuth deeplink（#40）、CLI shared-credentials unload（#35）已落地；UI Root/Welcome OAuth shell（#37）、settings 登录/购买（#36）、toolbar（#38）、sidebar footer（#39）、SessionPane upgrade CTA（#42）、login/** deadcode、UsageRemainingPanel + StatusCards 文案、settings 停 upgrade、ChatErrorBanner + loginRecovery、PlatformChannels/IPlatformService OAuth 薄清（#47 一带 / tip `860c4de`）已落地。仍剩：Dialog / Provider / EntryGate / Root 整卸；CLI TUI `loginSetup`/API Key 挂点与 verify 脚本扩展。`loginRequired` 面板/帮助文案已改为「无模型→配 Provider」（不再推 `/login` Coding Plan）。
+状态：P1 启动/UI 门禁解耦已落地（#20 一带）。P2 产品 OAuth / accountProvider / Coding Plan 服务装配拆除已落地（#27/#30 一带），见 `REMOVE-PRODUCT-LOGIN-P2.md`。P3 Web 浏览器 OAuth 栈（#33）、Desktop 产品 OAuth deeplink（#40）、CLI shared-credentials unload（#35）已落地；UI Root/Welcome OAuth shell（#37）、settings 登录/购买（#36）、toolbar（#38）、sidebar footer（#39）、SessionPane upgrade CTA（#42）、login/** deadcode、UsageRemainingPanel + StatusCards 文案、settings 停 upgrade、ChatErrorBanner + loginRecovery、PlatformChannels/IPlatformService OAuth 薄清（#47 一带 / tip `860c4de`）已落地。仍剩：Dialog / Provider / EntryGate / Root 整卸；verify 脚本扩展。`loginRequired` 文案与 CLI TUI `loginSetup`/API Key `/login` 挂点已卸（OAuth 选项死码与 api-key-under-/login 一并移除；bootstrap `configureCodingPlanApiKey` 库函数可另刀迁 Provider）。
 
 调研基线：`cursor/wave4-harness-integration-b7a9`，提交 `5ae4353`。本仓库定位为自用、开源的多 harness 工作台，不再要求登录 ZCode/Z.ai/BigModel 产品账号。
 

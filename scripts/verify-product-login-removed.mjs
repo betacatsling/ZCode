@@ -68,7 +68,7 @@ function assertStatic(path, extraAllow = []) {
     }
   }
   if (path.endsWith("tui-auth.ts")) {
-    // login/logout must throw; configureApiKey may keep bootstrap
+    // login/logout must throw; TUI configureApiKey hook unloaded
     const loginBody = src.slice(src.indexOf("loginForTui"), src.indexOf("loginBigmodelForTui"));
     const logoutBody = src.slice(src.indexOf("logoutForTui"));
     if (!/throw new Error\(PRODUCT_LOGIN_REMOVED_MESSAGE\)/.test(loginBody)) {
@@ -84,6 +84,12 @@ function assertStatic(path, extraAllow = []) {
   if (path.endsWith("create.ts")) {
     if (!src.includes("PRODUCT_LOGIN_REMOVED_MESSAGE")) {
       fails.push("create.ts missing removed message for oauth paths");
+    }
+    if (src.includes("parseApiKeyLoginArgs") || src.includes("configureApiKey")) {
+      fails.push("create.ts must not keep /login API key hooks");
+    }
+    if (src.includes("login-flow")) {
+      fails.push("create.ts must not import login-flow");
     }
   }
   return fails;
