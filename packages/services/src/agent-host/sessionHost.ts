@@ -33,6 +33,7 @@ import {
   type PreparedHostBinding,
 } from "./harnessRegistry.js";
 import type { JournalIdentity } from "./journalStorage.js";
+import { assertWorkspaceExecution, type WorkspaceSessionOwnership } from "./sessionRouter.js";
 import {
   planModelBinding,
   type ModelCatalogPort,
@@ -73,6 +74,8 @@ export interface SessionHostOptions {
   target: ExecutionTarget;
   catalog: ModelCatalogPort;
   registry: HarnessRegistry;
+  /** Adopted-workspace admission from the worktree service. Absent only for tests of the host itself. */
+  workspaces?: WorkspaceSessionOwnership;
 }
 
 interface PreparedTurnContext {
@@ -155,6 +158,20 @@ export class SessionHost {
     },
   ): Promise<SessionHost> {
     const spec = sessionSpecSchema.parse(options.spec);
+    // 原生 V4 是唯一可写 owner。在创建 manifest 之前拒绝，避免留下第二份会话状态。
+    if (spec.harness.id === "zcode")
+      throw new Error("native sessions must use the existing V4 route");
+    // 删除中的工作区由 worktree 服务拒绝。这里只读它的结论，并且在写 manifest 之前停住。
+    if (options.workspaces) {
+      assertWorkspaceExecution(await options.workspaces.readExecution(spec.hostSessionId), {
+        targetId: spec.execution.targetId,
+        ...(spec.execution.workspaceId ? { workspaceId: spec.execution.workspaceId } : {}),
+        worktreePath: spec.execution.worktreePath,
+        ...(spec.execution.worktreeGeneration
+          ? { worktreeGeneration: spec.execution.worktreeGeneration }
+          : {}),
+      });
+    }
     const target = executionTargetSchema.parse(options.target);
     const adapter = options.registry.require(spec.harness.id);
     const catalog = captureModelCatalog(options.catalog);
@@ -215,6 +232,9 @@ export class SessionHost {
 
   static async open(options: SessionHostOptions): Promise<SessionHost> {
     const spec = sessionSpecSchema.parse(options.spec);
+    // 打开路径同样不能把 zcode 挂成外部 owner，也不能为了检查而创建目录。
+    if (spec.harness.id === "zcode")
+      throw new Error("native sessions must use the existing V4 route");
     const path = manifestPath(options.root, spec);
     const manifest = manifestSchema.parse(JSON.parse(await readFile(path, "utf8")));
     if (JSON.stringify(manifest.spec) !== JSON.stringify(spec))
