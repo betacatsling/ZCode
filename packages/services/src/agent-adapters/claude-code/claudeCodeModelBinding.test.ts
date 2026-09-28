@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { ExecutionTarget, ModelBindingRequest, SessionSpec } from "@zcode/shared/agent-host";
+import type { Model } from "@zcode/contracts";
+import type {
+  BindingPlan,
+  ExecutionTarget,
+  ModelBindingRequest,
+  SessionSpec,
+} from "@zcode/shared/agent-host";
 import type { ModelSelection } from "@zcode/shared/model-selection";
 import { ClaudeCodeAdapterError } from "./claudeCodeErrors.js";
 import { AcpMarkingTransport, FakeClaudeCodeTransport } from "./claudeCodeFakeTransport.js";
@@ -178,5 +184,78 @@ test("adapter reports control plane and host-managed chain separately", async ()
     return error instanceof ClaudeCodeAdapterError && error.code === "unsupported";
   });
   await acp.shutdown();
+  await adapter.shutdown();
+});
+
+test("model factory admits Responses planning without treating the mock port as execution", async () => {
+  let factoryCalls = 0;
+  const adapter = new ClaudeCodeHarnessAdapter({
+    managedRoot: "/managed/claude-code",
+    userHome: "/home/user",
+    transport: new FakeClaudeCodeTransport({ userHome: "/home/user" }),
+    profileSink: new MemoryProfileSink(),
+    now: () => 10,
+    modelFactory: () => {
+      factoryCalls += 1;
+      return { providerId: "provider-a", modelId: "model-a" } as Model;
+    },
+  });
+  const local: ExecutionTarget = {
+    id: "target-local",
+    kind: "local",
+    platform: process.platform as ExecutionTarget["platform"],
+    available: true,
+  };
+  const disabled: ModelSelection = {
+    providerId: "provider-a",
+    modelId: "model-a",
+    options: { reasoningLevel: "off" },
+  };
+  const admitted = await adapter.hostManagedSupport(local, disabled);
+  assert.equal(admitted.support, "supported");
+  assert.equal(admitted.constraints?.route, "messages-gateway");
+  assert.equal(admitted.constraints?.reachedModelExecutionLayer, false);
+  const capabilities = await adapter.capabilities(local);
+  assert.equal(capabilities.hostManagedModel?.support, "experimental");
+  const low = await adapter.hostManagedSupport(local, selection);
+  assert.equal(low.support, "unsupported");
+  const plan = {
+    schemaVersion: 1,
+    requested: { kind: "host-managed", selection: disabled },
+    effective: disabled,
+    route: "messages-gateway",
+    support: { support: "supported" },
+  } as BindingPlan;
+  await adapter.prepareModel(
+    {
+      schemaVersion: 1,
+      hostSessionId: "host-factory",
+      execution: {
+        targetId: "target-local",
+        workspaceIdentity: "workspace-identity-a",
+        worktreePath: "/tmp/worktree-a",
+      },
+      harness: { id: "claude-code", adapterVersion: CLAUDE_CODE_ADAPTER_VERSION },
+      modelBinding: { kind: "host-managed", selection: disabled },
+    },
+    plan,
+  );
+  assert.equal(factoryCalls, 1);
+  await assert.rejects(async () => {
+    await adapter.prepareModel(
+      {
+        schemaVersion: 1,
+        hostSessionId: "host-factory",
+        execution: {
+          targetId: "target-local",
+          workspaceIdentity: "workspace-identity-a",
+          worktreePath: "/tmp/worktree-a",
+        },
+        harness: { id: "claude-code", adapterVersion: CLAUDE_CODE_ADAPTER_VERSION },
+        modelBinding: { kind: "host-managed", selection: disabled },
+      },
+      { ...plan, route: "responses-gateway" },
+    );
+  }, /supported messages-gateway plan/);
   await adapter.shutdown();
 });

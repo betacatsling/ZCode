@@ -4,8 +4,10 @@ import type { ModelGatewayProtocol } from "../contract.js";
 
 const DISABLED_RESPONSES_REASONING = new Set(["none", "off", "disabled"]);
 
+/** Responses 与 Codex 共用已绑定的 Model.streamText，因此同时准入 Pi 与 Claude Code 的生产路由。 */
+const RESPONSES_ROUTES = new Set<string>(["responses-gateway", "pi-sdk", "messages-gateway"]);
+
 const ROUTE_BY_PROTOCOL = {
-  "openai-responses": "responses-gateway",
   "anthropic-messages": "messages-gateway",
 } as const;
 
@@ -26,7 +28,7 @@ export function admitHostManagedGrant(input: {
   if (plan.hostSessionId !== input.sessionId) {
     throw new Error("BindingPlan hostSessionId does not match the grant");
   }
-  if (plan.route !== ROUTE_BY_PROTOCOL[input.protocol]) {
+  if (!routeAdmitted(input.protocol, plan.route)) {
     throw new Error("BindingPlan route does not match the Gateway protocol");
   }
   if (plan.catalogFingerprint !== input.modelBindingFingerprint) {
@@ -55,6 +57,12 @@ export function admitHostManagedGrant(input: {
   if (planReasoning !== input.reasoningLevel) {
     throw new Error("BindingPlan reasoning parameter does not match the bound Model");
   }
+}
+
+function routeAdmitted(protocol: ModelGatewayProtocol, route: string | undefined): boolean {
+  if (!route) return false;
+  if (protocol === "openai-responses") return RESPONSES_ROUTES.has(route);
+  return route === ROUTE_BY_PROTOCOL[protocol];
 }
 
 function requireHostSessionId(sessionId: string): void {

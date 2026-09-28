@@ -152,7 +152,29 @@ test("createGrant rejects BindingPlan mismatches before issuing a token", async 
       () =>
         gateway.createGrant({
           ...base,
-          plan: plan({ route: "messages-gateway" }),
+          plan: plan({ route: "mock" }),
+        }),
+      /route does not match/,
+    );
+    assert.throws(
+      () =>
+        gateway.createGrant({
+          ...base,
+          plan: plan({ route: "native" }),
+        }),
+      /route does not match/,
+    );
+    assert.throws(
+      () =>
+        gateway.createGrant({
+          protocol: "anthropic-messages",
+          sessionId: "host-session-1",
+          modelBindingFingerprint: "catalog-fp",
+          publicModelId: "zcode-host",
+          model,
+          plan: plan({ route: "pi-sdk" }),
+          expiresInMs: 60_000,
+          limits,
         }),
       /route does not match/,
     );
@@ -227,6 +249,39 @@ test("createGrant rejects BindingPlan mismatches before issuing a token", async 
         }),
       /does not match the bound Model/,
     );
+  } finally {
+    await gateway.close();
+  }
+});
+
+test("Responses admits Pi and Claude Code host-managed routes through the bound Model", async () => {
+  const { gateway } = await startedGateway();
+  try {
+    const admitted = [
+      { route: "pi-sdk" as const, harnessId: "pi", sessionId: "host-session-pi" },
+      {
+        route: "messages-gateway" as const,
+        harnessId: "claude-code",
+        sessionId: "host-session-claude",
+      },
+    ];
+    for (const row of admitted) {
+      const grant = gateway.createGrant({
+        protocol: "openai-responses",
+        sessionId: row.sessionId,
+        modelBindingFingerprint: "catalog-fp",
+        publicModelId: "zcode-host",
+        model: boundModel(),
+        plan: plan({
+          route: row.route,
+          harnessId: row.harnessId,
+          hostSessionId: row.sessionId,
+        }),
+        expiresInMs: 60_000,
+        limits,
+      });
+      assert.equal(grant.protocol, "openai-responses");
+    }
   } finally {
     await gateway.close();
   }
@@ -313,7 +368,24 @@ test("compatibility matrix uses shared capability reports and refuses Chat Compl
     route: "messages-gateway",
   });
   assert.equal(messages.report.support, "experimental");
-  assert.match(messages.report.reason ?? "", /Claude adapter/);
+  assert.match(messages.report.reason ?? "", /does not certify a live Provider/);
+  const pi = describeGatewayCompatibility({
+    harnessId: "pi",
+    harnessVersion: "0.87.1",
+    modelSource: selection,
+    target,
+    route: "pi-sdk",
+  });
+  assert.equal(pi.report.support, "supported");
+  const native = describeGatewayCompatibility({
+    harnessId: "zcode",
+    harnessVersion: "1.0.0",
+    modelSource: selection,
+    target,
+    route: "native",
+  });
+  assert.equal(native.report.support, "unsupported");
+  assert.match(native.report.reason ?? "", /not served/);
   const remote = describeGatewayCompatibility({
     harnessId: "codex",
     harnessVersion: "0.157.1",

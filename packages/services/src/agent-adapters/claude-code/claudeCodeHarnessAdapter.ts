@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { Model } from "@zcode/contracts";
 import type { ModelSelection } from "@zcode/shared/model-selection";
 import {
   backendBindingSchema,
@@ -26,6 +27,14 @@ import {
   planClaudeCodeProfile,
   type ClaudeCodeProfileSink,
 } from "./claudeCodeProfile.js";
+import {
+  claudeCodeControlCapabilities,
+  claudeCodeHarnessManagedSupport,
+} from "./claudeCodeControlReports.js";
+import {
+  claudeCodeResponsesSupport,
+  prepareClaudeCodeResponsesModel,
+} from "./claudeCodeResponsesBinding.js";
 import { ClaudeCodeSessionRunner, type ClaudeCodeSessionState } from "./claudeCodeSession.js";
 import { CLAUDE_CODE_ADAPTER_ID, CLAUDE_CODE_ADAPTER_VERSION } from "./claudeCodeVersion.js";
 
@@ -47,16 +56,13 @@ export interface ClaudeCodeHarnessOptions {
   readonly userHome: string;
   readonly transport: ClaudeCodeTransport;
   readonly modelBindingPort?: ClaudeCodeModelBindingPort;
+  /** Existing Model runtime. Absent means the mock port cannot enter Responses. */
+  readonly modelFactory?: (spec: SessionSpec, plan: BindingPlan) => Promise<Model> | Model;
   readonly profileSink: ClaudeCodeProfileSink;
   readonly now?: () => number;
   readonly secrets?: readonly string[];
   readonly env?: NodeJS.ProcessEnv;
 }
-
-const CONTROL_SUPPORTED: CapabilityReport = {
-  support: "supported",
-  constraints: { plane: "control", liveClaude: false, credentialsRequired: false },
-};
 
 function unsupported(reason: string): CapabilityReport {
   return { support: "unsupported", reason };
@@ -69,6 +75,7 @@ export class ClaudeCodeHarnessAdapter implements HarnessAdapter {
   /** Used only after hostManagedSupport is supported. Default mock never reaches that. */
   readonly hostManagedRoute = "messages-gateway" as const;
   readonly #options: ClaudeCodeHarnessOptions;
+  readonly #modelFactory: ClaudeCodeHarnessOptions["modelFactory"];
   readonly #port: ClaudeCodeModelBindingPort;
   readonly #now: () => number;
   readonly #secrets: readonly string[];
@@ -78,6 +85,7 @@ export class ClaudeCodeHarnessAdapter implements HarnessAdapter {
 
   constructor(options: ClaudeCodeHarnessOptions) {
     this.#options = options;
+    this.#modelFactory = options.modelFactory;
     this.#port = options.modelBindingPort ?? createMockClaudeCodeModelBindingPort();
     this.#now = options.now ?? Date.now;
     this.#secrets = options.secrets ?? [];
@@ -106,38 +114,35 @@ export class ClaudeCodeHarnessAdapter implements HarnessAdapter {
   }
 
   async capabilities(_target: ExecutionTarget): Promise<HarnessCapabilities> {
-    return {
-      text: CONTROL_SUPPORTED,
-      tools: CONTROL_SUPPORTED,
-      approvals: CONTROL_SUPPORTED,
-      cancelTurn: CONTROL_SUPPORTED,
-      history: CONTROL_SUPPORTED,
-      resumeExecution: unsupported("Fake transport cannot resume a live Claude execution"),
-      images: unsupported("Claude Code adapter does not accept image turns"),
-      modelSwitch: unsupported("Claude Code adapter does not switch models during a turn"),
-      detach: CONTROL_SUPPORTED,
-      terminateSession: CONTROL_SUPPORTED,
-      viewHistory: CONTROL_SUPPORTED,
-      hostManagedModel: {
-        support: "experimental",
-        reason: "Host-managed model execution is not certified by ACP or the fake transport",
-        constraints: { route: "harness-managed", acpProvesHostModel: false },
-      },
-    };
+    return claudeCodeControlCapabilities();
   }
 
   async harnessManagedSupport(): Promise<CapabilityReport> {
-    return {
-      support: "experimental",
-      reason:
-        "Control plane can run without Claude credentials. Global login is not read or overwritten, and this route does not reach the model execution layer.",
-      constraints: { route: "harness-managed", touchesGlobalClaudeLogin: false },
-    };
+    return claudeCodeHarnessManagedSupport();
   }
 
-  async hostManagedSupport(target: ExecutionTarget, selection: ModelSelection): Promise<CapabilityReport> {
+  async hostManagedSupport(
+    target: ExecutionTarget,
+    selection: ModelSelection,
+  ): Promise<CapabilityReport> {
+    if (this.#modelFactory) {
+      return claudeCodeResponsesSupport({
+        probed: await this.probe(target),
+        selection,
+        route: this.hostManagedRoute,
+      });
+    }
     const report = await this.separatedReport(target, selection);
     return report.hostManagedModelChain.support;
+  }
+
+  prepareModel(spec: SessionSpec, plan: BindingPlan) {
+    return prepareClaudeCodeResponsesModel({
+      spec,
+      plan,
+      route: this.hostManagedRoute,
+      modelFactory: this.#modelFactory,
+    });
   }
 
   /** Control readiness and the model chain are separate objects. */
@@ -331,7 +336,12 @@ export class ClaudeCodeHarnessAdapter implements HarnessAdapter {
         closed: false,
       };
       this.#runtimes.set(spec.hostSessionId, { spec, state, model });
-      logger.info(undefined, "claude-code session created", spec.hostSessionId, opened.nativeSessionId);
+      logger.info(
+        undefined,
+        "claude-code session created",
+        spec.hostSessionId,
+        opened.nativeSessionId,
+      );
       return binding;
     } catch (error) {
       if (opened) {
@@ -368,13 +378,17 @@ export class ClaudeCodeHarnessAdapter implements HarnessAdapter {
 
   #assertIdentity(spec: SessionSpec): void {
     if (spec.harness.id !== this.id || spec.harness.adapterVersion !== this.version) {
-      throw new ClaudeCodeAdapterError("unknown-harness", "Claude Code harness identity does not match");
+      throw new ClaudeCodeAdapterError(
+        "unknown-harness",
+        "Claude Code harness identity does not match",
+      );
     }
   }
 
   #require(hostSessionId: string): ClaudeCodeRuntime {
     const runtime = this.#runtimes.get(hostSessionId);
-    if (!runtime) throw new ClaudeCodeAdapterError("backend-failure", "Unknown Claude Code session");
+    if (!runtime)
+      throw new ClaudeCodeAdapterError("backend-failure", "Unknown Claude Code session");
     return runtime;
   }
 

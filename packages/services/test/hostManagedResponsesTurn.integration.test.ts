@@ -294,8 +294,12 @@ async function runTurn(input: {
     support: planned.support,
     capabilities: planned.capabilities,
   });
+  const admitted =
+    planned.route === "responses-gateway" ||
+    planned.route === "pi-sdk" ||
+    planned.route === "messages-gateway";
   if (
-    planned.route !== "responses-gateway" ||
+    !admitted ||
     planned.support.support !== "supported" ||
     planned.execution.kind !== "existing-model-runtime"
   ) {
@@ -422,11 +426,22 @@ test(
       bindHostModel({ plan, registry: modelRegistry, adapter });
     const pi = new PiHarnessAdapter({ root: join(root, "pi"), modelFactory: bind });
     const claudeHome = join(root, "claude-home");
+    const claudeProfile = {
+      async writeMarker() {},
+      async removeProfile() {},
+    };
+    const claudeMock = new ClaudeCodeHarnessAdapter({
+      managedRoot: join(root, "claude-mock"),
+      userHome: claudeHome,
+      transport: new FakeClaudeCodeTransport({ userHome: claudeHome }),
+      profileSink: claudeProfile,
+    });
     const claude = new ClaudeCodeHarnessAdapter({
       managedRoot: join(root, "claude-managed"),
       userHome: claudeHome,
       transport: new FakeClaudeCodeTransport({ userHome: claudeHome }),
-      profileSink: { async writeMarker() {}, async removeProfile() {} },
+      profileSink: claudeProfile,
+      modelFactory: bind,
     });
     const codex = new CodexHarnessAdapter({
       root: join(root, "codex-root"),
@@ -445,24 +460,38 @@ test(
       assert.equal(codex.hostManagedRoute, "responses-gateway");
       assert.equal(codex.version, "0.157.1");
 
-      const piTurn = await runTurn({ harness: pi, registry: modelRegistry, adapter, hits });
-      assert.equal(piTurn.label, "experimental");
-      assert.match(piTurn.reason, /pi-sdk|not admitted|not certified/);
+      const mockTurn = await runTurn({
+        harness: claudeMock,
+        registry: modelRegistry,
+        adapter,
+        hits,
+      });
+      assert.equal(mockTurn.label, "experimental");
+      assert.equal(mockTurn.outputText, "");
       assert.equal(hits.length, 0);
 
+      const piTurn = await runTurn({ harness: pi, registry: modelRegistry, adapter, hits });
+      assert.equal(piTurn.label, "execution-layer");
+      assert.equal(piTurn.outputText, ANSWER);
+      assert.equal(pi.hostManagedRoute, "pi-sdk");
+
       const claudeTurn = await runTurn({ harness: claude, registry: modelRegistry, adapter, hits });
-      assert.equal(claudeTurn.label, "experimental");
-      assert.equal(claudeTurn.outputText, "");
-      assert.equal(hits.length, 0);
+      assert.equal(claudeTurn.label, "execution-layer");
+      assert.equal(claudeTurn.outputText, ANSWER);
+      const claudeCapabilities = await claude.capabilities(target());
+      assert.equal(claudeCapabilities.hostManagedModel?.support, "experimental");
 
       const codexTurn = await runTurn({ harness: codex, registry: modelRegistry, adapter, hits });
       assert.equal(codexTurn.label, "execution-layer");
       assert.equal(codexTurn.outputText, ANSWER);
       const capabilities = await codex.capabilities(target());
       assert.equal(capabilities.hostManagedModel?.support, "experimental");
+      assert.ok(hits.length >= 3);
     } finally {
       await codex.shutdown();
       await claude.shutdown();
+      await claudeMock.shutdown();
+      await pi.shutdown();
       server.close();
       await rm(root, { recursive: true, force: true });
     }

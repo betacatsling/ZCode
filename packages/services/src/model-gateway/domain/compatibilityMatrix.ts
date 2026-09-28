@@ -65,7 +65,7 @@ function reportFor(
       reason: "Chat Completions has no harness ingress requirement",
     };
   }
-  if (route !== "responses-gateway" && route !== "messages-gateway") {
+  if (route !== "responses-gateway" && route !== "pi-sdk" && route !== "messages-gateway") {
     return { support: "unsupported", reason: "route is not served by Model Gateway" };
   }
   if (target.kind === "ssh") {
@@ -79,7 +79,7 @@ function reportFor(
     return {
       support: "experimental",
       reason:
-        "Messages HTTP ingress is reserved; this slice does not certify a Claude adapter or a live Provider chain",
+        "Messages HTTP ingress does not certify a live Provider chain. Responses admits a supported host-managed plan on this route only through the existing Model runtime.",
     };
   }
   if (!reasoningLevel || !DISABLED_RESPONSES_REASONING.has(reasoningLevel)) {
