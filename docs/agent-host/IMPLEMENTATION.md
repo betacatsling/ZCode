@@ -247,7 +247,7 @@ inventory/honesty/opt-in factory 已有 ≠ 生产第二 Agent。相对 tip：
 
 | # | 项 | tip 已有 | 仍缺 |
 | --- | --- | --- | --- |
-| L1 | 真实 ACP 子进程 | SessionHost **fake** transport 矩阵（至 #155；仍 ≠ live） | **程序 stub（#102）：** [`SECOND-ACP-INSTALL-DIAG.md`](./SECOND-ACP-INSTALL-DIAG.md) §L1；**尚未**执行真实子进程 |
+| L1 | 真实 ACP 子进程 | SessionHost **fake** transport 矩阵（至 #229；仍 ≠ live） | **程序 stub（#102）：** [`SECOND-ACP-INSTALL-DIAG.md`](./SECOND-ACP-INSTALL-DIAG.md) §L1；**尚未**执行真实子进程 |
 | L2 | resume / 只读历史 | 档案不硬编码 load/resume；honesty 不打开 transport | **程序 stub（#106）：** 同文档 §L2；**尚未**实跑 |
 | L3 | 第二 Agent 只加档案 | inventory + 共用 `acp-session-machine/1` | **程序 stub（#106）：** 同文档 §L3；**尚未**产品路径实跑 |
 | L4 | Host 默认 | lazy **不**注册 OpenCode/Goose ACP | **程序 stub（#106）：** 同文档 §L4 强制断言；实跑时仍须保持 opt-in |
