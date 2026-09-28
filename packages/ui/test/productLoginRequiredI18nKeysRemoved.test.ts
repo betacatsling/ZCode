@@ -86,10 +86,16 @@ test("ZCode account share-import signInRequired copy stays (not product login)",
 test("live welcome.title + bot regionTag keys stay (not product OAuth shell)", () => {
   assert.match(enUS, /"welcome\.title"/);
   assert.match(zhCN, /"welcome\.title"/);
-  assert.match(enUS, /"login\.oauth\.regionTag\.zai"/);
-  assert.match(zhCN, /"login\.oauth\.regionTag\.zai"/);
-  assert.match(enUS, /"login\.oauth\.regionTag\.bigmodel"/);
-  assert.match(zhCN, /"login\.oauth\.regionTag\.bigmodel"/);
-  assert.match(botsUi, /login\.oauth\.regionTag\.zai/);
-  assert.match(botsUi, /login\.oauth\.regionTag\.bigmodel/);
+  // #112: regionTag moved off login.oauth → settings.modelProvider
+  assert.equal(enUS.includes('"login.oauth.regionTag.zai"'), false);
+  assert.equal(zhCN.includes('"login.oauth.regionTag.zai"'), false);
+  assert.equal(enUS.includes('"login.oauth.regionTag.bigmodel"'), false);
+  assert.equal(zhCN.includes('"login.oauth.regionTag.bigmodel"'), false);
+  assert.equal(botsUi.includes("login.oauth.regionTag"), false);
+  assert.match(enUS, /"settings\.modelProvider\.regionTag\.zai"/);
+  assert.match(zhCN, /"settings\.modelProvider\.regionTag\.zai"/);
+  assert.match(enUS, /"settings\.modelProvider\.regionTag\.bigmodel"/);
+  assert.match(zhCN, /"settings\.modelProvider\.regionTag\.bigmodel"/);
+  assert.match(botsUi, /settings\.modelProvider\.regionTag\.zai/);
+  assert.match(botsUi, /settings\.modelProvider\.regionTag\.bigmodel/);
 });
