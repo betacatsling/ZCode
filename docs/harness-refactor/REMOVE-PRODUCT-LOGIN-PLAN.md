@@ -1,6 +1,6 @@
 # 移除产品账号登录：实施计划
 
-状态：P1 启动解耦已落地。P2 拆除产品 OAuth / accountProvider / Coding Plan 服务装配，见 `REMOVE-PRODUCT-LOGIN-P2.md`。P3–P5 尚未开始。
+状态：P1 启动/UI 门禁解耦已落地（#20 一带）。P2 产品 OAuth / accountProvider / Coding Plan 服务装配拆除已落地（#27/#30 一带），见 `REMOVE-PRODUCT-LOGIN-P2.md`。P3 Web 浏览器 OAuth 栈（#33）、Desktop 产品 OAuth deeplink（#40）、CLI shared-credentials unload（#35）已落地；UI Root/Welcome OAuth shell（#37）、settings 登录/购买（#36）、toolbar（#38）、sidebar footer（#39）、SessionPane upgrade CTA（#42）、login/** deadcode、UsageRemainingPanel + StatusCards 文案、settings 停 upgrade、ChatErrorBanner + loginRecovery、PlatformChannels/IPlatformService OAuth 薄清（#47 一带 / tip `860c4de`）已落地。仍剩：Dialog / Provider / EntryGate / Root 整卸；CLI TUI `loginRequired` 语义梳理；verify 脚本扩展。
 
 调研基线：`cursor/wave4-harness-integration-b7a9`，提交 `5ae4353`。本仓库定位为自用、开源的多 harness 工作台，不再要求登录 ZCode/Z.ai/BigModel 产品账号。
 
@@ -90,7 +90,7 @@ flowchart TD
 
 ## 6. 实施顺序与每阶段验收
 
-所有实现阶段先更新涉及模块的 spec/contract，并按 `.agents/skills/architecture-governance/SKILL.md` 生成受控上下文。以下步骤是依赖顺序，不是已经完成的修改。
+所有实现阶段先更新涉及模块的 spec/contract，并按 `.agents/skills/architecture-governance/SKILL.md` 生成受控上下文。以下按依赖顺序记录各阶段范围；落地进度见文首状态，未勾选项仍待做。
 
 ### P1：启动和个人模型配置解耦
 
@@ -124,7 +124,7 @@ flowchart TD
 
 ### P5：清理、回归和发布说明
 
-- 清理废弃导出、依赖、国际化字符串、test IDs、平台接口、说明和示例；不按 auth/oauth/login 关键词盲删第三方认证或 login shell。`PlatformChannels.OAuth*` 与 `IPlatformService.registerOAuthState`/`onOAuthCallback` 已薄清（#40 后）；`oauth.ts` 领域类型仍保留。
+- 清理废弃导出、依赖、国际化字符串、test IDs、平台接口、说明和示例；不按 auth/oauth/login 关键词盲删第三方认证或 login shell。`PlatformChannels.OAuth*` 与 `IPlatformService.registerOAuthState`/`onOAuthCallback` 已薄清（#47 一带 / tip `860c4de`）；`oauth.ts` 领域类型仍保留。
 - 检查 Desktop、Web、CLI 构建、入口网络行为，以及下列验收矩阵；记录每个用例的 pass/fail/blocked，不以 skip 代替实机证据。
 - 发布说明列出账号功能移除、自有模型配置方式、旧配置处理和不再提供的托管功能。保留本地数据以支持回退，不承诺旧版可读未经验证的新 schema。
 
@@ -166,6 +166,6 @@ pnpm exec tsx --test \
 
 - `pnpm typecheck`：通过，退出码 0。
 - `pnpm lint`：失败，84 warnings / 3 errors；均为已有 `max-lines`：`packages/server/src/remote/connect.ts`（538 行）、`packages/ui/src/project-sidebar/ProjectSidebarAgentCreateForm.tsx`（459 行）、`packages/services/src/agent-adapters/claude/claudeHarnessAdapter.ts`（583 行）。
-- 尚未修改登录代码，也未执行上面的移除后验收矩阵；合并本计划不代表登录已经删除。
+- 本计划文档初次合入时尚未改登录代码；后续 P1–P4 入口/UI 拆除进度见文首状态。验收矩阵仍须按实机补齐，不能仅凭文档或 guard 常量宣称完成。
 
 完成标准：P1–P5 的账号调用链真正退出产品，保留能力的回归及真实恢复场景有证据，文档与可运行入口一致。不能只删欢迎页或把 guard 常量改成 false 就宣布完成。
