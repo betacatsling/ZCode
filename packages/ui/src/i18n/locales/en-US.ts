@@ -2953,7 +2953,6 @@ const enUS: Record<string, string> = {
   "settings.modelProvider.accountProviderConfigMissing":
     "The account provider configuration is unavailable. Refresh and try again.",
   "settings.modelProvider.startPlan.login": "Log in",
-  "settings.modelProvider.startPlan.status.loginRequired": "Log in to view and use your Start Plan",
   "settings.modelProvider.startPlan.status.expired": "Start Plan expired",
   "settings.modelProvider.startPlan.status.noPlan": "No available Start Plan",
   "settings.modelProvider.startPlan.status.loginExpired":
@@ -2993,7 +2992,6 @@ const enUS: Record<string, string> = {
   "settings.modelProvider.codingPlan.webview.retry": "Retry",
   "settings.modelProvider.codingPlan.webview.loadFailed": "The plan page failed to load.",
   "settings.modelProvider.codingPlan.webview.openWebsite": "Buy on the official website",
-  "settings.modelProvider.codingPlan.status.loginRequired": "Not signed in",
   "settings.modelProvider.codingPlan.status.disconnected": "Not connected",
   "settings.modelProvider.codingPlan.status.checking": "Checking",
   "settings.modelProvider.codingPlan.status.notPurchased":

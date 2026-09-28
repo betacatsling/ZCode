@@ -2757,7 +2757,6 @@ const zhCN: Record<string, string> = {
   "settings.modelProvider.accountProviderConfigMissing":
     "账号 Provider 配置暂不可用，请刷新后重试。",
   "settings.modelProvider.startPlan.login": "登录",
-  "settings.modelProvider.startPlan.status.loginRequired": "登录后查看和使用体验套餐",
   "settings.modelProvider.startPlan.status.expired": "体验套餐已过期",
   "settings.modelProvider.startPlan.status.noPlan": "暂无可用体验套餐",
   "settings.modelProvider.startPlan.status.loginExpired": "登录已失效，请重新登录",
@@ -2794,7 +2793,6 @@ const zhCN: Record<string, string> = {
   "settings.modelProvider.codingPlan.webview.retry": "重试",
   "settings.modelProvider.codingPlan.webview.loadFailed": "套餐页加载失败。",
   "settings.modelProvider.codingPlan.webview.openWebsite": "前往官网购买",
-  "settings.modelProvider.codingPlan.status.loginRequired": "未登录",
   "settings.modelProvider.codingPlan.status.disconnected": "未连接",
   "settings.modelProvider.codingPlan.status.checking": "查询中",
   "settings.modelProvider.codingPlan.status.notPurchased": "未开通，开通后启用",
