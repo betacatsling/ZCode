@@ -163,6 +163,8 @@ test("settings StatusCards path drops dead Coding Plan upgrade/purchase CTA stri
     "settings.modelProvider.codingPlan.purchase.individualsSectionTitle",
     "settings.modelProvider.codingPlan.purchaseBanner.startPlanTitle",
     "settings.modelProvider.codingPlan.purchase.selectPlan",
+    // #124: Title orphan after Automations toast removal; KEEP productPurchaseRemoved body
+    "settings.modelProvider.codingPlan.productPurchaseRemovedTitle",
   ];
   for (const locale of ["en-US.ts", "zh-CN.ts"] as const) {
     const source = readFileSync(new URL(`../src/i18n/locales/${locale}`, import.meta.url), "utf8");
@@ -170,6 +172,11 @@ test("settings StatusCards path drops dead Coding Plan upgrade/purchase CTA stri
       assert.equal(source.includes(`"${key}"`), false, `${locale}:${key}`);
     }
     assert.equal(source.includes('"settings.modelProvider.connection.selectPlan"'), true, locale);
+    assert.equal(
+      source.includes('"settings.modelProvider.codingPlan.productPurchaseRemoved"'),
+      true,
+      locale,
+    );
   }
 
   const header = readFileSync(
