@@ -28,7 +28,7 @@
 - [Zed ACP](https://docs.devin.ai/cli/acp/zed) 与 [stable changelog](https://docs.devin.ai/cli/changelog/stable) 同样写明 `devin acp` 是 ACP server。
 - 交互 REPL 和 `devin -p` 是人用终端，不是本适配器的控制面。
 
-因此只增加档案 `devin`：可执行文件 `devin`，参数固定 `["acp"]`。复用 `AcpSessionMachine` 与 `createAcpHarness`，不新增 `agent-adapters/devin`，不实现第二套会话模型。
+因此 ACP 路径只增加档案 `devin`：可执行文件 `devin`，参数固定 `["acp"]`。复用 `AcpSessionMachine` 与 `createAcpHarness`，不在 ACP 目录另写会话模型。仓库里已有的 `agent-adapters/devin` 是 Host lazy 默认的 **print-mode**（`-p`）适配器，与本档案 **同 harness id `devin`**，不得在同一 `HarnessRegistry` 上同时注册（见 `devinPrintAcpCoexistence.test.ts` / `PROTOCOL.md`）。
 
 模型归 Devin 自己的账号和默认模型。这是 `harness-managed`：`SessionSpec.modelBinding.kind` 必须是 `harness-managed`，`BindingPlan.route` 必须是 `harness-managed`。不调用 `ModelBindingPlanner` 的 host-managed 分支，不调用 `bindHostModel`、Gateway 或 `Model.streamText`。`hostManagedSupport` 保持 `unsupported`。把 `nativeModelId` 或 `--model` 记进档案会变成没有模型执行的假宿主托管，所以默认参数不加 `--model`，`modelSwitch` 仍是 `unsupported`。host-managed 计划在打开传输之前拒绝。
 
