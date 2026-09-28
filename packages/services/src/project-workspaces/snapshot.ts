@@ -1,6 +1,39 @@
-import type { AgentSessionRecord, Project, RepositoryBinding, WorktreeWorkspace } from "./planTypes.js";
+import type {
+  AgentSessionRecord,
+  Project,
+  RepositoryBinding,
+  WorktreeWorkspace,
+} from "./planTypes.js";
 import { ProjectWorkspaceError } from "./errors.js";
 import type { FilesystemIdentity } from "./ports.js";
+
+export const SESSION_ACTIVITY_KINDS = [
+  "idle",
+  "starting",
+  "running",
+  "waiting",
+  "cancelling",
+] as const;
+export const SESSION_CONNECTION_KINDS = ["live", "stale", "offline", "unknown"] as const;
+export const SESSION_TURN_KINDS = ["succeeded", "failed", "unknown"] as const;
+
+export type SessionActivityKind = (typeof SESSION_ACTIVITY_KINDS)[number];
+export type SessionConnectionKind = (typeof SESSION_CONNECTION_KINDS)[number];
+export type SessionTurnKind = (typeof SESSION_TURN_KINDS)[number];
+
+/** 侧栏用的轻量活动摘要。离线重扫描只能把连接标过期，不能改活动和轮次结果。 */
+export interface SessionActivitySummary {
+  activity: SessionActivityKind;
+  connection: SessionConnectionKind;
+  lastTurn: SessionTurnKind;
+  unread: boolean;
+  pendingApproval: boolean;
+  problem: boolean;
+  unconfirmedError: boolean;
+  internalChild: boolean;
+  archived: boolean;
+  topLevel: boolean;
+}
 
 export interface MigrationMapping {
   nativeSessionId: string;
@@ -33,6 +66,8 @@ export interface CatalogSnapshot {
   creationReceipts: Record<string, string>;
   /** bindingId → 最近一次成功扫描里尚未接管的候选数。失败扫描不写 0。 */
   unadoptedCountByBindingId: Record<string, number>;
+  /** sessionId → 最近一次权威活动摘要。失败扫描不改写。 */
+  sessionActivityById: Record<string, SessionActivitySummary>;
   migration: { schemaVersion: 1; fingerprint: string; mappings: MigrationMapping[] } | null;
 }
 
@@ -58,6 +93,7 @@ export function emptySnapshot(): CatalogSnapshot {
     freshnessByTargetId: {},
     creationReceipts: {},
     unadoptedCountByBindingId: {},
+    sessionActivityById: {},
     migration: null,
   };
 }
@@ -79,6 +115,32 @@ function unique(ids: readonly string[], code: string): Set<string> {
     seen.add(id);
   }
   return seen;
+}
+
+const ACTIVITY_KINDS = new Set<string>(SESSION_ACTIVITY_KINDS);
+const CONNECTION_KINDS = new Set<string>(SESSION_CONNECTION_KINDS);
+const TURN_KINDS = new Set<string>(SESSION_TURN_KINDS);
+
+function assertActivitySummary(summary: SessionActivitySummary): void {
+  if (!summary || typeof summary !== "object")
+    throw new ProjectWorkspaceError("invalid-session-activity");
+  if (!ACTIVITY_KINDS.has(summary.activity) || !CONNECTION_KINDS.has(summary.connection)) {
+    throw new ProjectWorkspaceError("invalid-session-activity");
+  }
+  if (!TURN_KINDS.has(summary.lastTurn))
+    throw new ProjectWorkspaceError("invalid-session-activity");
+  for (const key of [
+    "unread",
+    "pendingApproval",
+    "problem",
+    "unconfirmedError",
+    "internalChild",
+    "archived",
+    "topLevel",
+  ] as const) {
+    if (typeof summary[key] !== "boolean")
+      throw new ProjectWorkspaceError("invalid-session-activity");
+  }
 }
 
 function assertHead(head: WorktreeWorkspace["head"]): void {
@@ -123,7 +185,11 @@ export function assertSnapshot(snapshot: CatalogSnapshot): void {
   );
   for (const project of snapshot.projects) {
     assertId(project.id, "invalid-project");
-    if (typeof project.name !== "string" || project.name.trim() === "" || project.name.length > 256) {
+    if (
+      typeof project.name !== "string" ||
+      project.name.trim() === "" ||
+      project.name.length > 256
+    ) {
       throw new ProjectWorkspaceError("invalid-project");
     }
     if (project.iconAssetId !== undefined) assertId(project.iconAssetId, "invalid-project");
@@ -179,7 +245,11 @@ export function assertSnapshot(snapshot: CatalogSnapshot): void {
     }
   }
   assertKeys(Object.keys(snapshot.sessionCwdById), sessionIds, "invalid-session-cwd");
-  assertKeys(Object.keys(snapshot.workspaceIdentityById), workspaceIds, "invalid-workspace-identity");
+  assertKeys(
+    Object.keys(snapshot.workspaceIdentityById),
+    workspaceIds,
+    "invalid-workspace-identity",
+  );
   assertKeys(Object.keys(snapshot.evidenceByWorkspaceId), workspaceIds, "invalid-evidence");
   assertKeys(Object.keys(snapshot.verificationByWorkspaceId), workspaceIds, "invalid-verification");
   assertKeys(Object.keys(snapshot.deletionByWorkspaceId), workspaceIds, "invalid-deletion-fence");
@@ -187,7 +257,19 @@ export function assertSnapshot(snapshot: CatalogSnapshot): void {
     assertId(requestId, "invalid-receipt");
     if (!workspaceIds.has(workspaceId)) throw new ProjectWorkspaceError("invalid-receipt");
   }
-  assertKeys(Object.keys(snapshot.unadoptedCountByBindingId), bindingIds, "invalid-unadopted-count");
+  assertKeys(
+    Object.keys(snapshot.unadoptedCountByBindingId),
+    bindingIds,
+    "invalid-unadopted-count",
+  );
+  assertKeys(
+    Object.keys(snapshot.sessionActivityById ?? {}),
+    sessionIds,
+    "invalid-session-activity",
+  );
+  for (const summary of Object.values(snapshot.sessionActivityById ?? {})) {
+    assertActivitySummary(summary);
+  }
   for (const id of snapshot.hiddenWorkspaceIds) {
     if (!workspaceIds.has(id)) throw new ProjectWorkspaceError("invalid-hidden-workspace");
   }
@@ -204,7 +286,8 @@ export function assertSnapshot(snapshot: CatalogSnapshot): void {
     if (!FRESHNESS.has(freshness)) throw new ProjectWorkspaceError("invalid-freshness");
   }
   if (snapshot.migration) {
-    if (snapshot.migration.schemaVersion !== 1) throw new ProjectWorkspaceError("unsupported-schema");
+    if (snapshot.migration.schemaVersion !== 1)
+      throw new ProjectWorkspaceError("unsupported-schema");
     if (!snapshot.migration.fingerprint) throw new ProjectWorkspaceError("invalid-migration");
   }
 }

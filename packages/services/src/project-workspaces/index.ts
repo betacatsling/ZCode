@@ -18,12 +18,71 @@ export { createWorktreeService, describeSharedWorkspace } from "./worktreeServic
 export { createWorktreeReconciler } from "./worktreeReconciler.js";
 export { buildSidebarIndex } from "./sidebarIndexService.js";
 export { createLegacyWorkspaceMigration, planLegacyMigration } from "./legacyWorkspaceMigration.js";
-export type { Project, RepositoryBinding, WorktreeWorkspace, AgentSessionRecord } from "./planTypes.js";
+export type {
+  Project,
+  RepositoryBinding,
+  WorktreeWorkspace,
+  AgentSessionRecord,
+} from "./planTypes.js";
 export type { CatalogSnapshot, MigrationMapping } from "./snapshot.js";
 export type { DiscoveryReport, DiscoveredWorktree } from "./discovery.js";
 export type { ExecutionLocation, CreateAgentSessionInput } from "./sessions.js";
-export type { SidebarIndex, SidebarIndexInput, SessionActivityInput } from "./sidebarIndexService.js";
+export type {
+  SidebarIndex,
+  SidebarIndexInput,
+  SessionActivityInput,
+} from "./sidebarIndexService.js";
 export type { LegacySessionInput, MigrationPlan } from "./legacyWorkspaceMigration.js";
+
+function freshnessForSession(snapshot: CatalogSnapshot, sessionId: string) {
+  const session = snapshot.sessions.find((item) => item.id === sessionId);
+  const workspace = snapshot.workspaces.find((item) => item.id === session?.workspaceId);
+  const binding = snapshot.bindings.find((item) => item.id === workspace?.repositoryBindingId);
+  if (!binding) return undefined;
+  return snapshot.freshnessByTargetId[binding.executionTargetId];
+}
+
+function storedActivities(snapshot: CatalogSnapshot): SessionActivityInput[] {
+  return Object.entries(snapshot.sessionActivityById ?? {}).map(([sessionId, summary]) => ({
+    sessionId,
+    ...summary,
+  }));
+}
+
+function retainExpiredActivity(
+  snapshot: CatalogSnapshot,
+  activity: SessionActivityInput,
+  stored: SessionActivityInput | undefined,
+): SessionActivityInput {
+  const freshness = freshnessForSession(snapshot, activity.sessionId);
+  if (freshness !== "offline" && freshness !== "stale") return activity;
+  // 过期摘要只改连接新鲜度，保留原来的活动和轮次结果。
+  const base = stored ?? activity;
+  return { ...base, sessionId: activity.sessionId, connection: freshness };
+}
+
+function projectSessionActivities(
+  snapshot: CatalogSnapshot,
+  caller: readonly SessionActivityInput[] | undefined,
+): SessionActivityInput[] {
+  const stored = storedActivities(snapshot);
+  const storedById = new Map(stored.map((item) => [item.sessionId, item]));
+  const source = caller ?? stored;
+  const seen = new Set<string>();
+  const projected: SessionActivityInput[] = [];
+  for (const activity of source) {
+    seen.add(activity.sessionId);
+    projected.push(retainExpiredActivity(snapshot, activity, storedById.get(activity.sessionId)));
+  }
+  for (const activity of stored) {
+    if (seen.has(activity.sessionId)) continue;
+    const freshness = freshnessForSession(snapshot, activity.sessionId);
+    if (freshness === "offline" || freshness === "stale") {
+      projected.push(retainExpiredActivity(snapshot, activity, activity));
+    }
+  }
+  return projected;
+}
 
 export function createProjectWorkspaces(
   input: Omit<ProjectWorkspaceDeps, "store" | "idFactory"> & {
@@ -71,7 +130,7 @@ export function createProjectWorkspaces(
         archivedSessionIds: snapshot.archivedSessionIds,
         removedProjectIds: snapshot.removedProjectIds,
         freshnessByTargetId: snapshot.freshnessByTargetId,
-        activities: options?.activities,
+        activities: projectSessionActivities(snapshot, options?.activities),
         discoveredNotAdopted: discovered,
         query: options?.query,
         collapsedWorkspaceIds: options?.collapsedWorkspaceIds,

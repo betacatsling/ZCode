@@ -44,7 +44,23 @@ bare 仓库不制造主检出，也不能把 bare 目录当成可执行工作区
   → lifecycle=removed，保留会话历史
 ```
 
-删除进行中 `createAgentSession` 拒绝。拒绝路径不先停止会话，也不删除目录。主检出不能走 linked worktree 删除。Git 成功但目录写入失败时返回未登记候选，不回删已创建的 worktree。
+删除进行中 `createAgentSession` 拒绝。拒绝路径不先停止会话，也不删除目录。主检出不能走 linked worktree 删除。Git 成功但目录写入失败时返回未登记候选，不回删已创建的 worktree。Git remove 失败时撤掉准入栅栏，工作区目录和会话记录保持原样。
+
+## 消失、重建与离线
+
+```text
+本机路径 ENOENT → 只把本机该工作区标 missing / 待核实
+另一台主机的同路径 → 新 binding + 新 workspace，不接收旧会话
+扫描失败 / 断线 → freshness=stale|offline，树和活动摘要保持
+```
+
+目录消失只影响当前 execution target 上路径相同、且尚未 removed 的工作区。另一台主机即使路径字符串和 git common dir 相同，也不改写这份历史，恢复请求不能进新目录。
+
+`noteSessionActivities` 拥有会话活动摘要。目标 freshness 为 offline 或 stale 时拒绝改写；失败扫描不增加 `stoppedSessionIds`，也不把 `lastTurn` 写成 succeeded。侧栏在目标过期时沿用这份摘要，只把连接标成过期。调用方漏报或改报完成，都不能把仍在运行或等待的 Agent 显示成已全部停止或完成。
+
+## 隐藏与归档
+
+隐藏只写展示偏好，归档只改 lifecycle。两者不调用 git remove，不停止会话，不删除工作区文件。隐藏工作区若有待审批，仍留在项目的 attention 入口里。
 
 ## 迁移
 

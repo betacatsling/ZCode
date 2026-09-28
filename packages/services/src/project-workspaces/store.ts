@@ -46,6 +46,10 @@ async function readCatalogFile(filePath: string): Promise<CatalogSnapshot> {
     throw new ProjectWorkspaceError("unsupported-schema");
   }
   const snapshot = parsed as CatalogSnapshot;
+  // 旧目录没有活动摘要时补空对象，避免把缺省读成“已全部完成”。
+  if (!snapshot.sessionActivityById || typeof snapshot.sessionActivityById !== "object") {
+    snapshot.sessionActivityById = {};
+  }
   assertSnapshot(snapshot);
   return snapshot;
 }
