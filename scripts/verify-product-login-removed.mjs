@@ -1143,6 +1143,36 @@ function assertDeletedSurfaces() {
     }
   }
 
+
+  // #200/#204: presetSubscriptionProviderId → presetCatalogProviderId hard-pin.
+  // ModelProviderSection + Detail only; do not expand tip-ledger SHA string (Ex1).
+  const presetCatalogRenameFiles = [
+    ["settings/ModelProviderSection.tsx", "ModelProviderSection.tsx"],
+    ["settings/model-provider-section/Detail.tsx", "Detail.tsx"],
+  ];
+  const deadPresetSubscriptionSymbols = [
+    "presetSubscriptionProviderId",
+    "setPresetSubscriptionProviderId",
+  ];
+  for (const [rel, label] of presetCatalogRenameFiles) {
+    const renamePath = join(UI_SRC, rel);
+    if (!existsSync(renamePath)) {
+      fails.push(`${label} must exist (#200/#204 gate)`);
+      continue;
+    }
+    const renameSrc = readFileSync(renamePath, "utf8");
+    for (const dead of deadPresetSubscriptionSymbols) {
+      if (renameSrc.includes(dead)) {
+        fails.push(
+          `${label} must not revive old preset-subscription symbol: ${dead} (#200/#204)`,
+        );
+      }
+    }
+    if (!renameSrc.includes("presetCatalogProviderId")) {
+      fails.push(`${label} must keep presetCatalogProviderId (#200/#204)`);
+    }
+  }
+
   return fails;
 }
 
