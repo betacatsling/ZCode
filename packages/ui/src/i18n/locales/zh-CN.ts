@@ -379,7 +379,7 @@ const zhCN: Record<string, string> = {
   "conversationShare.import.installing": "正在安装分享文件",
   "conversationShare.import.committing": "正在创建分享会话",
   "conversationShare.import.complete": "分享导入完成",
-  "conversationShare.import.loginRequired": "该分享暂不支持匿名导入，请登录 ZCode 后重试",
+  "conversationShare.import.signInRequired": "该分享暂不支持匿名导入，请登录 ZCode 账号后重试",
   "conversationShare.import.notFound": "分享不存在或当前账号无权访问",
   "conversationShare.import.expired": "分享已过期，请让分享者重新生成",
   "conversationShare.import.integrityFailed": "分享文件校验失败，已停止导入",

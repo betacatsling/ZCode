@@ -424,8 +424,8 @@ const enUS: Record<string, string> = {
   "conversationShare.import.installing": "Installing shared files",
   "conversationShare.import.committing": "Creating the shared conversation",
   "conversationShare.import.complete": "Share import complete",
-  "conversationShare.import.loginRequired":
-    "This share cannot be imported anonymously. Sign in to ZCode and try again",
+  "conversationShare.import.signInRequired":
+    "This share cannot be imported anonymously. Sign in to your ZCode account and try again",
   "conversationShare.import.notFound": "The share is unavailable for this account",
   "conversationShare.import.expired": "The share expired. Ask the author to create a new one",
   "conversationShare.import.integrityFailed": "Share file verification failed; import stopped",
