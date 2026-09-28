@@ -146,7 +146,7 @@ export function CodingPlanStatusPanel({
   onRetry,
   onOpenPurchase,
   onDisconnect,
-  loginActionVisible = false,
+  productPurchaseRemovedVisible = false,
   usageDetailsVisible = true,
   statusLabelId,
   statusMessage,
@@ -176,8 +176,8 @@ export function CodingPlanStatusPanel({
   onRetry?: () => void;
   onOpenPurchase?: (url: string) => void;
   onDisconnect?: () => void;
-  /** 未连接/不可用时展示 productPurchaseRemoved 说明。 */
-  loginActionVisible?: boolean;
+  /** 未连接/不可用时展示 productPurchaseRemoved 说明（非登录入口）。 */
+  productPurchaseRemovedVisible?: boolean;
   usageDetailsVisible?: boolean;
   statusLabelId?: string;
   statusMessage?: string | null;
@@ -230,11 +230,6 @@ export function CodingPlanStatusPanel({
     !isChecking &&
     !isUnavailable &&
     !isUnsupported;
-  const loginButtonId = isStartPlanProvider
-    ? isUnavailable
-      ? "chat.error.action.relogin"
-      : "settings.modelProvider.startPlan.login"
-    : "settings.modelProvider.codingPlan.connect";
   const defaultStatusBadgeId = isUnsupported
     ? "settings.modelProvider.codingPlan.status.unsupported"
     : isDisconnected
@@ -403,9 +398,7 @@ export function CodingPlanStatusPanel({
         isDisconnected={actionIsDisconnected}
         isUnavailable={recoverableUnavailable}
         isPurchased={isPurchased}
-        loginLoading={effectiveViewState.loginLoading}
-        loginButtonId={loginButtonId}
-        loginVisible={loginActionVisible && !retryVisible}
+        productPurchaseRemovedVisible={productPurchaseRemovedVisible && !retryVisible}
         canDisconnectProvider={inlineDisconnectVisible ? false : canDisconnectProvider}
         disconnectLoading={disconnectLoading}
         onDisconnect={onDisconnect}

@@ -17,7 +17,7 @@ export function CodingPlanStatusActions({
   isDisconnected,
   isUnavailable,
   isPurchased,
-  loginVisible,
+  productPurchaseRemovedVisible,
   canDisconnectProvider,
   disconnectLoading,
   onDisconnect,
@@ -26,9 +26,8 @@ export function CodingPlanStatusActions({
   isDisconnected: boolean;
   isUnavailable: boolean;
   isPurchased: boolean;
-  loginLoading?: boolean;
-  loginButtonId: string;
-  loginVisible: boolean;
+  /** When true (and disconnected/unavailable), show productPurchaseRemoved notice — not a login CTA. */
+  productPurchaseRemovedVisible: boolean;
   canDisconnectProvider: boolean;
   disconnectLoading?: boolean;
   onDisconnect?: () => void;
@@ -37,7 +36,7 @@ export function CodingPlanStatusActions({
 
   return (
     <div className="flex shrink-0 flex-wrap justify-start gap-2">
-      {loginVisible && (isDisconnected || isUnavailable) ? (
+      {productPurchaseRemovedVisible && (isDisconnected || isUnavailable) ? (
         <CodingPlanProductPurchaseRemovedNotice />
       ) : null}
       {canDisconnectProvider && onDisconnect && !isPurchased ? (

@@ -500,9 +500,9 @@ export function ModelProviderSectionDetail({
               : undefined
           }
           disconnectLoading={codingPlanDisconnectProviderId === selectedNavItem.presetId}
-          // Plan Card 在未连接时仍是当前入口；loginActionVisible 驱动 StatusCards
-          // 展示 productPurchaseRemoved 说明。
-          loginActionVisible
+          // Plan Card 在未连接时仍是当前入口；productPurchaseRemovedVisible 驱动 StatusCards
+          // 展示 productPurchaseRemoved 说明（非登录 CTA）。
+          productPurchaseRemovedVisible
           onRetry={
             retryTeamPlan ??
             (selectedNavItem.type === "codingPlan" &&
@@ -550,8 +550,8 @@ export function ModelProviderSectionDetail({
             providerName={selectedNavItem.providerName}
             status={selectedNavItem.status}
             viewState={statusPanelViewState}
-            // 未连接时右侧只渲染 Plan Card；loginActionVisible 保留 productPurchaseRemoved 说明。
-            loginActionVisible
+            // 未连接时右侧只渲染 Plan Card；productPurchaseRemovedVisible 保留 productPurchaseRemoved 说明。
+            productPurchaseRemovedVisible
             purchaseUrl={selectedNavItem.purchaseUrl}
             planLevel={selectedNavItem.planLevel}
             inactivePlanTitle={selectedNavItem.inactivePlanTitle}
