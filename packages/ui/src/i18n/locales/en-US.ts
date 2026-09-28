@@ -857,8 +857,6 @@ const enUS: Record<string, string> = {
 
   // Onboarding welcome + bot provider region tags
   "welcome.title": "Welcome to ZCode",
-  "login.oauth.regionTag.zai": "Global",
-  "login.oauth.regionTag.bigmodel": "CN",
   "settings.onboarding": "Onboard",
   "settings.onboardingDescription":
     "Choose your role, interface mode, and preferences again. Use Migration settings to import data.",
@@ -2900,6 +2898,8 @@ const enUS: Record<string, string> = {
   "settings.modelProvider.or": "or",
   "settings.modelProvider.connectionMode": "Connection mode",
   "settings.modelProvider.connectionMode.oauth": "OAuth",
+  "settings.modelProvider.regionTag.zai": "Global",
+  "settings.modelProvider.regionTag.bigmodel": "CN",
   "settings.modelProvider.connectionMode.codingPlan": "Individual Plan",
   "settings.modelProvider.connectionMode.startPlan": "Start Plan",
   "settings.modelProvider.connectionMode.startPlanCount": "Start Plan × {count}",

@@ -780,8 +780,6 @@ const zhCN: Record<string, string> = {
 
   // 引导欢迎 + 机器人提供方区域标签
   "welcome.title": "Welcome to ZCode",
-  "login.oauth.regionTag.zai": "全球",
-  "login.oauth.regionTag.bigmodel": "中国",
   "settings.onboarding": "引导",
   "settings.onboardingDescription":
     "重新选择职业、界面模式和使用偏好。数据迁移可在迁移设置中操作。",
@@ -2707,6 +2705,8 @@ const zhCN: Record<string, string> = {
   "settings.modelProvider.or": "或",
   "settings.modelProvider.connectionMode": "连接方式",
   "settings.modelProvider.connectionMode.oauth": "OAuth",
+  "settings.modelProvider.regionTag.zai": "全球",
+  "settings.modelProvider.regionTag.bigmodel": "中国",
   "settings.modelProvider.connectionMode.codingPlan": "个人套餐",
   "settings.modelProvider.connectionMode.startPlan": "体验套餐",
   "settings.modelProvider.connectionMode.startPlanCount": "体验套餐 × {count}",
