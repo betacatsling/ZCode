@@ -13,6 +13,7 @@
     "./model-gateway": "./src/model-gateway/index.ts",
     "./agent-host/codex": "./src/agent-adapters/codex/createCodexHarness.ts",
     "./agent-host/claude": "./src/agent-adapters/claude/createClaudeHarness.ts",
+    "./agent-host/devin": "./src/agent-adapters/devin/createDevinHarness.ts",
     ".": "./src/index.ts",
     "./cua-permission-broker": "./src/cua-permission-broker/index.ts",
     "./process/processTreeTerminator": "./src/process/processTreeTerminator.ts",

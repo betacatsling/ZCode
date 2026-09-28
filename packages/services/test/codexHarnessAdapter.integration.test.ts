@@ -527,7 +527,8 @@ test(
       fingerprint: "codex-long-tool-catalog-v1",
       validateSelection: () => ({ ok: true as const }),
     };
-    const command = `node '${script}' '${release}' '${started}'`;
+    // Must match the Fake Model tool argv (includes finished) or the approval rule will not attach.
+    const command = `node '${script}' '${release}' '${started}' '${finished}'`;
     const profileRules = join(
       codexSessionProfileRoot(join(root, "adapter-data"), spec),
       "codex-home",
@@ -594,6 +595,7 @@ test(
       2,
       "Codex must issue the post-tool Model request under the renewed turn lease",
     );
+    await waitForFile(finished);
     assert.equal(await readFile(finished, "utf8"), "finished");
     assert.equal(
       host

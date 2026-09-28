@@ -36,3 +36,49 @@ test(
     });
   },
 );
+
+test("Codex probe and hostManagedSupport return readable reasons when CLI is missing", async () => {
+  const { createExperimentalRegistryCodexHarness } = await import(
+    "../src/agent-adapters/codex/createCodexHarness.js"
+  );
+  const { HarnessRegistry } = await import("../src/agent-host/harnessRegistry.js");
+  const missing = join("/tmp", `zcode-codex-missing-${Date.now()}`, "no-such-codex");
+  const harness = createExperimentalRegistryCodexHarness({
+    root: await mkdtemp(join(tmpdir(), "zcode-codex-missing-cli-")),
+    registry: {
+      getSnapshot: () => ({ sourceRevisions: { config: "x", account: "y" } }),
+      validateSelection: () => ({ ok: true as const }),
+      getProvider: () => ({
+        providerId: "fake-provider",
+        config: {
+          access: { type: "api-key", apiKey: "unused" },
+          api: { type: "openai-responses", baseUrl: "http://127.0.0.1:9/v1" },
+        },
+        models: [],
+      }),
+      getModel: () => ({ modelId: "fake-model", config: { properties: {} } }),
+    } as never,
+    executablePath: missing,
+  });
+  const registry = new HarnessRegistry();
+  registry.register(harness);
+  assert.equal(harness.id, "codex");
+  assert.equal(harness.version, "0.157.1");
+  const target = {
+    id: "missing-cli-target",
+    kind: "local" as const,
+    platform: process.platform as "darwin" | "linux" | "win32",
+    available: true,
+  };
+  const probe = await harness.probe(target);
+  assert.equal(probe.support, "unsupported");
+  assert.match(probe.reason ?? "", /Pinned Codex CLI is unavailable|not found|version check/i);
+  const support = await harness.hostManagedSupport(target, {
+    providerId: "fake-provider" as never,
+    modelId: "fake-model" as never,
+    options: { reasoningLevel: "off" },
+  });
+  assert.equal(support.support, "unsupported");
+  assert.match(support.reason ?? "", /Pinned Codex CLI is unavailable|not found|version check/i);
+  await harness.shutdown();
+});

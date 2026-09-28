@@ -117,7 +117,9 @@ test("Messages decoder fails closed for unrepresentable or unsupported request s
   assert.equal(parsePinnedAnthropicBetaHeader(`${betas},unknown-beta`), undefined);
   reject(requestBody({ model: "other-model" }), "model does not match");
   reject(requestBody({ thinking: { type: "adaptive" } }), "thinking");
-  reject(requestBody({ temperature: 1 }), "temperature");
+  reject(requestBody({ top_p: 1 }), "top_p");
+  // Claude Code sends temperature; decoder accepts and ignores it.
+  assert.equal(decodeMessagesRequest(requestBody({ temperature: 1 }), expectedModel, model, supportedBetas).model, expectedModel);
   reject(
     requestBody({ messages: [{ role: "developer", content: "must not flatten" }] }),
     "developer",
@@ -289,7 +291,7 @@ test("Messages HTTP route binds x-api-key to its protocol, model, budget and abo
   assert.equal(missingAuth.status, 401);
   const wrongModel = await post(requestBody({ model: "other-model" }));
   assert.equal(wrongModel.status, 400);
-  const unsupported = await post(requestBody({ temperature: 1 }));
+  const unsupported = await post(requestBody({ top_p: 1 }));
   assert.equal(unsupported.status, 400);
   assert.equal(calls, 0, "rejected route/body must not call the bound Model");
 

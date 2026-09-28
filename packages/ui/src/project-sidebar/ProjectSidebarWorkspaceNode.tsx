@@ -20,6 +20,7 @@ import { ProjectSidebarAgentCreateForm } from "./ProjectSidebarAgentCreateForm.j
 import { SessionStatusIcon } from "./SessionStatusIcon.js";
 import { cn } from "@/components/lib/utils.js";
 import { projectSidebarSessionViewKey, projectSidebarWorkspaceViewKey } from "./viewKeys.js";
+import { loadHarnessAssetWithLocalFallback } from "./harnessAssetSources.js";
 import { useCallback, useState } from "react";
 
 function HeadLabel({ workspace }: { workspace: SidebarWorkspaceNode }) {
@@ -186,7 +187,10 @@ export function ProjectSidebarWorkspaceNode({
   const loadAsset = useCallback(
     (assetId: string) =>
       workspace.targetId !== null && targetOption
-        ? loadHarnessAsset(workspace.targetId, targetOption.attachmentGeneration, assetId)
+        ? loadHarnessAssetWithLocalFallback(
+            (id) => loadHarnessAsset(workspace.targetId!, targetOption.attachmentGeneration, id),
+            assetId,
+          )
         : Promise.resolve(null),
     [loadHarnessAsset, targetOption, workspace.targetId],
   );
