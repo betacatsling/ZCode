@@ -116,10 +116,6 @@ export async function writeClaudeSessionCapability(path: string, token: string):
   await rename(temporary, path);
 }
 
-export async function removeClaudeSessionProfile(profile: ClaudeSessionProfile): Promise<void> {
-  await rm(profile.root, { recursive: true, force: true });
-}
-
 export function createClaudeChildEnvironment(input: {
   readonly profile: ClaudeSessionProfile;
   readonly executablePath: string;
