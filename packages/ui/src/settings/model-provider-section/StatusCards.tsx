@@ -277,7 +277,7 @@ export function CodingPlanStatusPanel({
     ? defaultStatusBadgeId
     : (statusLabelId ??
       (isStartPlanProvider && isDisconnected
-        ? "settings.modelProvider.startPlan.status.loginRequired"
+        ? "chat.quota.plan.productLoginRemoved"
         : isStartPlanProvider && isNotPurchased
           ? "settings.modelProvider.startPlan.status.noPlan"
           : defaultStatusBadgeId));
