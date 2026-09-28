@@ -22,5 +22,17 @@ test("multi-harness new-session admission is enabled only for exact env 1", () =
     isMultiHarnessNewSessionAdmissionEnabled({ ZCODE_MULTI_HARNESS_ENABLED: "1 " }),
     false,
   );
+  assert.equal(
+    isMultiHarnessNewSessionAdmissionEnabled({ ZCODE_MULTI_HARNESS_ENABLED: "yes" }),
+    false,
+  );
+  assert.equal(
+    isMultiHarnessNewSessionAdmissionEnabled({ ZCODE_MULTI_HARNESS_ENABLED: "on" }),
+    false,
+  );
+  assert.equal(
+    isMultiHarnessNewSessionAdmissionEnabled({ ZCODE_MULTI_HARNESS_ENABLED: "01" }),
+    false,
+  );
   assert.equal(isMultiHarnessNewSessionAdmissionEnabled({ ZCODE_MULTI_HARNESS_ENABLED: "1" }), true);
 });

@@ -67,14 +67,25 @@ test("MULTI_HARNESS flag off keeps Pi and Codex unavailable for new sessions", a
     assert.equal(isMultiHarnessNewSessionAdmissionEnabled(env), false);
     await withLazyHost(env, async (service) => {
       const availability = await service.getAvailability();
-      // nativeOwner can keep admissionEnabled true; flag only gates *external* new sessions.
+      // nativeOwner keeps Host admissionEnabled; flag only gates *external* new sessions.
+      assert.equal(availability.admissionEnabled, true);
       assert.equal(availability.harnesses.includes("pi"), false);
       assert.equal(availability.harnesses.includes("codex"), false);
       assert.deepEqual(availability.harnesses, ["zcode"]);
 
+      await assert.rejects(
+        () => service.create({} as never),
+        /new external sessions disabled/,
+      );
+
       const directory = await service.getDirectory();
       assert.equal(directory.entries.find((e) => e.manifest.id === "pi")?.status, "unavailable");
       assert.equal(directory.entries.find((e) => e.manifest.id === "codex")?.status, "unavailable");
+      assert.equal(
+        directory.entries.find((e) => e.manifest.id === "claude-code")?.status,
+        "unavailable",
+      );
+      assert.equal(directory.entries.find((e) => e.manifest.id === "devin")?.status, "unavailable");
     });
   }
 });
@@ -87,6 +98,12 @@ test("MULTI_HARNESS flag exact 1 admits Pi and Codex on lazy directory", async (
     assert.equal(availability.admissionEnabled, true);
     assert.ok(availability.harnesses.includes("pi"));
     assert.ok(availability.harnesses.includes("codex"));
+    // Flag gates all lazy externals; Pi/Codex are not a special subset.
+    assert.ok(availability.harnesses.includes("claude-code"));
+    assert.ok(availability.harnesses.includes("devin"));
+    // ACP second agents stay opt-in — MULTI_HARNESS does not admit them.
+    assert.equal(availability.harnesses.includes("opencode"), false);
+    assert.equal(availability.harnesses.includes("goose"), false);
 
     const directory = await service.getDirectory();
     const pi = directory.entries.find((e) => e.manifest.id === "pi");
@@ -95,5 +112,14 @@ test("MULTI_HARNESS flag exact 1 admits Pi and Codex on lazy directory", async (
     assert.equal(codex?.status, "registered");
     assert.equal(pi?.manifest.adapterVersion, PI_HARNESS_MANIFEST.adapterVersion);
     assert.equal(codex?.manifest.adapterVersion, CODEX_HARNESS_MANIFEST.adapterVersion);
+    assert.equal(
+      directory.entries.find((e) => e.manifest.id === "claude-code")?.status,
+      "registered",
+    );
+    assert.equal(directory.entries.find((e) => e.manifest.id === "devin")?.status, "registered");
+    assert.equal(
+      directory.entries.some((e) => e.manifest.id === "opencode" || e.manifest.id === "goose"),
+      false,
+    );
   });
 });
