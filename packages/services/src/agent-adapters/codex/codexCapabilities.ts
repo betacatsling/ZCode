@@ -66,6 +66,8 @@ export async function codexHostManagedSupport(input: {
     cliVersion: input.adapterVersion,
     gatewayVersion: MODEL_GATEWAY_VERSION,
     apiFormat: "openai-responses",
+    // 控制面 fixture 不能标成已经打到模型执行层的统一路由。
+    unifiedModelRoute: "experimental",
   };
   if (
     evidence &&
@@ -113,5 +115,22 @@ export function codexHarnessCapabilities(): HarnessCapabilities {
     resumeExecution: no,
     images: no,
     modelSwitch: no,
+    detach: {
+      support: "unsupported",
+      reason: "View detach stays on the host subscription and does not stop this app-server.",
+    },
+    terminateSession: {
+      support: "experimental",
+      reason: "terminate stops only the named host session; it is not a live CLI certification.",
+    },
+    viewHistory: {
+      support: "unsupported",
+      reason: "This adapter has no read-only history snapshot and does not replay prompts.",
+    },
+    hostManagedModel: {
+      support: "experimental",
+      reason:
+        "The custom provider points at an injected Gateway port, but no model execution trace has been observed.",
+    },
   };
 }

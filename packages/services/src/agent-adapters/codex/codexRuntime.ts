@@ -6,7 +6,7 @@ import type {
   SessionSpec,
 } from "@zcode/shared/agent-host";
 import type { ModelGateway, ModelGatewayGrant } from "@zcode/services/model-gateway";
-import type { CodexAppServerProcess, JsonRpcId } from "./codexAppServerProcess.js";
+import type { CodexAppServerTransport, JsonRpcId } from "./codexAppServerProcess.js";
 
 export interface TurnCompletion {
   readonly promise: Promise<void>;
@@ -40,7 +40,7 @@ export interface CodexSessionRuntime {
   readonly model: Model;
   readonly gateway: ModelGateway;
   readonly grant: ModelGatewayGrant;
-  readonly process: CodexAppServerProcess;
+  readonly process: CodexAppServerTransport;
   readonly threadId: string;
   readonly sequence: { value: number };
   readonly pendingApprovals: Map<string, CodexPendingApproval>;
