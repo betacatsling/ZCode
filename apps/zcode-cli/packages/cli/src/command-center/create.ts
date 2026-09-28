@@ -24,10 +24,6 @@ import {
   formatSlashCommandHelp,
   parseSlashCommand,
 } from "./slash-commands.js";
-import {
-  formatProviderSetupResult,
-  parseApiKeyLoginArgs,
-} from "./login-flow.js";
 import { loginRequiredResponse } from "../tui-login-state.js";
 import { PRODUCT_LOGIN_REMOVED_MESSAGE } from "../login-command.js";
 import type { CommandCenterDeps } from "./types.js";
@@ -80,33 +76,7 @@ export function createCommandCenter(deps: CommandCenterDeps): TuiSubmitPrompt {
       }
 
       if (command.name === "login") {
-        // Product OAuth login removed (P3). API key-under-/login kept temporarily (待核实 → Provider 配置).
-        const apiKeyCommand = parseApiKeyLoginArgs(command.args);
-        if (apiKeyCommand) {
-          if (!deps.configureApiKey) {
-            return {
-              mode: deps.getMode?.(),
-              response: "Manual API key setup is not available in this client.",
-            };
-          }
-          if (!apiKeyCommand.apiKey) {
-            return {
-              loginRequired: await isLoginRequired(deps),
-              mode: deps.getMode?.(),
-              response: `Usage: /login ${apiKeyCommand.kind} <api-key>`,
-            };
-          }
-          return {
-            loginRequired: false,
-            mode: deps.getMode?.(),
-            response: formatProviderSetupResult(
-              await deps.configureApiKey({
-                apiKey: apiKeyCommand.apiKey,
-                providerId: apiKeyCommand.providerId,
-              }),
-            ),
-          };
-        }
+        // Product OAuth and API-key-under-/login hooks removed; configure personal providers instead.
         return {
           mode: deps.getMode?.(),
           response: PRODUCT_LOGIN_REMOVED_MESSAGE,

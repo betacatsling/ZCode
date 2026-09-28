@@ -103,53 +103,11 @@ Slash Commands:
       title: "model setup required",
     },
     loginSetup: {
-      emptyMessage: "No login options are available.",
-      help: "Use Up/Down to choose, Enter to select.",
-      options: {
-        bigmodelApiKey: {
-          inputPrimary: "Enter BigModel Coding Plan API Key",
-          inputSecondary: "Paste the key here. It is hidden while typing.",
-          primary: "BigModel Coding Plan API Key",
-          secondary: "Paste a Coding Plan API key manually.",
-        },
-        bigmodelOauth: {
-          pendingPrimary: "Waiting for BigModel authorization",
-          pendingSecondary:
-            "Complete sign-in in your browser. Authorization is detected automatically.",
-          primary: "BigModel Coding Plan",
-          secondary: "Open browser login; authorization is detected automatically.",
-        },
-        zaiApiKey: {
-          inputPrimary: "Enter Z.AI Coding Plan API Key",
-          inputSecondary: "Paste the key here. It is hidden while typing.",
-          primary: "Z.AI Coding Plan API Key",
-          secondary: "Paste a Coding Plan API key manually.",
-        },
-        zaiOauth: {
-          pendingPrimary: "Waiting for Z.AI authorization",
-          pendingSecondary:
-            "Complete sign-in in your browser. I will continue when authorization finishes.",
-          primary: "Z.AI Coding Plan",
-          secondary: "Open browser login and create a Coding Plan API key.",
-        },
-      },
-      pending: {
-        cancelStatus: "Login cancelled. Choose a setup method.",
-        help: "Esc cancels and returns to setup choices.",
-        status: "Waiting for browser authorization...",
-      },
-      input: {
-        cancelStatus: "API key entry cancelled. Choose a setup method.",
-        clearStatus: "API key input cleared.",
-        emptyStatus: "API key is required.",
-        help: "Enter saves the key. Esc returns to setup choices.",
-        placeholder: "Paste API key",
-        status: "Enter the API key, then press Enter.",
-        submitStatus: "Saving API key...",
-      },
-      prompt: "Choose a login or API key setup method.",
-      response: "Choose how to set up a Coding Plan provider.",
-      title: "Set Up Coding Plan",
+      emptyMessage: "Product account login setup was removed.",
+      help: "Configure a personal model provider instead of /login.",
+      prompt: "Product login setup is unavailable.",
+      response: "Product account login was removed. Configure a personal model provider instead.",
+      title: "login setup removed",
     },
     model: {
       requestFailed: (message) => `Model request failed: ${message}`,
