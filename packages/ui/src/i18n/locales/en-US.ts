@@ -3565,8 +3565,6 @@ const enUS: Record<string, string> = {
   "settings.usage.entitlementStatusNotConfigured": "Not configured",
   "sidebar.usage.summaryTitle": "Last 30 days",
   "sidebar.usage.plan.title": "Usage remaining",
-  "sidebar.usage.plan.upgrade": "Upgrade",
-  "sidebar.usage.plan.renew": "Renew",
   "sidebar.usage.plan.codingPlanTitle": "Coding Plan",
   "sidebar.usage.plan.audienceIndividual": "Individual",
   "sidebar.usage.plan.audienceTeam": "Team",
