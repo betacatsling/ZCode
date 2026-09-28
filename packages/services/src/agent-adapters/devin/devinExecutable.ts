@@ -69,7 +69,8 @@ export async function probeDevinTarget(target: ExecutionTarget, executablePath?:
     const version = await readDevinCliVersion(executable);
     return {
       support: "supported" as const,
-      reason: "Devin CLI answered an isolated version probe; Wave 2 sessions use print mode (-p).",
+      reason:
+        "Devin CLI answered an isolated version probe; Wave 2 sessions use print mode (-p). Probe support does not certify tools, approvals, history, resume, images, or model switch.",
       constraints: { adapterVersion: DEVIN_ADAPTER_VERSION, cliVersion: version },
     };
   } catch {

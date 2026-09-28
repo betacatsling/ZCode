@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -77,17 +77,17 @@ test(
   async (t) => {
     const root = await mkdtemp(join(tmpdir(), "zcode-devin-probe-"));
     const executable = join(root, "devin");
-    await writeFile(
-      executable,
-      "#!/usr/bin/env node\nprocess.stdout.write('devin 0.0.1\\n');\n",
-      { mode: 0o700 },
-    );
+    await writeFile(executable, "#!/usr/bin/env node\nprocess.stdout.write('devin 0.0.1\\n');\n", {
+      mode: 0o700,
+    });
     await chmod(executable, 0o700);
     t.after(() => rm(root, { recursive: true, force: true }));
 
     const report = await probeDevinTarget(localTarget, executable);
     assert.equal(report.support, "supported");
     assert.match(report.reason ?? "", /print mode/i);
+    assert.match(report.reason ?? "", /-p/);
+    assert.match(report.reason ?? "", /does not certify/i);
   },
 );
 
@@ -100,13 +100,36 @@ test("Devin probe is unsupported when CLI is missing", async () => {
   assert.match(report.reason ?? "", /unavailable|failed/i);
 });
 
-test("Devin capabilities keep tools/approvals unsupported", async () => {
+test("Devin capabilities stay print-mode honest on every field", () => {
   const caps = devinHarnessCapabilities();
   assert.equal(caps.text.support, "experimental");
+  assert.match(caps.text.reason ?? "", /print mode/i);
+  assert.match(caps.text.reason ?? "", /-p/);
   assert.equal(caps.cancelTurn.support, "experimental");
-  assert.equal(caps.tools.support, "unsupported");
-  assert.equal(caps.approvals.support, "unsupported");
-  assert.equal(caps.history.support, "unsupported");
+  assert.match(caps.cancelTurn.reason ?? "", /print-mode/i);
+  assert.match(caps.cancelTurn.reason ?? "", /-p/);
+
+  const unsupported = [
+    "tools",
+    "approvals",
+    "history",
+    "resumeExecution",
+    "images",
+    "modelSwitch",
+  ] as const;
+  for (const field of unsupported) {
+    assert.equal(caps[field].support, "unsupported", field);
+    assert.match(caps[field].reason ?? "", /print mode/i, field);
+    assert.match(caps[field].reason ?? "", /-p/, field);
+    for (const named of unsupported) {
+      assert.match(caps[field].reason ?? "", new RegExp(named), field);
+    }
+  }
+
+  assert.equal(caps.detach, undefined);
+  assert.equal(caps.terminateSession, undefined);
+  assert.equal(caps.viewHistory, undefined);
+  assert.equal(caps.hostManagedModel, undefined);
 });
 
 test(
@@ -121,13 +144,18 @@ test(
       executable,
       [
         "#!/usr/bin/env node",
+        "const fs = require('node:fs');",
+        "const path = require('node:path');",
         "const args = process.argv.slice(2);",
+        "const logPath = path.join(path.dirname(process.argv[1]), 'devin-argv.log');",
+        "fs.appendFileSync(logPath, JSON.stringify(args) + '\\n');",
         "if (args.includes('--version') || args[0] === 'version') {",
         "  process.stdout.write('devin 0.0.1\\n');",
         "  process.exit(0);",
         "}",
-        "if (!args.includes('-p')) {",
-        "  process.stderr.write('expected -p\\n');",
+        "const trust = args.indexOf('--respect-workspace-trust');",
+        "if (args[0] !== '-p' || trust < 0 || args[trust + 1] !== 'false' || !args.includes('--')) {",
+        "  process.stderr.write('expected print-mode argv\\n');",
         "  process.exit(2);",
         "}",
         "process.stdout.write('hello from fake devin');",
@@ -160,17 +188,25 @@ test(
     });
 
     const kinds = events.map((event) => event.kind);
-    assert.deepEqual(kinds, [
-      "turn.started",
-      "text.delta",
-      "message.finished",
-      "turn.finished",
-    ]);
+    assert.deepEqual(kinds, ["turn.started", "text.delta", "message.finished", "turn.finished"]);
     const finished = events.find((event) => event.kind === "message.finished");
     assert.ok(finished && finished.kind === "message.finished");
     assert.equal(finished.text, "hello from fake devin");
     const turn = events.find((event) => event.kind === "turn.finished");
     assert.ok(turn && turn.kind === "turn.finished");
     assert.equal(turn.outcome, "success");
+
+    const logged = await readFile(join(root, "devin-argv.log"), "utf8");
+    const invocations = logged
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as string[]);
+    const print = invocations.find((args) => args.includes("-p"));
+    assert.ok(print);
+    assert.deepEqual(print.slice(0, 4), ["-p", "--respect-workspace-trust", "false", "--"]);
+    assert.equal(print.includes("-c"), false);
+    assert.equal(print.includes("-r"), false);
+    assert.equal(print.includes("acp"), false);
+    assert.equal(print.includes("--cloud"), false);
   },
 );
