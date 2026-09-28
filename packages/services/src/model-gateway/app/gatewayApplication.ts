@@ -6,6 +6,7 @@ import type {
   ModelGatewayGrantInput,
 } from "../contract.js";
 import { ModelGatewayProtocolError } from "../domain/errors.js";
+import { rejectResponsesBeyondBoundModel } from "../domain/boundModelLimits.js";
 import { decodeResponsesRequest } from "../domain/responsesDecoder.js";
 import type {
   GatewayHttpHandler,
@@ -247,6 +248,14 @@ export class GatewayApplication implements GatewayHttpHandler {
       }
       const body = parseResponsesJson(await readBody(request, record.limits.maxBodyBytes));
       const decoded = decodeResponsesRequest(body, record.publicModelId);
+      rejectResponsesBeyondBoundModel({
+        ...(decoded.maxOutputTokens === undefined
+          ? {}
+          : { maxOutputTokens: decoded.maxOutputTokens }),
+        contextWindow: record.model.properties.contextWindow,
+        toolCount: decoded.tools.length,
+        supportsToolCall: record.model.properties.supportsToolCall,
+      });
       if (
         record.clientSessionId !== undefined &&
         record.clientSessionId !== decoded.clientSessionId

@@ -5,6 +5,7 @@ import type {
   ModelGatewayProtocol,
 } from "../contract.js";
 import { modelGatewayLimitsSchema, modelGatewayProtocolSchema } from "../contract.js";
+import { admitHostManagedGrant } from "../domain/bindingAdmission.js";
 import type { GatewayGrantRecord } from "./modelResponseStream.js";
 import type { GatewayTokenPort } from "./transport.js";
 
@@ -33,8 +34,6 @@ export class GatewayGrantStore {
     if (this.closed || !this.baseUrl)
       throw new Error("Model Gateway must be started before grants are issued");
     const limits = modelGatewayLimitsSchema.parse(input.limits);
-    if (!input.sessionId.trim() || input.sessionId.length > 256)
-      throw new Error("sessionId must be a bounded non-empty string");
     if (!input.modelBindingFingerprint.trim() || input.modelBindingFingerprint.length > 512) {
       throw new Error("modelBindingFingerprint must be a bounded non-empty string");
     }
@@ -42,6 +41,18 @@ export class GatewayGrantStore {
       throw new Error("publicModelId is invalid");
     if (!input.model.providerId || !input.model.modelId)
       throw new Error("bound Model must expose its actual Provider and model identity");
+    // 路由、会话和生效模型只接受宿主 BindingPlan，不从请求体猜测，也不保存 credentialRef。
+    admitHostManagedGrant({
+      protocol: input.protocol,
+      sessionId: input.sessionId,
+      modelBindingFingerprint: input.modelBindingFingerprint,
+      providerId: input.model.providerId,
+      modelId: input.model.modelId,
+      ...(input.model.options.reasoningLevel === undefined
+        ? {}
+        : { reasoningLevel: input.model.options.reasoningLevel }),
+      ...(input.plan ? { plan: input.plan } : {}),
+    });
     if (
       !Number.isSafeInteger(input.expiresInMs) ||
       input.expiresInMs < 1 ||
