@@ -35,9 +35,9 @@ export function createCommandCenter(deps: CommandCenterDeps): TuiSubmitPrompt {
     const hasAttachments = (promptInput.attachments?.length ?? 0) > 0;
 
     if (!command) {
-      if (await isLoginRequired(deps)) {
+      if (await isModelSetupRequired(deps)) {
         return {
-          loginRequired: true,
+          modelSetupRequired: true,
           mode: deps.getMode?.(),
           response: modelSetupRequiredResponse(deps.getLocale?.()),
         };
@@ -277,7 +277,7 @@ function parseForkTarget(args: string): string | undefined {
   return trimmed;
 }
 
-async function isLoginRequired(deps: CommandCenterDeps): Promise<boolean> {
+async function isModelSetupRequired(deps: CommandCenterDeps): Promise<boolean> {
   if (!deps.hasSelectableModels) return false;
   try {
     return !(await deps.hasSelectableModels());

@@ -19,6 +19,7 @@
  *
  * Hard (also): CLI i18n tui.loginRequired / tui.loginSetup key names must stay absent
  *   (renamed to modelSetupRequired / deleted dead loginSetup).
+ * Hard (also): CLI isLoginRequired gate must stay absent (renamed to isModelSetupRequired).
  *
  * Run from repo root: node scripts/verify-product-login-removed.mjs
  */
@@ -280,6 +281,19 @@ function assertDeletedSurfaces() {
   });
   if (!modelSetupHits.length) {
     fails.push("CLI i18n must define modelSetupRequired (renamed from loginRequired)");
+  }
+
+  // CLI command-center gate: isLoginRequired → isModelSetupRequired (Ex3 Track B).
+  const cliSrc = join(ROOT, "apps/zcode-cli/packages/cli/src");
+  const staleGateHits = grepFiles(cliSrc, /\bisLoginRequired\b/, { extensions: [".ts"] });
+  if (staleGateHits.length) {
+    fails.push(
+      `CLI must not keep isLoginRequired gate: ${staleGateHits.map((h) => h.file).join(", ")}`,
+    );
+  }
+  const modelGateHits = grepFiles(cliSrc, /\bisModelSetupRequired\b/, { extensions: [".ts"] });
+  if (!modelGateHits.length) {
+    fails.push("CLI must define isModelSetupRequired gate (renamed from isLoginRequired)");
   }
 
   return fails;
