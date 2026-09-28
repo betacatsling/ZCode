@@ -24,4 +24,4 @@
 - 不伪造已登录用户，不加永久跳过登录开关。
 - 模型视图的过期结果仍由现有 revision 丢弃；本变更不改 owner/lease。
 - MCP OAuth、harness 自身认证、SSH/Web token、审批和 workspace admission 保持原契约。
-- 设置页里尚未拆除的 Coding Plan 登录请求仍可能打开既有 WelcomeScreen。那是 P2 的服务与商业 UI 拆除范围，不是缺模型时的启动跳转。
+- 全局 WelcomeScreen / useOAuth / Root 产品 OAuth 登录壳已卸；`requestLoginEntry` 为 no-op，不再打开 Welcome。设置页 Coding Plan 购买/恢复接线属 Ex4，不在本刀。

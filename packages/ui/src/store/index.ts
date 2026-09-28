@@ -153,7 +153,7 @@ export interface ZCodeState {
   apiKeyLoginSuccessSeq: number;
   lastApiKeyLoginModel: string | null;
   markApiKeyLoginSuccess: (preferredModel?: string | null) => void;
-  /** 请求打开统一登录入口，可携带需要自动发起登录/连接的 provider */
+  /** 历史统一登录入口请求；Ex2 后 no-op，不再打开 Welcome */
   loginEntryRequest: {
     id: number;
     providerId?: OAuthProviderId;
@@ -343,23 +343,10 @@ export function createZCodeStore(
       })),
     loginEntryRequest: null,
     loginEntryAttempt: null,
-    requestLoginEntry: (providerId?: OAuthProviderId, purpose?: LoginEntryPurpose) => {
-      const id = ++loginEntryRequestSeq;
-      const attempt: LoginEntryAttempt = {
-        id,
-        providerId,
-        purpose,
-        status: "requested",
-      };
-      set({
-        loginEntryRequest: {
-          id,
-          providerId,
-          purpose,
-        },
-        loginEntryAttempt: attempt,
-      });
-      return id;
+    requestLoginEntry: (_providerId?: OAuthProviderId, _purpose?: LoginEntryPurpose) => {
+      // Product Welcome / Root OAuth login shell removed (Ex2).
+      // Keep signature for Ex4 settings callers; never publish loginEntryRequest.
+      return ++loginEntryRequestSeq;
     },
     clearLoginEntryRequest: (requestId?: number) =>
       set((state) => {
