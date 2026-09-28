@@ -4,6 +4,7 @@ import { access, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, isAbsolute, join } from "node:path";
 import { ZCODE_VERSION } from "@zcode/shared";
+import { isMultiHarnessNewSessionAdmissionEnabled } from "@zcode/shared/agent-host";
 import {
   controlRequestSchema,
   createStoppedServerStatus,
@@ -224,7 +225,7 @@ async function runServe(
         command: process.execPath,
         entry: process.argv[1] ?? fileURLToPath(import.meta.url),
         environment:
-          process.env.ZCODE_MULTI_HARNESS_ENABLED === "1"
+          isMultiHarnessNewSessionAdmissionEnabled()
             ? { ZCODE_MULTI_HARNESS_ENABLED: "1" }
             : {},
       });

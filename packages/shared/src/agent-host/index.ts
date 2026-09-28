@@ -13,3 +13,4 @@ export * from "./v4.js";
 export * from "./session-hierarchy.js";
 export * from "./workspace-session.js";
 export * from "./workspace-admission.js";
+export * from "./multiHarnessAdmission.js";

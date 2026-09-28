@@ -109,7 +109,7 @@ P0 验收仍缺 native GUI 回归、SSH 实际任务、安装包和脱敏 trace�
 - facade/ConversationTransport 已有生产可消费 port；ProjectSidebar native selection 复用既有 task callback，external selection 在 mapping port 未就绪时 fail-closed disabled。完整 Harness Picker/Header 共用、external create mount 和 side-by-side UI regression 仍未认证。
 - Project Catalog、WorktreeService、只读发现和显式接管已有 service ports；ProjectSidebar UI 正在接入，主检出/linked worktree、旧 session owner 保留和跨 target 映射仍依赖迁移 source 联合。
 - 没有严格 sidecar migration、future-version write rejection、旧 session/model/permission 保留和回滚演练。
-- `ZCODE_MULTI_HARNESS_ENABLED` 目前只在 `packages/services/src/node.ts` 中控制新 session admission，没有对应 spec、优先级、错误语义和完整 E2E。
+- `ZCODE_MULTI_HARNESS_ENABLED`：env 契约已锁在 `docs/agent-host/MULTI-HARNESS-ADMISSION.md` 与 `isMultiHarnessNewSessionAdmissionEnabled`（仅 `"1"` 开启；生产 `node.ts` / server CLI 共用）。完整产品 E2E（Picker/侧栏/create mount on/off）仍缺。
 
 P2 验收需要 native facade 开关 on/off、旧历史与设置保留、同工作区三会话不新增 worktree、后台不抢焦点、Picker/侧栏/Header 统一目录图标。当前只具备路由和隔离 channel 的确定性证据。
 
