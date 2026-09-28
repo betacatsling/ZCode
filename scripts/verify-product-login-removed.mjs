@@ -351,7 +351,7 @@ function remainingUiInventory() {
   };
 
   const note =
-    "Tip 8560df4/#57: Dialog/Provider/Root-wrap cleared (hard-gated). Soft remaining = Root isRestoringOAuthSession + EmbeddedWebview/funnel/entry-plan leftovers + CLI TUI loginRequired/loginSetup rename. Inventory does not fail this gate.";
+    "Tip 44fe40a+: Dialog/Provider/Root-wrap cleared (hard-gated). Soft remaining = Root isRestoringOAuthSession + EmbeddedWebview/funnel/pricing leftovers + CLI TUI loginRequired/loginSetup rename. useCodingPlanEntryPlanList deleted (zero callers). Inventory does not fail this gate.";
 
   return {
     note,
