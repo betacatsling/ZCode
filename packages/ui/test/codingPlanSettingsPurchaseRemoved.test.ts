@@ -25,13 +25,10 @@ test("coding plan login recovery and upgrade dialog modules are removed", () => 
   );
   assert.match(presentation, /CODING_PLAN_PRODUCT_PURCHASE_CARDS_REMOVED\s*=\s*true/);
 
-  const pricingCards = readFileSync(
-    new URL("model-provider-section/codingPlanPricingCards.ts", settingsRoot),
-    "utf8",
+  assert.equal(
+    existsSync(fileURLToPath(new URL("model-provider-section/codingPlanPricingCards.ts", settingsRoot))),
+    false,
   );
-  assert.match(pricingCards, /export type CodingPlanLoginOptions/);
-  assert.equal(pricingCards.includes("shouldOfferCodingPlanOAuthPurchase"), false);
-  assert.equal(pricingCards.includes("resolveCodingPlanUpgradeProductsProviderId"), false);
 });
 
 test("CodingPlanEmbeddedWebviewDialog and helpers are removed", () => {
@@ -63,6 +60,8 @@ test("Detail no longer renders Coding Plan purchase choice banners", () => {
   assert.equal(detail.includes("CodingPlanPurchaseChoiceBanners"), false);
   assert.equal(detail.includes("purchaseChoiceBannersVisible"), false);
   assert.equal(detail.includes("PurchaseChoiceBannerPrice"), false);
+  assert.equal(detail.includes("CodingPlanAccessBanner"), false);
+  assert.equal(detail.includes("CodingPlanLoginOptions"), false);
 });
 
 test("settings coding plan surface does not call product login entry", () => {
