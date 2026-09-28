@@ -36,7 +36,6 @@ import {
   type CodingPlanStatus,
   type ModelProviderNavGroup,
 } from "./model-provider-section/constants.js";
-import { useOptionalCodingPlanUpgradeDialog } from "@/settings/CodingPlanUpgradeDialogProvider.js";
 import { ModelProviderSectionDetail } from "./model-provider-section/Detail.js";
 import { ModelProviderSectionLayout } from "./model-provider-section/SectionLayout.js";
 import { ProviderTemplatePicker } from "./model-provider-section/ProviderTemplatePicker.js";
@@ -385,7 +384,6 @@ export function ModelProviderSection({
   const codingPlanStatusSyncAttemptsRef = useRef(
     new Map<string, "inFlight" | "succeeded" | "failed">(),
   );
-  const codingPlanUpgradeDialog = useOptionalCodingPlanUpgradeDialog();
   const setUser = useZCodeStore((state) => state.setUser);
   const oauthError = useZCodeStore((state) => state.oauthError);
   const setOAuthError = useZCodeStore((state) => state.setOAuthError);
@@ -801,10 +799,9 @@ export function ModelProviderSection({
         status,
         forceOAuth: options?.forceOAuth === true,
       });
-      // 套餐横幅仍会调用本回调。只打开下线说明。
-      codingPlanUpgradeDialog?.openCodingPlanUpgrade({ providerId: presetId });
+      // 套餐横幅仍会调用本回调；产品登录与升级弹窗均已下线，仅保留日志。
     },
-    [codingPlanUpgradeDialog],
+    [],
   );
 
   const handleCodingPlanDisconnect = useCallback(
