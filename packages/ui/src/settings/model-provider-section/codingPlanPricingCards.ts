@@ -1,13 +1,17 @@
 import { BUILTIN_MODEL_PROVIDER_IDS } from "@zcode/shared";
 import type { CodingPlanProviderId } from "@/settings/model-provider-section/constants.js";
+import { CODING_PLAN_PRODUCT_PURCHASE_CARDS_REMOVED } from "@/settings/model-provider-section/codingPlanProductPresentation.js";
 
-// 死代码清理：原生购买组件 CodingPlanPricingCards 及其配套 resolver 已随
-// CodingPlanPurchasePanel 一起下线（购买流程切换为内嵌官网 webview）。
-// 本文件仅保留仍被设置页使用的登录参数类型与套餐商品源解析。
+// 原生价卡与内嵌官网购买都已下线。forceOAuth 只留在类型里，避免调用方签名断裂，
+// 但不能再打开产品登录。
 
 export type CodingPlanLoginOptions = {
   forceOAuth?: boolean;
 };
+
+export function shouldOfferCodingPlanOAuthPurchase(_options?: CodingPlanLoginOptions): boolean {
+  return !CODING_PLAN_PRODUCT_PURCHASE_CARDS_REMOVED;
+}
 
 export function resolveCodingPlanUpgradeProductsProviderId(
   providerId: CodingPlanProviderId,

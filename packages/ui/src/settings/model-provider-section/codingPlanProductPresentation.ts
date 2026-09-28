@@ -35,6 +35,9 @@ export type CodingPlanProductDisplay = CodingPlanProductPreviewPayment & {
   descriptionItems?: CodingPlanCardCopyItem[];
 };
 
+/** 设置页不再渲染可下单的 OAuth 套餐价卡。价格格式化只留给只读状态。 */
+export const CODING_PLAN_PRODUCT_PURCHASE_CARDS_REMOVED = true;
+
 const CODING_PLAN_CURRENCY_LABELS_ZH: Record<CodingPlanPriceCurrency, string> = {
   CNY: "人民币",
   USD: "美元",

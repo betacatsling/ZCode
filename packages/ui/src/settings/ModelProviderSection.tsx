@@ -36,6 +36,7 @@ import {
   type CodingPlanStatus,
   type ModelProviderNavGroup,
 } from "./model-provider-section/constants.js";
+import { useOptionalCodingPlanUpgradeDialog } from "@/settings/CodingPlanUpgradeDialogProvider.js";
 import { ModelProviderSectionDetail } from "./model-provider-section/Detail.js";
 import { ModelProviderSectionLayout } from "./model-provider-section/SectionLayout.js";
 import { ProviderTemplatePicker } from "./model-provider-section/ProviderTemplatePicker.js";
@@ -384,7 +385,7 @@ export function ModelProviderSection({
   const codingPlanStatusSyncAttemptsRef = useRef(
     new Map<string, "inFlight" | "succeeded" | "failed">(),
   );
-  const requestLoginEntry = useZCodeStore((state) => state.requestLoginEntry);
+  const codingPlanUpgradeDialog = useOptionalCodingPlanUpgradeDialog();
   const setUser = useZCodeStore((state) => state.setUser);
   const oauthError = useZCodeStore((state) => state.oauthError);
   const setOAuthError = useZCodeStore((state) => state.setOAuthError);
@@ -793,26 +794,17 @@ export function ModelProviderSection({
       status: CodingPlanStatus,
       options?: CodingPlanLoginOptions,
     ) => {
-      setPresetSubscriptionProviderId(presetId);
-      setCodingPlanStatusSyncProviderId(presetId);
-      logger.info("[ModelProviderSection] 请求通过统一登录入口登录并连接 Coding Plan", {
+      logger.info("[ModelProviderSection] 产品登录已下线，不再连接 Coding Plan", {
         presetId,
         providerId,
         providerName,
         status,
         forceOAuth: options?.forceOAuth === true,
       });
-      if (activeOAuthProvider === providerId && options?.forceOAuth !== true) {
-        void refreshProviderPanelAfterAuthChange({}).finally(() => {
-          setPresetSubscriptionProviderId((current) => (current === presetId ? null : current));
-          setCodingPlanStatusSyncProviderId((current) => (current === presetId ? null : current));
-        });
-        return;
-      }
-      // ZAI/BigModel provider 不再有独立 connection，Connect 必须切换 App active provider。
-      return requestLoginEntry(providerId);
+      // 套餐横幅仍会调用本回调。只打开下线说明。
+      codingPlanUpgradeDialog?.openCodingPlanUpgrade({ providerId: presetId });
     },
-    [activeOAuthProvider, refreshProviderPanelAfterAuthChange, requestLoginEntry],
+    [codingPlanUpgradeDialog],
   );
 
   const handleCodingPlanDisconnect = useCallback(

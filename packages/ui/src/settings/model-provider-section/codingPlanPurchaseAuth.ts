@@ -8,8 +8,9 @@ type CodingPlanPurchaseAuthStatus =
   | "unauthenticated"
   | "error";
 
-export function isCodingPlanPurchaseAuthPending(status: CodingPlanPurchaseAuthStatus): boolean {
-  return status === "unknown" || status === "loading";
+export function isCodingPlanPurchaseAuthPending(_status: CodingPlanPurchaseAuthStatus): boolean {
+  // 购买鉴权的 unknown/loading 不再表示“等产品登录后继续购买”。
+  return false;
 }
 
 export function normalizeCodingPlanProviderId(
