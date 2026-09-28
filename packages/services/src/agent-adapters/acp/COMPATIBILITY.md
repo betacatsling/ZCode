@@ -8,7 +8,11 @@
 | version 1，两者都没有 | 可以新建会话 | unsupported，不发送 load/resume/new/prompt | 仍可查看 |
 | version 2 或未知版本 | experimental，不创建会话 | 不调用 session 方法 | 不依赖 Agent |
 
-认证方法只记录 `methodId`。本适配器不提交凭据，也不运行 `opencode auth login` / `goose acp`。
+认证方法只记录 `methodId`。本适配器不提交凭据，也不运行 `opencode auth login` / `goose acp` / `devin acp` / `devin auth login`。
+
+## Devin
+
+Devin CLI 的编辑器控制面是官方 `devin acp`（stdio JSON-RPC）。档案 id 为 `devin`，参数只有 `acp`。它和 OpenCode、Goose 共用 `acp-session-machine/1`。模型绑定只接受 `harness-managed`，不把 Devin 的账号模型送进 Gateway。`hostManagedSupport` 是 `unsupported`，不是已完成的 host-managed。协议版本、续跑和认证仍只看当次 `initialize`。
 
 ## 增加另一个 ACP Agent
 

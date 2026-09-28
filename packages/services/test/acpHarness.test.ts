@@ -7,6 +7,7 @@ import {
   buildAcpCompatibilityReport,
   createAcpHarness,
   diagnoseAcpInstall,
+  devinAcpProfile,
   gooseAcpProfile,
   linkAcpTransports,
   negotiateAcpInitialize,
@@ -328,7 +329,7 @@ test("negotiated session/resume does not claim history replay", async () => {
   assert.deepEqual(result, { method: "session/resume", replaysHistory: false });
 });
 
-test("Goose and OpenCode share one session machine and register without a brand branch", async () => {
+test("Goose, OpenCode, and Devin share one session machine and register without a brand branch", async () => {
   const machine = await readFile(
     new URL("../src/agent-adapters/acp/acpSessionMachine.ts", import.meta.url),
     "utf8",
@@ -338,23 +339,84 @@ test("Goose and OpenCode share one session machine and register without a brand 
     new URL("../src/agent-adapters/acp/agents/opencode.ts", import.meta.url),
     "utf8",
   );
+  const devin = await readFile(new URL("../src/agent-adapters/acp/agents/devin.ts", import.meta.url), "utf8");
   assert.equal(machine.includes("opencode"), false);
   assert.equal(machine.includes("goose"), false);
+  assert.equal(machine.includes("devin"), false);
   assert.equal(goose.includes("session/load"), false);
   assert.equal(opencode.includes("session/load"), false);
+  assert.equal(devin.includes("session/load"), false);
+  assert.equal(devin.includes("streamText"), false);
   const registry = new HarnessRegistry();
   const loaded = loadExplicitHarnessPlugins(
     registry,
-    [openCodeAcpProfile, gooseAcpProfile].map((profile) => ({
+    [openCodeAcpProfile, gooseAcpProfile, devinAcpProfile].map((profile) => ({
       manifest: profile.manifest,
       trusted: true,
       create: () => createAcpHarness({ profile, openTransport: () => linkAcpTransports().client }),
     })),
-    new Set(["opencode", "goose"]),
+    new Set(["opencode", "goose", "devin"]),
   );
-  assert.deepEqual(loaded.loaded, ["opencode", "goose"]);
+  assert.deepEqual(loaded.loaded, ["opencode", "goose", "devin"]);
   assert.equal(registry.require("opencode").sessionMachineId, ACP_SESSION_MACHINE_ID);
   assert.equal(registry.require("goose").sessionMachineId, ACP_SESSION_MACHINE_ID);
+  assert.equal(registry.require("devin").sessionMachineId, ACP_SESSION_MACHINE_ID);
+  assert.equal(registry.require("devin").id, devinAcpProfile.manifest.id);
+});
+
+test("Devin stays on harness-managed ACP and does not inject a host model", async () => {
+  assert.deepEqual(devinAcpProfile.install, { executableName: "devin", args: ["acp"] });
+  assert.equal(devinAcpProfile.manifest.adapterVersion, ACP_ADAPTER_VERSION);
+  const missing = diagnoseAcpInstall({ profile: devinAcpProfile, executableFound: false });
+  assert.equal(missing.support, "unsupported");
+  assert.match(missing.reason ?? "", /devin was not found/);
+  const { adapter, peers } = harness(devinAcpProfile, { agentName: "Devin" });
+  const hostManaged = await adapter.hostManagedSupport();
+  assert.equal(hostManaged.support, "unsupported");
+  const spec = specFor("host-devin", "devin");
+  const hostSelection = { providerId: "fixture", modelId: "fixture-model" } as const;
+  await assert.rejects(
+    adapter.create(spec, {
+      ...planFor(spec.hostSessionId, "devin"),
+      requested: { kind: "host-managed", selection: hostSelection },
+      route: "responses-gateway",
+    }),
+    /harness-managed/,
+  );
+  await assert.rejects(
+    adapter.create(
+      { ...spec, modelBinding: { kind: "host-managed", selection: hostSelection } },
+      planFor(spec.hostSessionId, "devin"),
+    ),
+    /host-managed model injection is not certified/,
+  );
+  assert.equal(peers.length, 0);
+  const binding = await adapter.create(spec, planFor(spec.hostSessionId, "devin"));
+  assert.equal(binding.hostSessionId, spec.hostSessionId);
+  assert.equal(binding.backendVersion, ACP_ADAPTER_VERSION);
+  assert.equal(typeof binding.backendSessionId, "string");
+  assert.equal(peers[0]?.methods.includes("session/new"), true);
+  assert.equal(peers[0]?.methods.includes("authenticate"), false);
+  await adapter.send({
+    type: "send",
+    commandId: "cmd-devin",
+    hostSessionId: spec.hostSessionId,
+    turnId: "turn-devin",
+    text: "hello",
+  });
+  assert.equal(textOf(adapter.viewHistory(spec.hostSessionId)), "hello");
+  const authed = harness(devinAcpProfile, {
+    agentName: "Devin",
+    authMethods: [{ methodId: "account-login" }],
+  });
+  const report = await authed.adapter.probe(target);
+  assert.equal(report.support, "unsupported");
+  assert.equal(authed.peers.some((peer) => peer.methods.includes("authenticate")), false);
+  await assert.rejects(
+    authed.adapter.create(specFor("host-devin-auth", "devin"), planFor("host-devin-auth", "devin")),
+    /does not submit credentials/,
+  );
+  assert.equal(authed.peers.some((peer) => peer.methods.includes("session/new")), false);
 });
 
 test("protocol version 2 stays experimental and does not start a session", async () => {
