@@ -39,15 +39,6 @@ function loadEnvFiles(): Record<string, string> {
   if (process.env.ZAI_BUSINESS_BASE_URL) {
     vars.ZAI_BUSINESS_BASE_URL = process.env.ZAI_BUSINESS_BASE_URL;
   }
-  if (process.env.ZAI_BUSINESS_LOGIN_URL) {
-    vars.ZAI_BUSINESS_LOGIN_URL = process.env.ZAI_BUSINESS_LOGIN_URL;
-  }
-  if (process.env.VITE_ZAI_OAUTH_CLIENT_ID) {
-    vars.VITE_ZAI_OAUTH_CLIENT_ID = process.env.VITE_ZAI_OAUTH_CLIENT_ID;
-  }
-  if (process.env.VITE_ZAI_OAUTH_ORIGIN) {
-    vars.VITE_ZAI_OAUTH_ORIGIN = process.env.VITE_ZAI_OAUTH_ORIGIN;
-  }
   return {
     ...vars,
     ...Object.fromEntries(
