@@ -223,20 +223,20 @@ inventory/honesty/opt-in factory 已有 ≠ 生产第二 Agent。相对 tip：
 | I4 | 故障降级 | 适配器不跑 `opencode auth login` / `goose acp` 凭据提交 | **草稿：** 同文档 I4 症状→动作与升级/回滚；仍缺 live 验证 |
 
 
-##### I1–I4 + L1 程序 stub（已落文档）
+##### I1–I4 + L1–L4 程序 stub（已落文档）
 
-可操作步骤见 [`SECOND-ACP-INSTALL-DIAG.md`](./SECOND-ACP-INSTALL-DIAG.md)：I1–I4 + **L1 live-probe 程序 stub**（未跑真实进程）。**L2–L4** 与 L1 实跑证据仍缺。不改 lazy 默认、不做生产接线、不在此同步 tip SHA。
+可操作步骤见 [`SECOND-ACP-INSTALL-DIAG.md`](./SECOND-ACP-INSTALL-DIAG.md)：I1–I4 + **L1–L4 LIVE-CERT 程序 stub**（均未实跑）。实跑证据仍缺。不改 lazy 默认、不做生产接线、不在此同步 tip SHA。
 
 **LIVE-CERT（缺真实进程；fake-transport ≠ live）**
 
 | # | 项 | tip 已有 | 仍缺 |
 | --- | --- | --- | --- |
 | L1 | 真实 ACP 子进程 | SessionHost **fake** transport 对称 create/send + late prompt + disconnect fault fence（#90） | **程序 stub：** [`SECOND-ACP-INSTALL-DIAG.md`](./SECOND-ACP-INSTALL-DIAG.md) §L1（前置条件/步骤/证据模板）；**尚未**执行真实子进程 |
-| L2 | resume / 只读历史 | 档案不硬编码 load/resume；honesty 不打开 transport | 当次协商允许时的 resume；不允许时历史只读的 live 证明 |
-| L3 | 第二 Agent 只加档案 | inventory + 共用 `acp-session-machine/1` | 产品路径上第二同协议 Agent **不改**公共状态机的 live/集成证明 |
-| L4 | Host 默认 | lazy **不**注册 OpenCode/Goose ACP | live 认证**不得**借机把 opt-in 改成 lazy 默认 |
+| L2 | resume / 只读历史 | 档案不硬编码 load/resume；honesty 不打开 transport | **程序 stub：** [`SECOND-ACP-INSTALL-DIAG.md`](./SECOND-ACP-INSTALL-DIAG.md) §L2；**尚未**实跑 |
+| L3 | 第二 Agent 只加档案 | inventory + 共用 `acp-session-machine/1` | **程序 stub：** 同文档 §L3；**尚未**产品路径实跑 |
+| L4 | Host 默认 | lazy **不**注册 OpenCode/Goose ACP | **程序 stub：** 同文档 §L4 强制断言；实跑时仍须保持 opt-in |
 
-下一薄刀候选（仍 Track A，需 Planner 另派）：L1 **程序 stub** 已见 `SECOND-ACP-INSTALL-DIAG.md`；续 L1 **实跑**、L2–L4，或 SessionHost resume-after-disconnect——**勿**把 opt-in 改成 lazy 默认。
+下一薄刀候选（仍 Track A，需 Planner 另派）：L1–L4 **程序 stub** 已见 `SECOND-ACP-INSTALL-DIAG.md`；续 L1–L4 **实跑**，或 SessionHost resume-after-disconnect——**勿**把 opt-in 改成 lazy 默认。
 
 ### StatusCards / funnel × Track A 交界（只读 scout @ `5ff4b68`）
 
