@@ -101,20 +101,27 @@ export function codexHarnessCapabilities(): HarnessCapabilities {
     support: "experimental" as const,
     reason: "Verified only through the pinned local app-server and Fake Model control path.",
   };
-  const no = {
-    support: "unsupported" as const,
-    reason:
-      "thread/resume cold-attaches saved history only; uncertain in-flight turns are never replayed by Host resumeExecution.",
-  };
   return {
     text: yes,
     tools: yes,
     approvals: yes,
     cancelTurn: yes,
     history: yes,
-    resumeExecution: no,
-    images: no,
-    modelSwitch: no,
+    resumeExecution: {
+      support: "unsupported",
+      reason:
+        "thread/resume cold-attaches saved history only; uncertain in-flight turns are never replayed by Host resumeExecution.",
+    },
+    images: {
+      support: "unsupported",
+      reason:
+        "Codex app-server send accepts text only; the images surface is unsupported.",
+    },
+    modelSwitch: {
+      support: "unsupported",
+      reason:
+        "In-turn modelSwitch is unsupported; model binding is fixed at session admission.",
+    },
     detach: {
       support: "unsupported",
       reason: "View detach stays on the host subscription and does not stop this app-server.",
