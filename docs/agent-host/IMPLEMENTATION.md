@@ -1,13 +1,13 @@
 # ZCode 多 Harness v0.3 实施台账
 
-更新时间：2026-09-28（P6 tip 对照同步至 `a9e645e`）
+更新时间：2026-09-29（P6 tip 对照同步至 `73ddb8c`）
 
 本台账以仓库当前源码、`package.json`、测试文件和
 `ZCode_Multi_Harness_Refactor_Plan_v0.3_Orca_Hierarchy.md` 为准。它记录“代码存在、确定性测试通过、真实环境认证通过”三种不同证据，不把契约、Mock、构建产物或协议探针当作产品完成。计划规定 P4 完成后才称为首个可用版本。
 
 ## 当前证据和环境
 
-- 计划固定的源码基线是 `328c1a0c0ffaa5a4f65e8fa199af5e4c20706e5f`。wave4 集成 tip（本台账对照用）以 `cursor/wave4-harness-integration-b7a9` @ `a9e645e` 为准（含 #61–#105：#75/#80/#83/#85/#90 opt-in OpenCode/Goose SessionHost（late prompt + disconnect fault fence）、#69 MULTI_HARNESS、#76–#79/#84/#86–#88/#91–#93/#95/#97/#99/#101/#103–#105 REMOVE chrome/storage/funnel/i18n/purchase/oauth/api-key/StartPlan/acquisition/StatusCards gate/login i18n/purchase CTA/usage panel/sidebar badge、#89/#94/#96/#98/#100/#102 P6 ledger + I1–I4/L1 install-diag stubs）；历史本地 checkout `438c257…` 与脏树记录不得与 tip 或计划基线混称，也不能清理与本任务无关的改动。
+- 计划固定的源码基线是 `328c1a0c0ffaa5a4f65e8fa199af5e4c20706e5f`。wave4 集成 tip（本台账对照用）以 `cursor/wave4-harness-integration-b7a9` @ `73ddb8c` 为准（含 #61–#159：opt-in OpenCode/Goose SessionHost fake-transport 矩阵（#75/#80/#83/#85/#90/#110/#115/#118/#122/#125/#129/#134/#136/#140/#143/#147/#149/#153/#155：late/disconnect/resume/cancel/permission/reopen/double-fault 等；仍 ≠ live）、#69 MULTI_HARNESS、#76–#159 REMOVE/UI soft（purchase/oauth/enterprise/usage/login noop/desktop login.html/slash-help/verify 台账等）、#89/#94/#98/#100/#102/#106/#108 P6 ledger + I1–I4/L1–L4 stubs）；历史本地 checkout `438c257…` 与脏树记录不得与 tip 或计划基线混称，也不能清理与本任务无关的改动。
 - `mise.toml` 要求 Node 24.14.0、pnpm 10.33.2。当前 shell 实测 Node 24.18.1、pnpm 10.33.2，`mise` 不在 PATH；后续认证必须使用固定工具链并在记录中注明实际版本。
 - 当前主开发 shell 是 Ubuntu 20.04.6、Linux 5.15、x86_64；本机未运行 macOS GUI。远端 Mac 已完成只读 capability probe，但源码构建、local worker 和桌面退出恢复仍未认证。
 - 本地 CLI 版本实测为 Pi 0.86.1、Claude Code 2.1.263、Codex CLI 0.154.0。仓库 Pi 依赖固定为 0.87.1，Codex 计划/探针要求 0.156.1；本地 CLI 版本差异不能算兼容认证。
@@ -186,12 +186,12 @@ P5 必须按 Harness 拆成 control/event 认证和 host-managed model ingress �
 
 状态：**部分完成（脚手架 + 一个可选 Agent）；P6 未完成**。
 
-已在 tip `a9e645e` 上、但不能标 P6 完成：
+已在 tip `73ddb8c` 上、但不能标 P6 完成：
 
 - 可复用 ACP transport/adapter 与 session machine：`packages/services/src/agent-adapters/acp/`（`COMPATIBILITY.md` / `SPEC.md`；SPEC 已写明 print-mode `agent-adapters/devin` 与可选 ACP 同 id）。
 - 长尾示例：Devin **可选** ACP profile（`agent-adapters/acp/agents/devin.ts`，`devin acp`）；与 print-mode `devin` 同 harness id，**不得**在同一 `HarnessRegistry` 双注册（`devinPrintAcpCoexistence.test.ts` / `devin/PROTOCOL.md`）。
 - 同协议第二批档案（inventory，非生产认证）：OpenCode / Goose（`acp/agents/opencode.ts`、`goose.ts`；`COMPATIBILITY.md`）— 共用 `acp-session-machine/1`，只加档案不改公共状态机。
-- **Opt-in 注册工厂（#75，非 lazy 默认）**：`createExperimentalRegistryOpenCodeAcpHarness` / `createExperimentalRegistryGooseAcpHarness`（`createAcpRegistryHarness.ts`；调用方注入 `openTransport`）。SessionHost fake-transport：OpenCode + **Goose 对称** create/send（#80）；OpenCode **late `session/prompt` 仍 journal**（#83）；Goose **late prompt 对称**（#85）；OpenCode/Goose **mid-prompt transport disconnect** 仍 journal fault fence（#90，同文件）；`enabledIds` 可单开 goose。契约：`lazyTargetService` **不**注册上述工厂。
+- **Opt-in 注册工厂（#75，非 lazy 默认）**：`createExperimentalRegistryOpenCodeAcpHarness` / `createExperimentalRegistryGooseAcpHarness`（`createAcpRegistryHarness.ts`；调用方注入 `openTransport`）。SessionHost fake-transport（同文件 `openCodeAcpSessionHost.integration.test.ts`，OpenCode+Goose 对称）：create/send（#80）；late prompt（#83/#85）；disconnect fault fence（#90）；**resume-after-disconnect** via `session/load`（#110）；cancel-after-disconnect（#115）；double-fault reopen idempotency（#118）；mid-tool disconnect→reopen（#122）；permission deny/allow/cancel 与 disconnect/reopen 矩阵（#125/#129/#134/#136/#140/#143/#147/#149/#153）；fault-during-session-load（#155）。`enabledIds` 可单开 goose。契约：`lazyTargetService` **不**注册上述工厂。
 - lazy Host 默认 Devin 路径仍是 **print-mode `-p`**（`createExperimentalRegistryDevinHarness`），不是默认 ACP；源码契约测：`lazyDevinPrintModeDefault.contract.test.ts`（#61）。
 - Honesty：print-mode `devinCapabilitiesHonesty.test.ts`；ACP Devin `devinAcpCapabilitiesHonesty.test.ts`（#62）；ACP OpenCode/Goose `acpOpenCodeGooseHonesty.test.ts`（#65）— install/probe `supported` **不**升级 text/tools/resume；`hostManagedSupport` 保持 `unsupported` 且不打开 transport；档案不硬编码 `session/load|resume`。
 
@@ -199,19 +199,19 @@ P5 必须按 Harness 拆成 control/event 认证和 host-managed model ingress �
 
 交付依赖 P1 manifest/factory、P3/P4 已验证 model binding/target Host，以及至少一个真实可用 ACP Agent。验收必须证明第二个同协议 Agent 只增加 manifest、绑定配置和必要扩展，不修改公共会话状态机；不支持 resume 的 Agent 只能历史只读；未知扩展安全降级；协议升级回到实验状态。
 
-### P6「第二生产 ACP」缺口（scout；tip 对照 `a9e645e`）
+### P6「第二生产 ACP」缺口（scout；tip 对照 `73ddb8c`）
 
 inventory/honesty/opt-in factory 已有 ≠ 生产第二 Agent。相对 tip：
 
 1. **仍未进 lazy 默认**：`lazyTargetService` 只注册 Pi/Codex/Claude + print-mode Devin；OpenCode/Goose ACP 仅 **显式 opt-in** 工厂（#75），契约测禁止 lazy 注册。
 2. **无产品 create/Picker 路径**：侧栏/Harness 选择不会把 OpenCode/Goose 当可选外部 Harness 挂上。
 3. **无 install/upgrade 手册与版本矩阵**：`COMPATIBILITY.md` 有档案说明；缺固定 CLI 版本、initialize 协商矩阵、故障降级手册。
-4. **无 live 认证**：honesty + SessionHost fake-transport（#75/#80/#83/#85/#90 OpenCode+Goose，含 late prompt + disconnect fault fence）≠ 真实 `opencode acp` / `goose acp` / resume / SSH。
-5. **验收口径未满足**：产品侧「第二同协议 Agent 只加 manifest/绑定」证明仍缺；当前为档案 + honesty + opt-in factory + OpenCode/Goose SessionHost fake-transport（#75/#80/#83/#85/#90）；#94 仅 docs checklist。
+4. **无 live 认证**：honesty + SessionHost fake-transport（#75/#80/#83/#85/#90/#110/#115/#118/#122/#125/#129/#134/#136/#140/#143/#147/#149/#153/#155；含 resume/cancel/permission/reopen）≠ 真实 `opencode acp` / `goose acp` / SSH 实跑。
+5. **验收口径未满足**：产品侧「第二同协议 Agent 只加 manifest/绑定」证明仍缺；当前为档案 + honesty + opt-in + SessionHost fake-transport 矩阵；#94/#102/#106 仅为 docs stub。
 
 #### install-diag / LIVE-CERT checklist（第二 ACP；相对 tip 证据）
 
-对照 tip 已有证据（#75 opt-in 工厂、#80/#83/#85/#90 SessionHost fake-transport 含 late prompt + disconnect fault fence、#65 honesty、#94 checklist、#98/#100/#102 I1–I4 + L1 程序 stub 文档、契约禁 lazy 注册）。下列为**仍缺**项，不是重写台账：
+对照 tip 已有证据（#75 opt-in、SessionHost fake-transport #75/#80/#83/#85/#90/#110/#115/#118/#122/#125/#129/#134/#136/#140/#143/#147/#149/#153/#155、#65 honesty、#94/#98/#100/#102/#106 I1–I4 + L1–L4 程序 stub、契约禁 lazy 注册）。下列为**仍缺**项，不是重写台账：
 
 **Install / 诊断（缺手册与可复现步骤）**
 
@@ -231,26 +231,26 @@ inventory/honesty/opt-in factory 已有 ≠ 生产第二 Agent。相对 tip：
 
 | # | 项 | tip 已有 | 仍缺 |
 | --- | --- | --- | --- |
-| L1 | 真实 ACP 子进程 | SessionHost **fake** transport 对称 create/send + late prompt + disconnect fault fence（#90） | **程序 stub（#102）：** [`SECOND-ACP-INSTALL-DIAG.md`](./SECOND-ACP-INSTALL-DIAG.md) §L1；**尚未**执行真实子进程 |
+| L1 | 真实 ACP 子进程 | SessionHost **fake** transport 矩阵（至 #155；仍 ≠ live） | **程序 stub（#102）：** [`SECOND-ACP-INSTALL-DIAG.md`](./SECOND-ACP-INSTALL-DIAG.md) §L1；**尚未**执行真实子进程 |
 | L2 | resume / 只读历史 | 档案不硬编码 load/resume；honesty 不打开 transport | **程序 stub（#106）：** 同文档 §L2；**尚未**实跑 |
 | L3 | 第二 Agent 只加档案 | inventory + 共用 `acp-session-machine/1` | **程序 stub（#106）：** 同文档 §L3；**尚未**产品路径实跑 |
 | L4 | Host 默认 | lazy **不**注册 OpenCode/Goose ACP | **程序 stub（#106）：** 同文档 §L4 强制断言；实跑时仍须保持 opt-in |
 
-下一薄刀候选（仍 Track A，需 Planner 另派）：L1–L4 **程序 stub** 已见 `SECOND-ACP-INSTALL-DIAG.md`；续 L1–L4 **实跑**，或 SessionHost resume-after-disconnect——**勿**把 opt-in 改成 lazy 默认。
+下一薄刀候选（仍 Track A，需 Planner 另派）：L1–L4 **程序 stub** 已见 `SECOND-ACP-INSTALL-DIAG.md`；续 L1–L4 **实跑**（fake-transport 矩阵已厚，≠ live）——**勿**把 opt-in 改成 lazy 默认。
 
-### StatusCards / funnel × Track A 交界（只读 scout @ `a9e645e`）
+### StatusCards / funnel × Track A 交界（只读 scout @ `73ddb8c`）
 
 UI/REMOVE 侧（**非 Track A 默认刀**；交界说明以免误抢）：
 
-- **已卸（契约测锁）**：Upgrade Dialog/Provider、EntryButton、EmbeddedWebview（#72）、sidebar upgrade、toolbar CTA；funnel telemetry（#77）；CLI i18n（#78/#87 `isModelSetupRequired`）；desktop chrome/storage（#76/#79）；purchase choice banners + `codingPlanPurchaseAuth` + dead purchase i18n（#84）；`CodingPlanLoginOptions` + Detail access banner（#88）；`oauth.ts` product types thin-clean（#86）；CLI Coding Plan **API-key login** remnants（#91）；settings **preset subscription success** telemetry / oauthActions residue（#92）；`StartPlanCard` / product-list hooks / acquisition preview（#93）；share-import i18n `loginRequired`→`signInRequired`（#95）；acquisition presentation leftovers（#97）；StatusCards `upgradePlansVisible` gate（#99）；dead product `loginRequired` / Coding Plan login i18n（#101）；dead upgrade/purchase **CTA strings**（#103）；usage-panel LogIn icon + upgrade i18n（#104）；sidebar plan-badge soft residual（#105）。
-- **StatusCards 现状**：升级/purchase CTA 文案与 `upgradePlansVisible` 已卸（#99/#103）；`upgradeActionVisible` 已 void；quota/status 编排仍在；StartPlan/acquisition 预览已卸（#93/#97）。
-- **与 Track A**：Agent Host / ACP / MULTI_HARNESS 不依赖 StatusCards/desktop chrome/purchase UI；#75/#80/#83/#85/#90 opt-in ACP + #98/#100/#102 install-diag/L1 stubs 已在 tip。REMOVE 运行时刀属 #86/#88/#91–#93/#95/#97/#99/#101/#103–#105。
+- **已卸（契约测锁；摘）**：既有 chrome/funnel/oauth/purchase/StartPlan/api-key/CTA/usage/badge（至 #105）+enterprise products/acquisition/Welcome login orphans/regionTag 迁 key/slash-help/desktop `login.html`（#107–#116）+enterprise callers/Automations toast/orphan hook/Title i18n/refreshTeamPlanProducts/team flatMap/Settings·V4·sidebar 空 `subscribedTeamProducts`/usage-sources builder/`codingPlanLogin` noop/purchase-complete/`oauthTeamPricing`/family `teamProducts`/`loginActionVisible`→`productPurchaseRemovedVisible`/owned-entry helper（#119–#159）。verify 脚本随 tip 硬缺席（#113/#117/#127/#130/#139/#154/#156 等）。
+- **StatusCards 现状**：升级/purchase CTA 与空 team 产品门控已卸；`productPurchaseRemoved` 正文 KEEP；可见性改名 `productPurchaseRemovedVisible`（#158）；quota/entitlement/manage·planCard KEEP。
+- **与 Track A**：Agent Host / ACP / MULTI_HARNESS 不依赖 REMOVE UI；SessionHost fake-transport 矩阵（#75/#80/#83/#85/#90/#110/#115/#118/#122/#125/#129/#134/#136/#140/#143/#147/#149/#153/#155）+ #98/#100/#102/#106 install-diag/L stubs 已在 tip。
 
-### `oauth.ts` / purchase × P6 交界（只读 scout @ `a9e645e`）
+### `oauth.ts` / purchase × P6 交界（只读 scout @ `73ddb8c`）
 
 - **`packages/shared/src/oauth.ts`**：#86 已 thin-clean 产品登录孤儿类型；仍可能有 provider ids / `UserInfo` 等供 settings 引用。#92 卸 settings preset subscription success telemetry / `oauthActions` 残留。
 - **与 P6 / Agent Host**：**无** import — ACP/opt-in Harness、MULTI_HARNESS、SessionHost 不依赖产品 OAuth 类型。清理 oauth/purchase/StartPlan 是 REMOVE 域，不是 Host 默认刀。
-- **purchase / LoginOptions / StartPlan / api-key / CTA / usage / badge（#84/#88/#91/#93/#95/#97/#99/#101/#103–#105）**：purchase banners、LoginOptions、CLI api-key、StartPlan/acquisition、share-import `signInRequired`、dead upgrade/purchase CTA、usage-panel 登录残留、sidebar plan-badge soft residual 已落地。少量仍用 plan-mode/access i18n 可能仍在。≠ Host admission。
+- **purchase / enterprise / login noop / usage（至 #159）**：获客 UI、空 team products 形参、login noop 链、purchase-complete、oauthTeamPricing、owned-entry helper 等已卸；`productPurchaseRemoved` / Display / entitlement / manage·planCard / MCP OAuth / personal API-key KEEP。≠ Host admission。
 - **结论**：P6 台账同步勿夹带 oauth/purchase 运行时改动；两轨并行，交界仅文档互指。
 
 
@@ -315,7 +315,7 @@ Worktree 服务现有 archive 元数据/fence 与确认式 remove；remove 会�
 | 08A  | worktree removal admission、重建、离线重同步、archive/hide                    | Worktree 移除/fence/native+external 准入与隔离 Git/CLI 测试已实现；UI/SSH 离线重同步未验收            | 依赖 08；UI/E2E、SSH 离线恢复及删除竞态矩阵                    |
 | 09   | Gateway core + Responses + Codex                                              | 部分完成 / FakeModel only：core + Responses + Codex 控制/绑定已在 tip；#26 SSH 共享 TargetModelGateway 仅为 FakeModel admission，兼容仍 experimental | 依赖 08；live Provider、真实 SSH 凭据与生产组合仍未认证        |
 | 10   | Messages + Claude structured adapter                                          | 部分完成 / FakeModel only：structured/Messages 实验路径已有，Gateway 仍 adapter-local，不是共享 owner | 依赖 09；共享 TargetModelGateway owner 与 live Provider 未认证 |
-| 11   | 通用 ACP + 一个长尾 Agent                                                     | 部分完成 @ tip `a9e645e`：#75/#80/#83/#85/#90 opt-in SessionHost；#94/#98/#100/#102 LIVE-CERT + I1–I4/L1 stubs（无实跑）；honesty；#69 MULTI_HARNESS；生产接线/发布加固未做 | 依赖 08 和已验证 model binding；勿把 print-mode/honesty/opt-in 写成 ACP 完成 |
+| 11   | 通用 ACP + 一个长尾 Agent                                                     | 部分完成 @ tip `73ddb8c`：opt-in SessionHost fake-transport 矩阵至 #155；#94/#98/#100/#102/#106 LIVE-CERT/I stubs（无实跑）；honesty；#69 MULTI_HARNESS；生产接线/发布加固未做 | 依赖 08 和已验证 model binding；勿把 print-mode/honesty/opt-in/fake-transport 写成 ACP 完成 |
 | 12   | 层级/并发/focus 压测、迁移回滚、版本锁定发布                                  | 未实现                                                                                                | 依赖 08A/09/10/11；50 worktree、10 session、8h、fault matrix   |
 
 建议执行顺序：
