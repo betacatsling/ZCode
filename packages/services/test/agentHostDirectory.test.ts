@@ -118,7 +118,7 @@ test("registered adapters without manifests are not invented into the directory"
   assert.equal(directory.get("mock"), undefined);
 });
 
-test("default host directory lists zcode, pi, codex, claude-code, and placeholder devin", () => {
+test("default host directory lists zcode, pi, codex, claude-code, and devin manifests", () => {
   const registry = new HarnessRegistry();
   registry.register(new MockHarness());
   const directory = createHostHarnessDirectory({ registry });
