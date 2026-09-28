@@ -28,10 +28,10 @@ function requireProject(snapshot: CatalogSnapshot, id: string): Project {
 }
 
 function projectFields(
-  project: Project,
+  project: Pick<Project, "id" | "name" | "iconAssetId" | "defaultWorkspaceId">,
   patch: { name?: string; iconAssetId?: string | null; defaultWorkspaceId?: string | null },
 ): Project {
-  const next: Project = { id: project.id, name: patch.name ?? project.name };
+  const next: Project = { schemaVersion: 1, id: project.id, name: patch.name ?? project.name };
   const icon = patch.iconAssetId === undefined ? project.iconAssetId : patch.iconAssetId;
   if (icon) next.iconAssetId = icon;
   const defaultWorkspaceId =

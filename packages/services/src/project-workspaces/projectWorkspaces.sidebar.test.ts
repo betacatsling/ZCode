@@ -5,6 +5,7 @@ import type { AgentSessionRecord, Project, RepositoryBinding, WorktreeWorkspace 
 
 function workspace(id: string, title: string): WorktreeWorkspace {
   return {
+    schemaVersion: 1,
     id,
     projectId: "project-1",
     repositoryBindingId: "binding-1",
@@ -15,17 +16,24 @@ function workspace(id: string, title: string): WorktreeWorkspace {
     head: { kind: "branch", ref: "develop", oid: "abc" },
     origin: "adopted",
     lifecycle: "active",
+    verification: "verified",
   };
 }
 
 function session(id: string, workspaceId: string, title: string): AgentSessionRecord {
-  return { id, workspaceId, harnessId: "pi", title };
+  return { schemaVersion: 1, id, workspaceId, harnessId: "pi", title };
 }
 
 function input(patch: Partial<SidebarIndexInput> = {}): SidebarIndexInput {
-  const projects: Project[] = [{ id: "project-1", name: "Repo" }];
+  const projects: Project[] = [{ schemaVersion: 1, id: "project-1", name: "Repo" }];
   const bindings: RepositoryBinding[] = [
-    { id: "binding-1", projectId: "project-1", executionTargetId: "host-a", gitCommonDir: "/repo/.git" },
+    {
+      schemaVersion: 1,
+      id: "binding-1",
+      projectId: "project-1",
+      executionTargetId: "host-a",
+      gitCommonDir: "/repo/.git",
+    },
   ];
   const workspaces = [workspace("main", "主要"), workspace("linked", "功能")];
   const sessions = [

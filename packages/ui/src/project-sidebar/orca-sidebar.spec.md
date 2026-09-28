@@ -1,6 +1,6 @@
-# Orca 式三层侧栏（未接入生产路由）
+# Orca 式三层侧栏
 
-本目录的展示组件实现计划第 8 节与第 13.1、13.5、13.8 节的可见层级。它们不是项目目录或会话运行时的所有者。
+生产导航是 `WorkspaceShellLayout` 里的 `ProjectSidebarMount`。目录为空时保留原来的工作区/任务区域；后台刷新不调用 `focus()`，图标按 `harnessId` 而不是模型名选择。本文件描述的 Orca 展示树与生产侧栏共用 `@zcode/shared/agent-host` 实体，不另挂第二棵树。
 
 ## 行为
 
@@ -20,5 +20,5 @@
 ## 失败与迁移
 
 - 不安全的 SVG、外部 URL 或无法解码的资源直接退回 fallback，不发网络请求，不执行资源。
-- `planTypes.ts` 是计划第 13.2 节的本地抄写。合并契约后改为 `@zcode/shared` 公开入口，不在业务代码里手写身份格式。
-- 这些组件不从应用壳或现有 `ProjectSidebar` 挂载。生产导航保持原样，直到契约和路由单独接入。
+- 实体类型来自 `@zcode/shared/agent-host`。侧栏节点上的活动、新鲜度和模型文案仍只属于展示，不在业务代码里手写远程身份格式。
+- Orca 组件不从应用壳再挂一次。空目录时的旧工作区/任务区域由 `ProjectSidebarMountView` 保留。

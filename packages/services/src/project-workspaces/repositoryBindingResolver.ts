@@ -34,6 +34,7 @@ export function resolveRepositoryBinding(input: ResolveRepositoryBindingInput): 
   return {
     created: true,
     binding: {
+      schemaVersion: 1,
       id: input.allocateId(),
       projectId: input.projectId,
       executionTargetId: input.executionTargetId,

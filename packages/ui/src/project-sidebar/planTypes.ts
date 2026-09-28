@@ -1,47 +1,15 @@
 /**
- * 计划草案的本地抄写，不是已合并的运行时契约。
- * 合并契约后改为 `@zcode/shared` 公开入口，并删除本文件。
- * Project、RepositoryBinding、WorktreeWorkspace、AgentSessionRecord 的字段
- * 与计划第 13.2 节一致，不在这些实体上追加字段。
- * SidebarSnapshot 只组装上述实体，以及第 13.1 / 13.5 节已经点名的侧栏展示事实。
+ * 实体类型来自 `@zcode/shared` 的 agent-host 公开入口。
+ * 侧栏节点只组装这些实体，以及计划第 13.1 / 13.5 节已经点名的展示事实。
  */
+import type {
+  AgentSessionRecord,
+  Project,
+  RepositoryBinding,
+  WorktreeWorkspace,
+} from "@zcode/shared/agent-host";
 
-export interface Project {
-  id: string;
-  name: string;
-  iconAssetId?: string;
-  defaultWorkspaceId?: string;
-}
-
-export interface RepositoryBinding {
-  id: string;
-  projectId: string;
-  executionTargetId: string;
-  gitCommonDir: string;
-}
-
-export interface WorktreeWorkspace {
-  id: string;
-  projectId: string;
-  repositoryBindingId: string;
-  title: string;
-  worktreePath: string;
-  worktreeGeneration: string;
-  isMainWorktree: boolean;
-  head:
-    | { kind: "branch"; ref: string; oid: string | null }
-    | { kind: "detached"; oid: string };
-  origin: "created" | "adopted";
-  lifecycle: "active" | "archived" | "missing" | "removed";
-}
-
-export interface AgentSessionRecord {
-  id: string;
-  workspaceId: string;
-  harnessId: string;
-  title: string;
-  // modelBinding、backendRef、状态和时间沿用前述会话模型，不在此实体上加字段。
-}
+export type { AgentSessionRecord, Project, RepositoryBinding, WorktreeWorkspace };
 
 /** 第 13.5 节列出的执行活动。 */
 export type SessionActivity = "idle" | "starting" | "running" | "waiting" | "cancelling";

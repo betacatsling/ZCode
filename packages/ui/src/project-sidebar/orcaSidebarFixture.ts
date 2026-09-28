@@ -1,7 +1,11 @@
 import type { HarnessDirectoryEntry } from "@/agent-host/HarnessIcon.js";
 import type { ModelBindingOption } from "@/agent-host/ModelBindingSelector.js";
 import type { SidebarSnapshot } from "./planTypes.js";
-import { EMPTY_AGENT_DRAFT, EMPTY_WORKSPACE_DRAFT, type OrcaSidebarViewData } from "./sidebarViewStore.js";
+import {
+  EMPTY_AGENT_DRAFT,
+  EMPTY_WORKSPACE_DRAFT,
+  type OrcaSidebarViewData,
+} from "./sidebarViewStore.js";
 
 export const orcaSidebarNow = 1_700_000_000_000;
 
@@ -56,11 +60,13 @@ export const orcaSidebarSnapshot: SidebarSnapshot = {
   projects: [
     {
       project: {
+        schemaVersion: 1,
         id: "project-zcode",
         name: "ZCode",
         defaultWorkspaceId: "ws-feature",
       },
       repositoryBinding: {
+        schemaVersion: 1,
         id: "binding-zcode",
         projectId: "project-zcode",
         executionTargetId: "local-mac",
@@ -70,6 +76,7 @@ export const orcaSidebarSnapshot: SidebarSnapshot = {
       workspaces: [
         {
           workspace: {
+            schemaVersion: 1,
             id: "ws-main",
             projectId: "project-zcode",
             repositoryBindingId: "binding-zcode",
@@ -79,6 +86,7 @@ export const orcaSidebarSnapshot: SidebarSnapshot = {
             isMainWorktree: true,
             head: { kind: "branch", ref: "develop", oid: "abc123def456" },
             origin: "adopted",
+            verification: "verified",
             lifecycle: "active",
           },
           targetLabel: "Local Mac",
@@ -86,6 +94,7 @@ export const orcaSidebarSnapshot: SidebarSnapshot = {
         },
         {
           workspace: {
+            schemaVersion: 1,
             id: "ws-feature",
             projectId: "project-zcode",
             repositoryBindingId: "binding-zcode",
@@ -95,12 +104,14 @@ export const orcaSidebarSnapshot: SidebarSnapshot = {
             isMainWorktree: false,
             head: { kind: "branch", ref: "feature/sidebar", oid: "fff000aaa111" },
             origin: "created",
+            verification: "verified",
             lifecycle: "active",
           },
           targetLabel: "Local Mac",
           sessions: [
             {
               session: {
+                schemaVersion: 1,
                 id: "s-research",
                 workspaceId: "ws-feature",
                 harnessId: "pi",
@@ -116,6 +127,7 @@ export const orcaSidebarSnapshot: SidebarSnapshot = {
             },
             {
               session: {
+                schemaVersion: 1,
                 id: "s-session",
                 workspaceId: "ws-feature",
                 harnessId: "pi",
@@ -131,6 +143,7 @@ export const orcaSidebarSnapshot: SidebarSnapshot = {
             },
             {
               session: {
+                schemaVersion: 1,
                 id: "s-review",
                 workspaceId: "ws-feature",
                 harnessId: "codex",
@@ -150,11 +163,13 @@ export const orcaSidebarSnapshot: SidebarSnapshot = {
     },
     {
       project: {
+        schemaVersion: 1,
         id: "project-docs",
         name: "Docs",
         defaultWorkspaceId: "ws-docs-main",
       },
       repositoryBinding: {
+        schemaVersion: 1,
         id: "binding-docs",
         projectId: "project-docs",
         executionTargetId: "server1",
@@ -164,6 +179,7 @@ export const orcaSidebarSnapshot: SidebarSnapshot = {
       workspaces: [
         {
           workspace: {
+            schemaVersion: 1,
             id: "ws-docs-main",
             projectId: "project-docs",
             repositoryBindingId: "binding-docs",
@@ -173,12 +189,14 @@ export const orcaSidebarSnapshot: SidebarSnapshot = {
             isMainWorktree: true,
             head: { kind: "branch", ref: "master", oid: "111aaa222bbb" },
             origin: "adopted",
+            verification: "verified",
             lifecycle: "active",
           },
           targetLabel: "server1",
           sessions: [
             {
               session: {
+                schemaVersion: 1,
                 id: "s-docs-offline",
                 workspaceId: "ws-docs-main",
                 harnessId: "codex",
@@ -196,6 +214,7 @@ export const orcaSidebarSnapshot: SidebarSnapshot = {
         },
         {
           workspace: {
+            schemaVersion: 1,
             id: "ws-docs-branch",
             projectId: "project-docs",
             repositoryBindingId: "binding-docs",
@@ -205,12 +224,14 @@ export const orcaSidebarSnapshot: SidebarSnapshot = {
             isMainWorktree: false,
             head: { kind: "branch", ref: "main", oid: "999ccc888ddd" },
             origin: "created",
+            verification: "verified",
             lifecycle: "active",
           },
           targetLabel: "server1",
           sessions: [
             {
               session: {
+                schemaVersion: 1,
                 id: "s-docs-unknown",
                 workspaceId: "ws-docs-branch",
                 harnessId: "new-harness",

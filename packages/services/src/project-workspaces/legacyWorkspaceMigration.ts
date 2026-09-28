@@ -1,15 +1,16 @@
 import { createHash } from "node:crypto";
 import { isAbsolute, relative } from "node:path";
 import { createServiceLogger } from "../logger/serviceLogger.js";
-import type { AgentSessionRecord, Project, RepositoryBinding, WorktreeWorkspace } from "./planTypes.js";
+import type {
+  AgentSessionRecord,
+  Project,
+  RepositoryBinding,
+  WorktreeWorkspace,
+} from "./planTypes.js";
 import { ProjectWorkspaceError } from "./errors.js";
 import { workspaceIdentityKey } from "./identity.js";
-import type { CatalogStore, FilesystemIdentity } from "./ports.js";
-import {
-  cloneSnapshot,
-  type CatalogSnapshot,
-  type MigrationMapping,
-} from "./snapshot.js";
+import type { CatalogStore, FilesystemIdentity, MigrationBackupWriter } from "./ports.js";
+import { cloneSnapshot, type CatalogSnapshot, type MigrationMapping } from "./snapshot.js";
 
 const logger = createServiceLogger("project-workspaces");
 
@@ -190,16 +191,19 @@ export function planLegacyMigration(
       `workspace:${targetId}:${session.resolution.gitCommonDir}:${session.resolution.worktreeRoot}:${identity}`,
     );
     projects.set(projectId, {
+      schemaVersion: 1,
       id: projectId,
       name: projectName(session.resolution.gitCommonDir),
     });
     bindings.set(bindingId, {
+      schemaVersion: 1,
       id: bindingId,
       projectId,
       executionTargetId: targetId,
       gitCommonDir: session.resolution.gitCommonDir,
     });
     workspaces.set(workspaceId, {
+      schemaVersion: 1,
       id: workspaceId,
       projectId,
       repositoryBindingId: bindingId,
@@ -210,11 +214,14 @@ export function planLegacyMigration(
       head: session.resolution.head,
       origin: "adopted",
       lifecycle: "active",
+      verification: "verified",
     });
-    if (session.workspaceIdentity?.trim()) identities[workspaceId] = session.workspaceIdentity.trim();
+    if (session.workspaceIdentity?.trim())
+      identities[workspaceId] = session.workspaceIdentity.trim();
     evidence[workspaceId] = session.resolution.evidence;
     if (cwdRelative) sessionCwdById[session.nativeSessionId] = cwdRelative;
     sessionRecords.push({
+      schemaVersion: 1,
       id: session.nativeSessionId,
       workspaceId,
       harnessId,
@@ -287,19 +294,33 @@ export function createLegacyWorkspaceMigration(deps: {
     plan(sessions: readonly LegacySessionInput[]): MigrationPlan {
       return planLegacyMigration(sessions, deps.knownHarnessIds);
     },
+    /**
+     * dry-run 是 `plan()`。`apply` 先把当前目录快照交给 backup，再写映射。
+     * 不删除 Git、工作区文件或 native session 正文。
+     */
     async apply(
       sessions: readonly LegacySessionInput[],
-      options: { backupConfirmed: boolean },
+      options: { backup: MigrationBackupWriter },
     ): Promise<MigrationPlan> {
-      if (!options.backupConfirmed) throw new ProjectWorkspaceError("backup-required");
+      // 没有可恢复的目录副本时不能开始写映射；调用方漏传 options 与漏传 backup 一样拒绝。
+      if (!options?.backup) throw new ProjectWorkspaceError("backup-required");
       const plan = planLegacyMigration(sessions, deps.knownHarnessIds);
       const current = await deps.store.read();
+      await options.backup.write({
+        schemaVersion: 1,
+        fingerprint: plan.fingerprint,
+        catalog: cloneSnapshot(current),
+      });
       if (current.migration?.fingerprint === plan.fingerprint) return plan;
-      await deps.store.update((snapshot) => ({ snapshot: applyPlan(snapshot, plan), result: plan }));
+      await deps.store.update((snapshot) => ({
+        snapshot: applyPlan(snapshot, plan),
+        result: plan,
+      }));
       logger.info(undefined, "legacy-workspace-migrated", {
         projects: plan.projects.length,
         sessions: plan.sessions.length,
-        pending: plan.mappings.filter((mapping) => mapping.status === "pending-verification").length,
+        pending: plan.mappings.filter((mapping) => mapping.status === "pending-verification")
+          .length,
       });
       return plan;
     },

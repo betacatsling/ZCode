@@ -169,6 +169,7 @@ export function createSessionCommands(deps: ProjectWorkspaceDeps) {
           throw new ProjectWorkspaceError("project-removed");
         }
         const session: AgentSessionRecord = {
+          schemaVersion: 1,
           id: deps.idFactory(),
           workspaceId: currentWorkspace.id,
           harnessId,

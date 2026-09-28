@@ -27,6 +27,7 @@ command → ClaudeCodeHarnessAdapter → 单个会话状态 → 假传输/ACP �
 - 晚到的 cancel / approval 必须命中原 epoch、turn、interaction，否则拒绝且不改变活动轮次。
 - 拒绝审批后不再投递该轮后续的工具成功事件。
 - `host-managed` 只有在端口证据 `kind === "model-execution-layer"` 且生效模型与请求一致时，才可以是 `supported`。否则路线记为 `harness-managed`，支持度记为 `experimental` 或 `unsupported`（模型不一致时拒绝降级）。
+- 生产 `hostManagedRoute` 是 `messages-gateway`。Gateway 的 Responses 切片只准入 `responses-gateway`。默认 mock 端口打不到执行层，因此这条生产组合保持 `experimental`。不用跳过执行层的假 Model 把它标成完成。
 - 不支持的能力返回 `{ support: "unsupported", reason }`。
 - 配置标记和事件不包含 API key。调用方传入的机密字符串会被替换成 `[redacted]`。
 

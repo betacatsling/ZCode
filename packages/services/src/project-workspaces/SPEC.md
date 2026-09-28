@@ -1,6 +1,6 @@
 # Project Catalog 与 Worktree 服务
 
-本目录实现计划第 13.2–13.4、13.6–13.7 节。类型以 `planTypes.ts` 为准，字段不扩展。合并共享契约 PR 后，改为从 shared 公开入口导入。
+本目录实现计划第 13.2–13.4、13.6–13.7 节。实体类型从 `@zcode/shared/agent-host` 公开入口经 `planTypes.ts` 再导出，字段不扩展。
 
 ## 所有者
 
@@ -64,7 +64,7 @@ bare 仓库不制造主检出，也不能把 bare 目录当成可执行工作区
 
 ## 迁移
 
-只读存储索引，不用当前打开的 tabs 定义项目是否存在。按目标 + `gitCommonDir` 分组；submodule 使用自己的 common dir。同一 worktree 的多个旧会话都保留 native session id、模型绑定和相对 cwd。离线、缺路径、未知 Harness、同路径重建进入待核实，不回退到本机或默认 Harness。事务可重入；失败不留下半份快照。
+只读存储索引，不用当前打开的 tabs 定义项目是否存在。按目标 + `gitCommonDir` 分组；submodule 使用自己的 common dir。同一 worktree 的多个旧会话都保留 native session id、模型绑定和相对 cwd。离线、缺路径、未知 Harness、同路径重建进入待核实，不回退到本机或默认 Harness。`plan()` 是 dry-run，不写 catalog，也不写备份。`apply()` 必须先通过 `MigrationBackupWriter` 写下当前快照，再做一次 `update`；没有备份写入器则拒绝，且不改 catalog。事务可重入；失败不留下半份快照。回滚是把该备份写回调用方自己的 catalog 文件，不删除 Git、工作区文件或 native session 正文，也不读取用户日常数据目录。
 
 ## 侧栏
 

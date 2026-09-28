@@ -18,7 +18,8 @@
 ## 两种验收
 
 1. 控制/事件面：假传输可以完成文本、工具、usage 快照、审批、取消、迟到审批拒绝、同工作区多会话和未知请求的结构化失败。
-2. `host-managed` 统一路由：假传输不会调用 `Model.streamText`。`capabilities.hostManagedModel` 保持 `experimental`。`hostManagedSupport` 即使带有控制面 fixture 证据，约束里的 `unifiedModelRoute` 也是 `experimental`，不能当成模型执行层已接通。`harness-managed` 为 `unsupported`。
+2. `host-managed` 统一路由：控制面假传输不会调用 `Model.streamText`。`capabilities.hostManagedModel` 保持 `experimental`。`hostManagedSupport` 即使带有控制面 fixture 证据，约束里的 `unifiedModelRoute` 也是 `experimental`，不能把控制面本身当成模型执行层已接通。`harness-managed` 为 `unsupported`。
+3. 模型栈验收另走现有执行层：`ModelBindingPlanner` 在假 CLI 版本探针和精确 fixture 证据下给出 `responses-gateway` 后，`prepareModel` 调用 `bindHostModel` 和 `AiSdkModelAdapter`，再由 Gateway `POST /v1/responses` 进入 `Model.streamText`。假响应只来自 `127.0.0.1`。这不读取真实 Provider，也不把 `capabilities.hostManagedModel` 改成 `supported`。
 
 ## 不支持
 

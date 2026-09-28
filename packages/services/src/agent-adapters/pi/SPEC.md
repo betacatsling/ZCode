@@ -30,6 +30,8 @@ Pi 的 agent loop、上下文和工具执行留在传输对面的 Pi 进程。�
 
 本目录不实现第二套 `ModelBindingPlanner`。契约基线还没有 PR #3 的 `ModelBindingPlanner` 类时，测试注入同形端口。
 
+生产 `hostManagedRoute` 是 `pi-sdk`。Gateway Responses 只准入 `responses-gateway`，所以这条生产组合不能进入 Responses 路由，保持 `experimental`。测试不会用跳过执行层的假 Model 把它标成已完成。
+
 ## 迁移
 
 现有 `PiHarnessAdapter` worker 仍由 `createPiHarness` 装配。本控制面是可替换的传输边界，这一轮不改 Host 注册。

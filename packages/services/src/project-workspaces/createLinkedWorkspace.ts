@@ -43,6 +43,7 @@ export function workspaceRecord(
   workspace: WorktreeWorkspace;
 } {
   const workspace: WorktreeWorkspace = {
+    schemaVersion: 1,
     id: deps.idFactory(),
     projectId: input.projectId,
     repositoryBindingId: input.bindingId,
@@ -53,6 +54,7 @@ export function workspaceRecord(
     head: input.candidate.head,
     origin: input.origin,
     lifecycle: "active",
+    verification: "verified",
   };
   return {
     workspace,
