@@ -27,6 +27,6 @@
 
 ## 明确留给后续
 
-- Desktop deep link、Web `packages/web/src/auth/**`、CLI login 命令：P3
+- Desktop deep link / Web `packages/web/src/auth/**` / CLI 产品 login：P3 已在 tip 落地（#33/#40/#35 等），后续整卸项见主计划文首「仍剩」
 - 凭据库中的旧 OAuth 键清理、协议字段迁移：P4
 - Claude adapter 与 agent-host 核心：不改
