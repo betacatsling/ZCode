@@ -239,8 +239,5 @@ export function useV4SessionQuotaBanner(params: {
     dismiss,
     markShown,
     takesOverError,
-    // 产品 Coding Plan 购买/升级已移除；横幅只读提示，不再提供 upgrade CTA。
-    upgradeProviderId: null,
-    upgradeActionLabelId: "chat.quota.action.upgrade",
   } as const;
 }
