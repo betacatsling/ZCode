@@ -1,5 +1,9 @@
 import { ProjectWorkspaceError } from "./errors.js";
-import type { GitExecResult, ProjectWorkspaceFilesystemPort, ProjectWorkspaceGitPort } from "./ports.js";
+import type {
+  GitExecResult,
+  ProjectWorkspaceFilesystemPort,
+  ProjectWorkspaceGitPort,
+} from "./ports.js";
 
 export interface PorcelainFixture {
   path: string;
@@ -41,7 +45,7 @@ export function createWorkspaceWorld(initial: Record<string, FsEntry>) {
   let bare = false;
   let notGit = false;
   let missingCommon = false;
-  let failList: "timeout" | "unknown-z" | null = null;
+  let failList: "timeout" | "unknown-z" | "disconnected" | null = null;
   let failRemove = false;
   let activity: "idle" | "busy" | "approval" | "unknown" = "idle";
   let releaseRemove: (() => void) | undefined;
@@ -71,6 +75,7 @@ export function createWorkspaceWorld(initial: Record<string, FsEntry>) {
           return { exitCode: 129, stdout: "", stderr: "error: unknown option `z'" };
         }
         if (failList === "timeout") return { exitCode: 1, stdout: "", stderr: "timed out" };
+        if (failList === "disconnected") return { exitCode: 1, stdout: "", stderr: "disconnected" };
         return { exitCode: 0, stdout: encodePorcelain(records), stderr: "" };
       }
       if (args.includes("status")) return { exitCode: 0, stdout: "", stderr: "" };
@@ -153,7 +158,7 @@ export function createWorkspaceWorld(initial: Record<string, FsEntry>) {
     setNotGit(value: boolean) {
       notGit = value;
     },
-    setFailList(value: "timeout" | "unknown-z" | null) {
+    setFailList(value: "timeout" | "unknown-z" | "disconnected" | null) {
       failList = value;
     },
     setFailRemove(value: boolean) {

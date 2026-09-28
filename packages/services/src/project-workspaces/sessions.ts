@@ -3,7 +3,16 @@ import type { AgentSessionRecord, WorktreeWorkspace } from "./planTypes.js";
 import { ProjectWorkspaceError } from "./errors.js";
 import { assertRelativeCwd, workspaceIdentityKey } from "./identity.js";
 import type { ProjectWorkspaceDeps } from "./ports.js";
-import type { CatalogSnapshot } from "./snapshot.js";
+import {
+  SESSION_ACTIVITY_KINDS,
+  SESSION_CONNECTION_KINDS,
+  SESSION_TURN_KINDS,
+  type CatalogSnapshot,
+  type SessionActivityKind,
+  type SessionActivitySummary,
+  type SessionConnectionKind,
+  type SessionTurnKind,
+} from "./snapshot.js";
 
 export interface ExecutionLocation {
   executionTargetId: string;
@@ -21,6 +30,46 @@ export interface CreateAgentSessionInput {
   harnessId: string;
   title: string;
   cwdRelativeToWorktree?: string;
+}
+
+export interface SessionActivityNote {
+  sessionId: string;
+  activity?: SessionActivityKind;
+  connection?: SessionConnectionKind;
+  lastTurn?: SessionTurnKind;
+  unread?: boolean;
+  pendingApproval?: boolean;
+  problem?: boolean;
+  unconfirmedError?: boolean;
+  internalChild?: boolean;
+  archived?: boolean;
+  topLevel?: boolean;
+}
+
+const ACTIVITY_KINDS = new Set<string>(SESSION_ACTIVITY_KINDS);
+const CONNECTION_KINDS = new Set<string>(SESSION_CONNECTION_KINDS);
+const TURN_KINDS = new Set<string>(SESSION_TURN_KINDS);
+
+function activitySummary(input: SessionActivityNote): SessionActivitySummary {
+  if (
+    (input.activity !== undefined && !ACTIVITY_KINDS.has(input.activity)) ||
+    (input.connection !== undefined && !CONNECTION_KINDS.has(input.connection)) ||
+    (input.lastTurn !== undefined && !TURN_KINDS.has(input.lastTurn))
+  ) {
+    throw new ProjectWorkspaceError("invalid-session-activity");
+  }
+  return {
+    activity: input.activity ?? "idle",
+    connection: input.connection ?? "unknown",
+    lastTurn: input.lastTurn ?? "unknown",
+    unread: input.unread ?? false,
+    pendingApproval: input.pendingApproval ?? false,
+    problem: input.problem ?? false,
+    unconfirmedError: input.unconfirmedError ?? false,
+    internalChild: input.internalChild ?? false,
+    archived: input.archived ?? false,
+    topLevel: input.topLevel ?? true,
+  };
 }
 
 function executionOf(
@@ -64,7 +113,9 @@ async function checkedCwd(
   assertRelativeCwd(cwdRelativeToWorktree);
   const root = await deps.filesystem.realpath(workspace.worktreePath);
   const target =
-    cwdRelativeToWorktree === "." ? root : await deps.filesystem.realpath(resolve(root, cwdRelativeToWorktree));
+    cwdRelativeToWorktree === "."
+      ? root
+      : await deps.filesystem.realpath(resolve(root, cwdRelativeToWorktree));
   const remainder = relative(root, target);
   if (remainder !== "" && (remainder.startsWith("..") || isAbsolute(remainder))) {
     throw new ProjectWorkspaceError("cwd-escapes-worktree");
@@ -98,7 +149,9 @@ export function createSessionCommands(deps: ProjectWorkspaceDeps) {
       await checkedCwd(deps, workspace, cwdRelative);
       return deps.store.update((current) => {
         const currentWorkspace = current.workspaces.find((item) => item.id === input.workspaceId);
-        const binding = current.bindings.find((item) => item.id === currentWorkspace?.repositoryBindingId);
+        const binding = current.bindings.find(
+          (item) => item.id === currentWorkspace?.repositoryBindingId,
+        );
         if (!currentWorkspace || !binding) throw new ProjectWorkspaceError("unknown-workspace");
         if (binding.executionTargetId !== deps.executionTargetId) {
           throw new ProjectWorkspaceError("foreign-target");
@@ -128,7 +181,10 @@ export function createSessionCommands(deps: ProjectWorkspaceDeps) {
         };
         return {
           snapshot: snapshotNext,
-          result: { session, execution: executionOf(snapshotNext, session, deps.executionTargetId) },
+          result: {
+            session,
+            execution: executionOf(snapshotNext, session, deps.executionTargetId),
+          },
         };
       });
     },
@@ -148,7 +204,32 @@ export function createSessionCommands(deps: ProjectWorkspaceDeps) {
       }));
       return { stoppedSessionIds: [session.id] };
     },
-    async noteViewDetached(sessionId: string): Promise<{ sessionRetained: true; workspaceRetained: true }> {
+    async noteSessionActivities(activities: readonly SessionActivityNote[]): Promise<void> {
+      await deps.store.update((current) => {
+        const sessionActivityById = { ...current.sessionActivityById };
+        for (const note of activities) {
+          const session = current.sessions.find((item) => item.id === note.sessionId);
+          if (!session) throw new ProjectWorkspaceError("unknown-session");
+          const workspace = current.workspaces.find((item) => item.id === session.workspaceId);
+          const binding = current.bindings.find(
+            (item) => item.id === workspace?.repositoryBindingId,
+          );
+          if (!binding || binding.executionTargetId !== deps.executionTargetId) {
+            throw new ProjectWorkspaceError("foreign-target");
+          }
+          const freshness = current.freshnessByTargetId[binding.executionTargetId];
+          // 断线或扫描过期后没有新的权威观察，不能把 Agent 改写成已停止或已完成。
+          if (freshness === "offline" || freshness === "stale") {
+            throw new ProjectWorkspaceError("offline-activity-retained");
+          }
+          sessionActivityById[session.id] = activitySummary(note);
+        }
+        return { snapshot: { ...current, sessionActivityById }, result: undefined };
+      });
+    },
+    async noteViewDetached(
+      sessionId: string,
+    ): Promise<{ sessionRetained: true; workspaceRetained: true }> {
       const snapshot = await deps.store.read();
       const session = snapshot.sessions.find((item) => item.id === sessionId);
       if (!session) throw new ProjectWorkspaceError("unknown-session");
