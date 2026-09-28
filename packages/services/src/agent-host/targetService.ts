@@ -10,6 +10,7 @@ import {
   type SessionSpec,
   type StoredAgentSessionSummary,
   type ExternalWorkspaceSessionCreateRequest,
+  type WorkspaceSessionBindingCapabilityRequest,
   type WorkspaceSessionCreateRequest,
   type WorkspaceSessionOwnersRequest,
 } from "@zcode/shared/agent-host";
@@ -32,6 +33,8 @@ import {
   type WorkspaceAdmissionRunner,
 } from "./workspaceSessionService.js";
 import { createTargetSessionIndex } from "./targetSessionIndex.js";
+import { admitOwnedSession } from "./runtime/admissionLane.js";
+import { createTargetOwnerGate } from "./runtime/ownerFence.js";
 
 export type {
   NativeWorkspaceSessionOwnerPort,
@@ -56,6 +59,7 @@ export class AgentHostTargetService {
   /** Admission is serialized per host ID because adapters address live backends by that ID. */
   readonly #admissionTails = new Map<string, Promise<void>>();
   readonly #listeners = new Set<(result: TargetHostEvent) => void>();
+  readonly #owner: ReturnType<typeof createTargetOwnerGate>;
   #closing = false;
   #closePromise?: Promise<void>;
 
@@ -69,6 +73,7 @@ export class AgentHostTargetService {
     worktrees?: IWorktreeService;
     nativeOwner?: NativeWorkspaceSessionOwnerPort;
     checkAdmissionFence?: WorkspaceAdmissionFenceChecker;
+    ownerGeneration?: number;
   }) {
     this.#root = options.root;
     this.#target = options.target;
@@ -96,6 +101,11 @@ export class AgentHostTargetService {
       target: this.#target,
       verify: (spec) => this.#verify(spec),
       mounted: () => [...this.#hosts.values()],
+    });
+    this.#owner = createTargetOwnerGate({
+      root: this.#root,
+      targetId: this.#target.id,
+      generation: options.ownerGeneration ?? 1,
     });
   }
   async getAvailability(): Promise<{ target: ExecutionTarget; harnesses: string[] }> {
@@ -179,6 +189,7 @@ export class AgentHostTargetService {
     const run = async () => {
       const key = admitted ? await this.#verify(spec) : this.#verifyHistory(spec);
       if (this.#closing) throw new Error("target host is closing");
+      await this.#owner.assertIfHeld(spec.hostSessionId);
       return this.#require(key).dispatch(command);
     };
     return admitted ? this.#runWithWorkspaceAdmission(spec, run) : run();
@@ -189,7 +200,7 @@ export class AgentHostTargetService {
   createWorkspaceSession(request: WorkspaceSessionCreateRequest) {
     return this.#workspaceSessions.createWorkspaceSession(request);
   }
-  getWorkspaceSessionCapability(request: import("@zcode/shared/agent-host").WorkspaceSessionBindingCapabilityRequest) {
+  getWorkspaceSessionCapability(request: WorkspaceSessionBindingCapabilityRequest) {
     return this.#workspaceSessions.getWorkspaceSessionCapability(request);
   }
   listWorkspaceSessionOwners(request: WorkspaceSessionOwnersRequest) {
@@ -322,26 +333,14 @@ export class AgentHostTargetService {
   }
 
   #withAdmission<T>(raw: SessionSpec, operation: (spec: SessionSpec) => Promise<T>): Promise<T> {
-    const spec = sessionSpecSchema.parse(raw);
-    if (this.#closing) throw new Error("target host is closing");
-    const hostSessionId = spec.hostSessionId;
-    const previous = this.#admissionTails.get(hostSessionId);
-    // 修复依据：#verify 含 realpath/授权 await；原实现把 owner 检查和 mount 分开，await 期间可让同一 ID 的第二个 create 越过检查。
-    const runOperation = async (): Promise<T> => {
-      if (this.#closing) throw new Error("target host is closing");
-      return operation(spec);
-    };
-    const run = previous ? previous.then(runOperation, runOperation) : runOperation();
-    const settled = run.then(
-      () => undefined,
-      () => undefined,
-    );
-    this.#admissionTails.set(hostSessionId, settled);
-    void settled.then(() => {
-      if (this.#admissionTails.get(hostSessionId) === settled)
-        this.#admissionTails.delete(hostSessionId);
+    return admitOwnedSession({
+      raw,
+      tails: this.#admissionTails,
+      isClosing: () => this.#closing,
+      owner: this.#owner,
+      isMounted: (hostSessionId) => this.#owners.has(hostSessionId),
+      operation,
     });
-    return run;
   }
 
   #runWithWorkspaceAdmission<T>(raw: SessionSpec, operation: () => Promise<T>): Promise<T> {
@@ -362,6 +361,7 @@ export class AgentHostTargetService {
     this.#hosts.clear();
     this.#owners.clear();
     this.#listeners.clear();
+    await this.#owner.releaseAll();
   }
 
   async #verify(spec: SessionSpec): Promise<string> {

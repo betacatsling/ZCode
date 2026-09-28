@@ -64,6 +64,7 @@ export async function runServerCore(
     zcodeBuiltinProviderConfigFilePath,
     serviceAuthorityMode: "standalone-server",
     agentHostTargetId: serverId,
+    agentHostOwnerGeneration: generation,
     // 缺失 cwd 的只读 session/history 查询可使用该稳定目录；写入入口会在 getClient 再验证原路径。
     zcodeAgentSpawnFallbackCwd: spawnFallbackCwd,
     // Target credential provisioning is available only through the protected desktop Host channel.

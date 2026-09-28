@@ -19,6 +19,7 @@
     "./node": "./src/node.ts",
     "./agent-host/pi": "./src/agent-adapters/pi/createPiHarness.ts",
     "./agent-host/mock-runtime-test": "./src/agent-host/mockRuntime.ts",
+    "./agent-host/runtime": "./src/agent-host/runtimeSupervisor.ts",
     "./agent-adapters/mock": "./src/agent-adapters/mock/index.ts",
     "./agent-host/plugins": "./src/agent-host/harnessPluginLoader.ts"
   },
