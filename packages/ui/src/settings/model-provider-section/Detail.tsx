@@ -14,10 +14,9 @@ import {
   getProviderFormApiKeyManagementUrl,
   type ProviderSettingsFormProvider,
 } from "@/lib/providerSettingsFormTypes.js";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import {
-  type CodingPlanProviderId,
   type ModelProviderNavItem,
 } from "./constants.js";
 import { InlineEditableProviderCard } from "./InlineEditableProviderCard.js";
@@ -502,7 +501,7 @@ export function ModelProviderSectionDetail({
           }
           disconnectLoading={codingPlanDisconnectProviderId === selectedNavItem.presetId}
           // Plan Card 在未连接时仍是当前入口；loginActionVisible 驱动 StatusCards
-          // 展示 productPurchaseRemoved 说明（产品登录回调已卸）。
+          // 展示 productPurchaseRemoved 说明。
           loginActionVisible
           onRetry={
             retryTeamPlan ??
