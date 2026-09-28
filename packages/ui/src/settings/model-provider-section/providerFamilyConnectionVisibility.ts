@@ -257,7 +257,7 @@ export function buildVisibleFamilyConnectionItems({
   >;
 }): ModelProviderNavGroup["items"] {
   // Team nav 只走 entitlement snapshot + 本地 fallback selectedKey。
-  return appendSubscribedTeamPlanItems({
+  return appendTeamPlanItems({
     items: filterStartPlanItemsByEntitlement({
       items,
       codingPlanEntitlements,
@@ -278,7 +278,7 @@ function filterStartPlanItemsByEntitlement({
   codingPlanEntitlements: Partial<Record<string, CodingPlanEntitlementState>>;
   connectionSelections?: ProviderFamilyConnectionSelectionSettings;
 }): Array<Extract<ModelProviderNavGroup["items"][number], { type: "codingPlan" }>> {
-  // Team 产品列表已恒空；是否已有团队连接只看 entitlement snapshot。
+  // 是否已有团队连接只看 entitlement snapshot。
   const hasAnyTeamPlan = hasEntitlementTeamPlan(codingPlanEntitlements);
   return items.filter((item) => {
     if (!isStartPlanModelProviderId(item.presetId)) {
@@ -314,10 +314,7 @@ function filterStartPlanItemsByEntitlement({
 }
 
 /**
- * 按 family 查找对应 family 的 Coding Plan nav item。
- * 原 appendSubscribedTeamPlanItems 硬编码找 bigmodelCodingPlan，
- * zai team plan items 无对应展示基线。zai/bigmodel 对称化后，team item 的
- * providerName、provider 等展示字段应继承自所属 family 的 codingPlanItem。
+ * 按 family 查找对应 Coding Plan nav item，供 Team 连接项继承展示字段。
  */
 function resolveCodingPlanItemForFamily(
   items: Array<Extract<ModelProviderNavGroup["items"][number], { type: "codingPlan" }>>,
@@ -327,7 +324,7 @@ function resolveCodingPlanItemForFamily(
   return items.find((item) => item.presetId === codingPlanProviderId);
 }
 
-function appendSubscribedTeamPlanItems({
+function appendTeamPlanItems({
   items,
   codingPlanEntitlements,
   teamPlanSelections,
@@ -415,8 +412,7 @@ function buildEntitlementTeamPlanItems(
   codingPlanEntitlements: Partial<Record<string, CodingPlanEntitlementState>>,
   family: ProviderFamilyDomain,
 ): TeamPlanNavItem[] {
-  // 原硬编码读 bigmodelCodingPlan bucket + bigmodel team key。
-  // zai/bigmodel 对称化后，按 family 读对应 codingPlan bucket、生成对应前缀 team key。
+  // 按 family 读对应 codingPlan bucket、生成对应前缀 team key。
   const familySpec = getModelProviderFamilySpec(family);
   const codingPlanProviderId = familySpec.teamCodingPlanProviderId;
   const entitlement = codingPlanEntitlements[codingPlanProviderId];
@@ -459,7 +455,6 @@ function buildEntitlementTeamPlanItems(
       projectId,
       status: "purchased" as const,
       // Team Plan 连接项以 entitlement snapshot 为主数据源。
-      // 企业 productList 已拆除，不再用 pricing 校正名称。
       planLevel: teamPlanName,
       currentProductId: productId,
       purchaseUrl: familySpec.teamCodingPlanManageUrl,
