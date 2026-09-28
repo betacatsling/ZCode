@@ -8,6 +8,7 @@ const readUi = (relativePath: string) =>
 
 const detail = readUi("../src/settings/model-provider-section/Detail.tsx");
 const section = readUi("../src/settings/ModelProviderSection.tsx");
+const actions = readUi("../src/settings/model-provider-section/modelProviderActions.ts");
 
 test("settings model-provider Detail does not open Coding Plan upgrade", () => {
   assert.equal(detail.includes("useCodingPlanUpgradeDialog"), false);
@@ -35,4 +36,15 @@ test("settings model-provider Detail does not use CodingPlan entryGate", () => {
     existsSync(fileURLToPath(new URL("../src/settings/CodingPlanEntryButton.tsx", import.meta.url))),
     false,
   );
+});
+
+test("settings model-provider Track B drops dead purchase-complete wiring", () => {
+  for (const source of [section, detail, actions]) {
+    assert.equal(source.includes("onCodingPlanPurchaseComplete"), false);
+    assert.equal(source.includes("codingPlanPurchaseToken"), false);
+    assert.equal(source.includes("refreshPurchaseTokenState"), false);
+  }
+  assert.match(detail, /onQuotaResetEntitlementRefresh/);
+  assert.match(section, /refreshActiveOAuthProviderState/);
+  assert.match(actions, /refreshActiveOAuthProvider/);
 });

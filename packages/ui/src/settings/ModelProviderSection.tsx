@@ -368,10 +368,6 @@ export function ModelProviderSection({
       }),
     [applyModelProviderTarget],
   );
-  const [
-    codingPlanPurchaseTokenAuthenticatedByProviderId,
-    setCodingPlanPurchaseTokenAuthenticatedByProviderId,
-  ] = useState<Partial<Record<BuiltinModelProviderId, boolean>>>({});
   const [activeOAuthProvider, setActiveOAuthProvider] = useState<OAuthProviderId | null>(null);
   const [pendingConnectionSelections, setPendingConnectionSelections] =
     useState<ProviderFamilyConnectionSelectionSettings>({});
@@ -434,18 +430,14 @@ export function ModelProviderSection({
     setCodingPlanProductsRefreshToken((current) => current + 1);
   }, []);
 
-  const refreshCodingPlanPurchaseTokenState = useCallback(
+  const refreshActiveOAuthProviderState = useCallback(
     async (
       options: {
         clearUserWhenLoggedOut?: boolean;
         shouldApply?: () => boolean;
       } = {},
     ) => {
-      const [activeProvider, zaiToken, bigmodelToken] = await Promise.all([
-        credentialService.load("oauth:active_provider"),
-        credentialService.load(`oauth:${ZAI_PROVIDER_ID}:access_token`),
-        credentialService.load(`oauth:${BIGMODEL_PROVIDER_ID}:access_token`),
-      ]);
+      const activeProvider = await credentialService.load("oauth:active_provider");
       if (options.shouldApply && !options.shouldApply()) {
         return null;
       }
@@ -454,23 +446,6 @@ export function ModelProviderSection({
           ? activeProvider
           : null;
       setActiveOAuthProvider(normalizedActiveProvider);
-      setCodingPlanPurchaseTokenAuthenticatedByProviderId({
-        [BUILTIN_MODEL_PROVIDER_IDS.zaiIndividualCodingPlan]:
-          normalizedActiveProvider === ZAI_PROVIDER_ID && (zaiToken?.trim().length ?? 0) > 0,
-        [BUILTIN_MODEL_PROVIDER_IDS.zaiTeamCodingPlan]:
-          normalizedActiveProvider === ZAI_PROVIDER_ID && (zaiToken?.trim().length ?? 0) > 0,
-        [BUILTIN_MODEL_PROVIDER_IDS.zaiStartPlan]:
-          normalizedActiveProvider === ZAI_PROVIDER_ID && (zaiToken?.trim().length ?? 0) > 0,
-        [BUILTIN_MODEL_PROVIDER_IDS.bigmodelIndividualCodingPlan]:
-          normalizedActiveProvider === BIGMODEL_PROVIDER_ID &&
-          (bigmodelToken?.trim().length ?? 0) > 0,
-        [BUILTIN_MODEL_PROVIDER_IDS.bigmodelTeamCodingPlan]:
-          normalizedActiveProvider === BIGMODEL_PROVIDER_ID &&
-          (bigmodelToken?.trim().length ?? 0) > 0,
-        [BUILTIN_MODEL_PROVIDER_IDS.bigmodelStartPlan]:
-          normalizedActiveProvider === BIGMODEL_PROVIDER_ID &&
-          (bigmodelToken?.trim().length ?? 0) > 0,
-      });
       if (!normalizedActiveProvider && options.clearUserWhenLoggedOut) {
         // provider Unlink 已等价于 App logout。
         // 服务端 token 已清理后，设置页也要同步清掉 Zustand user，否则侧边栏会一直显示旧登录态直到重启。
@@ -495,7 +470,7 @@ export function ModelProviderSection({
         refreshCodingPlanEntitlements: () =>
           refreshCodingPlanEntitlements({ force: true, reason: refreshReason }),
         refreshCodingPlanProducts,
-        refreshPurchaseTokenState: refreshCodingPlanPurchaseTokenState,
+        refreshActiveOAuthProvider: refreshActiveOAuthProviderState,
         refreshPlanSnapshots,
       });
     },
@@ -503,7 +478,7 @@ export function ModelProviderSection({
       refresh,
       refreshCodingPlanEntitlements,
       refreshCodingPlanProducts,
-      refreshCodingPlanPurchaseTokenState,
+      refreshActiveOAuthProviderState,
       refreshModelProviderPanelAfterAuthChange,
     ],
   );
@@ -551,14 +526,14 @@ export function ModelProviderSection({
   useEffect(() => {
     let disposed = false;
 
-    void refreshCodingPlanPurchaseTokenState({
+    void refreshActiveOAuthProviderState({
       shouldApply: () => !disposed,
     });
 
     return () => {
       disposed = true;
     };
-  }, [providerConnectionRefreshSignal, refreshCodingPlanPurchaseTokenState]);
+  }, [providerConnectionRefreshSignal, refreshActiveOAuthProviderState]);
 
   const presetProviders = useMemo(
     () =>
@@ -758,7 +733,7 @@ export function ModelProviderSection({
           providerFamilyDomainUpdatedAt: Date.now(),
           providerFamilyDomainMigrated: true,
         });
-        await refreshCodingPlanPurchaseTokenState({ clearUserWhenLoggedOut: true });
+        await refreshActiveOAuthProviderState({ clearUserWhenLoggedOut: true });
         await refresh();
         // 解绑后 batch-preview 的订阅/鉴权态已经失效，套餐卡片内部缓存必须刷新，
         // 否则按钮会继续沿用解绑前的 purchased 或 authenticated 状态。
@@ -785,7 +760,7 @@ export function ModelProviderSection({
       refresh,
       refreshCodingPlanEntitlements,
       refreshCodingPlanProducts,
-      refreshCodingPlanPurchaseTokenState,
+      refreshActiveOAuthProviderState,
     ],
   );
 
@@ -1094,9 +1069,9 @@ export function ModelProviderSection({
             );
             platform.openExternal(BIGMODEL_REGISTRATION_URL);
           }}
-          onCodingPlanPurchaseComplete={async () => {
-            await refreshProviderPanelAfterAuthChange({ refreshReason: "purchase" });
-          }}
+          onQuotaResetEntitlementRefresh={() =>
+            refreshCodingPlanEntitlements({ force: true, reason: "manual" })
+          }
         />
       )}
     </ModelProviderSectionLayout>
