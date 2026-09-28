@@ -12,6 +12,12 @@ test("StatusCards does not render Coding Plan upgrade CTA", () => {
   assert.equal(statusCards.includes("CodingPlanUpgradeAction"), false);
   assert.equal(statusCards.includes("canUpgrade"), false);
   assert.equal(statusCards.includes("openCodingPlanUpgrade"), false);
+  assert.equal(statusCards.includes("CodingPlanFunnelContext"), false);
+  assert.equal(statusCards.includes("onOpenUpgradePlans"), false);
+  assert.equal(statusCards.includes("funnelContext"), false);
+  assert.equal(statusCards.includes("upgradeActionVisible"), false);
+  assert.equal(statusCards.includes("purchaseInitialAudience"), false);
+  assert.equal(statusCards.includes("codingPlanFunnelTelemetry"), false);
 });
 
 test("CodingPlanUpgradeAction export is removed", () => {

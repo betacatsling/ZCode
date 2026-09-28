@@ -22,13 +22,8 @@ test("sidebarCodingPlanUpgrade.ts is removed", () => {
   assert.equal(existsSync(path.join(libRoot, "sidebarCodingPlanUpgrade.ts")), false);
 });
 
-test("upgrade funnel report/create helpers are removed", () => {
-  const telemetry = readFileSync(path.join(libRoot, "codingPlanFunnelTelemetry.ts"), "utf8");
-  assert.equal(telemetry.includes("reportCodingPlanUpgradeClick"), false);
-  assert.equal(telemetry.includes("createCodingPlanFunnelContext"), false);
-  assert.equal(telemetry.includes("createIdleTimeCodingPlanFunnelContext"), false);
-  assert.equal(telemetry.includes("resolveCodingPlanEntryPlanState"), false);
-  assert.match(telemetry, /export interface CodingPlanFunnelContext/);
+test("codingPlanFunnelTelemetry.ts is removed", () => {
+  assert.equal(existsSync(path.join(libRoot, "codingPlanFunnelTelemetry.ts")), false);
 });
 
 test("no remaining imports of sidebarCodingPlanUpgrade", () => {
