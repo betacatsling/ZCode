@@ -45,7 +45,7 @@ export function isShareImportIntentSame(
 
 export function resolveShareImportFailurePresentation(kind: string): {
   messageId:
-    | "conversationShare.import.loginRequired"
+    | "conversationShare.import.signInRequired"
     | "conversationShare.import.notFound"
     | "conversationShare.import.expired"
     | "conversationShare.import.integrityFailed"
@@ -54,7 +54,7 @@ export function resolveShareImportFailurePresentation(kind: string): {
 } {
   if (kind === "authentication_required") {
     return {
-      messageId: "conversationShare.import.loginRequired",
+      messageId: "conversationShare.import.signInRequired",
       retryable: false,
     };
   }
