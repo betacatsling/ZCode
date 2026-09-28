@@ -3,7 +3,7 @@
  *
  * Proves same-protocol Agents register via explicit factory + loadExplicit trust list
  * without changing lazy Host defaults or the shared ACP session machine. Goose SessionHost
- * path is symmetric to OpenCode (#75). Late prompt + transport fault/disconnect still journal via SessionHost (OpenCode + Goose). Resume-after-disconnect: SessionHost.open attach via negotiated session/load then send again. Cancel-after-disconnect: after fault fence, cancel of the dead turn is stale; after reopen+session/load, cancel mid-prompt journals cancelled (OpenCode + Goose). Double-fault/reopen: fault→reopen→fault→reopen stays idempotent (session/load, no session/new) then send succeeds (OpenCode + Goose). Mid-tool-call disconnect: tool_call + pending permission then fault → reopen session/load → send (OpenCode + Goose). Permission-denied-then-disconnect: Host denies permission, peer then faults the prompt (OpenCode + Goose). Cancel-during-permission: Host cancelTurn while permission pending journals cancelled (OpenCode + Goose). Permission-resolve-after-reopen: fault mid-permission → reopen → deny still clean (OpenCode + Goose). Allow-after-reopen: fault mid-permission → reopen → fresh allow completes send (OpenCode + Goose). Double-cancel: cancelTurn×2 mid-prompt is idempotent (one cancelled outcome; OpenCode + Goose). Allow-then-disconnect: Host allows permission then peer faults mid-turn (OpenCode + Goose). Cancel-then-disconnect: Host cancel mid-prompt then peer faults (OpenCode + Goose). Deny-then-cancel: Host deny pending permission then cancelTurn journals clean (OpenCode + Goose). Allow-then-cancel: Host allow pending permission then cancelTurn journals clean (OpenCode + Goose). Fault-during-session-load: reopen attach session/load mid-fault fails clean (OpenCode + Goose). Load-then-cancel: after reopen session/load succeeds, cancelTurn before first send is stale (OpenCode + Goose).
+ * path is symmetric to OpenCode (#75). Late prompt + transport fault/disconnect still journal via SessionHost (OpenCode + Goose). Resume-after-disconnect: SessionHost.open attach via negotiated session/load then send again. Cancel-after-disconnect: after fault fence, cancel of the dead turn is stale; after reopen+session/load, cancel mid-prompt journals cancelled (OpenCode + Goose). Double-fault/reopen: fault→reopen→fault→reopen stays idempotent (session/load, no session/new) then send succeeds (OpenCode + Goose). Mid-tool-call disconnect: tool_call + pending permission then fault → reopen session/load → send (OpenCode + Goose). Permission-denied-then-disconnect: Host denies permission, peer then faults the prompt (OpenCode + Goose). Cancel-during-permission: Host cancelTurn while permission pending journals cancelled (OpenCode + Goose). Permission-resolve-after-reopen: fault mid-permission → reopen → deny still clean (OpenCode + Goose). Allow-after-reopen: fault mid-permission → reopen → fresh allow completes send (OpenCode + Goose). Double-cancel: cancelTurn×2 mid-prompt is idempotent (one cancelled outcome; OpenCode + Goose). Allow-then-disconnect: Host allows permission then peer faults mid-turn (OpenCode + Goose). Cancel-then-disconnect: Host cancel mid-prompt then peer faults (OpenCode + Goose). Deny-then-cancel: Host deny pending permission then cancelTurn journals clean (OpenCode + Goose). Allow-then-cancel: Host allow pending permission then cancelTurn journals clean (OpenCode + Goose). Fault-during-session-load: reopen attach session/load mid-fault fails clean (OpenCode + Goose). Load-then-cancel: after reopen session/load succeeds, cancelTurn before first send is stale (OpenCode + Goose). Cancel-during-session-load: while reopen session/load is held in-flight, aborting the pending load rejects open clean (Host.cancelTurn cannot race mid-load — open awaits attach; OpenCode + Goose).
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -44,6 +44,11 @@ interface FakePeerOptions {
    * returning sessionId (reopen attach path; fault-during-session-load).
    */
   readonly faultOnSessionLoad?: boolean;
+  /**
+   * Hold session/load (or session/resume) unanswered until abortHeldSessionLoad() —
+   * mirrors holdUntilCancel for prompts (cancel-during-session-load / abort in-flight open).
+   */
+  readonly holdOnSessionLoad?: boolean;
   /**
    * Emit a partial chunk, then wait for session/cancel before answering with stopReason cancelled
    * (SessionHost cancelTurn mid-prompt path).
@@ -100,6 +105,8 @@ class FakePeer {
   readonly #options: FakePeerOptions;
   #cancelled = false;
   #cancelWaiters: Array<() => void> = [];
+  #holdingSessionLoad = false;
+  #sessionLoadHoldWaiters: Array<() => void> = [];
   readonly #pending = new Map<
     string,
     { resolve: (value: unknown) => void; reject: (error: Error) => void }
@@ -113,6 +120,21 @@ class FakePeer {
     transport.subscribe((message) => {
       void this.#receive(message);
     });
+  }
+
+  /** True while FakePeer has received session/load|resume and has not yet answered. */
+  get holdingSessionLoad(): boolean {
+    return this.#holdingSessionLoad;
+  }
+
+  /**
+   * Abort an in-flight held session/load (cancel-during-session-load concurrent path).
+   * Host.cancelTurn cannot run until SessionHost.open returns; open awaits attach/load.
+   */
+  abortHeldSessionLoad(): void {
+    if (!this.#holdingSessionLoad) throw new Error("session/load is not held");
+    for (const wake of this.#sessionLoadHoldWaiters) wake();
+    this.#sessionLoadHoldWaiters = [];
   }
 
   async #agentRequest(method: string, params: unknown): Promise<unknown> {
@@ -166,6 +188,24 @@ class FakePeer {
     }
     if (message.method === "session/load" || message.method === "session/resume") {
       if (this.#options.faultOnSessionLoad) {
+        await this.#transport.send({
+          jsonrpc: "2.0",
+          id: message.id,
+          error: { code: -32000, message: "ACP transport closed" },
+        });
+        await this.#transport.close();
+        return;
+      }
+      if (this.#options.holdOnSessionLoad) {
+        this.#holdingSessionLoad = true;
+        try {
+          await new Promise<void>((resolve) => {
+            this.#sessionLoadHoldWaiters.push(resolve);
+          });
+        } finally {
+          this.#holdingSessionLoad = false;
+        }
+        // Concurrent abort of held load — open must reject clean (no hang).
         await this.#transport.send({
           jsonrpc: "2.0",
           id: message.id,
@@ -3467,6 +3507,174 @@ test("SessionHost + opt-in OpenCode ACP: load-then-cancel is stale before first 
 
 test("SessionHost + opt-in Goose ACP: load-then-cancel is stale before first send (symmetric)", async (t) => {
   await assertSessionHostLoadThenCancel({
+    t,
+    label: "goose",
+    harnessId: "goose",
+    agentName: "Goose",
+    createHarness: (openTransport) =>
+      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+  });
+});
+
+
+async function waitForCondition(
+  predicate: () => boolean,
+  label: string,
+  timeoutMs = 5000,
+): Promise<void> {
+  const started = Date.now();
+  while (!predicate()) {
+    if (Date.now() - started > timeoutMs) throw new Error(`timeout waiting for ${label}`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+async function assertSessionHostCancelDuringSessionLoad(input: {
+  t: { after: (fn: () => void | Promise<void>) => void };
+  label: string;
+  harnessId: "opencode" | "goose";
+  agentName: string;
+  createHarness: (openTransport: () => AcpTransport) => ReturnType<
+    typeof createExperimentalRegistryOpenCodeAcpHarness
+  >;
+}): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-cdsl-`));
+  const worktree = join(root, "worktree");
+  const journalRoot = join(root, "journal");
+  await mkdir(worktree, { recursive: true });
+  input.t.after(() => rm(root, { recursive: true, force: true }));
+
+  const backendSessionId = `${input.harnessId}-cdsl-session`;
+  const hostSessionId = `${input.harnessId}-cdsl-1`;
+  const spec = {
+    schemaVersion: 1 as const,
+    hostSessionId,
+    execution: {
+      targetId: "local",
+      workspaceIdentity: `workspace-${input.harnessId}-cdsl`,
+      worktreePath: worktree,
+    },
+    harness: { id: input.harnessId, adapterVersion: ACP_ADAPTER_VERSION },
+    modelBinding: { kind: "harness-managed" as const },
+  };
+  const target = {
+    id: "local",
+    kind: "local" as const,
+    platform: process.platform as "darwin" | "linux" | "win32",
+    available: true,
+  };
+  const catalog = {
+    fingerprint: "registry-v1",
+    validateSelection: () => ({ ok: true as const }),
+  };
+
+  // Round 1: negotiate loadSession, disconnect mid-prompt, close — same fence as load-then-cancel.
+  const registryLive = new HarnessRegistry();
+  registryLive.register(
+    input.createHarness(() =>
+      openFakeTransport(input.agentName, backendSessionId, {
+        loadSession: true,
+        disconnectOnPrompt: true,
+      }),
+    ),
+  );
+
+  const host = await SessionHost.create({
+    root: journalRoot,
+    spec,
+    target,
+    catalog,
+    registry: registryLive,
+  });
+
+  const faultReceipt = await host.dispatch({
+    type: "send",
+    commandId: `${input.harnessId}-cdsl-fault`,
+    hostSessionId,
+    turnId: "turn-cdsl-fault",
+    text: "die mid-prompt",
+  });
+  assert.equal(faultReceipt.status, "accepted");
+  await host.whenIdle();
+  assert.ok(host.eventsSince(0).some((event) => event.kind === "session.error"));
+  await host.close();
+
+  // Round 2: reopen attach holds session/load in-flight. Host.cancelTurn cannot race here:
+  // SessionHost.open awaits adapter.attach (session/load) before returning a host
+  // (sessionHost.ts open/#mount→attach); adapter registers the machine only after load
+  // (acpHarnessAdapter attach); cancelTurn needs an active turn + sessionId
+  // (acpSessionMachine.cancelTurn). Concurrent path: abort the held load → open rejects.
+  const peersAfter: FakePeer[] = [];
+  const registryReopen = new HarnessRegistry();
+  registryReopen.register(
+    input.createHarness(() =>
+      openFakeTransport(
+        input.agentName,
+        backendSessionId,
+        { loadSession: true, holdOnSessionLoad: true },
+        peersAfter,
+      ),
+    ),
+  );
+
+  const openPromise = SessionHost.open({
+    root: journalRoot,
+    spec,
+    target,
+    catalog,
+    registry: registryReopen,
+  });
+
+  await waitForCondition(
+    () => peersAfter.some((peer) => peer.holdingSessionLoad),
+    "FakePeer hold mid session/load",
+  );
+  assert.ok(
+    peersAfter.some((peer) => peer.methods.includes("session/load")),
+    "reopen must attempt session/load before abort",
+  );
+  assert.ok(
+    peersAfter.every((peer) => !peer.methods.includes("session/new")),
+    "held load must not fall back to session/new",
+  );
+
+  const held = peersAfter.find((peer) => peer.holdingSessionLoad);
+  assert.ok(held, "expected a peer holding session/load");
+  held.abortHeldSessionLoad();
+
+  await assert.rejects(
+    () => openPromise,
+    (error: unknown) =>
+      error instanceof Error && /ACP transport closed/.test(error.message),
+  );
+
+  assert.ok(
+    peersAfter.every((peer) => !peer.methods.includes("session/new")),
+    "aborted load must not fall back to session/new",
+  );
+  assert.ok(
+    peersAfter.every((peer) => !peer.methods.includes("session/cancel")),
+    "abort-held-load path must not notify session/cancel (no Host cancelTurn mid-open)",
+  );
+
+  // Prior journal remains readable; held-load abort did not corrupt history.
+  const persisted = await SessionHost.eventsSinceHistory(journalRoot, spec, 0);
+  assert.ok(persisted.some((event) => event.kind === "session.error"));
+}
+
+test("SessionHost + opt-in OpenCode ACP: cancel-during-session-load aborts held open clean", async (t) => {
+  await assertSessionHostCancelDuringSessionLoad({
+    t,
+    label: "opencode",
+    harnessId: "opencode",
+    agentName: "OpenCode",
+    createHarness: (openTransport) =>
+      createExperimentalRegistryOpenCodeAcpHarness({ openTransport }),
+  });
+});
+
+test("SessionHost + opt-in Goose ACP: cancel-during-session-load aborts held open clean (symmetric)", async (t) => {
+  await assertSessionHostCancelDuringSessionLoad({
     t,
     label: "goose",
     harnessId: "goose",
