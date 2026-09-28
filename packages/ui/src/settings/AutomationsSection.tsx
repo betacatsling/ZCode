@@ -831,21 +831,6 @@ export function AutomationsSection({
     );
   }, [currentWorkspaceIsRemote]);
 
-  const showCodingPlanRequiredToast = useCallback(() => {
-    toast(
-      intl.formatMessage({
-        id: "settings.modelProvider.codingPlan.productPurchaseRemoved",
-      }),
-      {
-        durationMs: 8000,
-        position: "top-center",
-        variant: "info",
-        dismissible: true,
-        dismissLabel: intl.formatMessage({ id: "common.close" }),
-      },
-    );
-  }, [intl]);
-
   const showAutomationCreateLimitToast = useCallback(() => {
     toast(
       intl.formatMessage(
@@ -1265,9 +1250,9 @@ export function AutomationsSection({
             })
           : null;
       if (current.mode !== "offpeak-edit" && offPeakCreateGrey.reason !== null) {
-        if (offPeakCreateGrey.reason === "plan") {
-          showCodingPlanRequiredToast();
-        } else if (offPeakCreateGrey.reason === "unavailable") {
+        // plan / quota: reuse grey tooltip (codingPlanOnly / quota). StatusCards KEEP
+        // notice stays elsewhere; Automations no longer toasts that purchase-removed copy.
+        if (offPeakCreateGrey.reason === "unavailable") {
           toast(intl.formatMessage({ id: "offPeak.error.unavailable" }));
         } else {
           toast(offPeakCreateGrey.tooltip ?? intl.formatMessage({ id: "offPeak.error.quota" }));
@@ -1322,7 +1307,6 @@ export function AutomationsSection({
       offPeakTaskService,
       offPeakUpdate,
       platform,
-      showCodingPlanRequiredToast,
       view,
     ],
   );
@@ -1874,7 +1858,6 @@ export function AutomationsSection({
                         type="button"
                         onClick={() => {
                           if (planLocked) {
-                            showCodingPlanRequiredToast();
                             return;
                           }
                           const materializedDraft = materializeOffPeakTemplateDraft(
