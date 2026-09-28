@@ -7,15 +7,11 @@ import {
   type ZCodeAccountAccess,
   type ZCodeProviderAccountAccess,
 } from "@zcode/shared";
-import {
-  resolveEnterpriseCodingPlanProductFamily,
-  type EnterpriseCodingPlanProductDisplay,
-} from "@/settings/model-provider-section/enterpriseCodingPlanProducts.js";
+import type { EnterpriseCodingPlanProductDisplay } from "@/settings/model-provider-section/enterpriseCodingPlanProducts.js";
 import type {
   SidebarUsageCodingPlanProviderId,
   SidebarUsageCodingPlanSourceId,
 } from "@/lib/sidebarUsageCodingPlanProviderPreference.js";
-import { formatTeamPlanDisplayName } from "@/lib/teamPlanDisplayName.js";
 
 export interface CodingPlanUsageSource {
   id: SidebarUsageCodingPlanSourceId;
@@ -64,86 +60,15 @@ type CurrentSidebarCodingPlanUsageSource =
       teamSource: CodingPlanUsageSource;
     };
 
-export function buildCodingPlanUsageSources({
-  accountAccesses,
-  subscribedTeamProducts,
-}: {
+/**
+ * 企业 productList 已恒空（#119/#120/#123）；Team 用量改走 entitlement /
+ * personal source。保留签名供 Settings/侧栏/composer 传 subscribedTeamProducts。
+ */
+export function buildCodingPlanUsageSources(_args: {
   accountAccesses: Partial<Record<ProviderFamilyDomain, ZCodeProviderAccountAccess>>;
   subscribedTeamProducts: EnterpriseCodingPlanProductDisplay[];
 }): CodingPlanUsageSource[] {
-  return buildTeamCodingPlanUsageSources(subscribedTeamProducts, accountAccesses);
-}
-
-function buildTeamCodingPlanUsageSources(
-  subscribedTeamProducts: EnterpriseCodingPlanProductDisplay[],
-  accountAccesses: Partial<Record<ProviderFamilyDomain, ZCodeProviderAccountAccess>>,
-): CodingPlanUsageSource[] {
-  const seen = new Set<string>();
-  return subscribedTeamProducts.flatMap((product) => {
-    const projectContexts =
-      product.teamProjects && product.teamProjects.length > 0
-        ? product.teamProjects
-        : [
-            {
-              organizationId: product.organizationId ?? null,
-              organizationName: product.organizationName ?? null,
-              projectId: product.projectId ?? null,
-              projectName: product.projectName ?? null,
-            },
-          ];
-
-    return projectContexts.flatMap((projectContext, index) => {
-      const organizationId = projectContext.organizationId?.trim() ?? "";
-      const projectId = projectContext.projectId?.trim() ?? "";
-      if (!organizationId || !projectId) {
-        return [];
-      }
-      const label = formatTeamUsageSourceLabel({
-        product,
-        organizationId,
-        organizationName: projectContext.organizationName ?? product.organizationName,
-        projectId,
-        projectName: projectContext.projectName ?? product.projectName,
-      });
-      if (!label) {
-        // Team Plan usage source 只展示组织名；缺失时不能生成 "BigModel - " 空白来源。
-        return [];
-      }
-      const projectKey = projectId || String(index);
-      // 原 createBigModelTeamPlanConnectionKey + bigmodelCodingPlan providerId
-      // 硬编码 bigmodel，zai team product 的 sourceId 用了 bigmodel 前缀、providerId 也错。
-      // 按 product.family 用 family-aware key + 对应 codingPlan providerId。
-      const productFamily = resolveEnterpriseCodingPlanProductFamily(product);
-      const baseAccess = accountAccesses[productFamily];
-      if (baseAccess?.mode !== "team-coding-plan") {
-        return [];
-      }
-      const codingPlanProviderId =
-        getModelProviderFamilySpec(productFamily).teamCodingPlanProviderId;
-      const sourceId = ["team", productFamily, product.productId, organizationId, projectKey]
-        .map(encodeURIComponent)
-        .join(":") as SidebarUsageCodingPlanSourceId;
-      if (seen.has(sourceId)) {
-        return [];
-      }
-      seen.add(sourceId);
-      return [
-        {
-          id: sourceId,
-          providerId: codingPlanProviderId,
-          accountAccess: {
-            type: "zhipu-account",
-            family: productFamily,
-            planKind: "team-coding-plan",
-            productId: product.productId,
-            organizationId,
-            projectId,
-          },
-          label,
-        },
-      ];
-    });
-  });
+  return [];
 }
 
 export function resolveSidebarCurrentCodingPlanUsageSource({
@@ -186,33 +111,4 @@ export function resolveSidebarCurrentCodingPlanUsageSource({
   if (!accountAccess || accountAccess.mode !== "individual-coding-plan") return null;
   const providerId = getModelProviderFamilySpec(family).individualCodingPlanProviderId;
   return { audience: "individual", providerId, sourceId: providerId, accountAccess };
-}
-
-function formatTeamUsageSourceLabel({
-  product,
-  organizationId,
-  organizationName,
-  projectId,
-  projectName,
-}: {
-  product: EnterpriseCodingPlanProductDisplay;
-  organizationId?: string | null;
-  organizationName?: string | null;
-  projectId?: string | null;
-  projectName?: string | null;
-}): string | null {
-  const teamPlanName = formatTeamPlanDisplayName({
-    ...product,
-    organizationId,
-    organizationName,
-    projectId,
-    projectName,
-  });
-  if (!teamPlanName) {
-    return null;
-  }
-  // 原硬编码 "BigModel - " 前缀，zai team source 显示出来品牌也错位。
-  // 按 product.family 取品牌前缀，与 codingPlanItem.providerName 对齐。
-  const brandPrefix = `${getModelProviderFamilySpec(resolveEnterpriseCodingPlanProductFamily(product)).label} - `;
-  return `${brandPrefix}${teamPlanName}`;
 }
