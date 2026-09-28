@@ -27,7 +27,7 @@ credentials.json → ICredentialService（唯一写入者，本切片不新增�
 
 - 闲时遥测 userId 为空，Authorization 为 null，渠道归因为 null。不调用 `credentialService.load`，解密失败也不登出。
 - 反馈不再附带产品 JWT。列表走本地票据；没有 JWT 时本来就会走这条路径。
-- Start Plan 产品 JWT 路径不可用。只返回调用方已经持有的个人 `apiKey`；没有 Key 时返回空串。
+- Start Plan 产品 JWT 解析器（`bigmodelStartPlanZcodeJwt.ts` / `resolveBigModelStartPlanZcodeJwt`）已删除；不再有产品 JWT 读取入口。
 - Coding Plan 额度重置入口直接失败，不读 JWT / OAuth access token，不发重置或授权请求。团队额度查询不再读取 `oauth:*:access_token`。
 - 新 provisioning 信封的 `credentials` 恒为空。不打开、不解密产品键。
 - 凭据 `save` / `delete` 不再因为产品 OAuth 或 `account-provider:*:api-key` 变更去调用 `onProviderProvisioningSourceChanged("credential")`。个人配置和 account settings 的既有刷新保持不变。

@@ -16,7 +16,6 @@ import {
 } from "@zcode/provider";
 import type { AppSettings } from "@zcode/shared";
 import { createFeedbackService } from "../src/feedback/feedbackService.js";
-import { resolveBigModelStartPlanZcodeJwt } from "../src/model-provider/bigmodelStartPlanZcodeJwt.js";
 import {
   createProviderProvisioningSource,
   listProviderProvisioningCredentialKeys,
@@ -25,7 +24,7 @@ import { createProviderProvisioningTarget } from "../src/model-provider/provider
 import type { ProviderRuntime } from "../src/model-provider/providerRuntime.js";
 import { setDataBaseDir } from "../src/paths.js";
 import { BigModelUsageQuotaProvider } from "../src/usage-stats/providers/bigmodelUsageQuotaProvider.js";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -66,7 +65,6 @@ function throwingCredentialService() {
 
 const IN_READER_FILES = [
   "feedback/feedbackService.ts",
-  "model-provider/bigmodelStartPlanZcodeJwt.ts",
   "usage-stats/providers/bigmodelUsageQuotaProvider.ts",
   "node.ts",
   "model-provider/providerProvisioningSource.ts",
@@ -133,20 +131,11 @@ test("P4: feedback list does not read zcodejwttoken or call the feedback API", a
   }
 });
 
-test("P4: Start Plan product JWT is unavailable and personal api key still returns", async () => {
-  const credentials = throwingCredentialService();
-  const personal = await resolveBigModelStartPlanZcodeJwt({
-    credentialService: credentials,
-    provider: { apiKey: " personal-key " },
-    trustCachedZcodeJwt: true,
-  });
-  assert.equal(personal, "personal-key");
-  const unavailable = await resolveBigModelStartPlanZcodeJwt({
-    credentialService: credentials,
-    trustCachedZcodeJwt: true,
-  });
-  assert.equal(unavailable, "");
-  assert.deepEqual(credentials.loads, []);
+test("P4: Start Plan product JWT resolver file is absent", () => {
+  assert.equal(
+    existsSync(join(here, "../src/model-provider/bigmodelStartPlanZcodeJwt.ts")),
+    false,
+  );
 });
 
 test("P4: quota reset and team quota do not read oauth keys or fire auth", async () => {
