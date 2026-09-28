@@ -49,3 +49,30 @@ test("cli-types RunDependencies no longer injects configureCodingPlanApiKey", ()
   assert.equal(types.includes("configureCodingPlanApiKey"), false);
   assert.equal(types.includes("ConfigureCodingPlanApiKeyOptions"), false);
 });
+
+test("bootstrap no longer exports configureCodingPlanApiKey / ZCodeCliLoginError", () => {
+  const bootstrapRoot = path.resolve(cliSrc, "../../bootstrap/src");
+  const index = readFileSync(path.join(bootstrapRoot, "index.ts"), "utf8");
+  assert.equal(index.includes("configureCodingPlanApiKey"), false);
+  assert.equal(index.includes("ZCodeCliLoginError"), false);
+  assert.equal(existsSync(path.join(bootstrapRoot, "coding-plan-api-key-config.ts")), false);
+});
+
+test("adapters auth no longer ships coding-plan-api-key OAuth→key resolver", () => {
+  const authRoot = path.resolve(cliSrc, "../../adapters/src/auth");
+  const index = readFileSync(path.join(authRoot, "index.ts"), "utf8");
+  assert.equal(index.includes("coding-plan-api-key"), false);
+  assert.equal(existsSync(path.join(authRoot, "coding-plan-api-key.ts")), false);
+});
+
+test("cli history and tui app-submit drop *-coding-plan-api-key login remnants", () => {
+  const history = read("command-center/history.ts");
+  assert.equal(history.includes("API_KEY_LOGIN_PATTERN"), false);
+  assert.equal(history.includes("coding-plan-api-key"), false);
+  const appSubmit = readFileSync(
+    path.resolve(cliSrc, "../../tui/src/app-submit.ts"),
+    "utf8",
+  );
+  assert.equal(appSubmit.includes("coding-plan-api-key"), false);
+  assert.equal(appSubmit.includes("redactSensitivePromptForTranscript"), false);
+});
