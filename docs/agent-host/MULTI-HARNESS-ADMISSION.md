@@ -15,7 +15,7 @@ Owner of the boolean read: `isMultiHarnessNewSessionAdmissionEnabled` in `packag
 
 - Does not stop native ZCode / V4 CommandInbox ownership.
 - Does not revoke or migrate already-mounted external sessions.
-- Does not replace worktree `authorizeWorktree` / generation recheck, target availability, or per-harness probe / capability honesty.
+- Does not replace worktree `authorizeWorktree` / generation recheck, target availability, or per-harness probe / capability honesty (see e.g. `devinCapabilitiesHonesty`, `devinAcpCapabilitiesHonesty.test.ts`, `acpOpenCodeGooseHonesty.test.ts` — admission flag on ≠ caps certified).
 - Does not certify live Provider, SSH persistence, or UI E2E.
 
 ## Priority (when flag is on)
