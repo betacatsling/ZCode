@@ -1,61 +1,24 @@
 import { loadBootstrapModule } from "./bootstrap-loader.js";
-import { loadCliDotenv } from "./env.js";
 import type { RunDependencies } from "./cli-types.js";
 import type {
   CommandCenterApiKeyOptions,
   CommandCenterBigmodelLoginOptions,
   CommandCenterLoginOptions,
 } from "./command-center/types.js";
+import { PRODUCT_LOGIN_REMOVED_MESSAGE } from "./login-command.js";
 
 export async function loginForTui(
-  deps: RunDependencies,
-  options?: CommandCenterLoginOptions,
-) {
-  const env = deps.env ?? process.env;
-  const workingDirectory = (deps.cwd ?? process.cwd)();
-  const dotenvResult = (deps.loadDotenv ?? loadCliDotenv)({
-    cwd: workingDirectory,
-    env,
-  });
-
-  if (dotenvResult.error) {
-    throw new Error(`Failed to load environment file: ${dotenvResult.path}`, {
-      cause: dotenvResult.error,
-    });
-  }
-
-  const login = deps.loginZCodeCli ?? (await loadBootstrapModule()).loginZCodeCli;
-  return await login({
-    abortSignal: options?.abortSignal,
-    env,
-    onAuthorizeUrl: options?.onAuthorizeUrl,
-  });
+  _deps: RunDependencies,
+  _options?: CommandCenterLoginOptions,
+): Promise<never> {
+  throw new Error(PRODUCT_LOGIN_REMOVED_MESSAGE);
 }
 
 export async function loginBigmodelForTui(
-  deps: RunDependencies,
-  options?: CommandCenterBigmodelLoginOptions,
-) {
-  const env = deps.env ?? process.env;
-  const workingDirectory = (deps.cwd ?? process.cwd)();
-  const dotenvResult = (deps.loadDotenv ?? loadCliDotenv)({
-    cwd: workingDirectory,
-    env,
-  });
-
-  if (dotenvResult.error) {
-    throw new Error(`Failed to load environment file: ${dotenvResult.path}`, {
-      cause: dotenvResult.error,
-    });
-  }
-
-  const login =
-    deps.loginBigmodelCodingPlan ?? (await loadBootstrapModule()).loginBigmodelCodingPlan;
-  return await login({
-    abortSignal: options?.abortSignal,
-    env,
-    onAuthorizeUrl: options?.onAuthorizeUrl,
-  });
+  _deps: RunDependencies,
+  _options?: CommandCenterBigmodelLoginOptions,
+): Promise<never> {
+  throw new Error(PRODUCT_LOGIN_REMOVED_MESSAGE);
 }
 
 export async function configureApiKeyForTui(
@@ -71,20 +34,6 @@ export async function configureApiKeyForTui(
   });
 }
 
-export async function logoutForTui(deps: RunDependencies) {
-  const env = deps.env ?? process.env;
-  const workingDirectory = (deps.cwd ?? process.cwd)();
-  const dotenvResult = (deps.loadDotenv ?? loadCliDotenv)({
-    cwd: workingDirectory,
-    env,
-  });
-
-  if (dotenvResult.error) {
-    throw new Error(`Failed to load environment file: ${dotenvResult.path}`, {
-      cause: dotenvResult.error,
-    });
-  }
-
-  const logout = deps.logoutZCodeCli ?? (await loadBootstrapModule()).logoutZCodeCli;
-  return await logout({ env });
+export async function logoutForTui(_deps: RunDependencies): Promise<never> {
+  throw new Error(PRODUCT_LOGIN_REMOVED_MESSAGE);
 }
