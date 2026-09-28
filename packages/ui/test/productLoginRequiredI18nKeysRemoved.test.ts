@@ -19,6 +19,12 @@ const DEAD_PRODUCT_LOGIN_KEYS = [
   "settings.usage.entitlementLoginRequired",
   "settings.usage.entitlementStatusLoginRequired",
   "sidebar.usage.plan.loginRequired",
+  // Zero-importer product Connect/Disconnect chrome copy
+  "app.login",
+  "app.logout",
+  "quickPick.command.login",
+  "quickPick.command.logout",
+  "sidebar.profile.notLoggedIn",
 ] as const;
 
 /** Orphan Welcome / login.* shell keys (Root OAuth shell unloaded) — must stay absent. */

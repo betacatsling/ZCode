@@ -454,8 +454,6 @@ const zhCN: Record<string, string> = {
   "quickPick.command.myTickets": "我的反馈",
   "quickPick.command.community": "用户社群",
   "quickPick.command.productDocs": "产品文档",
-  "quickPick.command.login": "连接",
-  "quickPick.command.logout": "断开连接",
   "quickPick.command.modelHarnessSettings": "模型与 Harness 设置",
   "commandCenter.placeholder": "搜索操作、任务或文件",
   "commandCenter.open": "搜索",
@@ -784,15 +782,12 @@ const zhCN: Record<string, string> = {
 
   // 应用头部
   "app.currentTheme": "当前: {theme}",
-  "app.login": "连接使用",
-  "app.logout": "断开连接",
   "logout.confirm.title": "断开连接并重启 ZCode？",
   "logout.confirm.descriptionWithRunningSessions":
     "检测到 {count} 个会话正在运行。断开连接会中断这些会话并重启 App。",
   "logout.confirm.descriptionDefault": "断开连接后会重启 App，之后需要重新连接账号。",
   "logout.confirm.ok": "断开连接并重启",
   "logout.confirm.cancel": "取消",
-  "sidebar.profile.notLoggedIn": "连接使用",
   "sidebar.modelHarnessSettings": "模型与 Harness 设置",
   "sidebar.settings.preferences": "偏好",
   "app.selectFile": "选择文件以开始",
