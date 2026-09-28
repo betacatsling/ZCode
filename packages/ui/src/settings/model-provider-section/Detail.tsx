@@ -267,9 +267,6 @@ export function ModelProviderSectionDetail({
 }) {
   const { intl } = useZCodeIntl();
   const loadingLabel = intl.formatMessage({ id: "common.loading" });
-  const [upgradePlansVisibleProviderId, setUpgradePlansVisibleProviderId] =
-    useState<BuiltinModelProviderId | null>(null);
-  const selectedItemKey = selectedNavItem?.key ?? null;
   const rootProviderSettingsRead = useProviderSettingsView();
   const rootProviderSettingsView =
     rootProviderSettingsRead.state.status === "ready" ? rootProviderSettingsRead.state.view : null;
@@ -348,9 +345,6 @@ export function ModelProviderSectionDetail({
     />
   );
 
-  useEffect(() => {
-    setUpgradePlansVisibleProviderId(null);
-  }, [selectedItemKey]);
 
   if (!selectedNavItem) {
     return <ModelProviderLoadingCard loadingLabel={loadingLabel} />;
@@ -465,7 +459,6 @@ export function ModelProviderSectionDetail({
             await selectedTeamPlanEntitlement.refresh({ force: true, reason: "manual" });
           }
         : undefined;
-    const upgradePlansVisible = upgradePlansVisibleProviderId === selectedNavItem.presetId;
     const codingPlanFamilyHeader = (
       <ProviderFamilyHeader selectedNavItem={selectedNavItem} trailingAction={planModeSwitch} />
     );
@@ -524,11 +517,10 @@ export function ModelProviderSectionDetail({
           // 之前详情页没有打开状态卡内置登录动作，导致用户能进入 Coding tab 却只能看到“未连接”文案。
           loginActionVisible
           loginActionPlacement="trailing"
-          reloginOnFailure={!upgradePlansVisible && reloginOnFailure}
+          reloginOnFailure={reloginOnFailure}
           onRetry={
             retryTeamPlan ??
-            (!upgradePlansVisible &&
-            selectedNavItem.type === "codingPlan" &&
+            (selectedNavItem.type === "codingPlan" &&
             !selectedNavItem.accountLoginRequired &&
             (selectedNavItem.status === "unavailable" ||
               selectedNavItem.statusLabelId ===
@@ -544,10 +536,9 @@ export function ModelProviderSectionDetail({
               selectedNavItem.oauthProviderId,
               selectedNavItem.providerName,
               // 产品登录已下线；回调仅用于 StatusCards 可见性门控与日志。
-              upgradePlansVisible ? "unavailable" : selectedNavItem.status,
+              selectedNavItem.status,
             );
           }}
-          upgradePlansVisible={upgradePlansVisible}
         />
       );
 
@@ -623,11 +614,10 @@ export function ModelProviderSectionDetail({
                 selectedNavItem.status,
               );
             }}
-            reloginOnFailure={!upgradePlansVisible && reloginOnFailure}
+            reloginOnFailure={reloginOnFailure}
             onRetry={
               retryTeamPlan ??
-              (!upgradePlansVisible &&
-              selectedNavItem.type === "codingPlan" &&
+              (selectedNavItem.type === "codingPlan" &&
               !selectedNavItem.accountLoginRequired &&
               (selectedNavItem.status === "unavailable" ||
                 selectedNavItem.statusLabelId ===
@@ -654,7 +644,6 @@ export function ModelProviderSectionDetail({
                 : undefined
             }
             disconnectLoading={codingPlanDisconnectProviderId === selectedNavItem.presetId}
-            upgradePlansVisible={upgradePlansVisible}
             />
           {hidePlanModels ? null : providerSettingsView && !dedicatedProvider ? (
             <PresetProviderPlaceholderCard
