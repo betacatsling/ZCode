@@ -3,7 +3,7 @@
  *
  * Proves same-protocol Agents register via explicit factory + loadExplicit trust list
  * without changing lazy Host defaults or the shared ACP session machine. Goose SessionHost
- * path is symmetric to OpenCode (#75). Late prompt + transport fault/disconnect still journal via SessionHost (OpenCode + Goose). Resume-after-disconnect: SessionHost.open attach via negotiated session/load then send again. Cancel-after-disconnect: after fault fence, cancel of the dead turn is stale; after reopen+session/load, cancel mid-prompt journals cancelled (OpenCode + Goose). Double-fault/reopen: fault→reopen→fault→reopen stays idempotent (session/load, no session/new) then send succeeds (OpenCode + Goose). Mid-tool-call disconnect: tool_call + pending permission then fault → reopen session/load → send (OpenCode + Goose).
+ * path is symmetric to OpenCode (#75). Late prompt + transport fault/disconnect still journal via SessionHost (OpenCode + Goose). Resume-after-disconnect: SessionHost.open attach via negotiated session/load then send again. Cancel-after-disconnect: after fault fence, cancel of the dead turn is stale; after reopen+session/load, cancel mid-prompt journals cancelled (OpenCode + Goose). Double-fault/reopen: fault→reopen→fault→reopen stays idempotent (session/load, no session/new) then send succeeds (OpenCode + Goose). Mid-tool-call disconnect: tool_call + pending permission then fault → reopen session/load → send (OpenCode + Goose). Permission-denied-then-disconnect: Host denies permission, peer then faults the prompt (OpenCode + Goose).
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -49,6 +49,11 @@ interface FakePeerOptions {
    * then JSON-RPC error + close (permission left unresolved).
    */
   readonly disconnectOnToolCall?: boolean;
+  /**
+   * Emit tool_call + await session/request_permission; after Host responds (deny),
+   * fault the prompt with JSON-RPC error + close.
+   */
+  readonly disconnectAfterPermissionDenied?: boolean;
 }
 
 /** Minimal fake ACP peer: initialize / session/new / session/prompt. */
@@ -60,6 +65,10 @@ class FakePeer {
   readonly #options: FakePeerOptions;
   #cancelled = false;
   #cancelWaiters: Array<() => void> = [];
+  readonly #pending = new Map<
+    string,
+    { resolve: (value: unknown) => void; reject: (error: Error) => void }
+  >();
 
   constructor(transport: AcpTransport, sessionId: string, agentName: string, options: FakePeerOptions = {}) {
     this.#transport = transport;
@@ -71,7 +80,24 @@ class FakePeer {
     });
   }
 
+  async #agentRequest(method: string, params: unknown): Promise<unknown> {
+    const id = `agent-${this.methods.length}-${this.#pending.size}`;
+    const result = new Promise((resolve, reject) => {
+      this.#pending.set(String(id), { resolve, reject });
+    });
+    await this.#transport.send({ jsonrpc: "2.0", id, method, params });
+    return result;
+  }
+
   async #receive(message: AcpJsonRpcMessage): Promise<void> {
+    if (message.method === undefined && message.id !== undefined && message.id !== null) {
+      const pending = this.#pending.get(String(message.id));
+      if (!pending) return;
+      this.#pending.delete(String(message.id));
+      if (message.error) pending.reject(new Error(message.error.message));
+      else pending.resolve(message.result);
+      return;
+    }
     if (message.method) this.methods.push(message.method);
     if (message.method === "session/cancel") {
       this.#cancelled = true;
@@ -136,6 +162,40 @@ class FakePeer {
           id: message.id,
           result: { stopReason: "cancelled" },
         });
+        return;
+      }
+      if (this.#options.disconnectAfterPermissionDenied) {
+        await this.#transport.send({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: this.#sessionId,
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: "tool-perm-deny",
+              title: "write",
+              status: "pending",
+            },
+          },
+        });
+        const decision = await this.#agentRequest("session/request_permission", {
+          sessionId: this.#sessionId,
+          toolCall: { toolCallId: "tool-perm-deny", title: "Write a file?" },
+          options: [
+            { optionId: "allow", kind: "allow_once" },
+            { optionId: "reject", kind: "reject_once" },
+          ],
+        });
+        // Host deny must select the reject option before we fault the transport.
+        if (!JSON.stringify(decision).includes("reject")) {
+          throw new Error("expected Host to deny permission before disconnect");
+        }
+        await this.#transport.send({
+          jsonrpc: "2.0",
+          id: message.id,
+          error: { code: -32000, message: "ACP transport closed" },
+        });
+        await this.#transport.close();
         return;
       }
       if (this.#options.disconnectOnToolCall) {
@@ -1396,6 +1456,141 @@ test("SessionHost + opt-in OpenCode ACP: mid-tool-call disconnect then reopen re
 
 test("SessionHost + opt-in Goose ACP: mid-tool-call disconnect then reopen resume (symmetric)", async (t) => {
   await assertSessionHostMidToolDisconnectResume({
+    t,
+    label: "goose",
+    harnessId: "goose",
+    agentName: "Goose",
+    createHarness: (openTransport) =>
+      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+  });
+});
+
+async function assertSessionHostPermissionDeniedThenDisconnect(input: {
+  t: { after: (fn: () => void | Promise<void>) => void };
+  label: string;
+  harnessId: "opencode" | "goose";
+  agentName: string;
+  createHarness: (openTransport: () => AcpTransport) => ReturnType<
+    typeof createExperimentalRegistryOpenCodeAcpHarness
+  >;
+}): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-pdd-`));
+  const worktree = join(root, "worktree");
+  const journalRoot = join(root, "journal");
+  await mkdir(worktree, { recursive: true });
+  input.t.after(() => rm(root, { recursive: true, force: true }));
+
+  const hostSessionId = `${input.harnessId}-pdd-1`;
+  const spec = {
+    schemaVersion: 1 as const,
+    hostSessionId,
+    execution: {
+      targetId: "local",
+      workspaceIdentity: `workspace-${input.harnessId}-pdd`,
+      worktreePath: worktree,
+    },
+    harness: { id: input.harnessId, adapterVersion: ACP_ADAPTER_VERSION },
+    modelBinding: { kind: "harness-managed" as const },
+  };
+  const target = {
+    id: "local",
+    kind: "local" as const,
+    platform: process.platform as "darwin" | "linux" | "win32",
+    available: true,
+  };
+  const catalog = {
+    fingerprint: "registry-v1",
+    validateSelection: () => ({ ok: true as const }),
+  };
+
+  const registry = new HarnessRegistry();
+  registry.register(
+    input.createHarness(() =>
+      openFakeTransport(input.agentName, `${input.harnessId}-pdd-session`, {
+        disconnectAfterPermissionDenied: true,
+      }),
+    ),
+  );
+
+  const host = await SessionHost.create({
+    root: journalRoot,
+    spec,
+    target,
+    catalog,
+    registry,
+  });
+
+  const sendReceipt = await host.dispatch({
+    type: "send",
+    commandId: `${input.harnessId}-pdd-send`,
+    hostSessionId,
+    turnId: "turn-pdd",
+    text: "deny then die",
+  });
+  assert.equal(sendReceipt.status, "accepted");
+
+  const deadline = Date.now() + 5_000;
+  let interactionId: string | undefined;
+  while (Date.now() < deadline) {
+    const requested = host.eventsSince(0).find((event) => event.kind === "interaction.requested");
+    if (requested && requested.kind === "interaction.requested") {
+      interactionId = requested.interactionId;
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.ok(interactionId, "expected interaction.requested before deny");
+
+  const denyReceipt = await host.dispatch({
+    type: "resolveInteraction",
+    commandId: `${input.harnessId}-pdd-deny`,
+    hostSessionId,
+    runtimeEpoch: host.binding.runtimeEpoch!,
+    turnId: "turn-pdd",
+    interactionId,
+    decision: "deny",
+  });
+  assert.equal(denyReceipt.status, "completed");
+
+  await host.whenIdle();
+
+  const events = host.eventsSince(0);
+  assert.ok(events.some((event) => event.kind === "tool.started"));
+  assert.ok(
+    events.some(
+      (event) => event.kind === "interaction.resolved" && event.decision === "deny",
+    ),
+  );
+  const error = events.find((event) => event.kind === "session.error");
+  assert.ok(error && error.kind === "session.error");
+  assert.match(error.message, /ACP transport closed/);
+  const finished = events.find((event) => event.kind === "turn.finished");
+  assert.ok(finished && finished.kind === "turn.finished");
+  assert.equal(finished.outcome, "unknown");
+
+  await host.close();
+  const persisted = await SessionHost.eventsSinceHistory(journalRoot, spec, 0);
+  assert.ok(
+    persisted.some(
+      (event) => event.kind === "interaction.resolved" && event.decision === "deny",
+    ),
+  );
+  assert.ok(persisted.some((event) => event.kind === "session.error"));
+}
+
+test("SessionHost + opt-in OpenCode ACP: permission-denied-then-disconnect journals deny + fault", async (t) => {
+  await assertSessionHostPermissionDeniedThenDisconnect({
+    t,
+    label: "opencode",
+    harnessId: "opencode",
+    agentName: "OpenCode",
+    createHarness: (openTransport) =>
+      createExperimentalRegistryOpenCodeAcpHarness({ openTransport }),
+  });
+});
+
+test("SessionHost + opt-in Goose ACP: permission-denied-then-disconnect journals deny + fault (symmetric)", async (t) => {
+  await assertSessionHostPermissionDeniedThenDisconnect({
     t,
     label: "goose",
     harnessId: "goose",
