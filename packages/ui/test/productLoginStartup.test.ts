@@ -1,15 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseProviderConfig } from "@zcode/provider";
 import {
   isProviderStartupSyncPending,
   shouldBlockRootRender,
-  shouldRedirectStartupToProductLogin,
 } from "../src/lib/rootStartupGate.js";
 import {
   buildPersonalProviderInitialConfig,
   validatePersonalProviderSetup,
 } from "../src/settings/model-provider-section/personalProviderSetup.js";
+
+const uiSrc = join(dirname(fileURLToPath(import.meta.url)), "../src");
 
 test("startup render does not wait for product auth restore", () => {
   assert.equal(
@@ -35,15 +39,16 @@ test("startup still waits for workspace restore and model view resolution", () =
   assert.equal(isProviderStartupSyncPending({ modelSelectionViewHydrated: true }), false);
 });
 
-test("missing account, family domain, or models never opens product login", () => {
-  const cases = [
-    { hasUser: false, providerFamilyDomain: null, hasUsableProvider: false, modelSelectionFailed: false },
-    { hasUser: false, providerFamilyDomain: undefined, hasUsableProvider: true, modelSelectionFailed: false },
-    { hasUser: true, providerFamilyDomain: null, hasUsableProvider: true, modelSelectionFailed: false },
-    { hasUser: false, providerFamilyDomain: "zai", hasUsableProvider: false, modelSelectionFailed: true },
-  ];
-  for (const input of cases) {
-    assert.equal(shouldRedirectStartupToProductLogin(input), false);
+test("startup product-login redirect helper and loginEntryGuard toggle stay absent", () => {
+  const gate = readFileSync(join(uiSrc, "lib/rootStartupGate.ts"), "utf8");
+  const root = readFileSync(join(uiSrc, "Root.tsx"), "utf8");
+  for (const needle of [
+    "shouldRedirectStartupToProductLogin",
+    "StartupProductLoginInput",
+    "shouldEnableProviderAvailabilityLoginEntryGuard",
+  ]) {
+    assert.equal(gate.includes(needle), false, `rootStartupGate still has ${needle}`);
+    assert.equal(root.includes(needle), false, `Root still has ${needle}`);
   }
 });
 
