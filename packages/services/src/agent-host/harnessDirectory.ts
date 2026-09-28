@@ -5,8 +5,6 @@ import type {
 import { harnessDirectoryEntrySchema, harnessManifestSchema } from "@zcode/shared/agent-host";
 import type { HarnessAdapter, HarnessRegistry } from "./harnessRegistry.js";
 
-export type HarnessDirectoryStatus = "registered" | "unavailable";
-
 export type HarnessDirectoryEntry = SharedHarnessDirectoryEntry;
 
 export interface HarnessDirectory {
