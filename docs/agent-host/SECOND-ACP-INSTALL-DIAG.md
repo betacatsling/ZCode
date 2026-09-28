@@ -1,7 +1,7 @@
 # Second ACP — install / capability diagnosis drafts (I1–I4)
 
-**Scope:** I1–I4 install-diag drafts for OpenCode / Goose (second ACP).  
-**Not in this note:** L1–L4 live cert, tip-SHA ledger sync (ex6), lazy default flip, production wiring.  
+**Scope:** I1–I4 install-diag drafts + **L1 live-probe procedure stub** (docs only; no real ACP child in this knife).  
+**Not in this note:** Executed L1 evidence, L2–L4 live cert, tip-SHA ledger sync (ex6), lazy default flip, production wiring.  
 **Hard rules:** docs-only; do **not** register OpenCode/Goose in `lazyTargetService`.
 
 Checklist: `IMPLEMENTATION.md` → P6 → install-diag / LIVE-CERT.  
@@ -168,9 +168,69 @@ Client may offer version 2 in `initialize`; if peer settles on 1, operate on the
 4. **If stability became `experimental`:** rollback CLI pin or leave harness unregistered; do not create sessions.  
 5. **Rollback registration:** remove opt-in factory registration for that id; do not delete Host journals.
 
+---
+
+## L1 — live ACP subprocess probe (docs stub only)
+
+**Tip already has:** SessionHost **fake-transport** create/send + late prompt + disconnect fault fence (#75/#80/#83/#85/#90). That is **not** L1.
+
+**This knife:** write the procedure and evidence template only. **Do not** launch `opencode acp` / `goose acp`, open a real transport, or claim LIVE-CERT from this document alone.
+
+### Preconditions (before any future real run)
+
+1. Complete I1 on the **same** target (PATH + recorded `versionText`).
+2. Confirm I2 reading: install `supported` will not be treated as session caps.
+3. Plan to fill I3 matrix from the **first** real `initialize` result.
+4. Isolated data only: temp `HOME` / config dir, temp worktree, temp SessionHost journal root.
+5. Opt-in registry only (`createExperimentalRegistryOpenCodeAcpHarness` / `createExperimentalRegistryGooseAcpHarness` with a **real** `openTransport`). **Never** register into `lazyTargetService` for the probe.
+6. No Provider/API credentials in the child env unless a later authorized live knife says so; record credential URLs as redacted placeholders only.
+
+### Intended sequence (future real run — not executed here)
+
+```text
+1. I1 probes → record CLI versionText
+2. Spawn `opencode acp` OR `goose acp` over stdio (one agent per run)
+3. initialize → classify with I3 table (abort if experimental)
+4. session/new (or equivalent create) → session/prompt with a tiny fixed text
+5. Observe Host journal: turn.started, text.delta (if any), turn.finished
+6. Close transport cleanly; do not attempt resume in L1 (that is L2)
+```
+
+### Evidence template (leave blank until a real run)
+
+```text
+date:
+target: local | ssh:<id>
+harness_id: opencode | goose
+cli_versionText:
+command: <executable> acp
+isolated_HOME:
+isolated_worktree:
+journal_root:
+initialize_protocol_version:
+initialize_stability: stable | experimental
+create_ok: yes|no|not-run
+send_ok: yes|no|not-run
+journal_event_kinds: (list)
+child_stderr_summary: (no secrets)
+credential_urls: none | redacted
+lazyTargetService_unchanged: yes
+result: not-run (docs stub) | pass | fail | aborted-experimental
+```
+
+### Pass / fail bar (for when a later knife executes)
+
+| Outcome | Means |
+| --- | --- |
+| **pass** | Real child completed create→send; journal shows a finished turn; CLI version + sanitized initialize recorded; lazy defaults untouched |
+| **fail** | Stable negotiate but create/send/journal incomplete; attach stderr + journal excerpt |
+| **aborted-experimental** | I3 experimental — correctly refused create; still counts as a useful probe, not LIVE-CERT pass |
+| **not-run** | This docs stub only — **current state of this knife** |
+
 ### Explicit non-goals
 
-- No L1–L4 LIVE-CERT claims from these stubs.  
-- No tip-SHA mass rewrite in this change (ex6).  
+- No real ACP process, network Provider call, or LIVE-CERT pass claim in this change.  
+- No L2 resume / L3 product-path / L4 lazy-default work here.  
+- No tip-SHA mass rewrite (ex6).  
 - No UI / CLI / UsageRemaining / productPresentation edits.
 
