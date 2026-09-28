@@ -3,7 +3,7 @@
  *
  * Proves same-protocol Agents register via explicit factory + loadExplicit trust list
  * without changing lazy Host defaults or the shared ACP session machine. Goose SessionHost
- * path is symmetric to OpenCode (#75). Late prompt + transport fault/disconnect still journal via SessionHost (OpenCode + Goose). Resume-after-disconnect: SessionHost.open attach via negotiated session/load then send again. Cancel-after-disconnect: after fault fence, cancel of the dead turn is stale; after reopen+session/load, cancel mid-prompt journals cancelled (OpenCode + Goose). Double-fault/reopen: fault→reopen→fault→reopen stays idempotent (session/load, no session/new) then send succeeds (OpenCode + Goose). Mid-tool-call disconnect: tool_call + pending permission then fault → reopen session/load → send (OpenCode + Goose). Permission-denied-then-disconnect: Host denies permission, peer then faults the prompt (OpenCode + Goose). Cancel-during-permission: Host cancelTurn while permission pending journals cancelled (OpenCode + Goose). Permission-resolve-after-reopen: fault mid-permission → reopen → deny still clean (OpenCode + Goose).
+ * path is symmetric to OpenCode (#75). Late prompt + transport fault/disconnect still journal via SessionHost (OpenCode + Goose). Resume-after-disconnect: SessionHost.open attach via negotiated session/load then send again. Cancel-after-disconnect: after fault fence, cancel of the dead turn is stale; after reopen+session/load, cancel mid-prompt journals cancelled (OpenCode + Goose). Double-fault/reopen: fault→reopen→fault→reopen stays idempotent (session/load, no session/new) then send succeeds (OpenCode + Goose). Mid-tool-call disconnect: tool_call + pending permission then fault → reopen session/load → send (OpenCode + Goose). Permission-denied-then-disconnect: Host denies permission, peer then faults the prompt (OpenCode + Goose). Cancel-during-permission: Host cancelTurn while permission pending journals cancelled (OpenCode + Goose). Permission-resolve-after-reopen: fault mid-permission → reopen → deny still clean (OpenCode + Goose). Allow-after-reopen: fault mid-permission → reopen → fresh allow completes send (OpenCode + Goose).
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -2015,6 +2015,214 @@ test("SessionHost + opt-in OpenCode ACP: permission-resolve-after-reopen deny is
 
 test("SessionHost + opt-in Goose ACP: permission-resolve-after-reopen deny is clean (symmetric)", async (t) => {
   await assertSessionHostPermissionResolveAfterReopen({
+    t,
+    label: "goose",
+    harnessId: "goose",
+    agentName: "Goose",
+    createHarness: (openTransport) =>
+      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+  });
+});
+
+async function assertSessionHostAllowAfterReopen(input: {
+  t: { after: (fn: () => void | Promise<void>) => void };
+  label: string;
+  harnessId: "opencode" | "goose";
+  agentName: string;
+  createHarness: (openTransport: () => AcpTransport) => ReturnType<
+    typeof createExperimentalRegistryOpenCodeAcpHarness
+  >;
+}): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-aar-`));
+  const worktree = join(root, "worktree");
+  const journalRoot = join(root, "journal");
+  await mkdir(worktree, { recursive: true });
+  input.t.after(() => rm(root, { recursive: true, force: true }));
+
+  const backendSessionId = `${input.harnessId}-aar-session`;
+  const hostSessionId = `${input.harnessId}-aar-1`;
+  const spec = {
+    schemaVersion: 1 as const,
+    hostSessionId,
+    execution: {
+      targetId: "local",
+      workspaceIdentity: `workspace-${input.harnessId}-aar`,
+      worktreePath: worktree,
+    },
+    harness: { id: input.harnessId, adapterVersion: ACP_ADAPTER_VERSION },
+    modelBinding: { kind: "harness-managed" as const },
+  };
+  const target = {
+    id: "local",
+    kind: "local" as const,
+    platform: process.platform as "darwin" | "linux" | "win32",
+    available: true,
+  };
+  const catalog = {
+    fingerprint: "registry-v1",
+    validateSelection: () => ({ ok: true as const }),
+  };
+
+  // Round 1: fault mid-permission (unresolved), then close.
+  const registryLive = new HarnessRegistry();
+  registryLive.register(
+    input.createHarness(() =>
+      openFakeTransport(input.agentName, backendSessionId, {
+        loadSession: true,
+        disconnectOnToolCall: true,
+      }),
+    ),
+  );
+
+  const host = await SessionHost.create({
+    root: journalRoot,
+    spec,
+    target,
+    catalog,
+    registry: registryLive,
+  });
+
+  const faultReceipt = await host.dispatch({
+    type: "send",
+    commandId: `${input.harnessId}-aar-fault`,
+    hostSessionId,
+    turnId: "turn-aar-fault",
+    text: "die mid-permission",
+  });
+  assert.equal(faultReceipt.status, "accepted");
+  await host.whenIdle();
+
+  const faultEvents = host.eventsSince(0);
+  assert.ok(faultEvents.some((event) => event.kind === "interaction.requested"));
+  assert.ok(faultEvents.some((event) => event.kind === "session.error"));
+  // Stale resolve against the dead turn must be rejected (no hang / no crash).
+  const stale = await host.dispatch({
+    type: "resolveInteraction",
+    commandId: `${input.harnessId}-aar-stale`,
+    hostSessionId,
+    runtimeEpoch: host.binding.runtimeEpoch!,
+    turnId: "turn-aar-fault",
+    interactionId: "acp-permission:tool-mid-disconnect",
+    decision: "allow",
+  });
+  assert.equal(stale.status, "rejected");
+  assert.equal(stale.reasonCode, "stale-interaction");
+  await host.close();
+
+  // Round 2: reopen + session/load; fresh permission allow completes send.
+  const peersAfter: FakePeer[] = [];
+  const registryReopen = new HarnessRegistry();
+  registryReopen.register(
+    input.createHarness(() =>
+      openFakeTransport(
+        input.agentName,
+        backendSessionId,
+        { loadSession: true, awaitPermissionThenContinue: true },
+        peersAfter,
+      ),
+    ),
+  );
+
+  const resumed = await SessionHost.open({
+    root: journalRoot,
+    spec,
+    target,
+    catalog,
+    registry: registryReopen,
+  });
+
+  assert.ok(
+    peersAfter.some((peer) => peer.methods.includes("session/load")),
+    "reopen must session/load after mid-permission fault",
+  );
+
+  const sendReceipt = await resumed.dispatch({
+    type: "send",
+    commandId: `${input.harnessId}-aar-send`,
+    hostSessionId,
+    turnId: "turn-aar-live",
+    text: "allow after reopen",
+  });
+  assert.equal(sendReceipt.status, "accepted");
+
+  const deadline = Date.now() + 5_000;
+  let interactionId: string | undefined;
+  while (Date.now() < deadline) {
+    const requested = resumed.eventsSince(0).find(
+      (event) =>
+        event.kind === "interaction.requested" && event.turnId === "turn-aar-live",
+    );
+    if (requested && requested.kind === "interaction.requested") {
+      interactionId = requested.interactionId;
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.ok(interactionId, "expected fresh interaction.requested after reopen");
+
+  const allowReceipt = await resumed.dispatch({
+    type: "resolveInteraction",
+    commandId: `${input.harnessId}-aar-allow`,
+    hostSessionId,
+    runtimeEpoch: resumed.binding.runtimeEpoch!,
+    turnId: "turn-aar-live",
+    interactionId,
+    decision: "allow",
+  });
+  assert.equal(allowReceipt.status, "completed");
+  await resumed.whenIdle();
+
+  const after = resumed.eventsSince(0);
+  assert.ok(
+    after.some(
+      (event) =>
+        event.kind === "interaction.resolved" &&
+        event.turnId === "turn-aar-live" &&
+        event.decision === "allow",
+    ),
+  );
+  assert.ok(
+    after.some(
+      (event) => event.kind === "message.finished" && event.text === "allow after reopen",
+    ),
+  );
+  assert.ok(
+    after.some(
+      (event) => event.kind === "turn.finished" && event.turnId === "turn-aar-live",
+    ),
+  );
+
+  await resumed.close();
+  const persisted = await SessionHost.eventsSinceHistory(journalRoot, spec, 0);
+  assert.ok(persisted.some((event) => event.kind === "session.error"));
+  assert.ok(
+    persisted.some(
+      (event) =>
+        event.kind === "interaction.resolved" &&
+        event.turnId === "turn-aar-live" &&
+        event.decision === "allow",
+    ),
+  );
+  assert.ok(
+    persisted.some(
+      (event) => event.kind === "message.finished" && event.text === "allow after reopen",
+    ),
+  );
+}
+
+test("SessionHost + opt-in OpenCode ACP: allow-after-reopen succeeds send", async (t) => {
+  await assertSessionHostAllowAfterReopen({
+    t,
+    label: "opencode",
+    harnessId: "opencode",
+    agentName: "OpenCode",
+    createHarness: (openTransport) =>
+      createExperimentalRegistryOpenCodeAcpHarness({ openTransport }),
+  });
+});
+
+test("SessionHost + opt-in Goose ACP: allow-after-reopen succeeds send (symmetric)", async (t) => {
+  await assertSessionHostAllowAfterReopen({
     t,
     label: "goose",
     harnessId: "goose",
