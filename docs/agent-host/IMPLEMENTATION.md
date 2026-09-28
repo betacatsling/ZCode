@@ -1,13 +1,13 @@
 # ZCode 多 Harness v0.3 实施台账
 
-更新时间：2026-09-29（P6 tip 对照同步至 `39c07a5`；#223 disconnect-during-permission）
+更新时间：2026-09-29（P6 tip 对照同步至 `d587559`；#229 disconnect-during-permission-then-reopen；#228 lazyAdmission soft；#230 setProviderFamilyDomain soft DROP）
 
 本台账以仓库当前源码、`package.json`、测试文件和
 `ZCode_Multi_Harness_Refactor_Plan_v0.3_Orca_Hierarchy.md` 为准。它记录“代码存在、确定性测试通过、真实环境认证通过”三种不同证据，不把契约、Mock、构建产物或协议探针当作产品完成。计划规定 P4 完成后才称为首个可用版本。
 
 ## 当前证据和环境
 
-- 计划固定的源码基线是 `328c1a0c0ffaa5a4f65e8fa199af5e4c20706e5f`。wave4 集成 tip（本台账对照用）以 `cursor/wave4-harness-integration-b7a9` @ `39c07a5` 为准（含 #61–#223：opt-in OpenCode/Goose SessionHost fake-transport 矩阵（#75/#80/#83/#85/#90/#110/#115/#118/#122/#125/#129/#134/#136/#140/#143/#147/#149/#153/#155/#174/#177/#182/#187/#195/#202/#211/#217/#223：late/disconnect/resume/cancel/permission/reopen/load-then-*/disconnect-during-session-load/load-then-permission-deny/allow/permission-during-session-load/load-then-send/disconnect-during-permission 等；仍 ≠ live）、#69 MULTI_HARNESS、#76–#223 REMOVE/UI soft + verify pins + tip docs（…/#207–#222 ledger/pins；#218 AcpRpc；#221 multiHarness admission；#223 SessionHost）、#89/#94/#98/#100/#102/#106/#108/#161/#165/#169/#171/#173 P6 ledger + I1–I4/L1–L4 stubs）；历史本地 checkout `438c257…` 与脏树记录不得与 tip 或计划基线混称，也不能清理与本任务无关的改动。
+- 计划固定的源码基线是 `328c1a0c0ffaa5a4f65e8fa199af5e4c20706e5f`。wave4 集成 tip（本台账对照用）以 `cursor/wave4-harness-integration-b7a9` @ `d587559` 为准（含 #61–#229：opt-in OpenCode/Goose SessionHost fake-transport 矩阵（#75/#80/#83/#85/#90/#110/#115/#118/#122/#125/#129/#134/#136/#140/#143/#147/#149/#153/#155/#174/#177/#182/#187/#195/#202/#211/#217/#223/#229：late/disconnect/resume/cancel/permission/reopen/load-then-*/disconnect-during-session-load/load-then-permission-deny/allow/permission-during-session-load/load-then-send/disconnect-during-permission/disconnect-during-permission-then-reopen 等；仍 ≠ live）、#69 MULTI_HARNESS、#76–#229 REMOVE/UI soft + verify pins + tip docs（…/#224–#227 tip/ledger；#225 honesty；#226 auto-family；#228 lazyAdmission；#229 SessionHost reopen）、#89/#94/#98/#100/#102/#106/#108/#161/#165/#169/#171/#173 P6 ledger + I1–I4/L1–L4 stubs）；历史本地 checkout `438c257…` 与脏树记录不得与 tip 或计划基线混称，也不能清理与本任务无关的改动。
 - `mise.toml` 要求 Node 24.14.0、pnpm 10.33.2。当前 shell 实测 Node 24.18.1、pnpm 10.33.2，`mise` 不在 PATH；后续认证必须使用固定工具链并在记录中注明实际版本。
 - 当前主开发 shell 是 Ubuntu 20.04.6、Linux 5.15、x86_64；本机未运行 macOS GUI。远端 Mac 已完成只读 capability probe，但源码构建、local worker 和桌面退出恢复仍未认证。
 - 本地 CLI 版本实测为 Pi 0.86.1、Claude Code 2.1.263、Codex CLI 0.154.0。仓库 Pi 依赖固定为 0.87.1，Codex 计划/探针要求 0.156.1；本地 CLI 版本差异不能算兼容认证。
@@ -186,16 +186,16 @@ P5 必须按 Harness 拆成 control/event 认证和 host-managed model ingress �
 
 状态：**部分完成（脚手架 + 一个可选 Agent）；P6 未完成**。
 
-已在 tip `39c07a5` 上、但不能标 P6 完成：
+已在 tip `d587559` 上、但不能标 P6 完成：
 
 - 可复用 ACP transport/adapter 与 session machine：`packages/services/src/agent-adapters/acp/`（`COMPATIBILITY.md` / `SPEC.md`；SPEC 已写明 print-mode `agent-adapters/devin` 与可选 ACP 同 id）。
 - 长尾示例：Devin **可选** ACP profile（`agent-adapters/acp/agents/devin.ts`，`devin acp`）；与 print-mode `devin` 同 harness id，**不得**在同一 `HarnessRegistry` 双注册（`devinPrintAcpCoexistence.test.ts` / `devin/PROTOCOL.md`）。
 - 同协议第二批档案（inventory，非生产认证）：OpenCode / Goose（`acp/agents/opencode.ts`、`goose.ts`；`COMPATIBILITY.md`）— 共用 `acp-session-machine/1`，只加档案不改公共状态机。
-- **Opt-in 注册工厂（#75，非 lazy 默认）**：`createExperimentalRegistryOpenCodeAcpHarness` / `createExperimentalRegistryGooseAcpHarness`（`createAcpRegistryHarness.ts`；调用方注入 `openTransport`）。SessionHost fake-transport（同文件 `openCodeAcpSessionHost.integration.test.ts`，OpenCode+Goose 对称）：create/send（#80）；late prompt（#83/#85）；disconnect fault fence（#90）；**resume-after-disconnect** via `session/load`（#110）；cancel-after-disconnect（#115）；double-fault reopen idempotency（#118）；mid-tool disconnect→reopen（#122）；permission deny/allow/cancel 与 disconnect/reopen 矩阵（#125/#129/#134/#136/#140/#143/#147/#149/#153）；fault-during-session-load（#155）；**load-then-cancel**（#174）；**cancel-during-session-load**（#177，abort held load）；**load-then-disconnect**（#182）；**disconnect-during-session-load**（#187，load 未 settle 时断开）；**load-then-permission-deny**（#195）；**load-then-permission-allow**（#202）；**permission-during-session-load**（#211）；**load-then-send / mid-load prompt**（#217）；**disconnect-during-permission**（#223）。`enabledIds` 可单开 goose。契约：`lazyTargetService` **不**注册上述工厂。
+- **Opt-in 注册工厂（#75，非 lazy 默认）**：`createExperimentalRegistryOpenCodeAcpHarness` / `createExperimentalRegistryGooseAcpHarness`（`createAcpRegistryHarness.ts`；调用方注入 `openTransport`）。SessionHost fake-transport（同文件 `openCodeAcpSessionHost.integration.test.ts`，OpenCode+Goose 对称）：create/send（#80）；late prompt（#83/#85）；disconnect fault fence（#90）；**resume-after-disconnect** via `session/load`（#110）；cancel-after-disconnect（#115）；double-fault reopen idempotency（#118）；mid-tool disconnect→reopen（#122）；permission deny/allow/cancel 与 disconnect/reopen 矩阵（#125/#129/#134/#136/#140/#143/#147/#149/#153）；fault-during-session-load（#155）；**load-then-cancel**（#174）；**cancel-during-session-load**（#177，abort held load）；**load-then-disconnect**（#182）；**disconnect-during-session-load**（#187，load 未 settle 时断开）；**load-then-permission-deny**（#195）；**load-then-permission-allow**（#202）；**permission-during-session-load**（#211）；**load-then-send / mid-load prompt**（#217）；**disconnect-during-permission**（#223）；**disconnect-during-permission-then-reopen**（#229）。`enabledIds` 可单开 goose。契约：`lazyTargetService` **不**注册上述工厂。
 
 #### SessionHost fake-transport 仍缺矩阵（≠ live；禁标 P6 完成）
 
-相对 tip 已覆盖 create/send、late prompt、disconnect/resume/cancel/permission/reopen、fault-during-session-load、**load-then-cancel**（#174）、**cancel-during-session-load**（#177）、**load-then-disconnect**（#182）、**disconnect-during-session-load**（#187）、**load-then-permission-deny**（#195）、**load-then-permission-allow**（#202）、**permission-during-session-load**（#211）、**load-then-send / mid-load prompt**（#217）、**disconnect-during-permission**（#223）。下表含已合项与 **仍缺** 交叉项；**已合后仍 ≠ live / ≠ 生产接线 / 禁标 P6 完成**。
+相对 tip 已覆盖 create/send、late prompt、disconnect/resume/cancel/permission/reopen、fault-during-session-load、**load-then-cancel**（#174）、**cancel-during-session-load**（#177）、**load-then-disconnect**（#182）、**disconnect-during-session-load**（#187）、**load-then-permission-deny**（#195）、**load-then-permission-allow**（#202）、**permission-during-session-load**（#211）、**load-then-send / mid-load prompt**（#217）、**disconnect-during-permission**（#223）、**disconnect-during-permission-then-reopen**（#229）。下表含已合项与 **仍缺** 交叉项；**已合后仍 ≠ live / ≠ 生产接线 / 禁标 P6 完成**。
 
 | 项 | 状态 | 备注 |
 | --- | --- | --- |
@@ -205,6 +205,7 @@ P5 必须按 Harness 拆成 control/event 认证和 host-managed model ingress �
 | **permission-during-session-load** | **已合 #211** | load 持有期间 permission 到达；OpenCode+Goose fake-transport；仍 ≠ live |
 | **load-then-send / mid-load prompt** | **已合 #217** | reopen `session/load` 持有期间 mid-load chunk replay-swallow；随后首发 send 成功（OpenCode+Goose）；仍 ≠ live |
 | **disconnect-during-permission** | **已合 #223** | permission 已 requested、Host 未 resolve/cancel 时 peer JSON-RPC fault；transport 关、turn.finished unknown、无 interaction.resolved；仍 ≠ live |
+| **disconnect-during-permission-then-reopen** | **已合 #229** | #223 fence 后 reopen `session/load` 再首发 send 成功（OpenCode+Goose）；仍 ≠ live |
 | 其它 mid-load × cancel/permission/disconnect 组合 | 未穷尽 | 以 Planner 薄刀派单为准；扩矩阵 ≠ live 认证 |
 
 - lazy Host 默认 Devin 路径仍是 **print-mode `-p`**（`createExperimentalRegistryDevinHarness`），不是默认 ACP；源码契约测：`lazyDevinPrintModeDefault.contract.test.ts`（#61）。
@@ -214,7 +215,7 @@ P5 必须按 Harness 拆成 control/event 认证和 host-managed model ingress �
 
 交付依赖 P1 manifest/factory、P3/P4 已验证 model binding/target Host，以及至少一个真实可用 ACP Agent。验收必须证明第二个同协议 Agent 只增加 manifest、绑定配置和必要扩展，不修改公共会话状态机；不支持 resume 的 Agent 只能历史只读；未知扩展安全降级；协议升级回到实验状态。
 
-### P6「第二生产 ACP」缺口（scout；tip 对照 `39c07a5`）
+### P6「第二生产 ACP」缺口（scout；tip 对照 `d587559`）
 
 inventory/honesty/opt-in factory 已有 ≠ 生产第二 Agent。相对 tip：
 
@@ -253,15 +254,15 @@ inventory/honesty/opt-in factory 已有 ≠ 生产第二 Agent。相对 tip：
 
 下一薄刀候选（仍 Track A，需 Planner 另派）：L1–L4 **程序 stub** 已见 `SECOND-ACP-INSTALL-DIAG.md`；续 L1–L4 **实跑**（fake-transport 矩阵已厚，≠ live）——**勿**把 opt-in 改成 lazy 默认。
 
-### StatusCards / funnel × Track A 交界（只读 scout @ `39c07a5`）
+### StatusCards / funnel × Track A 交界（只读 scout @ `d587559`）
 
 UI/REMOVE 侧（**非 Track A 默认刀**；交界说明以免误抢）：
 
 - **已卸（契约测锁；摘）**：既有 chrome/funnel/oauth/purchase/StartPlan/api-key/CTA/usage/badge（至 #181）+enterprise products/acquisition/Welcome login orphans/regionTag 迁 key/slash-help/desktop `login.html`（#107–#116）+enterprise callers/Automations toast/orphan hook/Title i18n/refreshTeamPlanProducts/team flatMap/Settings·V4·sidebar 空 `subscribedTeamProducts`/usage-sources builder/`codingPlanLogin` noop/purchase-complete/`oauthTeamPricing`/family `teamProducts`/`loginActionVisible`→`productPurchaseRemovedVisible`/owned-entry helper（#119–#159）；verify hard-pin `loginActionVisible` 旧名（#160）；dead `teamPlanDisplayName`/`codingPlanErrorMessage`（#162）；owned-entry verify hard-pin（#163）；#164 dead-residual hard-pin；#166 login 注释清；#168 dead purchase locale；#169/#171 P6 tip docs；#170 purchase locale hard-pin；#172 plan-mode/access/pricing 死 i18n；#173/#175 tip docs/verify；#176 dead subscription DTOs；#178 `loginLoading`→`statusSyncLoading`；#179 billing/relogin locales；#181 DTO verify pin；#190 Catalog rename（CodingPlanSubscriptionProviderId→Catalog）。verify 脚本随 tip 硬缺席（#113/#117/#127/#130/#139/#154/#156/#160/#163 等）。
 - **StatusCards 现状**：升级/purchase CTA 与空 team 产品门控已卸；`productPurchaseRemoved` 正文 KEEP；可见性改名 `productPurchaseRemovedVisible`（#158）；quota/entitlement/manage·planCard KEEP。
-- **与 Track A**：Agent Host / ACP / MULTI_HARNESS 不依赖 REMOVE UI；SessionHost fake-transport 矩阵（至 #223；仍缺其它 mid-load × cancel/permission/disconnect 组合等，见上表；#218 AcpRpc soft）+ #98/#100/#102/#106 install-diag/L stubs 已在 tip。
+- **与 Track A**：Agent Host / ACP / MULTI_HARNESS 不依赖 REMOVE UI；SessionHost fake-transport 矩阵（至 #229；仍缺其它 mid-load × cancel/permission/disconnect 组合等，见上表；#218 AcpRpc / #228 lazyAdmission soft）+ #98/#100/#102/#106 install-diag/L stubs 已在 tip。
 
-### `oauth.ts` / purchase × P6 交界（只读 scout @ `39c07a5`）
+### `oauth.ts` / purchase × P6 交界（只读 scout @ `d587559`）
 
 - **`packages/shared/src/oauth.ts`**：#86 已 thin-clean 产品登录孤儿类型；仍可能有 provider ids / `UserInfo` 等供 settings 引用。#92 卸 settings preset subscription success telemetry / `oauthActions` 残留。
 - **与 P6 / Agent Host**：**无** import — ACP/opt-in Harness、MULTI_HARNESS、SessionHost 不依赖产品 OAuth 类型。清理 oauth/purchase/StartPlan 是 REMOVE 域，不是 Host 默认刀。
@@ -330,7 +331,7 @@ Worktree 服务现有 archive 元数据/fence 与确认式 remove；remove 会�
 | 08A  | worktree removal admission、重建、离线重同步、archive/hide                    | Worktree 移除/fence/native+external 准入与隔离 Git/CLI 测试已实现；UI/SSH 离线重同步未验收            | 依赖 08；UI/E2E、SSH 离线恢复及删除竞态矩阵                    |
 | 09   | Gateway core + Responses + Codex                                              | 部分完成 / FakeModel only：core + Responses + Codex 控制/绑定已在 tip；#26 SSH 共享 TargetModelGateway 仅为 FakeModel admission，兼容仍 experimental | 依赖 08；live Provider、真实 SSH 凭据与生产组合仍未认证        |
 | 10   | Messages + Claude structured adapter                                          | 部分完成 / FakeModel only：structured/Messages 实验路径已有，Gateway 仍 adapter-local，不是共享 owner | 依赖 09；共享 TargetModelGateway owner 与 live Provider 未认证 |
-| 11   | 通用 ACP + 一个长尾 Agent                                                     | 部分完成 @ tip `39c07a5`：opt-in SessionHost fake-transport 矩阵至 #223（仍缺其它 mid-load 组合等；≠ live；#218 AcpRpc soft）；#94/#98/#100/#102/#106 LIVE-CERT/I stubs（无实跑）；honesty；#69 MULTI_HARNESS；生产接线/发布加固未做 | 依赖 08 和已验证 model binding；勿把 print-mode/honesty/opt-in/fake-transport 写成 ACP 完成 |
+| 11   | 通用 ACP + 一个长尾 Agent                                                     | 部分完成 @ tip `d587559`：opt-in SessionHost fake-transport 矩阵至 #229（仍缺其它 mid-load 组合等；≠ live；#218 AcpRpc / #228 lazyAdmission soft）；#94/#98/#100/#102/#106 LIVE-CERT/I stubs（无实跑）；honesty；#69 MULTI_HARNESS；生产接线/发布加固未做 | 依赖 08 和已验证 model binding；勿把 print-mode/honesty/opt-in/fake-transport 写成 ACP 完成 |
 | 12   | 层级/并发/focus 压测、迁移回滚、版本锁定发布                                  | 未实现                                                                                                | 依赖 08A/09/10/11；50 worktree、10 session、8h、fault matrix   |
 
 建议执行顺序：
