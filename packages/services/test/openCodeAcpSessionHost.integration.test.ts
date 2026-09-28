@@ -3,7 +3,7 @@
  *
  * Proves same-protocol Agents register via explicit factory + loadExplicit trust list
  * without changing lazy Host defaults or the shared ACP session machine. Goose SessionHost
- * path is symmetric to OpenCode (#75). Late prompt + transport fault/disconnect still journal via SessionHost (OpenCode + Goose). Resume-after-disconnect: SessionHost.open attach via negotiated session/load then send again. Cancel-after-disconnect: after fault fence, cancel of the dead turn is stale; after reopen+session/load, cancel mid-prompt journals cancelled (OpenCode + Goose). Double-fault/reopen: fault→reopen→fault→reopen stays idempotent (session/load, no session/new) then send succeeds (OpenCode + Goose). Mid-tool-call disconnect: tool_call + pending permission then fault → reopen session/load → send (OpenCode + Goose). Permission-denied-then-disconnect: Host denies permission, peer then faults the prompt (OpenCode + Goose).
+ * path is symmetric to OpenCode (#75). Late prompt + transport fault/disconnect still journal via SessionHost (OpenCode + Goose). Resume-after-disconnect: SessionHost.open attach via negotiated session/load then send again. Cancel-after-disconnect: after fault fence, cancel of the dead turn is stale; after reopen+session/load, cancel mid-prompt journals cancelled (OpenCode + Goose). Double-fault/reopen: fault→reopen→fault→reopen stays idempotent (session/load, no session/new) then send succeeds (OpenCode + Goose). Mid-tool-call disconnect: tool_call + pending permission then fault → reopen session/load → send (OpenCode + Goose). Permission-denied-then-disconnect: Host denies permission, peer then faults the prompt (OpenCode + Goose). Cancel-during-permission: Host cancelTurn while permission pending journals cancelled (OpenCode + Goose).
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -54,6 +54,11 @@ interface FakePeerOptions {
    * fault the prompt with JSON-RPC error + close.
    */
   readonly disconnectAfterPermissionDenied?: boolean;
+  /**
+   * Emit tool_call + await session/request_permission; Host cancelTurn rejects the
+   * permission and notifies session/cancel; peer then answers prompt as cancelled.
+   */
+  readonly cancelDuringPermission?: boolean;
 }
 
 /** Minimal fake ACP peer: initialize / session/new / session/prompt. */
@@ -161,6 +166,36 @@ class FakePeer {
           jsonrpc: "2.0",
           id: message.id,
           result: { stopReason: "cancelled" },
+        });
+        return;
+      }
+      if (this.#options.cancelDuringPermission) {
+        await this.#transport.send({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: this.#sessionId,
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: "tool-cancel-perm",
+              title: "write",
+              status: "pending",
+            },
+          },
+        });
+        await this.#agentRequest("session/request_permission", {
+          sessionId: this.#sessionId,
+          toolCall: { toolCallId: "tool-cancel-perm", title: "Write a file?" },
+          options: [
+            { optionId: "allow", kind: "allow_once" },
+            { optionId: "reject", kind: "reject_once" },
+          ],
+        });
+        // cancelTurn notifies session/cancel and rejects the pending permission.
+        await this.#transport.send({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: { stopReason: this.#cancelled ? "cancelled" : "end_turn" },
         });
         return;
       }
@@ -1591,6 +1626,141 @@ test("SessionHost + opt-in OpenCode ACP: permission-denied-then-disconnect journ
 
 test("SessionHost + opt-in Goose ACP: permission-denied-then-disconnect journals deny + fault (symmetric)", async (t) => {
   await assertSessionHostPermissionDeniedThenDisconnect({
+    t,
+    label: "goose",
+    harnessId: "goose",
+    agentName: "Goose",
+    createHarness: (openTransport) =>
+      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+  });
+});
+
+async function assertSessionHostCancelDuringPermission(input: {
+  t: { after: (fn: () => void | Promise<void>) => void };
+  label: string;
+  harnessId: "opencode" | "goose";
+  agentName: string;
+  createHarness: (openTransport: () => AcpTransport) => ReturnType<
+    typeof createExperimentalRegistryOpenCodeAcpHarness
+  >;
+}): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-cdp-`));
+  const worktree = join(root, "worktree");
+  const journalRoot = join(root, "journal");
+  await mkdir(worktree, { recursive: true });
+  input.t.after(() => rm(root, { recursive: true, force: true }));
+
+  const peers: FakePeer[] = [];
+  const hostSessionId = `${input.harnessId}-cdp-1`;
+  const spec = {
+    schemaVersion: 1 as const,
+    hostSessionId,
+    execution: {
+      targetId: "local",
+      workspaceIdentity: `workspace-${input.harnessId}-cdp`,
+      worktreePath: worktree,
+    },
+    harness: { id: input.harnessId, adapterVersion: ACP_ADAPTER_VERSION },
+    modelBinding: { kind: "harness-managed" as const },
+  };
+  const target = {
+    id: "local",
+    kind: "local" as const,
+    platform: process.platform as "darwin" | "linux" | "win32",
+    available: true,
+  };
+  const catalog = {
+    fingerprint: "registry-v1",
+    validateSelection: () => ({ ok: true as const }),
+  };
+
+  const registry = new HarnessRegistry();
+  registry.register(
+    input.createHarness(() =>
+      openFakeTransport(
+        input.agentName,
+        `${input.harnessId}-cdp-session`,
+        { cancelDuringPermission: true },
+        peers,
+      ),
+    ),
+  );
+
+  const host = await SessionHost.create({
+    root: journalRoot,
+    spec,
+    target,
+    catalog,
+    registry,
+  });
+
+  const sendReceipt = await host.dispatch({
+    type: "send",
+    commandId: `${input.harnessId}-cdp-send`,
+    hostSessionId,
+    turnId: "turn-cdp",
+    text: "cancel while permission pending",
+  });
+  assert.equal(sendReceipt.status, "accepted");
+
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    if (host.eventsSince(0).some((event) => event.kind === "interaction.requested")) break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.ok(
+    host.eventsSince(0).some((event) => event.kind === "interaction.requested"),
+    "expected interaction.requested before cancel",
+  );
+
+  const cancelReceipt = await host.dispatch({
+    type: "cancelTurn",
+    commandId: `${input.harnessId}-cdp-cancel`,
+    hostSessionId,
+    runtimeEpoch: host.binding.runtimeEpoch!,
+    turnId: "turn-cdp",
+  });
+  assert.equal(cancelReceipt.status, "completed");
+  await host.whenIdle();
+
+  assert.ok(
+    peers.some((peer) => peer.methods.includes("session/cancel")),
+    "cancel must reach ACP peer during pending permission",
+  );
+  const events = host.eventsSince(0);
+  assert.ok(events.some((event) => event.kind === "tool.started"));
+  assert.ok(events.some((event) => event.kind === "interaction.requested"));
+  const finished = events.find(
+    (event) => event.kind === "turn.finished" && event.turnId === "turn-cdp",
+  );
+  assert.ok(finished && finished.kind === "turn.finished");
+  assert.equal(finished.outcome, "cancelled");
+
+  await host.close();
+  const persisted = await SessionHost.eventsSinceHistory(journalRoot, spec, 0);
+  assert.ok(
+    persisted.some(
+      (event) =>
+        event.kind === "turn.finished" &&
+        event.turnId === "turn-cdp" &&
+        event.outcome === "cancelled",
+    ),
+  );
+}
+
+test("SessionHost + opt-in OpenCode ACP: cancel-during-permission journals cancelled", async (t) => {
+  await assertSessionHostCancelDuringPermission({
+    t,
+    label: "opencode",
+    harnessId: "opencode",
+    agentName: "OpenCode",
+    createHarness: (openTransport) =>
+      createExperimentalRegistryOpenCodeAcpHarness({ openTransport }),
+  });
+});
+
+test("SessionHost + opt-in Goose ACP: cancel-during-permission journals cancelled (symmetric)", async (t) => {
+  await assertSessionHostCancelDuringPermission({
     t,
     label: "goose",
     harnessId: "goose",
