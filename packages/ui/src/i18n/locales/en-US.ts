@@ -3026,106 +3026,17 @@ const enUS: Record<string, string> = {
     "Product sign-in and plan purchase have been removed. Configure a personal API Key in model settings.",
   "settings.modelProvider.codingPlan.login": "Sign in to {provider}",
   "settings.modelProvider.codingPlan.connect": "Connect to {provider}",
-  "settings.modelProvider.codingPlan.purchaseLoginRequiredShort": "Sign in to purchase",
-  "settings.modelProvider.codingPlan.purchaseConnectRequiredShort": "Connect to purchase",
   "settings.modelProvider.codingPlan.disconnect": "Unlink",
   "settings.modelProvider.codingPlan.subscribe": "Subscribe",
   "settings.modelProvider.codingPlan.upgrade": "Upgrade",
   "settings.modelProvider.codingPlan.renew": "Renew",
   "settings.modelProvider.codingPlan.currentPlan": "Current",
-  "settings.modelProvider.codingPlan.purchased": "Purchased",
   "settings.modelProvider.codingPlan.startPlan.expiredBadge": "Expired",
   "settings.modelProvider.codingPlan.startPlan.expiredAction": "Ended",
   "settings.modelProvider.codingPlan.cancelUpgrade": "Back",
-  "settings.modelProvider.codingPlan.purchase.title": "Upgrade Coding Plan",
-  "settings.modelProvider.codingPlan.purchase.pricingTitle": "Pricing",
-  "settings.modelProvider.codingPlan.purchase.pricingDescription":
-    "Find the perfect plan for you and kick-start your AI coding journey.",
-  "settings.modelProvider.codingPlan.purchase.moreInfo": "More Info",
-  "settings.modelProvider.codingPlan.purchase.billingCycleTitle": "Choose billing cycle",
-  "settings.modelProvider.codingPlan.purchase.paymentConfirmTitle": "Confirm payment",
-  "settings.modelProvider.codingPlan.purchase.paymentTitle": "Payment",
-  "settings.modelProvider.codingPlan.purchase.personal": "Individuals",
-  "settings.modelProvider.codingPlan.purchase.team": "Teams",
   "settings.modelProvider.codingPlan.purchase.individualsSectionTitle": "For Individuals",
-  "settings.modelProvider.codingPlan.purchase.teamsSectionTitle": "For Teams",
   "settings.modelProvider.codingPlan.purchaseBanner.startPlanTitle": "Start Plan",
-  "settings.modelProvider.codingPlan.purchaseBanner.startPlanDescription":
-    "Try platform GLM flagship model quota for free.",
-  "settings.modelProvider.codingPlan.purchaseBanner.personalTitle": "For Individuals",
-  "settings.modelProvider.codingPlan.purchaseBanner.personalDescription":
-    "For individual developers with dedicated Coding Plan quota.",
-  "settings.modelProvider.codingPlan.purchaseBanner.temporarilySoldOut": "Temporarily sold out",
-  "settings.modelProvider.codingPlan.purchaseBanner.teamTitle": "For Teams",
-  "settings.modelProvider.codingPlan.purchaseBanner.teamDescription":
-    "For team collaboration with seats and centralized billing.",
-  "settings.modelProvider.codingPlan.purchaseBanner.teamStandardDescription":
-    "For small teams that need shared quota and seat management.",
-  "settings.modelProvider.codingPlan.purchaseBanner.teamAdvancedDescription":
-    "For high-throughput engineering teams that need more quota and flexible seats.",
-  "settings.modelProvider.codingPlan.purchase.choosePlan": "Choose a plan",
-  "settings.modelProvider.codingPlan.purchase.choosePlanDescription":
-    "Compare plan capacity first. Billing cycle and final payment are confirmed next.",
   "settings.modelProvider.codingPlan.purchase.selectPlan": "Select",
-  "settings.modelProvider.codingPlan.purchase.select": "Select",
-  "settings.modelProvider.codingPlan.purchase.selected": "Selected",
-  "settings.modelProvider.codingPlan.purchase.fromPrice": "{price}+",
-  "settings.modelProvider.codingPlan.purchase.fromPriceSuffix": "",
-  "settings.modelProvider.codingPlan.purchase.previewLoading": "Calculating payment amount",
-  "settings.modelProvider.codingPlan.purchase.previewLoadingDescription":
-    "Please wait. Confirmation and payment use the same payment details.",
-  "settings.modelProvider.codingPlan.purchase.previewUnavailableDescription":
-    "Payment amount is unavailable. Go back and choose the billing cycle again.",
-  "settings.modelProvider.codingPlan.purchase.teamTitle": "Team plans",
-  "settings.modelProvider.codingPlan.purchase.teamDescription":
-    "Seats, shared quota, and centralized billing are coming later.",
-  "settings.modelProvider.codingPlan.purchase.teamCardDescription":
-    "Shared quota, seat management, and centralized billing.",
-  "settings.modelProvider.codingPlan.purchase.comingSoon": "Coming soon",
-  "settings.modelProvider.codingPlan.purchase.chooseBillingCycle":
-    "Choose billing cycle for {plan}",
-  "settings.modelProvider.codingPlan.purchase.billingCycleDescription":
-    "Prices and discounts are refreshed before payment. Final amount is confirmed in the payment step.",
-  "settings.modelProvider.codingPlan.purchase.continueToPayment": "Continue to payment",
-  "settings.modelProvider.codingPlan.purchase.summaryPlan": "Plan",
-  "settings.modelProvider.codingPlan.purchase.summaryBillingCycle": "Billing cycle",
-  "settings.modelProvider.codingPlan.purchase.summaryDueToday": "Due today",
-  "settings.modelProvider.codingPlan.purchase.summaryStatus": "Status",
-  "settings.modelProvider.codingPlan.purchase.servicePeriod": "Service period",
-  "settings.modelProvider.codingPlan.purchase.durationValue": "{duration} {unit}",
-  "settings.modelProvider.codingPlan.purchase.autoRenewPeriod": "Auto-renews every {period}",
-  "settings.modelProvider.codingPlan.purchase.renewalPolicyTitle": "Renewal policy",
-  "settings.modelProvider.codingPlan.purchase.renewalPolicyCharge":
-    "Your subscription renews automatically at {price}{unit} unless cancelled.",
-  "settings.modelProvider.codingPlan.purchase.renewalPolicyPreview":
-    "Final discounts, credits, and payment amount are confirmed in the next payment preview.",
-  "settings.modelProvider.codingPlan.purchase.renewalPolicyCancel":
-    "You can turn off auto-renewal from plan management before the next renewal.",
-  "settings.modelProvider.codingPlan.purchase.termsAccepted":
-    "I understand and agree to the renewal policy and subscription terms.",
-  "settings.modelProvider.codingPlan.purchase.paymentPreparing": "Preparing payment",
-  "settings.modelProvider.codingPlan.purchase.securityChecking":
-    "Waiting for security verification",
-  "settings.modelProvider.codingPlan.purchase.paymentPolling": "Waiting for payment confirmation",
-  "settings.modelProvider.codingPlan.purchase.paymentStarted":
-    "Complete payment on this payment page",
-  "settings.modelProvider.codingPlan.purchase.paymentStartedDescription":
-    "Keep this panel open while the payment channel finishes. You can go back to the payment confirmation page before payment succeeds.",
-  "settings.modelProvider.codingPlan.purchase.paymentInProgress": "Payment in progress",
-  "settings.modelProvider.codingPlan.purchase.successTitle": "Payment successful",
-  "settings.modelProvider.codingPlan.purchase.successDescription":
-    "Your Coding Plan payment was successful. The provider status will refresh after you close this panel.",
-  "settings.modelProvider.codingPlan.purchase.successRefreshingDescription":
-    "Your payment was successful. We are refreshing plan status; you can close this panel and the provider page will continue refreshing.",
-  "settings.modelProvider.codingPlan.purchase.statusSyncing": "Syncing",
-  "settings.modelProvider.codingPlan.purchase.statusActive": "Active",
-  "settings.modelProvider.codingPlan.purchase.refreshNow": "Refresh now",
-  "settings.modelProvider.codingPlan.purchase.done": "Done",
-  "settings.modelProvider.codingPlan.purchase.teamMemberNoticeTitle":
-    "Assign members to your team plan",
-  "settings.modelProvider.codingPlan.purchase.teamMemberNoticeDescription":
-    "Add yourself or other members on the BigModel team plan management page. Once assigned, the team quota will be available in ZCode.",
-  "settings.modelProvider.codingPlan.purchase.manageTeamPlan": "Manage team plan",
   "settings.modelProvider.codingPlan.manage": "Manage",
   "settings.modelProvider.planCard.codingPlan": "Coding Plan",
   "settings.modelProvider.planCard.startPlan": "Start Plan",
@@ -3164,16 +3075,11 @@ const enUS: Record<string, string> = {
   "settings.modelProvider.codingPlan.productsLoading": "Loading Coding Plan",
   "settings.modelProvider.codingPlan.productsLoadingDescription":
     "Fetching the latest plans and prices from {provider}.",
-  "settings.modelProvider.codingPlan.purchase.authStateError":
-    "Failed to read your sign-in status. Please retry.",
-  "settings.modelProvider.codingPlan.purchase.authStateRetry": "Retry sign-in status",
   "settings.modelProvider.codingPlan.productsError": "Could not load plans",
   "settings.modelProvider.codingPlan.productsReconnectTitle": "Connect to view plans",
   "settings.modelProvider.codingPlan.reconnectToViewPlans": "Reconnect",
   "settings.modelProvider.codingPlan.productsLoginRequired":
     "Reconnect your {provider} account to refresh prices and available Coding Plan products.",
-  "settings.modelProvider.codingPlan.purchaseLoginRequired":
-    "Reconnect your account and try again.",
   "settings.modelProvider.codingPlan.productsEmpty": "No plans available",
   "settings.modelProvider.codingPlan.productsEmptyDescription":
     "{provider} did not return any purchasable Coding Plan products for this account.",

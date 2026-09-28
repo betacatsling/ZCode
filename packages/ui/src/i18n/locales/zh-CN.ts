@@ -2823,101 +2823,17 @@ const zhCN: Record<string, string> = {
     "产品登录和套餐购买已移除。请在模型设置中配置个人 API Key。",
   "settings.modelProvider.codingPlan.login": "登录 {provider}",
   "settings.modelProvider.codingPlan.connect": "连接 {provider}",
-  "settings.modelProvider.codingPlan.purchaseLoginRequiredShort": "登录后可购买",
-  "settings.modelProvider.codingPlan.purchaseConnectRequiredShort": "连接后可购买",
   "settings.modelProvider.codingPlan.disconnect": "解绑",
   "settings.modelProvider.codingPlan.subscribe": "订阅",
   "settings.modelProvider.codingPlan.upgrade": "升级",
   "settings.modelProvider.codingPlan.renew": "续期",
   "settings.modelProvider.codingPlan.currentPlan": "当前套餐",
-  "settings.modelProvider.codingPlan.purchased": "已经购买",
   "settings.modelProvider.codingPlan.startPlan.expiredBadge": "已过期",
   "settings.modelProvider.codingPlan.startPlan.expiredAction": "已结束",
   "settings.modelProvider.codingPlan.cancelUpgrade": "返回",
-  "settings.modelProvider.codingPlan.purchase.title": "升级 Coding Plan",
-  "settings.modelProvider.codingPlan.purchase.pricingTitle": "定价",
-  "settings.modelProvider.codingPlan.purchase.pricingDescription":
-    "选择适合你的套餐，开启 AI 编程工作流。",
-  "settings.modelProvider.codingPlan.purchase.moreInfo": "更多信息",
-  "settings.modelProvider.codingPlan.purchase.billingCycleTitle": "选择周期",
-  "settings.modelProvider.codingPlan.purchase.paymentConfirmTitle": "确认支付",
-  "settings.modelProvider.codingPlan.purchase.paymentTitle": "支付",
-  "settings.modelProvider.codingPlan.purchase.personal": "个人",
-  "settings.modelProvider.codingPlan.purchase.team": "团队",
   "settings.modelProvider.codingPlan.purchase.individualsSectionTitle": "个人套餐",
-  "settings.modelProvider.codingPlan.purchase.teamsSectionTitle": "团队套餐",
   "settings.modelProvider.codingPlan.purchaseBanner.startPlanTitle": "体验套餐",
-  "settings.modelProvider.codingPlan.purchaseBanner.startPlanDescription":
-    "免费体验平台 GLM 旗舰模型额度。",
-  "settings.modelProvider.codingPlan.purchaseBanner.personalTitle": "个人套餐",
-  "settings.modelProvider.codingPlan.purchaseBanner.personalDescription":
-    "适合个人开发者，独享 Coding Plan 额度。",
-  "settings.modelProvider.codingPlan.purchaseBanner.temporarilySoldOut": "暂时售罄",
-  "settings.modelProvider.codingPlan.purchaseBanner.teamTitle": "团队套餐",
-  "settings.modelProvider.codingPlan.purchaseBanner.teamDescription":
-    "适合团队协作，支持席位和集中结算。",
-  "settings.modelProvider.codingPlan.purchaseBanner.teamStandardDescription":
-    "适合小团队稳定使用，共享额度并统一管理席位。",
-  "settings.modelProvider.codingPlan.purchaseBanner.teamAdvancedDescription":
-    "适合高频研发团队，提供更高额度和更灵活的席位配置。",
-  "settings.modelProvider.codingPlan.purchase.choosePlan": "选择套餐",
-  "settings.modelProvider.codingPlan.purchase.choosePlanDescription":
-    "先比较套餐能力与额度，周期和最终支付金额在后续页面确认。",
   "settings.modelProvider.codingPlan.purchase.selectPlan": "选择",
-  "settings.modelProvider.codingPlan.purchase.select": "选择",
-  "settings.modelProvider.codingPlan.purchase.selected": "已选择",
-  "settings.modelProvider.codingPlan.purchase.fromPrice": "{price} 起",
-  "settings.modelProvider.codingPlan.purchase.fromPriceSuffix": "起",
-  "settings.modelProvider.codingPlan.purchase.previewLoading": "正在试算支付金额",
-  "settings.modelProvider.codingPlan.purchase.previewLoadingDescription":
-    "请稍候，确认支付和支付页面会使用同一份金额明细。",
-  "settings.modelProvider.codingPlan.purchase.previewUnavailableDescription":
-    "暂时无法获取支付金额，请返回后重新选择周期。",
-  "settings.modelProvider.codingPlan.purchase.teamTitle": "团队套餐",
-  "settings.modelProvider.codingPlan.purchase.teamDescription":
-    "席位、共享额度和集中结算稍后开放。",
-  "settings.modelProvider.codingPlan.purchase.teamCardDescription":
-    "共享额度、席位管理和集中付费。",
-  "settings.modelProvider.codingPlan.purchase.comingSoon": "即将推出",
-  "settings.modelProvider.codingPlan.purchase.chooseBillingCycle": "选择 {plan} 的计费周期",
-  "settings.modelProvider.codingPlan.purchase.billingCycleDescription":
-    "支付前会刷新价格和优惠，最终金额以支付页确认为准。",
-  "settings.modelProvider.codingPlan.purchase.continueToPayment": "继续支付",
-  "settings.modelProvider.codingPlan.purchase.summaryPlan": "套餐",
-  "settings.modelProvider.codingPlan.purchase.summaryBillingCycle": "计费周期",
-  "settings.modelProvider.codingPlan.purchase.summaryDueToday": "本次应付",
-  "settings.modelProvider.codingPlan.purchase.summaryStatus": "状态",
-  "settings.modelProvider.codingPlan.purchase.servicePeriod": "服务周期",
-  "settings.modelProvider.codingPlan.purchase.durationValue": "{duration}{unit}",
-  "settings.modelProvider.codingPlan.purchase.autoRenewPeriod": "每{period}自动续费",
-  "settings.modelProvider.codingPlan.purchase.renewalPolicyTitle": "续费政策",
-  "settings.modelProvider.codingPlan.purchase.renewalPolicyCharge":
-    "订阅将按 {price}{unit} 自动续费，取消后停止续费。",
-  "settings.modelProvider.codingPlan.purchase.renewalPolicyPreview":
-    "最终优惠、抵扣和实付金额会在下一步支付预览中确认。",
-  "settings.modelProvider.codingPlan.purchase.renewalPolicyCancel":
-    "你可以在下次续费前到套餐管理中关闭自动续费。",
-  "settings.modelProvider.codingPlan.purchase.termsAccepted": "我已了解并同意续费政策和订阅条款。",
-  "settings.modelProvider.codingPlan.purchase.paymentPreparing": "正在准备支付",
-  "settings.modelProvider.codingPlan.purchase.securityChecking": "等待完成安全验证",
-  "settings.modelProvider.codingPlan.purchase.paymentPolling": "正在等待支付确认",
-  "settings.modelProvider.codingPlan.purchase.paymentStarted": "请在当前支付页完成支付",
-  "settings.modelProvider.codingPlan.purchase.paymentStartedDescription":
-    "支付渠道完成前请保持面板打开。支付成功前可以返回确认支付页。",
-  "settings.modelProvider.codingPlan.purchase.paymentInProgress": "支付处理中",
-  "settings.modelProvider.codingPlan.purchase.successTitle": "支付成功",
-  "settings.modelProvider.codingPlan.purchase.successDescription":
-    "Coding Plan 已支付成功。关闭面板后会刷新供应商权益状态。",
-  "settings.modelProvider.codingPlan.purchase.successRefreshingDescription":
-    "支付已成功，正在刷新套餐状态。你可以关闭面板，供应商页面会继续在后台刷新。",
-  "settings.modelProvider.codingPlan.purchase.statusSyncing": "同步中",
-  "settings.modelProvider.codingPlan.purchase.statusActive": "已生效",
-  "settings.modelProvider.codingPlan.purchase.refreshNow": "立即刷新",
-  "settings.modelProvider.codingPlan.purchase.done": "完成",
-  "settings.modelProvider.codingPlan.purchase.teamMemberNoticeTitle": "团队套餐需要分配成员",
-  "settings.modelProvider.codingPlan.purchase.teamMemberNoticeDescription":
-    "请先在 BigModel 团队套餐管理页添加自己或其他成员，完成后即可在 ZCode 使用团队额度。",
-  "settings.modelProvider.codingPlan.purchase.manageTeamPlan": "管理团队套餐",
   "settings.modelProvider.codingPlan.manage": "管理",
   "settings.modelProvider.planCard.codingPlan": "编程套餐",
   "settings.modelProvider.planCard.startPlan": "体验套餐",
@@ -2956,14 +2872,11 @@ const zhCN: Record<string, string> = {
   "settings.modelProvider.codingPlan.productsLoading": "正在加载编程套餐",
   "settings.modelProvider.codingPlan.productsLoadingDescription":
     "正在从 {provider} 获取最新套餐信息。",
-  "settings.modelProvider.codingPlan.purchase.authStateError": "读取登录状态失败，请重试。",
-  "settings.modelProvider.codingPlan.purchase.authStateRetry": "重试登录状态",
   "settings.modelProvider.codingPlan.productsError": "套餐加载失败",
   "settings.modelProvider.codingPlan.productsReconnectTitle": "连接后查看套餐",
   "settings.modelProvider.codingPlan.reconnectToViewPlans": "重新连接",
   "settings.modelProvider.codingPlan.productsLoginRequired":
     "重新连接 {provider} 账号后，即可刷新价格和可购买的编程套餐。",
-  "settings.modelProvider.codingPlan.purchaseLoginRequired": "请重新连接账号后再试。",
   "settings.modelProvider.codingPlan.productsEmpty": "暂无可购买的编程套餐",
   "settings.modelProvider.codingPlan.productsEmptyDescription":
     "{provider} 当前没有返回可购买的编程套餐。",

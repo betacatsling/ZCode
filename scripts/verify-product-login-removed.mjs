@@ -163,6 +163,22 @@ function assertDeletedSurfaces() {
       "codingPlanEmbeddedWebview.ts must stay deleted (helpers only used by EmbeddedWebview Dialog)",
     );
   }
+  const purchaseAuth = join(
+    UI_SRC,
+    "settings/model-provider-section/codingPlanPurchaseAuth.ts",
+  );
+  if (existsSync(purchaseAuth)) {
+    fails.push(
+      "codingPlanPurchaseAuth.ts must stay deleted (purchase auth stub unload)",
+    );
+  }
+  const detailPath = join(UI_SRC, "settings/model-provider-section/Detail.tsx");
+  if (existsSync(detailPath)) {
+    const detailSrc = readFileSync(detailPath, "utf8");
+    if (/CodingPlanPurchaseChoiceBanners|purchaseChoiceBannersVisible/.test(detailSrc)) {
+      fails.push("Detail.tsx must not retain Coding Plan purchase choice banners");
+    }
+  }
   const codingPlanWebviewPreload = join(
     ROOT,
     "packages/desktop/src/preload/codingPlanWebview.ts",
