@@ -31,5 +31,6 @@ export {
   type AcpJsonRpcMessage,
   type AcpTransport,
 } from "./acpTransport.js";
+export { devinAcpProfile } from "./agents/devin.js";
 export { gooseAcpProfile } from "./agents/goose.js";
 export { openCodeAcpProfile } from "./agents/opencode.js";
