@@ -60,6 +60,3 @@ export function CodingPlanStatusActions({
   );
 }
 
-export function CodingPlanUpgradeAction() {
-  return <CodingPlanProductPurchaseRemovedNotice />;
-}

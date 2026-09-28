@@ -38,7 +38,6 @@ import { CodingPlanStatusMeta, StartPlanStatusMeta } from "./CodingPlanStatusMet
 import {
   CodingPlanProductPurchaseRemovedNotice,
   CodingPlanStatusActions,
-  CodingPlanUpgradeAction,
 } from "./CodingPlanStatusActions.js";
 import type { CodingPlanLoginOptions } from "./codingPlanPricingCards.js";
 import type { PurchaseAudience } from "./codingPlanEnterpriseTiers.js";
@@ -157,7 +156,7 @@ export function CodingPlanStatusPanel({
   loginActionPlacement = "inline",
   loginActionVisible = false,
   usageDetailsVisible = true,
-  upgradeActionVisible = true,
+  upgradeActionVisible: _upgradeActionVisible = true,
   upgradePlansVisible: controlledUpgradePlansVisible,
   startPlanPreviewVisible = true,
   statusLabelId,
@@ -307,9 +306,7 @@ export function CodingPlanStatusPanel({
   const displayPlanLevel = /^GLM[\s_-]+CODING\b/i.test(rawPlanLevel)
     ? formatQuotaModelDisplayName(rawPlanLevel)
     : normalizedPlanLevel;
-  const canUpgrade =
-    // Max 已是最高档但仍需要续期入口，不能因为不可升级就隐藏按钮。
-    upgradeActionVisible && isPurchased && !isChecking && !isUnsupported;
+  void _upgradeActionVisible;
   const canManageCodingPlan =
     !isDisconnected &&
     !isChecking &&
@@ -328,9 +325,9 @@ export function CodingPlanStatusPanel({
     isChecking &&
     providerIcon === BIGMODEL_PROVIDER_ID &&
     isBigModelUnregisteredAuthError(authError);
-  const upgradeAction = canUpgrade ? <CodingPlanUpgradeAction /> : null;
+  // 产品 Coding Plan 升级 CTA 已移除；未购买时仅显示「购买已移除」说明。
   const buyAction =
-    !isStartPlanProvider && !canUpgrade && isNotPurchased && !isChecking && !isUnsupported ? (
+    !isStartPlanProvider && isNotPurchased && !isChecking && !isUnsupported ? (
       <CodingPlanProductPurchaseRemovedNotice />
     ) : null;
   const inlineDisconnectVisible = canDisconnectProvider && !isPurchased;
@@ -436,10 +433,6 @@ export function CodingPlanStatusPanel({
     </Button>
   ) : trailingLoginVisible ? (
     <CodingPlanProductPurchaseRemovedNotice />
-  ) : upgradeAction ? (
-    // 升级是 Plan Card 的主操作，和连接入口同属卡片级 action。
-    // 放在标题旁会随标题换行抖动；放到右侧并使用同尺寸按钮，层级和位置都更稳定。
-    upgradeAction
   ) : buyAction ? (
     buyAction
   ) : null;
