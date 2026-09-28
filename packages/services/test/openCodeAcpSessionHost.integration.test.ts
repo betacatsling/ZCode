@@ -3,7 +3,7 @@
  *
  * Proves same-protocol Agents register via explicit factory + loadExplicit trust list
  * without changing lazy Host defaults or the shared ACP session machine. Goose SessionHost
- * path is symmetric to OpenCode (#75). Late prompt + transport fault/disconnect still journal via SessionHost (OpenCode + Goose). Resume-after-disconnect: SessionHost.open attach via negotiated session/load then send again. Cancel-after-disconnect: after fault fence, cancel of the dead turn is stale; after reopen+session/load, cancel mid-prompt journals cancelled (OpenCode + Goose). Double-fault/reopen: fault→reopen→fault→reopen stays idempotent (session/load, no session/new) then send succeeds (OpenCode + Goose). Mid-tool-call disconnect: tool_call + pending permission then fault → reopen session/load → send (OpenCode + Goose). Permission-denied-then-disconnect: Host denies permission, peer then faults the prompt (OpenCode + Goose). Cancel-during-permission: Host cancelTurn while permission pending journals cancelled (OpenCode + Goose). Permission-resolve-after-reopen: fault mid-permission → reopen → deny still clean (OpenCode + Goose). Allow-after-reopen: fault mid-permission → reopen → fresh allow completes send (OpenCode + Goose). Double-cancel: cancelTurn×2 mid-prompt is idempotent (one cancelled outcome; OpenCode + Goose). Allow-then-disconnect: Host allows permission then peer faults mid-turn (OpenCode + Goose). Cancel-then-disconnect: Host cancel mid-prompt then peer faults (OpenCode + Goose). Deny-then-cancel: Host deny pending permission then cancelTurn journals clean (OpenCode + Goose). Allow-then-cancel: Host allow pending permission then cancelTurn journals clean (OpenCode + Goose). Fault-during-session-load: reopen attach session/load mid-fault fails clean (OpenCode + Goose). Load-then-cancel: after reopen session/load succeeds, cancelTurn before first send is stale (OpenCode + Goose). Cancel-during-session-load: while reopen session/load is held in-flight, aborting the pending load rejects open clean (Host.cancelTurn cannot race mid-load — open awaits attach; OpenCode + Goose). Load-then-disconnect: after reopen session/load succeeds, peer transport close before first send stays idle until next send faults clean (OpenCode + Goose). Permission-during-session-load: while reopen session/load is held in-flight, peer session/request_permission is rejected as stale (no active turn) then load completes (OpenCode + Goose). Disconnect-during-session-load: while reopen session/load is held in-flight, peer idle transport.close (no JSON-RPC error reply) rejects open clean (OpenCode + Goose). Load-then-permission-deny: after reopen session/load succeeds, first send hits permission and Host deny journals clean with no new fault (OpenCode + Goose). Load-then-permission-allow: after reopen session/load succeeds, first send hits permission and Host allow completes the turn with no new fault (OpenCode + Goose).
+ * path is symmetric to OpenCode (#75). Late prompt + transport fault/disconnect still journal via SessionHost (OpenCode + Goose). Resume-after-disconnect: SessionHost.open attach via negotiated session/load then send again. Cancel-after-disconnect: after fault fence, cancel of the dead turn is stale; after reopen+session/load, cancel mid-prompt journals cancelled (OpenCode + Goose). Double-fault/reopen: fault→reopen→fault→reopen stays idempotent (session/load, no session/new) then send succeeds (OpenCode + Goose). Mid-tool-call disconnect: tool_call + pending permission then fault → reopen session/load → send (OpenCode + Goose). Permission-denied-then-disconnect: Host denies permission, peer then faults the prompt (OpenCode + Goose). Cancel-during-permission: Host cancelTurn while permission pending journals cancelled (OpenCode + Goose). Permission-resolve-after-reopen: fault mid-permission → reopen → deny still clean (OpenCode + Goose). Allow-after-reopen: fault mid-permission → reopen → fresh allow completes send (OpenCode + Goose). Double-cancel: cancelTurn×2 mid-prompt is idempotent (one cancelled outcome; OpenCode + Goose). Allow-then-disconnect: Host allows permission then peer faults mid-turn (OpenCode + Goose). Cancel-then-disconnect: Host cancel mid-prompt then peer faults (OpenCode + Goose). Deny-then-cancel: Host deny pending permission then cancelTurn journals clean (OpenCode + Goose). Allow-then-cancel: Host allow pending permission then cancelTurn journals clean (OpenCode + Goose). Fault-during-session-load: reopen attach session/load mid-fault fails clean (OpenCode + Goose). Load-then-cancel: after reopen session/load succeeds, cancelTurn before first send is stale (OpenCode + Goose). Cancel-during-session-load: while reopen session/load is held in-flight, aborting the pending load rejects open clean (Host.cancelTurn cannot race mid-load — open awaits attach; OpenCode + Goose). Load-then-disconnect: after reopen session/load succeeds, peer transport close before first send stays idle until next send faults clean (OpenCode + Goose). Permission-during-session-load: while reopen session/load is held in-flight, peer session/request_permission is rejected as stale (no active turn) then load completes (OpenCode + Goose). Disconnect-during-session-load: while reopen session/load is held in-flight, peer idle transport.close (no JSON-RPC error reply) rejects open clean (OpenCode + Goose). Load-then-send / mid-load prompt: while reopen session/load held, peer agent_message_chunk is replay-swallowed (acp.replay applied:false) then first send succeeds (OpenCode + Goose). Load-then-permission-deny: after reopen session/load succeeds, first send hits permission and Host deny journals clean with no new fault (OpenCode + Goose). Load-then-permission-allow: after reopen session/load succeeds, first send hits permission and Host allow completes the turn with no new fault (OpenCode + Goose).
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -50,6 +50,12 @@ interface FakePeerOptions {
    */
   readonly holdOnSessionLoad?: boolean;
   readonly permissionWhileHeldSessionLoad?: boolean;
+  /**
+   * While session/load is held unanswered, emit agent_message_chunk session/update(s)
+   * (prompt-like mid-load / #replaying traffic), then complete load successfully
+   (load-then-send / mid-load prompt; Host must swallow as acp.replay applied:false).
+   */
+  readonly promptWhileHeldSessionLoad?: boolean;
   /**
    * Emit a partial chunk, then wait for session/cancel before answering with stopReason cancelled
    * (SessionHost cancelTurn mid-prompt path).
@@ -112,6 +118,7 @@ class FakePeer {
   #idleCloseHeld = false;
   #permissionRejectedDuringHeldLoad = false;
   #permissionRejectMessage?: string;
+  #promptEmittedDuringHeldLoad = false;
   readonly #pending = new Map<
     string,
     { resolve: (value: unknown) => void; reject: (error: Error) => void }
@@ -136,6 +143,9 @@ class FakePeer {
   }
   get permissionRejectMessage(): string | undefined {
     return this.#permissionRejectMessage;
+  }
+  get promptEmittedDuringHeldLoad(): boolean {
+    return this.#promptEmittedDuringHeldLoad;
   }
 
   /**
@@ -261,6 +271,31 @@ class FakePeer {
               this.#permissionRejectMessage =
                 error instanceof Error ? error.message : String(error);
             }
+            await this.#transport.send({
+              jsonrpc: "2.0",
+              id: message.id,
+              result: { sessionId: this.#sessionId },
+            });
+            return;
+          }
+          if (this.#options.promptWhileHeldSessionLoad) {
+            // Peer emits prompt-like agent_message_chunk while session/load RPC is unanswered.
+            // Host AcpSessionMachine.resumeNative sets #replaying during load → chunks counted
+            // as replay (not journal body); load then completes successfully.
+            for (const text of ["mid-load replay chunk", "mid-load replay chunk 2"]) {
+              await this.#transport.send({
+                jsonrpc: "2.0",
+                method: "session/update",
+                params: {
+                  sessionId: this.#sessionId,
+                  update: {
+                    sessionUpdate: "agent_message_chunk",
+                    content: { type: "text", text },
+                  },
+                },
+              });
+            }
+            this.#promptEmittedDuringHeldLoad = true;
             await this.#transport.send({
               jsonrpc: "2.0",
               id: message.id,
@@ -4301,6 +4336,223 @@ test("SessionHost + opt-in OpenCode ACP: permission-during-session-load rejects 
 
 test("SessionHost + opt-in Goose ACP: permission-during-session-load rejects stale then load completes (symmetric)", async (t) => {
   await assertSessionHostPermissionDuringSessionLoad({
+    t,
+    label: "goose",
+    harnessId: "goose",
+    agentName: "Goose",
+    createHarness: (openTransport) =>
+      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+  });
+});
+
+const MID_LOAD_REPLAY_CHUNK = "mid-load replay chunk";
+
+async function assertSessionHostLoadThenSendMidLoadPrompt(input: {
+  t: { after: (fn: () => void | Promise<void>) => void };
+  label: string;
+  harnessId: "opencode" | "goose";
+  agentName: string;
+  createHarness: (openTransport: () => AcpTransport) => ReturnType<
+    typeof createExperimentalRegistryOpenCodeAcpHarness
+  >;
+}): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-ltsm-`));
+  const worktree = join(root, "worktree");
+  const journalRoot = join(root, "journal");
+  await mkdir(worktree, { recursive: true });
+  input.t.after(() => rm(root, { recursive: true, force: true }));
+
+  const backendSessionId = `${input.harnessId}-ltsm-session`;
+  const hostSessionId = `${input.harnessId}-ltsm-1`;
+  const spec = {
+    schemaVersion: 1 as const,
+    hostSessionId,
+    execution: {
+      targetId: "local",
+      workspaceIdentity: `workspace-${input.harnessId}-ltsm`,
+      worktreePath: worktree,
+    },
+    harness: { id: input.harnessId, adapterVersion: ACP_ADAPTER_VERSION },
+    modelBinding: { kind: "harness-managed" as const },
+  };
+  const target = {
+    id: "local",
+    kind: "local" as const,
+    platform: process.platform as "darwin" | "linux" | "win32",
+    available: true,
+  };
+  const catalog = {
+    fingerprint: "registry-v1",
+    validateSelection: () => ({ ok: true as const }),
+  };
+
+  // Round 1: negotiate loadSession, disconnect mid-prompt, close — same fence as mid-load axis.
+  const registryLive = new HarnessRegistry();
+  registryLive.register(
+    input.createHarness(() =>
+      openFakeTransport(input.agentName, backendSessionId, {
+        loadSession: true,
+        disconnectOnPrompt: true,
+      }),
+    ),
+  );
+
+  const host = await SessionHost.create({
+    root: journalRoot,
+    spec,
+    target,
+    catalog,
+    registry: registryLive,
+  });
+
+  const faultReceipt = await host.dispatch({
+    type: "send",
+    commandId: `${input.harnessId}-ltsm-fault`,
+    hostSessionId,
+    turnId: "turn-ltsm-fault",
+    text: "die mid-prompt",
+  });
+  assert.equal(faultReceipt.status, "accepted");
+  await host.whenIdle();
+  assert.ok(host.eventsSince(0).some((event) => event.kind === "session.error"));
+  await host.close();
+
+  // Round 2: reopen attach holds session/load; while unanswered, peer emits agent_message_chunk
+  // (prompt-like mid-load / #replaying). Host swallows as replay → extension.event acp.replay
+  // { applied: false }; mid-load text must not become message.finished. Load completes; first send succeeds.
+  const peersAfter: FakePeer[] = [];
+  const registryReopen = new HarnessRegistry();
+  registryReopen.register(
+    input.createHarness(() =>
+      openFakeTransport(
+        input.agentName,
+        backendSessionId,
+        {
+          loadSession: true,
+          holdOnSessionLoad: true,
+          promptWhileHeldSessionLoad: true,
+        },
+        peersAfter,
+      ),
+    ),
+  );
+
+  const resumed = await SessionHost.open({
+    root: journalRoot,
+    spec,
+    target,
+    catalog,
+    registry: registryReopen,
+  });
+
+  assert.ok(
+    peersAfter.some((peer) => peer.methods.includes("session/load")),
+    "reopen must attach via session/load",
+  );
+  assert.ok(
+    peersAfter.every((peer) => !peer.methods.includes("session/new")),
+    "mid-load prompt path must not fall back to session/new",
+  );
+
+  const livePeer = peersAfter.find((peer) => peer.methods.includes("session/load"));
+  assert.ok(livePeer, "expected live peer after session/load");
+  assert.equal(
+    livePeer.promptEmittedDuringHeldLoad,
+    true,
+    "FakePeer must emit agent_message_chunk while session/load was unanswered",
+  );
+
+  await resumed.whenIdle();
+  await resumed.whenEventsSettled();
+
+  const replayEvent = resumed.eventsSince(0).find(
+    (event) => event.kind === "extension.event" && event.namespace === "acp.replay",
+  );
+  assert.ok(
+    replayEvent && replayEvent.kind === "extension.event",
+    "mid-load chunks must journal extension.event namespace acp.replay",
+  );
+  const replayPayload = replayEvent.payload;
+  assert.ok(
+    replayPayload !== null && typeof replayPayload === "object" && !Array.isArray(replayPayload),
+    "acp.replay payload must be an object",
+  );
+  const payload = replayPayload as { replayedUpdates?: unknown; applied?: unknown };
+  assert.equal(payload.applied, false, "acp.replay must report applied:false (swallowed, not journal body)");
+  assert.ok(
+    typeof payload.replayedUpdates === "number" && payload.replayedUpdates >= 1,
+    `expected replayedUpdates >= 1, got ${String(payload.replayedUpdates)}`,
+  );
+
+  assert.ok(
+    resumed.eventsSince(0).every(
+      (event) =>
+        !(
+          event.kind === "message.finished" &&
+          typeof event.text === "string" &&
+          event.text.includes(MID_LOAD_REPLAY_CHUNK)
+        ),
+    ),
+    "mid-load replay chunk must not become message.finished",
+  );
+
+  assert.ok(
+    resumed.eventsSince(0).some((event) => event.kind === "session.error"),
+    "prior fault session.error must still be present after mid-load replay",
+  );
+
+  const sendReceipt = await resumed.dispatch({
+    type: "send",
+    commandId: `${input.harnessId}-ltsm-send`,
+    hostSessionId,
+    turnId: "turn-lts-send",
+    text: "hello after load-then-send",
+  });
+  assert.equal(sendReceipt.status, "accepted");
+  await resumed.whenIdle();
+  const finished = resumed.eventsSince(0).find(
+    (event) => event.kind === "turn.finished" && event.turnId === "turn-lts-send",
+  );
+  assert.ok(finished && finished.kind === "turn.finished");
+  assert.equal(finished.outcome, "success");
+
+  await resumed.close();
+
+  const persisted = await SessionHost.eventsSinceHistory(journalRoot, spec, 0);
+  assert.ok(
+    persisted.every(
+      (event) =>
+        !(
+          event.kind === "message.finished" &&
+          typeof event.text === "string" &&
+          event.text.includes(MID_LOAD_REPLAY_CHUNK)
+        ),
+    ),
+    "persisted history must not contain mid-load replay as message.finished",
+  );
+  assert.ok(
+    persisted.some(
+      (event) =>
+        event.kind === "extension.event" &&
+        event.namespace === "acp.replay",
+    ),
+    "persisted history must keep acp.replay extension.event",
+  );
+}
+
+test("SessionHost + opt-in OpenCode ACP: load-then-send / mid-load prompt swallows replay then send succeeds", async (t) => {
+  await assertSessionHostLoadThenSendMidLoadPrompt({
+    t,
+    label: "opencode",
+    harnessId: "opencode",
+    agentName: "OpenCode",
+    createHarness: (openTransport) =>
+      createExperimentalRegistryOpenCodeAcpHarness({ openTransport }),
+  });
+});
+
+test("SessionHost + opt-in Goose ACP: load-then-send / mid-load prompt swallows replay then send succeeds (symmetric)", async (t) => {
+  await assertSessionHostLoadThenSendMidLoadPrompt({
     t,
     label: "goose",
     harnessId: "goose",
