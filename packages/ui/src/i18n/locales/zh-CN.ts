@@ -2821,7 +2821,6 @@ const zhCN: Record<string, string> = {
   "settings.modelProvider.codingPlan.productPurchaseRemovedTitle": "产品登录与购买已下线",
   "settings.modelProvider.codingPlan.productPurchaseRemoved":
     "产品登录和套餐购买已移除。请在模型设置中配置个人 API Key。",
-  "settings.modelProvider.codingPlan.login": "登录 {provider}",
   "settings.modelProvider.codingPlan.connect": "连接 {provider}",
   "settings.modelProvider.codingPlan.disconnect": "解绑",
   "settings.modelProvider.codingPlan.subscribe": "订阅",
@@ -2875,8 +2874,6 @@ const zhCN: Record<string, string> = {
   "settings.modelProvider.codingPlan.productsError": "套餐加载失败",
   "settings.modelProvider.codingPlan.productsReconnectTitle": "连接后查看套餐",
   "settings.modelProvider.codingPlan.reconnectToViewPlans": "重新连接",
-  "settings.modelProvider.codingPlan.productsLoginRequired":
-    "重新连接 {provider} 账号后，即可刷新价格和可购买的编程套餐。",
   "settings.modelProvider.codingPlan.productsEmpty": "暂无可购买的编程套餐",
   "settings.modelProvider.codingPlan.productsEmptyDescription":
     "{provider} 当前没有返回可购买的编程套餐。",
@@ -2904,8 +2901,6 @@ const zhCN: Record<string, string> = {
     "继续购买前需要先完成安全验证。",
   "settings.modelProvider.codingPlan.securityVerificationCancelled": "已取消安全验证。",
   "settings.modelProvider.codingPlan.securityVerificationFailed": "安全验证失败，请稍后重试。",
-  "settings.modelProvider.codingPlan.start.loginEnable": "连接后启用",
-  "settings.modelProvider.codingPlan.start.loginTrial": "连接 Z.ai",
   "settings.modelProvider.codingPlan.start.enabled": "已启用",
   "settings.modelProvider.codingPlan.start.freeBadge": "Free",
   "settings.modelProvider.codingPlan.start.freeEquityTitle": "体验计划",
@@ -3352,13 +3347,11 @@ const zhCN: Record<string, string> = {
   "settings.usage.entitlementConcurrencyValue": "{value}",
   "settings.usage.entitlementPolicyHint":
     "套餐额度为当前说明口径，平台策略可能调整，最新数值以用量说明页面为准。",
-  "settings.usage.entitlementLoginRequired": "需要先登录",
   "settings.usage.entitlementNotConfigured":
     "未找到可查询额度的 Z.ai / BigModel 编程套餐账号。请先连接编程套餐账号。",
   "settings.usage.entitlementStatusActive": "已开通",
   "settings.usage.entitlementStatusError": "异常",
   "settings.usage.entitlementStatusLoading": "加载中",
-  "settings.usage.entitlementStatusLoginRequired": "需要登录",
   "settings.usage.entitlementStatusNoPlan": "未开通",
   "settings.usage.entitlementStatusNotConfigured": "未配置",
   "sidebar.usage.summaryTitle": "最近 30 天",

@@ -3024,7 +3024,6 @@ const enUS: Record<string, string> = {
     "Product sign-in and purchase removed",
   "settings.modelProvider.codingPlan.productPurchaseRemoved":
     "Product sign-in and plan purchase have been removed. Configure a personal API Key in model settings.",
-  "settings.modelProvider.codingPlan.login": "Sign in to {provider}",
   "settings.modelProvider.codingPlan.connect": "Connect to {provider}",
   "settings.modelProvider.codingPlan.disconnect": "Unlink",
   "settings.modelProvider.codingPlan.subscribe": "Subscribe",
@@ -3078,8 +3077,6 @@ const enUS: Record<string, string> = {
   "settings.modelProvider.codingPlan.productsError": "Could not load plans",
   "settings.modelProvider.codingPlan.productsReconnectTitle": "Connect to view plans",
   "settings.modelProvider.codingPlan.reconnectToViewPlans": "Reconnect",
-  "settings.modelProvider.codingPlan.productsLoginRequired":
-    "Reconnect your {provider} account to refresh prices and available Coding Plan products.",
   "settings.modelProvider.codingPlan.productsEmpty": "No plans available",
   "settings.modelProvider.codingPlan.productsEmptyDescription":
     "{provider} did not return any purchasable Coding Plan products for this account.",
@@ -3112,8 +3109,6 @@ const enUS: Record<string, string> = {
     "Security verification was cancelled.",
   "settings.modelProvider.codingPlan.securityVerificationFailed":
     "Security verification failed. Try again in a moment.",
-  "settings.modelProvider.codingPlan.start.loginEnable": "Connect to enable",
-  "settings.modelProvider.codingPlan.start.loginTrial": "Connect Z.ai",
   "settings.modelProvider.codingPlan.start.enabled": "Enabled",
   "settings.modelProvider.codingPlan.start.freeBadge": "Free",
   "settings.modelProvider.codingPlan.start.freeEquityTitle": "Start free plan",
@@ -3568,13 +3563,11 @@ const enUS: Record<string, string> = {
   "settings.usage.entitlementConcurrencyValue": "{value}",
   "settings.usage.entitlementPolicyHint":
     "Quota values follow the current usage guide and may change with platform policy.",
-  "settings.usage.entitlementLoginRequired": "Login required",
   "settings.usage.entitlementNotConfigured":
     "No connected Z.ai or BigModel Coding Plan account is available for quota lookup. Connect a Coding Plan account first.",
   "settings.usage.entitlementStatusActive": "Active",
   "settings.usage.entitlementStatusError": "Error",
   "settings.usage.entitlementStatusLoading": "Loading",
-  "settings.usage.entitlementStatusLoginRequired": "Login required",
   "settings.usage.entitlementStatusNoPlan": "Not subscribed",
   "settings.usage.entitlementStatusNotConfigured": "Not configured",
   "sidebar.usage.summaryTitle": "Last 30 days",

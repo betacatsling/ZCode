@@ -15,11 +15,13 @@
  *     registerOAuthState / onOAuthCallback; Root must not remount Provider
  *
  * Soft inventory (print-only; does not fail exit):
- *   - funnel / pricing leftovers (isRestoringOAuthSession + EmbeddedWebview Dialog unloaded)
+ *   - thin residual file-existence peek (most Dialog/Provider/Entry surfaces are hard above)
  *
  * Hard (also): CLI i18n tui.loginRequired / tui.loginSetup key names must stay absent
  *   (renamed to modelSetupRequired / deleted dead loginSetup).
  * Hard (also): CLI isLoginRequired gate must stay absent (renamed to isModelSetupRequired).
+ * Hard (also): UI locale dead product loginRequired / Coding Plan login keys must stay absent
+ *   (codingPlan.login, productsLoginRequired, start.loginEnable/Trial, entitlement*LoginRequired).
  *
  * Run from repo root: node scripts/verify-product-login-removed.mjs
  */
@@ -305,6 +307,40 @@ function assertDeletedSurfaces() {
     fails.push("CLI must define isModelSetupRequired gate (renamed from isLoginRequired)");
   }
 
+  // UI i18n: dead product-login / Coding Plan /login locale keys (Ex3 thin knife).
+  const uiLocaleDir = join(UI_SRC, "i18n/locales");
+  const deadUiLoginKeys = [
+    "settings.modelProvider.codingPlan.login",
+    "settings.modelProvider.codingPlan.productsLoginRequired",
+    "settings.modelProvider.codingPlan.start.loginEnable",
+    "settings.modelProvider.codingPlan.start.loginTrial",
+    "settings.usage.entitlementLoginRequired",
+    "settings.usage.entitlementStatusLoginRequired",
+    "sidebar.usage.plan.loginRequired",
+  ];
+  const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  for (const key of deadUiLoginKeys) {
+    const keyHits = grepFiles(uiLocaleDir, new RegExp(`"${escapeRegExp(key)}"`), {
+      extensions: [".ts"],
+    });
+    if (keyHits.length) {
+      fails.push(
+        `UI locales must not keep dead product-login key ${key}: ${keyHits
+          .map((h) => h.file)
+          .join(", ")}`,
+      );
+    }
+  }
+  // Legitimate ZCode account sign-in copy (share-import) must remain.
+  const signInHits = grepFiles(uiLocaleDir, /"conversationShare\.import\.signInRequired"/, {
+    extensions: [".ts"],
+  });
+  if (signInHits.length < 2) {
+    fails.push(
+      "UI locales must keep conversationShare.import.signInRequired (ZCode account, not product login)",
+    );
+  }
+
   return fails;
 }
 
@@ -362,101 +398,27 @@ function fileStatus(relPath) {
 }
 
 /**
- * Soft inventory: residuals still present on tip after Dialog/Provider unload.
- * Cleared Dialog/Provider/Root-wrap/EmbeddedWebview + CLI i18n loginRequired/
- * loginSetup key rename are hard-gated above; this prints leftovers
- * (funnel/pricing helpers). Never flips results.ok by itself.
+ * Soft inventory: thin residual peek after hard gates above.
+ * Cleared Dialog/Provider/Root-wrap/EmbeddedWebview + CLI/UI loginRequired copy
+ * are hard-gated; this only prints a short leftover note. Never flips results.ok.
  */
 function remainingUiInventory() {
-  const symbolScans = [
-    {
-      id: "CodingPlanUpgradeDialog",
-      pattern: /\bCodingPlanUpgradeDialog\b/,
-      roots: [UI_SRC],
-    },
-    {
-      id: "CodingPlanUpgradeDialogProvider",
-      pattern: /\bCodingPlanUpgradeDialogProvider\b/,
-      roots: [UI_SRC],
-    },
-    {
-      id: "openCodingPlanUpgrade",
-      pattern: /\bopenCodingPlanUpgrade\b/,
-      roots: [UI_SRC],
-    },
-    {
-      id: "useCodingPlanUpgradeDialog",
-      pattern: /\buse(?:Optional)?CodingPlanUpgradeDialog\b/,
-      roots: [UI_SRC],
-    },
-    {
-      id: "useCodingPlanEntryGate",
-      pattern: /\buseCodingPlanEntryGate\b/,
-      roots: [UI_SRC],
-    },
-    {
-      id: "CodingPlanEntryButton",
-      pattern: /\bCodingPlanEntryButton\b/,
-      roots: [UI_SRC],
-    },
-  ];
-
-  const symbols = {};
-  for (const scan of symbolScans) {
-    const hits = [];
-    for (const root of scan.roots) {
-      hits.push(...grepFiles(root, scan.pattern));
-    }
-    // Prefer production src hits in summary; keep tests visible but tagged.
-    const production = hits.filter((h) => !/(^|\/)test\//.test(h.file) && !/\.test\./.test(h.file) && !/\.spec\./.test(h.file));
-    const tests = hits.filter((h) => !production.includes(h));
-    symbols[scan.id] = {
-      productionHitCount: production.reduce((n, h) => n + h.matchCount, 0),
-      productionFiles: production.map((h) => h.file),
-      testOnlyFiles: tests.map((h) => h.file),
-      sample: production[0]?.matches?.slice(0, 3) ?? tests[0]?.matches?.slice(0, 2) ?? [],
-    };
-  }
-
   const knownPaths = [
-    "packages/ui/src/settings/CodingPlanUpgradeDialog.tsx",
-    "packages/ui/src/settings/CodingPlanUpgradeDialogProvider.tsx",
-    "packages/ui/src/settings/CodingPlanEmbeddedWebviewDialog.tsx",
-    "packages/ui/src/settings/model-provider-section/codingPlanEmbeddedWebview.ts",
-    "packages/desktop/src/preload/codingPlanWebview.ts",
+    "packages/ui/src/Root.tsx",
+    "apps/zcode-cli/packages/cli/src/tui-login-state.ts",
     "packages/desktop/src/main/desktopWindowChrome.ts",
     "packages/desktop/src/main/desktopMainIpcRemote.ts",
-    "packages/ui/src/settings/CodingPlanEntryButton.tsx",
-    "packages/ui/src/login",
-    "packages/ui/src/Root.tsx",
-    "packages/ui/src/lib/sidebarCodingPlanUpgrade.ts",
-    "packages/ui/src/lib/codingPlanFunnelTelemetry.ts",
-    "packages/ui/src/hooks/useCodingPlanEntryPlanList.ts",
-    "packages/ui/src/settings/model-provider-section/codingPlanPricingCards.ts",
-    "apps/zcode-cli/packages/cli/src/tui-login-state.ts",
   ].map(fileStatus);
 
-  const rootSrc = existsSync(join(UI_SRC, "Root.tsx"))
-    ? readFileSync(join(UI_SRC, "Root.tsx"), "utf8")
-    : "";
-  const rootMount = {
-    importsCodingPlanUpgradeDialogProvider: /CodingPlanUpgradeDialogProvider/.test(rootSrc),
-    wrapsWithCodingPlanUpgradeDialogProvider:
-      /<CodingPlanUpgradeDialogProvider>/.test(rootSrc) &&
-      /<\/CodingPlanUpgradeDialogProvider>/.test(rootSrc),
-    stillReadsIsRestoringOAuthSession: /\bisRestoringOAuthSession\b/.test(rootSrc),
-  };
-
   const note =
-    "Tip d736a33+: Dialog/Provider/Root-wrap + EmbeddedWebview Dialog/helpers + Root isRestoringOAuthSession cleared (hard). CLI i18n loginRequired→modelSetupRequired + loginSetup deleted (hard). Soft remaining = funnel/pricing leftovers. useCodingPlanEntryPlanList deleted (zero callers). Inventory does not fail this gate.";
+    "Tip 5ff4b68+: Dialog/Provider/Entry/EmbeddedWebview + CLI loginRequired→modelSetupRequired hard. UI locale dead product loginRequired / Coding Plan login keys hard-gated (Ex3). Soft inventory thinned — cleared symbol scans dropped. Inventory does not fail this gate.";
 
   return {
     note,
     knownPaths,
-    rootMount,
-    symbols,
   };
 }
+
 
 const results = {
   static: {},
