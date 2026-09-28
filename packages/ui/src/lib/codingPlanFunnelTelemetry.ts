@@ -1,7 +1,7 @@
 /**
  * Coding Plan 购买/升级漏斗上下文类型。
- * 上报与 create/resolve 助手已随升级 CTA 下线删除；类型仍供 StatusCards /
- * CodingPlanUpgradeDialog / embedded webview 的 props 形状使用。
+ * 上报与 create/resolve 助手已随升级 CTA 下线删除；CodingPlanUpgradeDialog 已整卸。
+ * 类型仍供 StatusCards / embedded webview 的 props 形状使用。
  */
 
 export type CodingPlanUpgradeSource =
