@@ -533,7 +533,7 @@ export function createBrowserWindow(options: {
     Menu.buildFromTemplate(template).popup({ window: win });
   });
 
-  void Promise.resolve(loadWindow(win, "index", options.bootstrap)).catch((error: unknown) => {
+  void Promise.resolve(loadWindow(win, options.bootstrap)).catch((error: unknown) => {
     // loadFile/loadURL 返回的导航 Promise 过去被丢弃，长跑中的导航失败
     // 只会表现为 chrome-error 页面，主进程日志没有原始异常可供追踪。
     options.logger.warn("[desktop-window] renderer navigation rejected", error);

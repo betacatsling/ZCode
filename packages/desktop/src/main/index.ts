@@ -1675,7 +1675,7 @@ function openUpdateStatusWindow() {
     }
   });
 
-  loadWindow(win, "index", {
+  loadWindow(win, {
     restoreSession: false,
     supportsSettings: false,
     windowKind: "update-status",
