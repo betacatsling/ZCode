@@ -11,12 +11,18 @@ export interface AcpTransport {
   send(message: AcpJsonRpcMessage): Promise<void>;
   subscribe(listener: (message: AcpJsonRpcMessage) => void): () => void;
   close(): Promise<void>;
+  /**
+   * Optional: notify when the transport pair closes so in-flight RPC can reject
+   * without a JSON-RPC error reply (peer idle disconnect mid-await).
+   */
+  subscribeClose?(listener: () => void): () => void;
 }
 
 export function linkAcpTransports(): { client: AcpTransport; agent: AcpTransport } {
   let closed = false;
   const clientListeners = new Set<(message: AcpJsonRpcMessage) => void>();
   const agentListeners = new Set<(message: AcpJsonRpcMessage) => void>();
+  const closeListeners = new Set<() => void>();
   const make = (
     local: Set<(message: AcpJsonRpcMessage) => void>,
     remote: Set<(message: AcpJsonRpcMessage) => void>,
@@ -29,10 +35,18 @@ export function linkAcpTransports(): { client: AcpTransport; agent: AcpTransport
       local.add(listener);
       return () => local.delete(listener);
     },
+    subscribeClose(listener) {
+      closeListeners.add(listener);
+      return () => closeListeners.delete(listener);
+    },
     async close() {
+      if (closed) return;
       closed = true;
       local.clear();
       remote.clear();
+      const listeners = [...closeListeners];
+      closeListeners.clear();
+      for (const listener of listeners) listener();
     },
   });
   return {
@@ -94,12 +108,15 @@ export class AcpRpc {
   readonly #pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
   readonly #unsubscribe: () => void;
 
+  readonly #unsubscribeClose: (() => void) | undefined;
+
   constructor(
     private readonly transport: AcpTransport,
     private readonly onRequest: (message: AcpJsonRpcMessage) => void,
     private readonly onNotification: (message: AcpJsonRpcMessage) => void,
   ) {
     this.#unsubscribe = transport.subscribe((message) => this.#receive(message));
+    this.#unsubscribeClose = transport.subscribeClose?.(() => this.close());
   }
 
   async request(method: string, params: unknown): Promise<unknown> {
@@ -130,8 +147,10 @@ export class AcpRpc {
   }
 
   close(): void {
+    if (this.#closed) return;
     this.#closed = true;
     this.#unsubscribe();
+    this.#unsubscribeClose?.();
     for (const pending of this.#pending.values()) pending.reject(new Error("ACP transport closed"));
     this.#pending.clear();
   }
