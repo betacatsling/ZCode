@@ -392,7 +392,6 @@ export function ModelProviderSection({
   } = useSettings();
   // 企业 pricing/获客服务已拆除；Team 已购身份走 entitlement。空列表保留导航签名。
   const subscribedTeamProducts = useMemo<EnterpriseCodingPlanProductDisplay[]>(() => [], []);
-  const refreshAuthenticatedEnterpriseProducts = useCallback(async () => {}, []);
   const connectionSelections = sharedSettings?.providerFamilyConnectionSelections ?? {};
   const familyConnectionSettingsFailed = sharedSettingsError !== null && sharedSettings === null;
   const effectiveConnectionSelections = useMemo(
@@ -498,7 +497,6 @@ export function ModelProviderSection({
         refreshModelProviders: refresh,
         refreshCodingPlanEntitlements: () =>
           refreshCodingPlanEntitlements({ force: true, reason: refreshReason }),
-        refreshTeamPlanProducts: refreshAuthenticatedEnterpriseProducts,
         refreshCodingPlanProducts,
         refreshPurchaseTokenState: refreshCodingPlanPurchaseTokenState,
         refreshPlanSnapshots,
@@ -506,7 +504,6 @@ export function ModelProviderSection({
     },
     [
       refresh,
-      refreshAuthenticatedEnterpriseProducts,
       refreshCodingPlanEntitlements,
       refreshCodingPlanProducts,
       refreshCodingPlanPurchaseTokenState,
@@ -1037,9 +1034,6 @@ export function ModelProviderSection({
       onRefresh={() => {
         void refreshModelProviderSection({
           refresh,
-          // 手动刷新设置页时也要同时刷新 Z.ai / BigModel Team Plan 快照；
-          // 原来只刷新 BigModel，Z.ai Team Plan 购买或订阅变化后会继续显示旧项目。
-          refreshTeamPlanProducts: refreshAuthenticatedEnterpriseProducts,
         });
         refreshCodingPlanEntitlements();
       }}
