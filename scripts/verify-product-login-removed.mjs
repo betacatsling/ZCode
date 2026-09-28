@@ -2,10 +2,10 @@
 /**
  * Product-login removal gate (scripts-only knife; docs/inventory sync after Dialog unload).
  *
- * Tip state (origin/cursor/wave4-harness-integration-b7a9 @ e70fca7 / #140–#151–#153 (#152 oauthTeamPricing drop; #153 allow-then-cancel)):
+ * Tip state (origin/cursor/wave4-harness-integration-b7a9 @ 6694a62 / #140–#154 (#152 oauthTeamPricing hard-pin; #153 allow-then-cancel; #154 ledger)):
  *   P1–P4 landed; CodingPlanUpgradeDialog / Provider + Root wrap unloaded (Ex1 /
  *   9ce3088); EntryGate CTA / CodingPlanEntryButton / useCodingPlanEntryGate gone;
- *   soft remainingUiInventory first landed in #57; #103–#151 clearances hard-gated below.
+ *   soft remainingUiInventory first landed in #57; #103–#154 clearances hard-gated below.
  *
  * Hard gates (must exit 0 on tip):
  *   - CLI login-command / tui-auth / create.ts stubs (P3)
@@ -49,6 +49,9 @@
  * Hard (also): #150 ModelProviderSection / Detail / modelProviderActions must not revive
  *   onCodingPlanPurchaseComplete / codingPlanPurchaseToken / refreshPurchaseTokenState
  *   (KEEP onQuotaResetEntitlementRefresh / refreshActiveOAuthProvider*).
+ * Hard (also): #152 oauthTeamPricing.ts must stay deleted; accountConnectionLossSuggestion must not
+ *   revive oauthTeamPricing / getEnterprisePricingProducts / productList team fallback
+ *   (KEEP prepareAccountConnectionSwitch + individual-coding-plan path; Display/entitlement KEPT).
  * Soft ledger also records SessionHost #140/#143/#147/#149 (OUT of this scripts gate) + #144/#151
  *   productList comment scrubs.
  *
@@ -663,6 +666,45 @@ function assertDeletedSurfaces() {
     }
   }
 
+  // #152: oauthTeamPricing empty productList + account-loss team fallback hard-absent.
+  // KEEP prepareAccountConnectionSwitch + individual-coding-plan; Display/entitlement KEPT elsewhere.
+  const oauthTeamPricingPath = join(UI_SRC, "root/oauthTeamPricing.ts");
+  if (existsSync(oauthTeamPricingPath)) {
+    fails.push(
+      "oauthTeamPricing.ts must stay deleted (empty team pricing fallback unload #152)",
+    );
+  }
+  const accountLossSuggestionPath = join(
+    UI_SRC,
+    "root/accountConnectionLossSuggestion.ts",
+  );
+  if (!existsSync(accountLossSuggestionPath)) {
+    fails.push("accountConnectionLossSuggestion.ts must exist (#152 KEEP)");
+  } else {
+    const suggestionSrc = readFileSync(accountLossSuggestionPath, "utf8");
+    for (const dead of [
+      "oauthTeamPricing",
+      "getEnterprisePricingProducts",
+      "productList",
+    ]) {
+      if (suggestionSrc.includes(dead)) {
+        fails.push(
+          `accountConnectionLossSuggestion.ts must not revive ${dead} (#152)`,
+        );
+      }
+    }
+    if (!/\bprepareAccountConnectionSwitch\b/.test(suggestionSrc)) {
+      fails.push(
+        "accountConnectionLossSuggestion.ts must keep prepareAccountConnectionSwitch (#152)",
+      );
+    }
+    if (!/\bindividual-coding-plan\b/.test(suggestionSrc)) {
+      fails.push(
+        "accountConnectionLossSuggestion.ts must keep individual-coding-plan path (#152)",
+      );
+    }
+  }
+
   // #114: slash-help /login+/logout rewritten off Coding Plan / Z.ai OAuth acquisition.
   // KEEP MCP (and other non-login) help entries unchanged.
   const slashHelpPath = join(ROOT, "packages/shared/src/zcode-slash-command-help.ts");
@@ -779,7 +821,7 @@ function remainingUiInventory() {
   ].map(fileStatus);
 
   const note =
-    "Tip e70fca7 (#151 / after #103–#150): Dialog/Provider/Entry/EmbeddedWebview + CLI loginRequired→modelSetupRequired hard. UI locale dead product loginRequired / Coding Plan login + orphan Welcome/login.* shell + #103–#107 upgrade/purchase/usage/enterprise acquisition i18n hard-gated. login.oauth.regionTag.* absent; KEEP settings.modelProvider.regionTag.* + share-import signInRequired + manage/planCard + productPurchaseRemoved body + live personal API-key / MCP OAuth copy. #114 slash-help /login+/logout off Coding Plan/Z.ai OAuth acquisition → model-setup/API-key guidance hard-gated (KEEP MCP help). #123 useEnterpriseCodingPlanProducts.ts hard-absent; #124 productPurchaseRemovedTitle absent; #126 refreshTeamPlanProducts hard-absent (KEEP entitlement refresh); #128/#Ex1/#142 usageSources buildCodingPlanUsageSources hard-absent (KEEP CodingPlanUsageSource / personal builder / sidebar resolver); #131–#135+/#141 Settings/V4/sidebar/MPS/visibility subscribedTeamProducts stubs+wiring hard-absent; #145 teamSources/team audience hard-absent; #146/#148 codingPlanLogin noop (onCodingPlanLogin/handleCodingPlanLogin) hard-absent (KEEP codingPlanLoginPending); #150 onCodingPlanPurchaseComplete/codingPlanPurchaseToken/refreshPurchaseTokenState hard-absent (KEEP quota/OAuth refresh); soft ledger #140/#143/#147/#149 SessionHost OUT + #144/#151 productList comment scrubs. Soft inventory thinned — cleared symbol scans dropped. Inventory does not fail this gate.";
+    "Tip 6694a62 (#154 / after #103–#153): Dialog/Provider/Entry/EmbeddedWebview + CLI loginRequired→modelSetupRequired hard. UI locale dead product loginRequired / Coding Plan login + orphan Welcome/login.* shell + #103–#107 upgrade/purchase/usage/enterprise acquisition i18n hard-gated. login.oauth.regionTag.* absent; KEEP settings.modelProvider.regionTag.* + share-import signInRequired + manage/planCard + productPurchaseRemoved body + live personal API-key / MCP OAuth copy. #114 slash-help /login+/logout off Coding Plan/Z.ai OAuth acquisition → model-setup/API-key guidance hard-gated (KEEP MCP help). #123 useEnterpriseCodingPlanProducts.ts hard-absent; #124 productPurchaseRemovedTitle absent; #126 refreshTeamPlanProducts hard-absent (KEEP entitlement refresh); #128/#Ex1/#142 usageSources buildCodingPlanUsageSources hard-absent (KEEP CodingPlanUsageSource / personal builder / sidebar resolver); #131–#135+/#141 Settings/V4/sidebar/MPS/visibility subscribedTeamProducts stubs+wiring hard-absent; #145 teamSources/team audience hard-absent; #146/#148 codingPlanLogin noop (onCodingPlanLogin/handleCodingPlanLogin) hard-absent (KEEP codingPlanLoginPending); #150 onCodingPlanPurchaseComplete/codingPlanPurchaseToken/refreshPurchaseTokenState hard-absent (KEEP quota/OAuth refresh); #152 oauthTeamPricing.ts + account-loss getEnterprisePricingProducts/productList team fallback hard-absent (KEEP prepareAccountConnectionSwitch + individual-coding-plan); soft ledger #140/#143/#147/#149/#153 SessionHost OUT + #144/#151 productList comment scrubs. Soft inventory thinned — cleared symbol scans dropped. Inventory does not fail this gate.";
 
   return {
     note,
