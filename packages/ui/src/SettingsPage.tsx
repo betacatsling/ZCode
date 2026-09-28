@@ -447,13 +447,12 @@ export function SettingsPage({
     usageZaiProvider,
     usageZaiProviderAccess,
   ]);
-  // 企业 productList 已恒空（#128）；保留 buildCodingPlanUsageSources 调用满足签名/guard。
-  // Team 用量展示走 entitlement / personal source，不再拼空 team products。
+  // 企业 productList 已恒空（#128）；buildCodingPlanUsageSources 已卸 team-products 参数。
+  // Team 用量展示走 entitlement / personal source。
   const usageTeamCodingPlanSources = useMemo(
     () =>
       buildCodingPlanUsageSources({
         accountAccesses: {},
-        subscribedTeamProducts: [],
       }),
     [],
   );

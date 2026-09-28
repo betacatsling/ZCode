@@ -7,7 +7,6 @@ import {
   type ZCodeAccountAccess,
   type ZCodeProviderAccountAccess,
 } from "@zcode/shared";
-import type { EnterpriseCodingPlanProductDisplay } from "@/settings/model-provider-section/enterpriseCodingPlanProducts.js";
 import type {
   SidebarUsageCodingPlanProviderId,
   SidebarUsageCodingPlanSourceId,
@@ -61,12 +60,12 @@ type CurrentSidebarCodingPlanUsageSource =
     };
 
 /**
- * 企业 productList 已恒空（#119/#120/#123）；Team 用量改走 entitlement /
- * personal source。保留签名供 Settings/侧栏/composer 传 subscribedTeamProducts。
+ * 企业 productList 已恒空（#119/#120/#123/#128）；Team 用量改走 entitlement /
+ * personal source。team-products 参数已卸；保留 accountAccesses 供
+ * Settings/侧栏/composer 调用形态。
  */
 export function buildCodingPlanUsageSources(_args: {
   accountAccesses: Partial<Record<ProviderFamilyDomain, ZCodeProviderAccountAccess>>;
-  subscribedTeamProducts: EnterpriseCodingPlanProductDisplay[];
 }): CodingPlanUsageSource[] {
   return [];
 }

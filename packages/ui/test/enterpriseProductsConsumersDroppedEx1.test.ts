@@ -10,7 +10,8 @@ test("SettingsPage and V4ComposerToolbar drop empty useEnterpriseCodingPlanProdu
   for (const file of ["../src/SettingsPage.tsx", "../src/v4/composer/V4ComposerToolbar.tsx"]) {
     const source = readUi(file);
     assert.equal(source.includes("useEnterpriseCodingPlanProducts"), false, file);
-    assert.match(source, /subscribedTeamProducts/, file);
+    // buildCodingPlanUsageSources no longer takes subscribedTeamProducts; callers must not stub it.
+    assert.equal(source.includes("subscribedTeamProducts"), false, file);
   }
 });
 
