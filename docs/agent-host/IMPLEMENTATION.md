@@ -25,7 +25,7 @@ Target Runtime Host（未来：RepositoryBinding、WorktreeWorkspace、准入）
         ↓ 继承
 Agent Host Session（已有外部 Host 的命令/事件/journal 所有者）
         ↓
-Harness Adapter（Pi 已有；Codex/Claude/ACP 未有）
+Harness Adapter（Pi 已有；Codex/Claude FakeModel experimental；Devin print-mode + 可选 ACP profile；通用长尾 ACP 未完成）
         ↓
 现有 Provider Registry + Model executor（Pi bridge 已有代码路径，真实路由未认证）
         ↓
@@ -184,9 +184,15 @@ P5 必须按 Harness 拆成 control/event 认证和 host-managed model ingress �
 
 ## P6：通用 ACP、长尾 Harness 和发布加固
 
-状态：**未实现**。
+状态：**部分完成（脚手架 + 一个可选 Agent）；P6 未完成**。
 
-未发现当前代码中的可复用 ACP transport/adapter、manifest-driven second Agent、能力协商报告、版本兼容矩阵、安装诊断、升级手册或长期压力测试。现有历史 ACP retirement 测试用于保护 native 兼容边界，不是新 ACP 接入。
+已在 tip 上、但不能标 P6 完成：
+
+- 可复用 ACP transport/adapter 与 session machine：`packages/services/src/agent-adapters/acp/`（`COMPATIBILITY.md` / `SPEC.md`）。
+- 长尾示例：Devin **可选** ACP profile（`agent-adapters/acp/agents/devin.ts`，`devin acp`）；与 print-mode `devin` 同 harness id，**不得**在同一 `HarnessRegistry` 双注册（见 `devin/PROTOCOL.md` 与 exclusivity 测）。
+- lazy Host 默认 Devin 路径仍是 **print-mode `-p`**（`createExperimentalRegistryDevinHarness`），不是默认 ACP。
+
+仍缺：能力协商/版本矩阵产品化、安装诊断与升级手册、长期压力测试、第二个生产 ACP Agent、把 lazy 默认切到 ACP、发布加固。历史 ACP retirement 测只保护 native 边界，不是完整 P6 验收。
 
 交付依赖 P1 manifest/factory、P3/P4 已验证 model binding/target Host，以及至少一个真实可用 ACP Agent。验收必须证明第二个同协议 Agent 只增加 manifest、绑定配置和必要扩展，不修改公共会话状态机；不支持 resume 的 Agent 只能历史只读；未知扩展安全降级；协议升级回到实验状态。
 
@@ -250,7 +256,7 @@ Worktree 服务现有 archive 元数据/fence 与确认式 remove；remove 会�
 | 08A  | worktree removal admission、重建、离线重同步、archive/hide                    | Worktree 移除/fence/native+external 准入与隔离 Git/CLI 测试已实现；UI/SSH 离线重同步未验收            | 依赖 08；UI/E2E、SSH 离线恢复及删除竞态矩阵                    |
 | 09   | Gateway core + Responses + Codex                                              | 部分完成 / FakeModel only：core + Responses + Codex 控制/绑定已在 tip；#26 SSH 共享 TargetModelGateway 仅为 FakeModel admission，兼容仍 experimental | 依赖 08；live Provider、真实 SSH 凭据与生产组合仍未认证        |
 | 10   | Messages + Claude structured adapter                                          | 部分完成 / FakeModel only：structured/Messages 实验路径已有，Gateway 仍 adapter-local，不是共享 owner | 依赖 09；共享 TargetModelGateway owner 与 live Provider 未认证 |
-| 11   | 通用 ACP + 一个长尾 Agent                                                     | 未实现                                                                                                | 依赖 08 和已验证 model binding                                 |
+| 11   | 通用 ACP + 一个长尾 Agent                                                     | 部分完成：ACP adapter + Devin 可选 ACP profile 已在 tip；lazy 默认仍 print-mode；第二 Agent/发布加固未做 | 依赖 08 和已验证 model binding；勿把 print-mode 写成 ACP 完成 |
 | 12   | 层级/并发/focus 压测、迁移回滚、版本锁定发布                                  | 未实现                                                                                                | 依赖 08A/09/10/11；50 worktree、10 session、8h、fault matrix   |
 
 建议执行顺序：
