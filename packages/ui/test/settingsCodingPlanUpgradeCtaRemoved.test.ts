@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 const readUi = (relativePath: string) =>
@@ -21,5 +22,15 @@ test("settings ModelProviderSection login stub does not open Coding Plan upgrade
   assert.match(
     section,
     /\[ModelProviderSection\] 产品登录已下线，不再连接 Coding Plan/,
+  );
+});
+
+test("settings model-provider Detail does not use CodingPlan entryGate", () => {
+  assert.equal(detail.includes("useCodingPlanEntryGate"), false);
+  assert.equal(detail.includes("CodingPlanEntryButton"), false);
+  assert.equal(detail.includes("entryGate"), false);
+  assert.equal(
+    existsSync(fileURLToPath(new URL("../src/settings/CodingPlanEntryButton.tsx", import.meta.url))),
+    false,
   );
 });
