@@ -1,6 +1,5 @@
 import type { StartPlanPreviewConfig } from "@zcode/shared";
 import { useCallback, useEffect, useState } from "react";
-import { useOptionalServices } from "@/hooks/useServices.js";
 import { logger } from "@/logger.js";
 import { normalizeErrorMessage as normalizeCodingPlanErrorMessage } from "@/settings/model-provider-section/useCodingPlanProducts.js";
 
@@ -14,9 +13,17 @@ const START_PLAN_PREVIEW_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 let previewCache: { preview: StartPlanPreviewConfig | null; expiresAt: number } | null = null;
 let previewRequest: Promise<StartPlanPreviewConfig | null> | null = null;
 
+type StartPlanPreviewReader = {
+  getStartPlanPreview(): Promise<StartPlanPreviewConfig | null>;
+};
+
+/** 产品订阅服务已拆除。函数返回类型避免 const undefined 把后续分支收成 never。 */
+function removedStartPlanPreviewService(): StartPlanPreviewReader | undefined {
+  return undefined;
+}
+
 export function useStartPlanPreview(options?: { enabled?: boolean }) {
-  const services = useOptionalServices();
-  const service = services?.codingPlanSubscriptionService;
+  const service = removedStartPlanPreviewService();
   const enabled = options?.enabled !== false;
   const [state, setState] = useState<StartPlanPreviewState>({
     preview: previewCache?.preview ?? null,
@@ -80,9 +87,9 @@ export function useStartPlanPreview(options?: { enabled?: boolean }) {
   };
 }
 
-async function loadStartPlanPreview(
-  service: NonNullable<ReturnType<typeof useOptionalServices>>["codingPlanSubscriptionService"],
-): Promise<StartPlanPreviewConfig | null> {
+async function loadStartPlanPreview(service: {
+  getStartPlanPreview(): Promise<StartPlanPreviewConfig | null>;
+}): Promise<StartPlanPreviewConfig | null> {
   const now = Date.now();
   if (previewCache && previewCache.expiresAt > now) {
     return previewCache.preview;

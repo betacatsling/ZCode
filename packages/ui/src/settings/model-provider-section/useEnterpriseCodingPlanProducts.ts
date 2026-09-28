@@ -5,7 +5,6 @@ import {
   type EnterpriseCodingPlanPricingResponse,
   type ProviderFamilyDomain,
 } from "@zcode/shared";
-import { useOptionalServices } from "@/hooks/useServices.js";
 import { isRemoteWorkspaceDisconnectedError } from "@/lib/remoteWorkspaceServiceError.js";
 import { logger } from "@/logger.js";
 import {
@@ -63,6 +62,21 @@ function resolveEnterprisePricingFailureSnapshot({
   };
 }
 
+type EnterpriseCodingPlanReader = {
+  getStaticTeamProducts(): Promise<
+    Partial<Record<string, CodingPlanStaticTeamProduct[] | undefined>>
+  >;
+  getEnterprisePricing(request: {
+    authenticated: boolean;
+    family: ProviderFamilyDomain;
+  }): Promise<EnterpriseCodingPlanPricingResponse>;
+};
+
+/** 产品订阅服务已拆除。函数返回类型避免 const undefined 把后续分支收成 never。 */
+function removedEnterpriseCodingPlanService(): EnterpriseCodingPlanReader | undefined {
+  return undefined;
+}
+
 /**
  * 给企业套餐展示列表打上 family 标记（zai / bigmodel）。
  * 下游可见性函数（appendSubscribedTeamPlanItems 等）需要按 family
@@ -96,8 +110,7 @@ export function useEnterpriseCodingPlanProducts({
   authenticated: boolean;
   family?: ProviderFamilyDomain;
 }) {
-  const services = useOptionalServices();
-  const service = services?.codingPlanSubscriptionService;
+  const service = removedEnterpriseCodingPlanService();
   const codingPlanProviderId = getModelProviderFamilySpec(family).individualCodingPlanProviderId;
   const [state, setState] = useState<EnterpriseCodingPlanProductsState>({
     snapshot: null,

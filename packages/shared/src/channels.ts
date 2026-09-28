@@ -110,8 +110,10 @@ export const ServiceChannels = {
   ConversationShare: "conversation-share",
   /** 文件系统监视服务 */
   FileWatcher: "file-watcher",
-  /** OAuth 认证服务 */
-  OAuth: "oauth",
+  /**
+   * 产品 OAuth 频道 `oauth` 已退役。Host 不再注册该名字；
+   * 旧客户端请求时由 RPC 报 Unknown channel，不能当成匿名访问成功。
+   */
   /** 新 Provider Config 的设置读写 Facade */
   ProviderSettings: "provider-settings",
   /** 新 Provider Registry 的模型选择 Facade */
@@ -120,8 +122,10 @@ export const ServiceChannels = {
   ProviderProvisioningTarget: "provider-provisioning-target",
   /** 本地 usage 统计服务 */
   UsageStats: "usage-stats",
-  /** Coding Plan 订阅购买服务 */
-  CodingPlanSubscription: "coding-plan-subscription",
+  /**
+   * 产品 Coding Plan 订阅频道 `coding-plan-subscription` 已退役。
+   * 未注册时旧客户端得到 Unknown channel，而不是空订阅或匿名购买。
+   */
   ClientConfig: "client-config",
   /** ZCode 客户端场景配置服务 */
   ClientScenes: "client-scenes",

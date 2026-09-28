@@ -18,7 +18,7 @@ export function useCodingPlanEntryPlanList(): CodingPlanEntryInventory {
   const { state, reload } = useProviderSettingsView();
   const providerSettingsView = state.status === "ready" ? state.view : null;
   const loading = state.status === "loading";
-  const { credentialService, codingPlanSubscriptionService } = useServices();
+  const { credentialService } = useServices();
   const user = useZCodeStore((state) => state.user);
   // 不传当前选中的团队上下文，四种 Start/个人连接分别使用已有权益缓存。
   const { entitlements, refresh } = useCodingPlanEntitlements({
@@ -48,11 +48,8 @@ export function useCodingPlanEntryPlanList(): CodingPlanEntryInventory {
           try {
             token = (await credentialService.load(`oauth:${family}:access_token`))?.trim() || null;
             if (!token) return { token, products: [] };
-            const result = await codingPlanSubscriptionService.getEnterprisePricing({
-              authenticated: true,
-              family,
-            });
-            return { token, products: result.productList };
+            // 产品订阅服务已拆除，团队套餐不再请求定价接口。
+            return { token, products: [] as EnterpriseCodingPlanPricingProduct[] };
           } catch (error) {
             logger.warn("[purchaseTelemetry] 读取团队套餐失败", { family, error });
             return { token, products: null };
@@ -82,7 +79,6 @@ export function useCodingPlanEntryPlanList(): CodingPlanEntryInventory {
     };
   }, [
     credentialService,
-    codingPlanSubscriptionService,
     user,
     providerSettingsView,
     generation,
