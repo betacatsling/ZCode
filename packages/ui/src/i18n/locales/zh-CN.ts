@@ -5664,6 +5664,8 @@ const zhCN: Record<string, string> = {
   "chat.quota.mcp.codingPlanRequired":
     "当前无 ZCode MCP「{server}」额度，请登录或开通 Coding Plan 使用。",
   "chat.quota.providerLimited": "当前账户额度或套餐已达到使用限制。请升级或调整套餐后继续。",
+  "chat.quota.plan.productLoginRemoved":
+    "产品登录已移除。请在设置中配置 API Key 后查看额度。",
   "chat.quota.action.upgrade": "升级",
   "chat.quota.action.renew": "续期",
   "chat.quota.action.switchModel": "切换模型",

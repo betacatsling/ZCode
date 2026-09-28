@@ -5939,6 +5939,8 @@ const enUS: Record<string, string> = {
     'No ZCode MCP "{server}" quota. Sign in or get a Coding Plan to use it.',
   "chat.quota.providerLimited":
     "The current account quota or plan limit has been reached. Upgrade or adjust the plan to continue.",
+  "chat.quota.plan.productLoginRemoved":
+    "Product sign-in has been removed. Configure an API Key in Settings to view quota.",
   "chat.quota.action.upgrade": "Upgrade",
   "chat.quota.action.renew": "Renew",
   "chat.quota.action.switchModel": "Switch model",
