@@ -58,3 +58,32 @@ test("linkAcpTransports close: double close is idempotent (listener once)", asyn
 
   assert.equal(closes, 1);
 });
+
+test("AcpRpc: request and notify refuse after peer idle subscribeClose", async () => {
+  const { client, agent } = linkAcpTransports();
+  const rpc = new AcpRpc(
+    client,
+    () => {},
+    () => {},
+  );
+
+  await agent.close();
+
+  await assert.rejects(rpc.request("session/prompt", { prompt: "again" }), /ACP transport closed/);
+  await assert.rejects(rpc.notify("session/cancel", {}), /ACP transport closed/);
+});
+
+test("AcpRpc: direct close rejects pending (SessionMachine path)", async () => {
+  const { client } = linkAcpTransports();
+  const rpc = new AcpRpc(
+    client,
+    () => {},
+    () => {},
+  );
+
+  const pending = rpc.request("session/prompt", { prompt: "ping" });
+  rpc.close();
+
+  await assert.rejects(pending, /ACP transport closed/);
+  await assert.rejects(rpc.request("session/prompt", { prompt: "again" }), /ACP transport closed/);
+});
