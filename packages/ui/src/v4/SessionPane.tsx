@@ -4414,7 +4414,6 @@ export function SessionPane({
       error={composerError}
       onDismissError={handleDismissComposerError}
       onOpenModelSettings={isAgentHostSession ? undefined : handleOpenModelSettings}
-      onOpenModelUpgrade={undefined}
       onOpenCodeViewer={isAgentHostSession ? undefined : onOpenCodeViewer}
       suppressGoalCommands={selectionSideChat}
       appSlashCommands={isAgentHostSession ? undefined : appSlashCommands}
