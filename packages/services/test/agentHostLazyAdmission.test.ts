@@ -216,6 +216,57 @@ test("lazy admission off returns capability admission-disabled without registeri
   }
 });
 
+test("lazy admission off fails closed for ACP harness ids and sibling create APIs", async () => {
+  const root = await mkdtemp(join(tmpdir(), "zcode-lazy-admission-acp-"));
+  const registeredIds: string[] = [];
+  const { service, dispose } = createLazyTargetAgentHostService({
+    root,
+    target: localTarget(true),
+    registry: fakeProviderRegistry(),
+    allowNewSessions: () => false,
+    nativeOwner: {
+      createWorkspaceSession: async () => {
+        throw new Error("native-not-used");
+      },
+    } as never,
+    observeRegisteredHarness: (harness) => {
+      registeredIds.push(harness.id);
+    },
+  });
+  try {
+    // #228 pinned pi; residual — ACP second agents + other CLI ids also fail closed
+    // without warming getTarget() / registering anything.
+    for (const harnessId of ["opencode", "goose", "codex", "claude-code", "devin"] as const) {
+      const capability = await service.getWorkspaceSessionCapability({
+        harnessId,
+        modelBinding: { kind: "harness-managed" },
+      });
+      assert.equal(capability.targetId, "local", harnessId);
+      assert.equal(capability.report.support, "unsupported", harnessId);
+      assert.equal(capability.report.reason, "admission-disabled", harnessId);
+    }
+    assert.deepEqual(registeredIds, []);
+
+    await assert.rejects(
+      () => service.createWorkspaceSession({ harnessId: "pi" } as never),
+      /new external sessions disabled/,
+    );
+    await assert.rejects(
+      () => service.createExternalSession({} as never),
+      /new external sessions disabled/,
+    );
+    await assert.rejects(
+      () => service.createExternalForWorkspace({} as never),
+      /new external sessions disabled/,
+    );
+    // Sibling create APIs must not warm registration either.
+    assert.deepEqual(registeredIds, []);
+  } finally {
+    await dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("lazy getDirectory keeps all five entries when target is unavailable", async () => {
   const root = await mkdtemp(join(tmpdir(), "zcode-lazy-target-down-"));
   const { service, dispose } = createLazyTargetAgentHostService({
