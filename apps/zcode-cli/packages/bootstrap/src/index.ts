@@ -17,7 +17,12 @@ export type {
   ZCodeAppOptions,
   ZCodeModelOption,
 } from "./app/types.js";
-export * from "./auth-login.js";
+export { configureCodingPlanApiKey, ZCodeCliLoginError } from "./coding-plan-api-key-config.js";
+export type {
+  CodingPlanProviderId,
+  ConfigureCodingPlanApiKeyOptions,
+  ConfigureCodingPlanApiKeyResult,
+} from "./coding-plan-api-key-config.js";
 export {
   inspectZCodeCustomCommand,
   listZCodeCustomCommands,
