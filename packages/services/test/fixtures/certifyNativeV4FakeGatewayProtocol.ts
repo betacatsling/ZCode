@@ -3,9 +3,6 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 export type FakeGatewayJsonRecord = Record<string, unknown>;
 
-export const fakeNativeOutput = "native live output\n";
-export const fakeDeniedOutput = "native denied sentinel\n";
-
 export function objectRecord(value: unknown): FakeGatewayJsonRecord | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as FakeGatewayJsonRecord)
