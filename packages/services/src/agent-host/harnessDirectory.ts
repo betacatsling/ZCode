@@ -58,7 +58,7 @@ export const CLAUDE_CODE_HARNESS_MANIFEST: HarnessManifest = {
   },
 };
 
-/** Placeholder until createDevinHarness ships; keep adapterVersion in sync with that adapter. */
+/** Registered Devin CLI manifest; keep adapterVersion in sync with that adapter. */
 export const DEVIN_HARNESS_MANIFEST: HarnessManifest = {
   schemaVersion: 1,
   id: "devin",
