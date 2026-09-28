@@ -329,7 +329,7 @@ Worktree 服务现有 archive 元数据/fence 与确认式 remove；remove 会�
 | 08A  | worktree removal admission、重建、离线重同步、archive/hide                    | Worktree 移除/fence/native+external 准入与隔离 Git/CLI 测试已实现；UI/SSH 离线重同步未验收            | 依赖 08；UI/E2E、SSH 离线恢复及删除竞态矩阵                    |
 | 09   | Gateway core + Responses + Codex                                              | 部分完成 / FakeModel only：core + Responses + Codex 控制/绑定已在 tip；#26 SSH 共享 TargetModelGateway 仅为 FakeModel admission，兼容仍 experimental | 依赖 08；live Provider、真实 SSH 凭据与生产组合仍未认证        |
 | 10   | Messages + Claude structured adapter                                          | 部分完成 / FakeModel only：structured/Messages 实验路径已有，Gateway 仍 adapter-local，不是共享 owner | 依赖 09；共享 TargetModelGateway owner 与 live Provider 未认证 |
-| 11   | 通用 ACP + 一个长尾 Agent                                                     | 部分完成 @ tip `dd31baf`：opt-in SessionHost fake-transport 矩阵至 #211（仍缺 load-then-send / mid-load prompt 等；≠ live）；#94/#98/#100/#102/#106 LIVE-CERT/I stubs（无实跑）；honesty；#69 MULTI_HARNESS；生产接线/发布加固未做 | 依赖 08 和已验证 model binding；勿把 print-mode/honesty/opt-in/fake-transport 写成 ACP 完成 |
+| 11   | 通用 ACP + 一个长尾 Agent                                                     | 部分完成 @ tip `3df4f85`：opt-in SessionHost fake-transport 矩阵至 #211（仍缺 load-then-send / mid-load prompt 等；≠ live）；#94/#98/#100/#102/#106 LIVE-CERT/I stubs（无实跑）；honesty；#69 MULTI_HARNESS；生产接线/发布加固未做 | 依赖 08 和已验证 model binding；勿把 print-mode/honesty/opt-in/fake-transport 写成 ACP 完成 |
 | 12   | 层级/并发/focus 压测、迁移回滚、版本锁定发布                                  | 未实现                                                                                                | 依赖 08A/09/10/11；50 worktree、10 session、8h、fault matrix   |
 
 建议执行顺序：
