@@ -6,22 +6,34 @@ import { atomicWritePrivateTextFile, backupCorruptFile, withFileLock } from "@zc
 import { createZCodeCredentialCipher, type ZCodeCredentialCipher } from "./credential-cipher.js";
 
 const ZCODE_DATA_BASE_DIR_ENV_KEY = "ZCODE_DATA_BASE_DIR";
-const ZAI_PROVIDER_ID = "zai";
 const credentialChangeListeners = new Map<
   string,
   Set<() => void | Promise<void>>
 >();
 
-export const SHARED_ZCODE_CREDENTIAL_KEYS = {
-  activeProvider: "oauth:active_provider",
-  bigmodelAccessToken: "oauth:bigmodel:access_token",
-  bigmodelRefreshToken: "oauth:bigmodel:refresh_token",
-  bigmodelUserInfo: "oauth:bigmodel:user_info",
-  zaiAccessToken: "oauth:zai:access_token",
-  zaiRefreshToken: "oauth:zai:refresh_token",
-  zaiUserInfo: "oauth:zai:user_info",
-  zcodeJwtToken: "zcodejwttoken",
-} as const;
+/**
+ * 历史产品登录 OAuth / JWT 键。旧 credentials.json 可留盘。
+ * 业务路径不再 load/save 这些键；仅作 legacy 忽略名单（文档/测试）。
+ * MCP OAuth 使用 `mcp:oauth:*`，不受此名单影响。
+ */
+export const LEGACY_PRODUCT_OAUTH_CREDENTIAL_KEYS = [
+  "oauth:active_provider",
+  "oauth:zai:access_token",
+  "oauth:zai:refresh_token",
+  "oauth:zai:user_info",
+  "oauth:bigmodel:access_token",
+  "oauth:bigmodel:refresh_token",
+  "oauth:bigmodel:user_info",
+  "zcodejwttoken",
+] as const;
+
+const LEGACY_PRODUCT_OAUTH_CREDENTIAL_KEY_SET = new Set<string>(
+  LEGACY_PRODUCT_OAUTH_CREDENTIAL_KEYS,
+);
+
+function isLegacyProductOauthCredentialKey(key: string): boolean {
+  return LEGACY_PRODUCT_OAUTH_CREDENTIAL_KEY_SET.has(key);
+}
 
 export interface SharedZCodeCredentialStoreOptions {
   baseDir?: string;
@@ -30,22 +42,8 @@ export interface SharedZCodeCredentialStoreOptions {
   filePath?: string;
 }
 
-export interface ZaiLoginCredentialUser {
-  avatar?: string;
-  email?: string;
-  name?: string;
-  user_id: string;
-}
-
-export interface ZaiLoginCredentialPayload {
-  accessToken: string;
-  jwtToken: string;
-  user: ZaiLoginCredentialUser;
-}
-
 export interface SharedZCodeCredentialStore {
   readonly filePath: string;
-  clearZaiLoginCredentials(): Promise<void>;
   delete(key: string): Promise<void>;
   deleteIfValue(key: string, expectedValue: string): Promise<boolean>;
   deleteIfValues(
@@ -62,7 +60,6 @@ export interface SharedZCodeCredentialStore {
   save(key: string, value: string): Promise<void>;
   saveMany(entries: Readonly<Record<string, string>>): Promise<void>;
   saveReplacing(key: string, value: string, replacedKeys: readonly string[]): Promise<void>;
-  saveZaiLoginCredentials(payload: ZaiLoginCredentialPayload): Promise<void>;
 }
 
 export function createSharedZCodeCredentialStore(
@@ -75,19 +72,6 @@ export function createSharedZCodeCredentialStore(
   return {
     filePath,
 
-    async clearZaiLoginCredentials(): Promise<void> {
-      await mutateRawCredentialRecord(filePath, async (rawCredentials) => {
-        const activeProviderRaw = rawCredentials[SHARED_ZCODE_CREDENTIAL_KEYS.activeProvider];
-        const activeProvider = activeProviderRaw ? cipher.decrypt(activeProviderRaw) : null;
-        delete rawCredentials[SHARED_ZCODE_CREDENTIAL_KEYS.zaiAccessToken];
-        delete rawCredentials[SHARED_ZCODE_CREDENTIAL_KEYS.zaiRefreshToken];
-        delete rawCredentials[SHARED_ZCODE_CREDENTIAL_KEYS.zaiUserInfo];
-        delete rawCredentials[SHARED_ZCODE_CREDENTIAL_KEYS.zcodeJwtToken];
-        if (activeProvider === ZAI_PROVIDER_ID) {
-          delete rawCredentials[SHARED_ZCODE_CREDENTIAL_KEYS.activeProvider];
-        }
-      });
-    },
 
     async delete(key: string): Promise<void> {
       const validatedKey = validateCredentialKey(key);
@@ -165,8 +149,13 @@ export function createSharedZCodeCredentialStore(
     },
 
     async load(key: string): Promise<string | null> {
+      const validatedKey = validateCredentialKey(key);
+      // 产品 OAuth / JWT 已退役：不解密、不返回。
+      if (isLegacyProductOauthCredentialKey(validatedKey)) {
+        return null;
+      }
       const rawCredentials = await readRawCredentialRecord(filePath);
-      const rawValue = rawCredentials[validateCredentialKey(key)];
+      const rawValue = rawCredentials[validatedKey];
       if (rawValue === undefined) {
         return null;
       }
@@ -178,6 +167,9 @@ export function createSharedZCodeCredentialStore(
       const rawCredentials = await readRawCredentialRecord(filePath);
       return Object.fromEntries(
         validatedKeys.map((key) => {
+          if (isLegacyProductOauthCredentialKey(key)) {
+            return [key, null];
+          }
           const rawValue = rawCredentials[key];
           return [key, rawValue === undefined ? null : cipher.decrypt(rawValue)];
         }),
@@ -199,6 +191,10 @@ export function createSharedZCodeCredentialStore(
 
     async save(key: string, value: string): Promise<void> {
       const validatedKey = validateCredentialKey(key);
+      // 产品 OAuth / JWT 已退役：拒绝写入，旧键留盘不动。
+      if (isLegacyProductOauthCredentialKey(validatedKey)) {
+        return;
+      }
       const encryptedValue = cipher.encrypt(validateCredentialValue(value));
       await mutateRawCredentialRecord(filePath, (rawCredentials) => {
         rawCredentials[validatedKey] = encryptedValue;
@@ -206,10 +202,15 @@ export function createSharedZCodeCredentialStore(
     },
 
     async saveMany(entries: Readonly<Record<string, string>>): Promise<void> {
-      const encryptedEntries = Object.entries(entries).map(
-        ([key, value]) =>
-          [validateCredentialKey(key), cipher.encrypt(validateCredentialValue(value))] as const,
-      );
+      const encryptedEntries = Object.entries(entries)
+        .map(
+          ([key, value]) =>
+            [validateCredentialKey(key), cipher.encrypt(validateCredentialValue(value))] as const,
+        )
+        .filter(([key]) => !isLegacyProductOauthCredentialKey(key));
+      if (encryptedEntries.length === 0) {
+        return;
+      }
       await mutateRawCredentialRecord(filePath, (rawCredentials) => {
         for (const [key, encryptedValue] of encryptedEntries) {
           rawCredentials[key] = encryptedValue;
@@ -223,8 +224,13 @@ export function createSharedZCodeCredentialStore(
       replacedKeys: readonly string[],
     ): Promise<void> {
       const validatedKey = validateCredentialKey(key);
+      if (isLegacyProductOauthCredentialKey(validatedKey)) {
+        return;
+      }
       const encryptedValue = cipher.encrypt(validateCredentialValue(value));
-      const validatedReplacedKeys = replacedKeys.map(validateCredentialKey);
+      const validatedReplacedKeys = replacedKeys
+        .map(validateCredentialKey)
+        .filter((replacedKey) => !isLegacyProductOauthCredentialKey(replacedKey));
       await mutateRawCredentialRecord(filePath, (rawCredentials) => {
         rawCredentials[validatedKey] = encryptedValue;
         for (const replacedKey of validatedReplacedKeys) {
@@ -233,22 +239,6 @@ export function createSharedZCodeCredentialStore(
       });
     },
 
-    async saveZaiLoginCredentials(payload: ZaiLoginCredentialPayload): Promise<void> {
-      const encryptedCredentials = {
-        activeProvider: cipher.encrypt(ZAI_PROVIDER_ID),
-        accessToken: cipher.encrypt(validateCredentialValue(payload.accessToken)),
-        jwtToken: cipher.encrypt(validateCredentialValue(payload.jwtToken)),
-        userInfo: cipher.encrypt(JSON.stringify(payload.user)),
-      };
-      await mutateRawCredentialRecord(filePath, (rawCredentials) => {
-        rawCredentials[SHARED_ZCODE_CREDENTIAL_KEYS.activeProvider] =
-          encryptedCredentials.activeProvider;
-        rawCredentials[SHARED_ZCODE_CREDENTIAL_KEYS.zaiAccessToken] =
-          encryptedCredentials.accessToken;
-        rawCredentials[SHARED_ZCODE_CREDENTIAL_KEYS.zcodeJwtToken] = encryptedCredentials.jwtToken;
-        rawCredentials[SHARED_ZCODE_CREDENTIAL_KEYS.zaiUserInfo] = encryptedCredentials.userInfo;
-      });
-    },
   };
 }
 
@@ -256,6 +246,10 @@ export function loadSharedZCodeCredentialSync(
   key: string,
   options: SharedZCodeCredentialStoreOptions = {},
 ): string | undefined {
+  const validatedKey = validateCredentialKey(key);
+  if (isLegacyProductOauthCredentialKey(validatedKey)) {
+    return undefined;
+  }
   const filePath = resolveSharedZCodeCredentialsPath(options);
   if (!existsSync(filePath)) {
     return undefined;
@@ -265,7 +259,7 @@ export function loadSharedZCodeCredentialSync(
     const raw = readFileSync(filePath, "utf-8");
     const parsed = JSON.parse(raw);
     const record = parseCredentialRecord(parsed);
-    const rawValue = record[validateCredentialKey(key)];
+    const rawValue = record[validatedKey];
     if (rawValue === undefined) {
       return undefined;
     }
