@@ -1,16 +1,12 @@
 import {
   MODEL_GATEWAY_GRANT_LIFETIME_MS,
-  MODEL_GATEWAY_TURN_LEASE_MAX_MS,
   MODEL_GATEWAY_TURN_LEASE_RENEW_INTERVAL_MS,
   TargetModelGateway,
-  type TargetModelGatewayOptions,
   type TargetModelGatewayPort,
 } from "@zcode/services/model-gateway";
 
 export const CODEX_GRANT_LIFETIME_MS = MODEL_GATEWAY_GRANT_LIFETIME_MS;
-export const CODEX_TURN_LEASE_MAX_MS = MODEL_GATEWAY_TURN_LEASE_MAX_MS;
 export const CODEX_TURN_LEASE_RENEW_INTERVAL_MS = MODEL_GATEWAY_TURN_LEASE_RENEW_INTERVAL_MS;
-export type CodexTargetGatewayOptions = TargetModelGatewayOptions;
 
 /** Backward-compatible name for the per-adapter default while a shared owner is absent. */
 export class CodexTargetGateway extends TargetModelGateway {}
