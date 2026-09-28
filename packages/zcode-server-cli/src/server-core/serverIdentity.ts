@@ -10,5 +10,5 @@ export async function resolveCoreServerId(
 ): Promise<string | undefined> {
   if (!serverRoot) return undefined;
   const ownership = await validateServerInstallOwnership(resolveServerLayout(serverRoot));
-  return ownership.installationId;
+  return ownership.targetId ?? ownership.installationId;
 }

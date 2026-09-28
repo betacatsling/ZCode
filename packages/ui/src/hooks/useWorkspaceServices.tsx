@@ -1,9 +1,11 @@
 import type { IServiceAccessor } from "@zcode/services";
 import { Event, ProxyChannel, type IChannel } from "@zcode/rpc";
+import { stripRemoteTargetSecrets, type RemoteTarget } from "@zcode/shared";
 import { useMemo } from "react";
 import { useOptionalServices, useServices } from "@/hooks/useServices.js";
 import {
   useRemoteWorkspaceSessionStore,
+  type RegisteredRemoteWorkspaceSession,
   type RemoteWorkspaceSession,
 } from "@/store/remoteWorkspaceSessionStore.js";
 import { useResolvedRemoteWorkspaceSessionId } from "@/hooks/useResolvedRemoteWorkspaceSessionId.js";
@@ -12,6 +14,7 @@ import { isWorkspaceTab } from "@/store/tabStore.js";
 import { REMOTE_WORKSPACE_DISCONNECTED_ERROR_CODE } from "@/lib/remoteWorkspaceServiceError.js";
 
 let disconnectedRemoteServices: IServiceAccessor | null = null;
+let fallbackBaseServices: IServiceAccessor | null = null;
 
 interface WorkspaceServiceTargetTab {
   workspacePath: string;
@@ -133,6 +136,71 @@ export function useBaseWorkspaceServices(): IServiceAccessor {
   // 这类跨 workspace 查询里的本地 shard 必须继续查本机 host。
   // 这里优先使用 renderer 启动时注册的根 services，避免远端连接污染本地任务列表。
   return resolveBaseWorkspaceServices(contextServices, registeredBaseServices);
+}
+
+export interface WorkspaceServiceAttachment {
+  readonly kind: "local" | "remote";
+  readonly services: IServiceAccessor;
+  readonly remoteSessionId: string | null;
+  readonly attachmentGeneration: number;
+  readonly remoteTarget?: RemoteTarget;
+}
+
+/** Current service attachments only; this list never defines Project Catalog membership. */
+export function useWorkspaceServiceAttachments(): readonly WorkspaceServiceAttachment[] {
+  const baseServices = useBaseWorkspaceServices();
+  const sessionsById = useRemoteWorkspaceSessionStore((state) => state.sessionsById);
+  const baseAttachmentGeneration = useRemoteWorkspaceSessionStore(
+    (state) => state.baseAttachmentGeneration,
+  );
+  if (!useRemoteWorkspaceSessionStore.getState().baseServices) {
+    // Root registers the profile owner in an effect. Keep the first context-only render current
+    // until that registration commits, so an async sidebar read does not become permanently stale.
+    fallbackBaseServices = baseServices;
+  }
+  return useMemo(
+    () => [
+      {
+        kind: "local" as const,
+        services: baseServices,
+        remoteSessionId: null,
+        attachmentGeneration: baseAttachmentGeneration,
+      },
+      ...Object.values(sessionsById).map((session) => ({
+        kind: "remote" as const,
+        services: session.services,
+        remoteSessionId: session.sessionId,
+        attachmentGeneration: session.attachmentGeneration,
+        ...(session.target ? { remoteTarget: stripRemoteTargetSecrets(session.target) } : {}),
+      })),
+    ],
+    [baseAttachmentGeneration, baseServices, sessionsById],
+  );
+}
+
+export function isWorkspaceServiceAttachmentCurrent(
+  attachment: WorkspaceServiceAttachment,
+): boolean {
+  const state = useRemoteWorkspaceSessionStore.getState();
+  if (attachment.kind === "local") {
+    if (!state.baseServices) {
+      return attachment.attachmentGeneration === 0 && fallbackBaseServices === attachment.services;
+    }
+    return (
+      state.baseServices === attachment.services &&
+      state.baseAttachmentGeneration === attachment.attachmentGeneration
+    );
+  }
+  const remote = attachment.remoteSessionId
+    ? (state.sessionsById[attachment.remoteSessionId] as
+        | RegisteredRemoteWorkspaceSession
+        | undefined)
+    : undefined;
+  return Boolean(
+    remote &&
+    remote.services === attachment.services &&
+    remote.attachmentGeneration === attachment.attachmentGeneration,
+  );
 }
 
 export function useOptionalBaseWorkspaceServices(): IServiceAccessor | null {

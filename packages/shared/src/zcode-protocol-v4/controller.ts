@@ -17,7 +17,7 @@ export type WindowHostControllerTopic = z.infer<typeof windowHostControllerTopic
 export const windowHostTaskAddressSchema = z
   .object({
     remoteSessionId: z.string().trim().min(1).optional(),
-    workspacePath: z.string().trim().min(1),
+    workspacePath: z.string().min(1).max(4096),
     workspaceIdentity: z.string().trim().min(1).optional(),
     taskId: z.string().trim().min(1),
   })
@@ -36,7 +36,7 @@ export type WindowHostTaskAddress = z.infer<typeof windowHostTaskAddressSchema>;
 export const windowHostControllerWorkspaceFactSchema = z
   .object({
     remoteSessionId: z.string().trim().min(1).optional(),
-    workspacePath: z.string().trim().min(1),
+    workspacePath: z.string().min(1).max(4096),
     workspaceIdentity: z.string().trim().min(1).optional(),
     sourceAvailability: z.enum(["online", "offline"]),
     connectionState: z.enum([
@@ -171,7 +171,7 @@ export const windowHostControllerWorkspaceDeltaSchema = z.discriminatedUnion("op
     .object({
       op: z.literal("workspace.removed"),
       remoteSessionId: z.string().trim().min(1).optional(),
-      workspacePath: z.string().trim().min(1),
+      workspacePath: z.string().min(1).max(4096),
       workspaceIdentity: z.string().trim().min(1).optional(),
     })
     .strict(),

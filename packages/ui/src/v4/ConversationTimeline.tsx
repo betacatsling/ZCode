@@ -914,6 +914,10 @@ function ConversationTimelineImpl({
   const syncTurnNavigatorViewport = useCallback(
     (element: HTMLDivElement) => {
       syncMessageLayerMask(element);
+      // Bug 原因：空会话没有 query anchor，却仍在每次吸底 layout commit 中提交 viewport；
+      // 远端首帧尚未到达时其高度会随宿主布局变化，触发连续 layout state 更新。没有导航目标时
+      // 只需维护消息遮罩，不应更新 turn navigator 的派生视口。
+      if (turnNavigatorQueryRowIdsRef.current.size === 0) return;
       const viewportRect = element.getBoundingClientRect();
       const queryPositions: ConversationTurnNavigatorQueryPosition[] = [];
       for (const rowElement of element.querySelectorAll<HTMLElement>("[data-row-id]")) {
@@ -1622,6 +1626,9 @@ function ConversationTimelineImpl({
   // 若同帧有用户向上滚动，capture handler 会先登记 awayFromBottom，本 effect 必须让位。
   useLayoutEffect(() => {
     const element = scrollRef.current;
+    // Bug 原因：冷会话首个 subscribe ACK 可能先于完整 snapshot；空窗口没有可锚定的内容，
+    // 仍运行贴底/scroll observer 会反复测量空视口并同步派生状态。等出现首行或 Host 总数后再锚定。
+    if (rows.length === 0 && totalCount === 0) return;
     markLayoutScrollGuard();
     if (element) {
       const following = reconcileFollowingForContentAnchor({

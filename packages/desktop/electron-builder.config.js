@@ -569,6 +569,12 @@ export default {
     }
   },
   extraResources: [
+    {
+      // 持久 target 只从 app bundle 复制到用户数据目录一次；Core/worker 后续不引用会被 app update 覆盖的文件。
+      from: "resources/persistent-target",
+      to: "persistent-target",
+      filter: ["**/*"],
+    },
     { from: resolve(workspaceRoot, noticesFileName), to: noticesFileName },
     ...(targetPlatform.os === "darwin"
       ? [

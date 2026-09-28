@@ -10,6 +10,10 @@ import type {
   TaskRunLeaseTarget,
   TaskStreamMirrorPublishOp,
   TaskStreamMirrorTarget,
+  WorkspaceAdmissionActivityFact,
+  WorkspaceAdmissionActivityQuery,
+  WorkspaceAdmissionActivityRequest,
+  WorkspaceAdmissionActivityResult,
 } from "@zcode/shared";
 
 export interface SessionRealtimePort {
@@ -41,5 +45,12 @@ export interface SessionRealtimePort {
     dispose(): void;
   };
   publishOwnerCommandResult(result: TaskOwnerCommandResult): void;
+  queryWorkspaceAdmissionActivity(
+    request: Omit<WorkspaceAdmissionActivityRequest, "requestId">,
+  ): Promise<WorkspaceAdmissionActivityFact>;
+  onDidReceiveWorkspaceAdmissionActivityQuery(
+    listener: (query: WorkspaceAdmissionActivityQuery) => void,
+  ): { dispose(): void };
+  respondWorkspaceAdmissionActivityQuery(result: WorkspaceAdmissionActivityResult): void;
   dispose(): void;
 }

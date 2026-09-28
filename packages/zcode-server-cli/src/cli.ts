@@ -16,7 +16,10 @@ import {
   resolveServerLayout,
   validateUninstallTarget,
 } from "./runtime/paths.js";
-import { validateServerInstallOwnership } from "./runtime/installationOwnership.js";
+import {
+  ensureServerInstallOwnership,
+  validateServerInstallOwnership,
+} from "./runtime/installationOwnership.js";
 import { createReleaseAgentWiring, type BundledAgentWiring } from "./runtime/agentWiring.js";
 import { writeStableLauncher } from "./runtime/stableLauncher.js";
 import { runUpdateCommand } from "./runtime/updateCommand.js";
@@ -81,6 +84,9 @@ export async function runServerCli(
   try {
     const parsed = parseServerCliArguments(argv);
     const command = parsed.argv[0];
+    if (parsed.targetId && command !== "serve") {
+      throw new Error("--target-id is supported only by serve");
+    }
     if (!command) {
       return await (io.legacyDelegate?.(parsed.argv) ?? delegateLegacyCli(parsed.argv, io));
     }
@@ -91,7 +97,14 @@ export async function runServerCli(
       : parsed.layout;
     switch (command) {
       case "serve":
-        return await runServe(parsed.argv.slice(1), io, json, layout, runtimeOptions);
+        return await runServe(
+          parsed.argv.slice(1),
+          io,
+          json,
+          layout,
+          runtimeOptions,
+          parsed.targetId,
+        );
       case "status":
       case "stop":
       case "restart":
@@ -116,21 +129,45 @@ export async function runServerCli(
 function parseServerCliArguments(argv: readonly string[]): {
   argv: readonly string[];
   layout: ReturnType<typeof resolveServerLayout>;
+  targetId?: string;
 } {
   const rootOptionIndexes = argv.flatMap((value, index) =>
     value === "--server-root" ? [index] : [],
   );
   if (rootOptionIndexes.length > 1) throw new Error("--server-root may only be specified once");
   const rootOptionIndex = rootOptionIndexes[0];
-  if (rootOptionIndex === undefined) return { argv, layout: resolveServerLayout() };
-  const serverRoot = argv[rootOptionIndex + 1];
-  if (!serverRoot) throw new Error("--server-root requires an absolute path");
-  if (!isAbsolute(serverRoot)) throw new Error("--server-root must be an absolute path");
+  const targetOptionIndexes = argv.flatMap((value, index) =>
+    value === "--target-id" ? [index] : [],
+  );
+  if (targetOptionIndexes.length > 1) throw new Error("--target-id may only be specified once");
+  const targetOptionIndex = targetOptionIndexes[0];
+  const targetId = targetOptionIndex === undefined ? undefined : argv[targetOptionIndex + 1];
+  if (targetOptionIndex !== undefined && !targetId) {
+    throw new Error("--target-id requires a non-empty value");
+  }
+  if (targetId && (targetId.length > 256 || targetId.trim() !== targetId)) {
+    throw new Error("--target-id must be a trimmed value of at most 256 characters");
+  }
+  const serverRoot = rootOptionIndex === undefined ? undefined : argv[rootOptionIndex + 1];
+  if (rootOptionIndex !== undefined && !serverRoot) {
+    throw new Error("--server-root requires an absolute path");
+  }
+  if (serverRoot && !isAbsolute(serverRoot)) {
+    throw new Error("--server-root must be an absolute path");
+  }
+  const removedIndexes = new Set<number>();
+  if (rootOptionIndex !== undefined) {
+    removedIndexes.add(rootOptionIndex);
+    removedIndexes.add(rootOptionIndex + 1);
+  }
+  if (targetOptionIndex !== undefined) {
+    removedIndexes.add(targetOptionIndex);
+    removedIndexes.add(targetOptionIndex + 1);
+  }
   return {
-    argv: argv.filter(
-      (_value, index) => index !== rootOptionIndex && index !== rootOptionIndex + 1,
-    ),
+    argv: argv.filter((_value, index) => !removedIndexes.has(index)),
     layout: resolveServerLayout(serverRoot),
+    ...(targetId ? { targetId } : {}),
   };
 }
 
@@ -140,7 +177,9 @@ async function runServe(
   json: boolean,
   layout: ReturnType<typeof resolveServerLayout>,
   runtimeOptions: ServerCliRuntimeOptions,
+  targetId?: string,
 ): Promise<number> {
+  if (targetId) await bindRequestedTargetIdentity(layout, targetId);
   const daemonRequested = args.includes("--daemon");
   const supervisorProcess = args.includes("--supervisor");
   if (shouldRegisterService(daemonRequested, supervisorProcess)) {
@@ -184,6 +223,10 @@ async function runServe(
       await writeStableLauncher(layout, platform, {
         command: process.execPath,
         entry: process.argv[1] ?? fileURLToPath(import.meta.url),
+        environment:
+          process.env.ZCODE_MULTI_HARNESS_ENABLED === "1"
+            ? { ZCODE_MULTI_HARNESS_ENABLED: "1" }
+            : {},
       });
       const descriptor = createDaemonServiceDescriptor({ platform, layout });
       await mkdir(layout.serviceDir, { recursive: true, mode: 0o700 });
@@ -304,6 +347,30 @@ async function runServe(
     }
   });
   return 0;
+}
+
+async function bindRequestedTargetIdentity(
+  layout: ReturnType<typeof resolveServerLayout>,
+  targetId: string,
+): Promise<void> {
+  const lock = new DataRootLock(layout.lockFile);
+  const inspection = await lock.inspect();
+  if (inspection.state === "active") {
+    const ownership = await validateServerInstallOwnership(layout);
+    if (ownership.targetId !== targetId) {
+      throw new Error("Cannot bind a different target identity while Server Core is running");
+    }
+    return;
+  }
+  if (inspection.state === "invalid" || inspection.state === "unreadable") {
+    throw new Error("Cannot verify Server Core lock before binding target identity");
+  }
+  await lock.acquire();
+  try {
+    await ensureServerInstallOwnership(layout, targetId);
+  } finally {
+    await lock.release();
+  }
 }
 
 // apply-update 服务端最坏路径包含旧 Core 停止、新 Core ready 等待、新 Core 回滚停止、

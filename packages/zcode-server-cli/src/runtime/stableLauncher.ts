@@ -7,6 +7,7 @@ import type { ServerLayout } from "./paths.js";
 interface StableLauncherBootstrap {
   command: string;
   entry: string;
+  environment?: Readonly<Record<string, string>>;
 }
 
 function quoteShell(value: string): string {
@@ -14,10 +15,14 @@ function quoteShell(value: string): string {
 }
 
 function stablePosixLauncher(bootstrap?: StableLauncherBootstrap): string {
+  const exportedEnvironment = Object.entries(bootstrap?.environment ?? {})
+    .map(([key, value]) => `export ${key}=${quoteShell(value)}`)
+    .join("\n");
   const fallback = bootstrap
     ? `exec ${quoteShell(bootstrap.command)} ${quoteShell(bootstrap.entry)} "$@"`
     : 'echo "No current ZCode Server release" >&2; exit 1';
   return `#!/bin/sh
+${exportedEnvironment}
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 RELEASE_DIR=$(sed -n 's/.*"releaseDir"[[:space:]]*:[[:space:]]*"\\([^"\\]*\\)".*/\\1/p' "$ROOT/current.json")
 if [ -n "$RELEASE_DIR" ]; then
@@ -36,10 +41,14 @@ function quoteBatch(value: string): string {
 }
 
 function stableWindowsLauncher(bootstrap?: StableLauncherBootstrap): string {
+  const exportedEnvironment = Object.entries(bootstrap?.environment ?? {})
+    .map(([key, value]) => `set "${key}=${value.replaceAll('"', '""')}"\r`)
+    .join("");
   const fallback = bootstrap
     ? `${quoteBatch(bootstrap.command)} ${quoteBatch(bootstrap.entry)} %*\r\n`
     : "echo No current ZCode Server release 1>&2\r\nexit /b 1\r\n";
   return `@echo off\r
+${exportedEnvironment}\r
 set "ROOT=%~dp0.."\r
 set "ZCODE_SERVER_ROOT=%ROOT%"\r
 powershell -NoProfile -NonInteractive -Command "$root=[IO.Path]::GetFullPath($env:ZCODE_SERVER_ROOT); $current=Join-Path $root 'current.json'; if (Test-Path -LiteralPath $current) { $j=Get-Content -Raw -LiteralPath $current ^| ConvertFrom-Json; if ($j.releaseDir) { $release=[IO.Path]::GetFullPath([string]$j.releaseDir); $releases=[IO.Path]::GetFullPath((Join-Path $root 'releases')); if (-not $release.StartsWith($releases + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { exit 1 } } }"\r

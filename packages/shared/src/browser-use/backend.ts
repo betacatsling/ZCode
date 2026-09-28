@@ -52,8 +52,8 @@ export type BrowserSessionContextKind = z.infer<typeof browserSessionContextKind
 export const browserDiscoveryContextSchema = z
   .object({
     requestId: z.string().trim().min(1),
-    workspaceKey: z.string().trim().min(1),
-    workspacePath: z.string().trim().min(1),
+    workspaceKey: z.string().min(1).max(4096),
+    workspacePath: z.string().min(1).max(4096),
     workspaceIdentity: z.string().trim().min(1).optional(),
     remoteSessionId: z.string().trim().min(1).optional(),
     sessionId: z.string().trim().min(1),

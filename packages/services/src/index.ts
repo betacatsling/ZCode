@@ -1,6 +1,13 @@
 // Descriptors & collection (browser-safe)
 export { type ServiceDescriptor, createServiceDescriptor } from "./descriptors.js";
 export { ServiceCollection } from "./collection.js";
+export { IAgentHostService } from "./agent-host/serviceContract.js";
+export type {
+  AgentHostActivityIndex,
+  AgentHostActivityIndexEntry,
+  AgentHostActivityState,
+} from "./agent-host/serviceContract.js";
+export { projectSidebarSnapshot } from "./agent-ui-projection/sidebarProjector.js";
 export {
   IModelSelectionService,
   IProviderSettingsService,
@@ -80,6 +87,14 @@ export { IBroadcastService } from "./broadcast/broadcast.js";
 
 // Onboarding 完成记录服务（本地持久化，后续上传服务器）
 export { IOnboardingRecordService } from "./onboarding/onboardingRecord.js";
+export {
+  IProjectCatalogService,
+  IWorktreeService,
+  ISessionHierarchyService,
+  getProjectWorkspaceWriteExclusions,
+  type IProjectCatalogService as ProjectCatalogService,
+  type IWorktreeService as WorktreeService,
+} from "./projectWorkspaceServices.js";
 export type {
   CreateOnboardingRecordServiceOptions,
   OnboardingRecordServiceFactory,

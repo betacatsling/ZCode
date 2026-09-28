@@ -44,6 +44,7 @@ import { ConversationTelemetryPaneAttachment } from "@/v4/telemetry/Conversation
 
 export interface V4ConversationContextValue {
   layer: SessionDataLayer;
+  ownerKind: "native-v4" | "agent-host";
   sendCommand(envelope: CommandEnvelope): Promise<CommandAck>;
   fileChanges(params: V4ConversationFileChangesParams): Promise<V4ConversationFileChangesResult>;
   fileRewindPreview(
@@ -101,6 +102,45 @@ export interface V4ConversationContextValue {
 // 装配 value 后直接 Provider 注入，不经 V4ConversationProvider 的 workspace 解析链路。
 export const V4ConversationContext = createContext<V4ConversationContextValue | null>(null);
 
+export function createV4ConversationContextValue(
+  transport: ConversationTransport,
+  layer: SessionDataLayer,
+  ownerKind: V4ConversationContextValue["ownerKind"],
+): V4ConversationContextValue {
+  return {
+    layer,
+    ownerKind,
+    sendCommand: (envelope: CommandEnvelope) => transport.sendCommand(envelope),
+    fileChanges: (params: V4ConversationFileChangesParams) => transport.fileChanges(params),
+    fileRewindPreview: (params: V4ConversationFileRewindPreviewParams) =>
+      transport.fileRewindPreview(params),
+    workflowRunEvents: (params: V4ConversationWorkflowRunEventsParams) =>
+      transport.workflowRunEvents(params),
+    workflowRunArtifacts: (params: V4ConversationWorkflowRunArtifactsParams) =>
+      transport.workflowRunArtifacts(params),
+    workflowRunArtifactData: (params: V4ConversationWorkflowRunArtifactDataParams) =>
+      transport.workflowRunArtifactData(params),
+    workflowRunArtifactRead: (params: V4ConversationWorkflowRunArtifactReadParams) =>
+      transport.workflowRunArtifactRead(params),
+    workflowRunWorkspace: (params: V4ConversationWorkflowRunWorkspaceParams) =>
+      transport.workflowRunWorkspace(params),
+    workflowRunNodeResult: (params: V4ConversationWorkflowRunNodeResultParams) =>
+      transport.workflowRunNodeResult(params),
+    workflowRuns: (params: V4ConversationWorkflowRunsParams) => transport.workflowRuns(params),
+    attachmentPut: (params: V4AttachmentPutParams, options?: AttachmentUploadOptions) =>
+      transport.attachmentPut(params, options),
+    attachmentRead: (params) => transport.attachmentRead(params),
+    attachmentReadRange: (params) => transport.attachmentReadRange(params),
+    onRuntimeRestart: (listener: () => void) => transport.onRuntimeRestart(listener),
+    ...(transport.onRuntimeLifecycle
+      ? {
+          onRuntimeLifecycle: (listener: (state: "available" | "unavailable") => void) =>
+            transport.onRuntimeLifecycle?.(listener) ?? (() => {}),
+        }
+      : {}),
+  };
+}
+
 interface V4ConversationProviderProps {
   workspacePath: string;
   workspaceIdentity?: string;
@@ -130,37 +170,7 @@ function ReadyV4ConversationProvider({
         : {}),
     });
     const layer = new SessionDataLayer({ transport });
-    return {
-      layer,
-      sendCommand: (envelope: CommandEnvelope) => transport.sendCommand(envelope),
-      fileChanges: (params: V4ConversationFileChangesParams) => transport.fileChanges(params),
-      fileRewindPreview: (params: V4ConversationFileRewindPreviewParams) =>
-        transport.fileRewindPreview(params),
-      workflowRunEvents: (params: V4ConversationWorkflowRunEventsParams) =>
-        transport.workflowRunEvents(params),
-      workflowRunArtifacts: (params: V4ConversationWorkflowRunArtifactsParams) =>
-        transport.workflowRunArtifacts(params),
-      workflowRunArtifactData: (params: V4ConversationWorkflowRunArtifactDataParams) =>
-        transport.workflowRunArtifactData(params),
-      workflowRunArtifactRead: (params: V4ConversationWorkflowRunArtifactReadParams) =>
-        transport.workflowRunArtifactRead(params),
-      workflowRunWorkspace: (params: V4ConversationWorkflowRunWorkspaceParams) =>
-        transport.workflowRunWorkspace(params),
-      workflowRunNodeResult: (params: V4ConversationWorkflowRunNodeResultParams) =>
-        transport.workflowRunNodeResult(params),
-      workflowRuns: (params: V4ConversationWorkflowRunsParams) => transport.workflowRuns(params),
-      attachmentPut: (params: V4AttachmentPutParams, options?: AttachmentUploadOptions) =>
-        transport.attachmentPut(params, options),
-      attachmentRead: (params) => transport.attachmentRead(params),
-      attachmentReadRange: (params) => transport.attachmentReadRange(params),
-      onRuntimeRestart: (listener: () => void) => transport.onRuntimeRestart(listener),
-      ...(transport.onRuntimeLifecycle
-        ? {
-            onRuntimeLifecycle: (listener: (state: "available" | "unavailable") => void) =>
-              transport.onRuntimeLifecycle?.(listener) ?? (() => {}),
-          }
-        : {}),
-    } satisfies V4ConversationContextValue;
+    return createV4ConversationContextValue(transport, layer, "native-v4");
   }, [
     platform.createLocalMediaPreviewUrl,
     remoteSessionId,
@@ -293,39 +303,7 @@ function ReadyV4PaneConversationProvider({
     );
     return {
       lease,
-      value: {
-        layer: lease.layer,
-        sendCommand: (envelope: CommandEnvelope) => lease.transport.sendCommand(envelope),
-        fileChanges: (params: V4ConversationFileChangesParams) =>
-          lease.transport.fileChanges(params),
-        fileRewindPreview: (params: V4ConversationFileRewindPreviewParams) =>
-          lease.transport.fileRewindPreview(params),
-        workflowRunEvents: (params: V4ConversationWorkflowRunEventsParams) =>
-          lease.transport.workflowRunEvents(params),
-        workflowRunArtifacts: (params: V4ConversationWorkflowRunArtifactsParams) =>
-          lease.transport.workflowRunArtifacts(params),
-        workflowRunArtifactData: (params: V4ConversationWorkflowRunArtifactDataParams) =>
-          lease.transport.workflowRunArtifactData(params),
-        workflowRunArtifactRead: (params: V4ConversationWorkflowRunArtifactReadParams) =>
-          lease.transport.workflowRunArtifactRead(params),
-        workflowRunWorkspace: (params: V4ConversationWorkflowRunWorkspaceParams) =>
-          lease.transport.workflowRunWorkspace(params),
-        workflowRunNodeResult: (params: V4ConversationWorkflowRunNodeResultParams) =>
-          lease.transport.workflowRunNodeResult(params),
-        workflowRuns: (params: V4ConversationWorkflowRunsParams) =>
-          lease.transport.workflowRuns(params),
-        attachmentPut: (params: V4AttachmentPutParams, options?: AttachmentUploadOptions) =>
-          lease.transport.attachmentPut(params, options),
-        attachmentRead: (params) => lease.transport.attachmentRead(params),
-        attachmentReadRange: (params) => lease.transport.attachmentReadRange(params),
-        onRuntimeRestart: (listener: () => void) => lease.transport.onRuntimeRestart(listener),
-        ...(lease.transport.onRuntimeLifecycle
-          ? {
-              onRuntimeLifecycle: (listener: (state: "available" | "unavailable") => void) =>
-                lease.transport.onRuntimeLifecycle?.(listener) ?? (() => {}),
-            }
-          : {}),
-      } satisfies V4ConversationContextValue,
+      value: createV4ConversationContextValue(lease.transport, lease.layer, "native-v4"),
     };
   }, [
     agentService,

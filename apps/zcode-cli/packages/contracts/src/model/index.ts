@@ -317,7 +317,7 @@ export function createModelId(modelId: string): ModelId {
   return normalized as ModelId;
 }
 
-export type ModelMessageRole = "system" | "user" | "assistant" | "tool";
+export type ModelMessageRole = "system" | "developer" | "user" | "assistant" | "tool";
 
 export interface ModelToolCall {
   id: string;
@@ -715,6 +715,8 @@ export interface ModelTextResult {
 export type ModelStreamEvent =
   | {
       type: "start";
+      /** Provider-reported usage available before the first content event, when supported. */
+      usage?: ModelUsage;
     }
   | {
       /**

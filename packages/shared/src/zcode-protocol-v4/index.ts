@@ -40,6 +40,8 @@ export * from "./wire-fault.js";
 export * from "./sessions-index.js";
 export * from "./sessions-index-workflow-activity.js";
 export * from "./workspace-config.js";
+export * from "./workspace-admission.js";
+export * from "./managed-workspace-sessions.js";
 export * from "./command.js";
 export * from "./workflow-run-settings-command.js";
 export * from "./shared-context-ref.js";

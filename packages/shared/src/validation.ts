@@ -29,6 +29,10 @@ import {
   taskOwnerCommandDeliverySchema,
   taskOwnerCommandRequestSchema,
   taskOwnerCommandResultSchema,
+  workspaceAdmissionActivityQuerySchema,
+  workspaceAdmissionActivityQueryResultSchema,
+  workspaceAdmissionActivityRequestSchema,
+  workspaceAdmissionActivityResultSchema,
   taskRealtimeDeliveredEventSchema,
   taskRealtimeEventSchema,
   taskRealtimeHostDeliveryKindSchema,
@@ -60,6 +64,9 @@ export function formatZodError(error: z.ZodError): string {
 }
 
 export const nonEmptyStringSchema = z.string().trim().min(1);
+// 修复依据：workspacePath 与 path-fallback workspaceKey 是 filesystem identity，不可 trim 改变目录。
+export const workspaceFilesystemPathSchema = z.string().min(1).max(4096);
+export const workspaceIdentityKeySchema = z.string().min(1).max(4096);
 export const stringArraySchema = z.array(z.string());
 export const credentialRecordSchema = z.record(z.string(), z.string());
 export const credentialKeySchema = nonEmptyStringSchema;
@@ -173,7 +180,7 @@ export const remoteAssetDirsSchema = z.object({
 });
 
 const hostAgentWarmupTargetSchema = z.object({
-  workspacePath: nonEmptyStringSchema,
+  workspacePath: workspaceFilesystemPathSchema,
   workspaceIdentity: nonEmptyStringSchema.optional(),
 });
 
@@ -184,10 +191,21 @@ export const hostInitLocalMessageSchema = z.object({
   deliveryKind: taskRealtimeHostDeliveryKindSchema.optional(),
   deviceMid: z.string().optional(),
   feedbackApiBase: z.string().url().optional(),
-  workspacePath: nonEmptyStringSchema.optional(),
+  workspacePath: workspaceFilesystemPathSchema.optional(),
   workspaceIdentity: nonEmptyStringSchema.optional(),
   agentWarmupTargets: z.array(hostAgentWarmupTargetSchema).max(3).optional(),
   agentSpawnFallbackCwd: nonEmptyStringSchema.optional(),
+  persistentTarget: z
+    .object({
+      host: z.enum(["127.0.0.1", "::1", "localhost"]),
+      port: z.number().int().min(1).max(65535),
+      targetId: nonEmptyStringSchema,
+      runtimeArchives: z
+        .record(z.string().regex(/^(darwin|linux|win32)-(arm64|x64)$/u), nonEmptyStringSchema)
+        .default({}),
+    })
+    .strict()
+    .optional(),
   zcodeBuiltinProviderConfigFilePath: nonEmptyStringSchema,
   runtimeProcessEnvPatch: z
     .record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/), z.string())
@@ -198,7 +216,7 @@ export const windowHostRemoteWorkspaceDescriptorSchema = z
   .object({
     remoteSessionId: nonEmptyStringSchema,
     target: remoteTargetSchema,
-    workspacePath: nonEmptyStringSchema.optional(),
+    workspacePath: workspaceFilesystemPathSchema.optional(),
     workspaceIdentity: nonEmptyStringSchema.optional(),
     generation: z.number().int().positive(),
   })
@@ -213,7 +231,7 @@ export const windowHostAttachmentScopeSchema = z.discriminatedUnion("kind", [
     .object({
       kind: z.literal("remote"),
       remoteSessionId: nonEmptyStringSchema,
-      workspacePath: nonEmptyStringSchema,
+      workspacePath: workspaceFilesystemPathSchema,
       workspaceIdentity: nonEmptyStringSchema,
     })
     .strict(),
@@ -226,7 +244,7 @@ export const hostConnectRemoteWorkspaceMessageSchema = z
     requestId: nonEmptyStringSchema,
     target: remoteTargetSchema,
     remoteAssets: remoteAssetDirsSchema,
-    workspacePath: nonEmptyStringSchema.optional(),
+    workspacePath: workspaceFilesystemPathSchema.optional(),
     workspaceIdentity: nonEmptyStringSchema.optional(),
   })
   .strict();
@@ -243,7 +261,7 @@ export const hostBindRemoteWorkspaceContextMessageSchema = z
     type: z.literal("bind-remote-workspace-context"),
     requestId: nonEmptyStringSchema,
     remoteSessionId: nonEmptyStringSchema,
-    workspacePath: nonEmptyStringSchema,
+    workspacePath: workspaceFilesystemPathSchema,
     workspaceIdentity: nonEmptyStringSchema,
   })
   .strict();
@@ -322,6 +340,15 @@ export const hostTaskOwnerCommandResultMessageSchema = z.object({
   result: taskOwnerCommandResultSchema,
 });
 
+export const hostWorkspaceAdmissionActivityQueryMessageSchema = z.object({
+  type: z.literal("workspace-admission-activity-query"),
+  request: workspaceAdmissionActivityQuerySchema,
+});
+export const hostWorkspaceAdmissionActivityQueryResultMessageSchema = z.object({
+  type: z.literal("workspace-admission-activity-query-result"),
+  result: workspaceAdmissionActivityQueryResultSchema,
+});
+
 export const hostBotRemoteWorkspaceReconnectResultMessageSchema = z.object({
   type: z.literal("bot-remote-workspace-reconnect-result"),
   requestId: nonEmptyStringSchema,
@@ -364,6 +391,8 @@ export const sessionMessageDeliveryResultSchema = z.object({
 
 export const sessionRouteSchema = z.object({
   sessionId: nonEmptyStringSchema,
+  workspacePath: z.string().min(1).max(4096).optional(),
+  workspaceIdentity: nonEmptyStringSchema.optional(),
 });
 
 export const hostSessionMessageDeliverMessageSchema = z.object({
@@ -391,7 +420,7 @@ export const hostCronRunMessageSchema = z.object({
   type: z.literal("cron-run"),
   automationId: nonEmptyStringSchema,
   runId: nonEmptyStringSchema,
-  workspacePath: nonEmptyStringSchema,
+  workspacePath: workspaceFilesystemPathSchema,
   workspaceIdentity: z.string().optional(),
   prompt: nonEmptyStringSchema,
   targetTaskId: nonEmptyStringSchema.optional(),
@@ -405,7 +434,7 @@ export const hostCronRunMessageSchema = z.object({
 export const hostOffPeakRunMessageSchema = z.object({
   type: z.literal("off-peak-run"),
   offPeakTaskId: nonEmptyStringSchema,
-  workspacePath: nonEmptyStringSchema,
+  workspacePath: workspaceFilesystemPathSchema,
   workspaceIdentity: z.string().optional(),
   prompt: nonEmptyStringSchema,
   // 权限四档映射现有 ZCodeTaskMode；与 cron-run 的 mode 同样按宽松 string 传输
@@ -489,6 +518,8 @@ export const hostIncomingMessageSchema = z.discriminatedUnion("type", [
   hostTaskRunLeaseResultMessageSchema,
   hostTaskOwnerCommandDeliverMessageSchema,
   hostTaskOwnerCommandResultMessageSchema,
+  hostWorkspaceAdmissionActivityQueryMessageSchema,
+  hostWorkspaceAdmissionActivityQueryResultMessageSchema,
   hostBotRemoteWorkspaceReconnectResultMessageSchema,
   hostBotRemoteWorkspaceConnectionStatusResultMessageSchema,
   hostBotRemoteWorkspaceRuntimePortMessageSchema,
@@ -556,7 +587,7 @@ export const hostAgentProcessSpawnedResponseSchema = z.object({
   lane: nonEmptyStringSchema.optional(),
   pid: z.number().int().positive(),
   provider: zcodeProviderSchema,
-  workspacePath: nonEmptyStringSchema,
+  workspacePath: workspaceFilesystemPathSchema,
   command: z.string(),
   args: z.array(z.string()),
   startedAt: z.number().int().nonnegative(),
@@ -571,7 +602,7 @@ export const hostAgentProcessReadyResponseSchema = z.object({
   lane: nonEmptyStringSchema.optional(),
   pid: z.number().int().positive(),
   provider: zcodeProviderSchema,
-  workspacePath: nonEmptyStringSchema,
+  workspacePath: workspaceFilesystemPathSchema,
   readyAt: z.number().int().nonnegative(),
   startupDurationMs: z.number().int().nonnegative(),
   runtimeGeneration: z.number().int().positive(),
@@ -585,7 +616,7 @@ export const hostAgentProcessExitedResponseSchema = z.object({
   lane: nonEmptyStringSchema.optional(),
   pid: z.number().int().positive(),
   provider: zcodeProviderSchema,
-  workspacePath: nonEmptyStringSchema,
+  workspacePath: workspaceFilesystemPathSchema,
   exitCode: z.number().int().nullable(),
   signal: z.string().nullable(),
   endedAt: z.number().int().nonnegative(),
@@ -608,7 +639,7 @@ export const hostAgentProcessErrorResponseSchema = z.object({
   lane: nonEmptyStringSchema.optional(),
   pid: z.number().int().positive().nullable(),
   provider: zcodeProviderSchema,
-  workspacePath: nonEmptyStringSchema,
+  workspacePath: workspaceFilesystemPathSchema,
   command: z.string(),
   args: z.array(z.string()),
   errorName: nonEmptyStringSchema,
@@ -628,7 +659,7 @@ export const hostAgentProcessExceptionResponseSchema = z
     lane: nonEmptyStringSchema.optional(),
     pid: z.number().int().positive(),
     provider: zcodeProviderSchema,
-    workspacePath: nonEmptyStringSchema,
+    workspacePath: workspaceFilesystemPathSchema,
     runtimeGeneration: z.number().int().positive(),
     runtimeInstanceId: nonEmptyStringSchema,
     diagnostic: zcodeProcessDiagnosticSchema,
@@ -749,7 +780,7 @@ export const hostAgentRunningTaskCountChangedResponseSchema = z.object({
 
 export const hostWorkspaceRunningTaskCountChangedResponseSchema = z.object({
   type: z.literal("workspace-running-task-count-changed"),
-  workspacePath: nonEmptyStringSchema,
+  workspacePath: workspaceFilesystemPathSchema,
   workspaceIdentity: nonEmptyStringSchema.optional(),
   runningTaskCount: z.number().int().nonnegative(),
 });
@@ -760,7 +791,7 @@ export const hostCuaOperationStateResponseSchema = z
     active: z.boolean(),
     sessionId: nonEmptyStringSchema,
     turnId: nonEmptyStringSchema,
-    workspacePath: nonEmptyStringSchema,
+    workspacePath: workspaceFilesystemPathSchema,
     workspaceIdentity: nonEmptyStringSchema.optional(),
   })
   .strict();
@@ -816,10 +847,19 @@ export const hostTaskOwnerCommandResultResponseSchema = z.object({
   result: taskOwnerCommandResultSchema,
 });
 
+export const hostWorkspaceAdmissionActivityRequestResponseSchema = z.object({
+  type: z.literal("workspace-admission-activity-request"),
+  request: workspaceAdmissionActivityRequestSchema,
+});
+export const hostWorkspaceAdmissionActivityResultResponseSchema = z.object({
+  type: z.literal("workspace-admission-activity-result"),
+  result: workspaceAdmissionActivityResultSchema,
+});
+
 export const hostBotRemoteWorkspaceReconnectRequestResponseSchema = z.object({
   type: z.literal("bot-remote-workspace-reconnect-request"),
   requestId: nonEmptyStringSchema,
-  workspacePath: nonEmptyStringSchema,
+  workspacePath: workspaceFilesystemPathSchema,
   workspaceIdentity: nonEmptyStringSchema,
   target: remoteTargetSchema,
 });
@@ -827,7 +867,7 @@ export const hostBotRemoteWorkspaceReconnectRequestResponseSchema = z.object({
 export const hostBotRemoteWorkspaceConnectionStatusRequestResponseSchema = z.object({
   type: z.literal("bot-remote-workspace-connection-status-request"),
   requestId: nonEmptyStringSchema,
-  workspacePath: nonEmptyStringSchema,
+  workspacePath: workspaceFilesystemPathSchema,
   workspaceIdentity: nonEmptyStringSchema,
   target: remoteTargetSchema,
 });
@@ -835,7 +875,7 @@ export const hostBotRemoteWorkspaceConnectionStatusRequestResponseSchema = z.obj
 export const hostBotRemoteWorkspaceRuntimePortRequestResponseSchema = z.object({
   type: z.literal("bot-remote-workspace-runtime-port-request"),
   requestId: nonEmptyStringSchema,
-  workspacePath: nonEmptyStringSchema,
+  workspacePath: workspaceFilesystemPathSchema,
   workspaceIdentity: nonEmptyStringSchema,
   target: remoteTargetSchema,
 });
@@ -904,8 +944,8 @@ export const hostBrowserExecuteRequestResponseSchema = z.object({
   browserGeneration: z.number().int().nonnegative().optional(),
   sessionId: nonEmptyStringSchema,
   turnId: nonEmptyStringSchema.optional(),
-  workspaceKey: nonEmptyStringSchema.optional(),
-  workspacePath: nonEmptyStringSchema.optional(),
+  workspaceKey: workspaceIdentityKeySchema.optional(),
+  workspacePath: workspaceFilesystemPathSchema.optional(),
   workspaceIdentity: nonEmptyStringSchema.optional(),
   remoteSessionId: nonEmptyStringSchema.optional(),
   clientMode: z.enum(["desktop-continuous", "web-remote-replayable"]).optional(),
@@ -1016,6 +1056,8 @@ export const hostResponseMessageSchema = z.discriminatedUnion("type", [
   hostTaskRunLeaseReleaseResponseSchema,
   hostTaskOwnerCommandRequestResponseSchema,
   hostTaskOwnerCommandResultResponseSchema,
+  hostWorkspaceAdmissionActivityRequestResponseSchema,
+  hostWorkspaceAdmissionActivityResultResponseSchema,
   hostBotRemoteWorkspaceReconnectRequestResponseSchema,
   hostBotRemoteWorkspaceConnectionStatusRequestResponseSchema,
   hostBotRemoteWorkspaceRuntimePortRequestResponseSchema,
@@ -1207,7 +1249,7 @@ export const zcodeTaskMetaSchema = z.object({
   traceId: nonEmptyStringSchema,
   title: z.string(),
   titleOverridden: z.boolean().optional(),
-  workspacePath: nonEmptyStringSchema,
+  workspacePath: workspaceFilesystemPathSchema,
   workspaceIdentity: nonEmptyStringSchema.optional(),
   workspacePurpose: z.enum(["project", "conversation"]).optional(),
   createdAt: z.number().int().nonnegative(),

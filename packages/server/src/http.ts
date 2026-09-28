@@ -18,6 +18,8 @@ import {
 import {
   ServiceCollection,
   IZCodeAgentService,
+  IAgentHostService,
+  getProjectWorkspaceWriteExclusions,
   createZCodeAgentConnectionScope,
   IFileService,
   IGitService,
@@ -117,7 +119,11 @@ function setupChannelServer(
       },
     });
   }
-  services.exposeOnChannelServer(server, overrides);
+  services.exposeOnChannelServer(
+    server,
+    overrides,
+    new Set([IAgentHostService.channelName, ...getProjectWorkspaceWriteExclusions(clientMode)]),
+  );
   socket.onClose(() => {
     void connectionScope?.dispose();
     rawServer.dispose();

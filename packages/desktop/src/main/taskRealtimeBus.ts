@@ -14,6 +14,10 @@ import {
   type TaskStreamMirrorOp,
   type TaskStreamMirrorPublishOp,
   type TaskStreamWatermark,
+  type WorkspaceAdmissionActivityFact,
+  type WorkspaceAdmissionActivityRequest,
+  type WorkspaceAdmissionActivityQuery,
+  type WorkspaceAdmissionActivityResult,
   formatZodError,
   HostMessageTypes,
   HostResponseTypes,
@@ -109,6 +113,16 @@ interface PendingSessionMessageDelivery {
   timeout: ReturnType<typeof setTimeout>;
 }
 
+interface PendingWorkspaceAdmissionActivityQuery {
+  internalRequestId: string;
+  requesterHostId: string;
+  responseRequestId: string;
+  ownerHostIds: Set<string>;
+  requiredOwnerHostIds: Set<string>;
+  factsByOwner: Map<string, WorkspaceAdmissionActivityFact>;
+  timeout: ReturnType<typeof setTimeout>;
+}
+
 interface TaskRealtimeBusLogger {
   info: (...args: unknown[]) => void;
   warn: (...args: unknown[]) => void;
@@ -128,7 +142,14 @@ export class TaskRealtimeBus {
   private readonly leases = new Map<string, TaskRunLease>();
   private readonly streamBatches = new Map<string, PendingStreamBatch>();
   private readonly pendingOwnerCommands = new Map<string, PendingOwnerCommandRoute>();
-  private readonly sessionRoutes = new Map<string, string>();
+  private readonly sessionRoutes = new Map<
+    string,
+    { hostId: string; workspacePath?: string; workspaceIdentity?: string }
+  >();
+  private readonly pendingWorkspaceAdmissionQueries = new Map<
+    string,
+    PendingWorkspaceAdmissionActivityQuery
+  >();
   private readonly pendingSessionMessageDeliveries = new Map<
     string,
     PendingSessionMessageDelivery
@@ -193,6 +214,7 @@ export class TaskRealtimeBus {
     registered.child.off?.("exit", registered.onExit);
     this.hosts.delete(hostId);
     this.failPendingOwnerCommandsForHost(hostId, "Owner command host exited.");
+    this.failWorkspaceAdmissionQueriesForHost(hostId);
     this.unregisterSessionRoutesForHost(hostId);
     this.failPendingSessionMessagesForHost(hostId, "Session message host exited.");
     const releasedLeases = this.releaseLeasesForHost(hostId);
@@ -265,6 +287,12 @@ export class TaskRealtimeBus {
       case HostResponseTypes.TaskOwnerCommandResult:
         this.handleOwnerCommandResult(origin, parsed.data.result);
         break;
+      case HostResponseTypes.WorkspaceAdmissionActivityRequest:
+        this.handleWorkspaceAdmissionActivityRequest(origin, parsed.data.request);
+        break;
+      case HostResponseTypes.WorkspaceAdmissionActivityResult:
+        this.handleWorkspaceAdmissionActivityResult(origin, parsed.data.result);
+        break;
       case HostResponseTypes.SessionMessageSendRequested:
         this.handleSessionMessageSendRequested(origin, parsed.data.request);
         break;
@@ -283,9 +311,188 @@ export class TaskRealtimeBus {
     origin: RegisteredRealtimeHost,
     route: {
       sessionId: string;
+      workspacePath?: string;
+      workspaceIdentity?: string;
     },
   ): void {
-    this.sessionRoutes.set(route.sessionId, origin.hostId);
+    this.sessionRoutes.set(route.sessionId, {
+      hostId: origin.hostId,
+      ...(route.workspacePath ? { workspacePath: route.workspacePath } : {}),
+      ...(route.workspaceIdentity ? { workspaceIdentity: route.workspaceIdentity } : {}),
+    });
+  }
+
+  private handleWorkspaceAdmissionActivityRequest(
+    requester: RegisteredRealtimeHost,
+    request: WorkspaceAdmissionActivityRequest,
+  ): void {
+    const workspaceKey = request.workspaceIdentity?.trim() || request.workspacePath;
+    const unknown: WorkspaceAdmissionActivityFact = {
+      complete: false,
+      ownerPresent: false,
+      state: "unknown",
+      activeSessionCount: 0,
+      activeTurnCount: 0,
+      pendingCommandCount: 0,
+      pendingInputCount: 0,
+      pendingApprovalCount: 0,
+    };
+    if (workspaceKey !== request.workspaceKey) {
+      this.postWorkspaceAdmissionActivityQueryResult(requester.hostId, request.requestId, unknown);
+      return;
+    }
+
+    const ownerHostIds = new Set<string>();
+    const requiredOwnerHostIds = new Set<string>();
+    for (const host of this.hosts.values()) {
+      if (host.workspaceKeys.has(workspaceKey)) ownerHostIds.add(host.hostId);
+    }
+    for (const lease of this.leases.values()) {
+      if (
+        lease.workspacePath === request.workspacePath &&
+        (lease.workspaceIdentity?.trim() || lease.workspacePath) === workspaceKey
+      ) {
+        ownerHostIds.add(lease.ownerHostId);
+        requiredOwnerHostIds.add(lease.ownerHostId);
+      }
+    }
+    for (const route of this.sessionRoutes.values()) {
+      if (
+        route.workspacePath === request.workspacePath &&
+        (route.workspaceIdentity?.trim() || route.workspacePath) === workspaceKey
+      ) {
+        ownerHostIds.add(route.hostId);
+        requiredOwnerHostIds.add(route.hostId);
+      }
+    }
+    ownerHostIds.add(requester.hostId);
+    if (ownerHostIds.size === 0) {
+      this.postWorkspaceAdmissionActivityQueryResult(requester.hostId, request.requestId, unknown);
+      return;
+    }
+
+    const internalRequestId = `${requester.hostId}:${request.requestId}`;
+    const pending: PendingWorkspaceAdmissionActivityQuery = {
+      internalRequestId,
+      requesterHostId: requester.hostId,
+      responseRequestId: request.requestId,
+      ownerHostIds,
+      requiredOwnerHostIds,
+      factsByOwner: new Map(),
+      timeout: setTimeout(
+        () => this.finishWorkspaceAdmissionActivityQuery(pending, false),
+        OWNER_COMMAND_TIMEOUT_MS,
+      ),
+    };
+    this.pendingWorkspaceAdmissionQueries.set(internalRequestId, pending);
+    for (const ownerHostId of ownerHostIds) {
+      const owner = this.hosts.get(ownerHostId);
+      if (!owner) {
+        ownerHostIds.delete(ownerHostId);
+        pending.factsByOwner.set(ownerHostId, unknown);
+        continue;
+      }
+      const query: WorkspaceAdmissionActivityQuery = {
+        ...request,
+        requestId: internalRequestId,
+        requesterHostId: requester.hostId,
+        ...(requiredOwnerHostIds.size === 0 && ownerHostId === requester.hostId
+          ? { startIfMissing: true }
+          : {}),
+      };
+      owner.child.postMessage({
+        type: HostMessageTypes.WorkspaceAdmissionActivityQuery,
+        request: query,
+      });
+    }
+    if (ownerHostIds.size === 0) this.finishWorkspaceAdmissionActivityQuery(pending, true);
+  }
+
+  private handleWorkspaceAdmissionActivityResult(
+    owner: RegisteredRealtimeHost,
+    result: WorkspaceAdmissionActivityResult,
+  ): void {
+    const pending = this.pendingWorkspaceAdmissionQueries.get(result.requestId);
+    if (!pending || !pending.ownerHostIds.delete(owner.hostId)) return;
+    pending.factsByOwner.set(owner.hostId, result.fact);
+    if (pending.ownerHostIds.size === 0) this.finishWorkspaceAdmissionActivityQuery(pending, true);
+  }
+
+  private finishWorkspaceAdmissionActivityQuery(
+    pending: PendingWorkspaceAdmissionActivityQuery,
+    allOwnersResponded: boolean,
+  ): void {
+    if (this.pendingWorkspaceAdmissionQueries.get(pending.internalRequestId) !== pending) return;
+    clearTimeout(pending.timeout);
+    this.pendingWorkspaceAdmissionQueries.delete(pending.internalRequestId);
+    const facts = [...pending.factsByOwner.entries()];
+    const ownerFacts = facts.filter(([, fact]) => fact.ownerPresent).map(([, fact]) => fact);
+    const requiredOwnersPresent = [...pending.requiredOwnerHostIds].every((ownerHostId) => {
+      const fact = pending.factsByOwner.get(ownerHostId);
+      return fact?.ownerPresent === true && fact.complete;
+    });
+    const complete =
+      allOwnersResponded &&
+      ownerFacts.length > 0 &&
+      requiredOwnersPresent &&
+      ownerFacts.every((fact) => fact.complete);
+    const state =
+      !complete || ownerFacts.some((fact) => fact.state === "unknown")
+        ? "unknown"
+        : ownerFacts.some((fact) => fact.state === "busy")
+          ? "busy"
+          : "idle";
+    const sum = (
+      field:
+        | "activeSessionCount"
+        | "activeTurnCount"
+        | "pendingCommandCount"
+        | "pendingInputCount"
+        | "pendingApprovalCount",
+    ) => ownerFacts.reduce((total, fact) => total + fact[field], 0);
+    this.postWorkspaceAdmissionActivityQueryResult(
+      pending.requesterHostId,
+      pending.responseRequestId,
+      {
+        complete,
+        ownerPresent: ownerFacts.length > 0,
+        state,
+        activeSessionCount: sum("activeSessionCount"),
+        activeTurnCount: sum("activeTurnCount"),
+        pendingCommandCount: sum("pendingCommandCount"),
+        pendingInputCount: sum("pendingInputCount"),
+        pendingApprovalCount: sum("pendingApprovalCount"),
+      },
+    );
+  }
+
+  private postWorkspaceAdmissionActivityQueryResult(
+    hostId: string,
+    requestId: string,
+    fact: WorkspaceAdmissionActivityFact,
+  ): void {
+    this.hosts.get(hostId)?.child.postMessage({
+      type: HostMessageTypes.WorkspaceAdmissionActivityQueryResult,
+      result: { requestId, fact },
+    });
+  }
+
+  private failWorkspaceAdmissionQueriesForHost(hostId: string): void {
+    for (const pending of this.pendingWorkspaceAdmissionQueries.values()) {
+      if (!pending.ownerHostIds.delete(hostId)) continue;
+      pending.factsByOwner.set(hostId, {
+        complete: false,
+        ownerPresent: false,
+        state: "unknown",
+        activeSessionCount: 0,
+        activeTurnCount: 0,
+        pendingCommandCount: 0,
+        pendingInputCount: 0,
+        pendingApprovalCount: 0,
+      });
+      if (pending.ownerHostIds.size === 0)
+        this.finishWorkspaceAdmissionActivityQuery(pending, false);
+    }
   }
 
   private handleRealtimePublish(origin: RegisteredRealtimeHost, event: TaskRealtimeEvent): void {
@@ -933,7 +1140,7 @@ export class TaskRealtimeBus {
       return;
     }
 
-    const target = this.hosts.get(targetHostId);
+    const target = this.hosts.get(targetHostId.hostId);
     if (!target) {
       this.sessionRoutes.delete(request.toSessionId);
       this.postSessionMessageDeliveryResult(source.hostId, {
@@ -1000,7 +1207,7 @@ export class TaskRealtimeBus {
 
   private unregisterSessionRoutesForHost(hostId: string): void {
     for (const [sessionId, routeHostId] of this.sessionRoutes) {
-      if (routeHostId === hostId) {
+      if (routeHostId.hostId === hostId) {
         this.sessionRoutes.delete(sessionId);
       }
     }

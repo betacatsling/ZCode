@@ -44,6 +44,7 @@ import {
   IZCodeTaskService,
   IZCodeSessionService,
   ICuaPipSessionService,
+  IWorktreeService,
   createZCodeAgentConnectionScope,
   type ZCodeAgentV4ClientMode,
   collectServiceMemoryDiagnostics,
@@ -66,6 +67,7 @@ import {
   type OffPeakRequestAuthBuilder,
 } from "@zcode/services/node";
 import { createHostResourceUsageResponder } from "./hostResourceUsage.js";
+import type { PersistentTargetConnection } from "@zcode/server/remote/persistentTargetClient.js";
 import {
   assertBoundSessionDispatchable,
   resolveOffPeakDispatchKind,
@@ -94,6 +96,7 @@ import {
   type ZCodeAutomationRun,
   type ZCodeAutomationRunOutcome,
   type ModelSelection,
+  type WorkspaceAdmissionActivityFact,
 } from "@zcode/shared";
 import {
   parseHostIncomingMessageEvent,
@@ -1215,6 +1218,8 @@ function createReportingRemoteZCodeTaskService<T extends object>(
         type: HostResponseTypes.SessionRouteAnnounce,
         route: {
           sessionId: result.taskId,
+          workspacePath: result.workspacePath,
+          ...(result.workspaceIdentity ? { workspaceIdentity: result.workspaceIdentity } : {}),
         },
       });
     }
@@ -1595,6 +1600,7 @@ const hostResourceUsageResponder = createHostResourceUsageResponder({
   postMessage: (message) => parentPort?.postMessage(message),
 });
 let activeSessionRealtimePort: ReturnType<typeof createTaskRealtimeBridgeForHostInit> = null;
+let persistentTargetRuntimeArchives: Readonly<Record<string, string>> = {};
 let hasDisposedHostResources = false;
 let disposeHostResourcesInFlight: Promise<HostShutdownResult> | null = null;
 
@@ -2818,7 +2824,24 @@ parentPort.on("message", async (e: Electron.MessageEvent) => {
         ),
       initializeServices: async () => {
         logger.info("initializing local services");
+        persistentTargetRuntimeArchives = msg.persistentTarget?.runtimeArchives ?? {};
         activeSessionRealtimePort = createTaskRealtimeBridgeForHostInit(msg, parentPort);
+        let targetAttachment: PersistentTargetConnection | undefined;
+        if (msg.persistentTarget) {
+          const expectedTargetId = `local:${msg.deviceMid}`;
+          if (msg.persistentTarget.targetId !== expectedTargetId) {
+            throw new Error(
+              "Main supplied a persistent target identity that does not match this Host",
+            );
+          }
+          const { connectToPersistentTarget } =
+            await import("@zcode/server/remote/persistentTargetClient.js");
+          targetAttachment = await connectToPersistentTarget({
+            host: msg.persistentTarget.host,
+            port: msg.persistentTarget.port,
+            expectedTargetId,
+          });
+        }
         // 旧 Team 补组织必须与网络代理读取共用同一个 Setting 实例及写队列。
         // 只注入 service 会跳过默认装配分支，导致缺组织的升级用户永远无法恢复连接。
         const { service: settingService, prepareLegacyAccountConnections } =
@@ -2837,6 +2860,23 @@ parentPort.on("message", async (e: Electron.MessageEvent) => {
           establishOwner: () => {
             const initializedServices = createLocalServices({
               parentPort,
+              queryWorkspaceAdmissionActivity: (query) => {
+                if (!activeSessionRealtimePort) {
+                  return Promise.resolve({
+                    complete: false,
+                    state: "unknown",
+                    activeSessionCount: 0,
+                    activeTurnCount: 0,
+                    pendingCommandCount: 0,
+                    pendingInputCount: 0,
+                    pendingApprovalCount: 0,
+                  });
+                }
+                return activeSessionRealtimePort.queryWorkspaceAdmissionActivity({
+                  ...query,
+                  workspaceKey: query.workspaceIdentity?.trim() || query.workspacePath,
+                });
+              },
               settingService,
               prepareLegacyAccountConnections,
               hostApiNetworkTransport,
@@ -2847,6 +2887,13 @@ parentPort.on("message", async (e: Electron.MessageEvent) => {
                 runtimeSurface: "desktop_local_host",
               },
               serviceAuthorityMode: "desktop-local",
+              agentHostTargetId: `local:${msg.deviceMid}`,
+              ...(targetAttachment
+                ? {
+                    targetServices: targetAttachment.services,
+                    targetAttachment,
+                  }
+                : {}),
               zcodeAgentSpawnFallbackCwd: msg.agentSpawnFallbackCwd,
               zcodeBuiltinProviderConfigFilePath: msg.zcodeBuiltinProviderConfigFilePath,
               processLifecycleReporter: runtimeProcessLifecycleReporter,
@@ -2885,6 +2932,66 @@ parentPort.on("message", async (e: Electron.MessageEvent) => {
           },
         });
         const zcodeTaskService = services.getOptional(IZCodeTaskService);
+        activeSessionRealtimePort?.onDidReceiveWorkspaceAdmissionActivityQuery((query) => {
+          const unknown: WorkspaceAdmissionActivityFact = {
+            complete: false,
+            ownerPresent: false,
+            state: "unknown",
+            activeSessionCount: 0,
+            activeTurnCount: 0,
+            pendingCommandCount: 0,
+            pendingInputCount: 0,
+            pendingApprovalCount: 0,
+          };
+          void (async () => {
+            let fact = unknown;
+            try {
+              const worktrees = services.getOptional(IWorktreeService);
+              const agent = services.getOptional(IZCodeAgentService);
+              if (worktrees && agent) {
+                const catalog = await worktrees.read();
+                const workspace = catalog.workspaces.find(
+                  (candidate) => candidate.id === query.workspaceId,
+                );
+                const workspaceKey =
+                  workspace?.workspaceIdentity?.trim() || workspace?.worktreePath;
+                if (
+                  workspace &&
+                  workspaceKey === query.workspaceKey &&
+                  workspace.worktreePath === query.workspacePath &&
+                  workspace.worktreeGeneration === query.worktreeGeneration &&
+                  workspace.lifecycle !== "removed"
+                ) {
+                  const observation = await agent.readWorkspaceAdmissionQuiescence({
+                    workspacePath: workspace.worktreePath,
+                    ...(workspace.workspaceIdentity
+                      ? { workspaceIdentity: workspace.workspaceIdentity }
+                      : {}),
+                    workspaceId: workspace.id,
+                    worktreeGeneration: workspace.worktreeGeneration,
+                    ...(query.startIfMissing ? { startIfMissing: true } : {}),
+                  });
+                  fact = {
+                    complete: observation.complete,
+                    ownerPresent: observation.ownerPresent,
+                    state: observation.state,
+                    activeSessionCount: observation.activeSessionCount,
+                    activeTurnCount: observation.activeTurnCount,
+                    pendingCommandCount: observation.pendingCommandCount,
+                    pendingInputCount: observation.pendingInputCount,
+                    pendingApprovalCount: observation.pendingApprovalCount,
+                  };
+                }
+              }
+            } catch {
+              fact = unknown;
+            }
+            activeSessionRealtimePort?.respondWorkspaceAdmissionActivityQuery({
+              requestId: query.requestId,
+              fact,
+            });
+          })();
+        });
         if (zcodeTaskService) {
           const reportingZCodeTaskService = createReportingRemoteZCodeTaskService(
             zcodeTaskService,
@@ -2959,6 +3066,7 @@ async function setupRemoteConnection(
     // 这里只透传 server 侧白名单允许的公开环境变量，避免把 credential/token 带到远端机器。
     remoteRuntimeEnv: pickRemoteRuntimeEnv(process.env),
     assetInstallMode: target.kind === "ssh" ? target.assetInstallMode : undefined,
+    persistentTargetRuntimeArchives,
     // SSH 由窗口级 registry 串行复用，其余 transport 仍保留远端 connector 自身锁。
     deployLockMode,
     onDidRemoteClose: ({ code }) => {

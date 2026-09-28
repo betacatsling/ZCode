@@ -13,6 +13,7 @@ import type {
   TraceContext,
 } from "@zcode/contracts";
 import type { ZCodeAutomationBotDeliveryTarget } from "@zcode/shared";
+import type { ManagedWorkspaceSessionAssociation } from "@zcode/shared/agent-host";
 import type {
   CommandAck,
   CommandEnvelope,
@@ -231,6 +232,9 @@ export interface V4CommandCoreHost {
    */
   createSessionRecord?(params: {
     workspaceId: string;
+    workspaceAdmissionGeneration?: string;
+    managedWorkspaceSession?: ManagedWorkspaceSessionAssociation;
+    config?: CommandPayloadMap["createSession"]["config"];
     mcpServers?: CommandPayloadMap["createSession"]["mcpServers"];
     /** host 判定的 Off-Peak 工具面门禁；缺省不注册工具。 */
     offPeakToolEnabled?: boolean;

@@ -808,6 +808,7 @@ export const SESSION_ENTRY_USER_INPUT_AUTO_RESOLUTION =
   "runtime/user_input_auto_resolution" as const;
 export const SESSION_ENTRY_WORKSPACE_CHECKPOINT = "runtime/workspace_checkpoint" as const;
 export const SESSION_ENTRY_WORKSPACE_FILE_REWIND = "runtime/workspace_file_rewind" as const;
+export const SESSION_ENTRY_WORKSPACE_GENERATION = "runtime/workspace_generation" as const;
 
 export const SESSION_ENTRY_TYPES = [
   SESSION_ENTRY_TARGET_COMPLETION_VERIFICATION,
@@ -817,6 +818,7 @@ export const SESSION_ENTRY_TYPES = [
   SESSION_ENTRY_USER_INPUT_AUTO_RESOLUTION,
   SESSION_ENTRY_WORKSPACE_CHECKPOINT,
   SESSION_ENTRY_WORKSPACE_FILE_REWIND,
+  SESSION_ENTRY_WORKSPACE_GENERATION,
 ] as const;
 
 export type SessionEntryType = (typeof SESSION_ENTRY_TYPES)[number];

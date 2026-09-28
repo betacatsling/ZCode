@@ -83,6 +83,7 @@ class ExecutableModel implements Model {
     const requestOptions = request.options ?? {};
     return {
       messages: request.messages,
+      systemInstructions: request.systemInstructions,
       tools: request.tools,
       responseJsonSchema: request.responseJsonSchema,
       abortSignal: request.abortSignal,
@@ -153,6 +154,9 @@ function validatePartialOptions(specs: ModelOptionSpecs, options: ModelOptions):
 }
 
 function validateRequestProperties(properties: ModelProperties, request: ModelRequest): void {
+  if (request.systemInstructions !== undefined && typeof request.systemInstructions !== "string") {
+    throw invalidRequest("systemInstructions must be a string");
+  }
   if (request.tools && request.tools.length > 0 && !properties.supportsToolCall) {
     throw invalidRequest("Model does not support tool calls");
   }

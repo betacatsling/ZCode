@@ -1,4 +1,8 @@
 import { readBackgroundBashOutputFromOwner } from "./background-work-owner.js";
+import {
+  acquireWorkspaceAdmissionFence,
+  managedNativeWorkspaceSessionId,
+} from "@zcode/shared/node";
 // v4 网关 binder。
 // 定位：ConversationV4Gateway 是域无关的通道运行时，本文件把它绑到协议服务器上下文：
 // - 帧出口 = context.notify（stdio NDJSON notification，与旧 session/event 同一条管道并存）；
@@ -17,6 +21,11 @@ import {
 } from "@zcode/shared";
 import { createExternalTurnFaultError } from "@zcode/core";
 import {
+  managedWorkspaceSessionAssociationSchema,
+  workspaceSessionModelBindingSchema,
+  type ManagedWorkspaceSessionAssociation,
+} from "@zcode/shared/agent-host";
+import {
   V4_NOTIFICATIONS,
   conversationInputIntentSchema,
   type AttachmentRef,
@@ -24,6 +33,8 @@ import {
   type ConversationInputIntent,
   type V4ConversationFileChangesResult,
   type V4ConversationFileRewindPreviewResult,
+  type V4ManagedWorkspaceSessionsParams,
+  type V4ManagedWorkspaceSessionsResult,
   type SessionSummary,
 } from "@zcode/shared/zcode-protocol-v4";
 import { V4CommandExecutor } from "../zcode-protocol-v4/commands/executor.js";
@@ -62,9 +73,11 @@ import {
 } from "../zcode-protocol-v4/v4-gateway.js";
 import {
   SESSION_ENTRY_TARGET_COMPLETION_VERIFICATION,
+  SESSION_ENTRY_MODEL_SELECTION,
   SessionEventType,
   createEventId,
   createSessionId,
+  SESSION_ENTRY_WORKSPACE_GENERATION,
 } from "@zcode/contracts";
 import type {
   CollaborationMode,
@@ -92,6 +105,8 @@ import {
   afterStateMutation,
   activateSessionForResume,
   createSessionRecordForV4,
+  persistWorkspaceAdmissionGeneration,
+  persistWorkspaceAdmissionEntry,
   ensureSessionModelAvailableForNextTurn,
   listSessionSubagents,
   registerForkedSession,
@@ -566,6 +581,54 @@ async function registerCommittedForkBestEffort(
       // logger 自身异常过去会越过 PONR 冒泡，让 gateway 错误 settle 为 failed。
     }
   }
+}
+
+export async function acquireWorkspaceAdmissionForV4Command(
+  context: ZCodeProtocolAgentServerContext,
+  envelope: CommandEnvelope,
+): Promise<() => Promise<void>> {
+  const env = context.deps.env ?? process.env;
+  const root = env.ZCODE_WORKSPACE_ADMISSION_ROOT;
+  const targetId = env.ZCODE_WORKSPACE_ADMISSION_TARGET_ID;
+  if (!root || !targetId) return async () => undefined;
+  if (envelope.sessionId && envelope.workspaceAdmissionGeneration) {
+    const record = context.sessions.get(envelope.sessionId);
+    let sessionGeneration = record?.workspaceAdmissionGeneration;
+    if (!sessionGeneration) {
+      const entries = await context.deps.sessionStore?.sessionEntries?.({
+        sessionID: envelope.sessionId as SessionId,
+        type: SESSION_ENTRY_WORKSPACE_GENERATION,
+      });
+      const value = (
+        entries?.find((entry) => entry.id === `${envelope.sessionId}:workspace-generation`) ??
+        entries?.find((entry) => entry.id === "workspace-generation")
+      )?.data as
+        | { worktreeGeneration?: unknown }
+        | undefined;
+      sessionGeneration =
+        typeof value?.worktreeGeneration === "string" ? value.worktreeGeneration : undefined;
+    }
+    if (sessionGeneration !== envelope.workspaceAdmissionGeneration) {
+      throw new Error("workspace-admission-stale-session-generation");
+    }
+  }
+  const workspace = envelope.sessionId
+    ? context.sessions.get(envelope.sessionId)?.workspace
+    : undefined;
+  return acquireWorkspaceAdmissionFence({
+    root,
+    targetId,
+    workspacePath: workspace?.workspacePath ?? context.deps.cwd ?? process.cwd(),
+    ...(workspace?.workspaceIdentity ?? env.ZCODE_WORKSPACE_ADMISSION_IDENTITY
+      ? {
+          workspaceIdentity:
+            workspace?.workspaceIdentity ?? env.ZCODE_WORKSPACE_ADMISSION_IDENTITY,
+        }
+      : {}),
+    ...(envelope.workspaceAdmissionGeneration
+      ? { expectedGeneration: envelope.workspaceAdmissionGeneration }
+      : {}),
+  });
 }
 
 export function createConversationV4Gateway(
@@ -1104,6 +1167,9 @@ export function createConversationV4Gateway(
     // 语义决策（draft persistence / firstInput 走原生 prompt turn）在原生 handler。
     createSessionRecord: async ({
       workspaceId,
+      workspaceAdmissionGeneration,
+      managedWorkspaceSession: rawManagedWorkspaceSession,
+      config,
       mcpServers,
       offPeakToolEnabled,
       dynamicWorkflowEnabled,
@@ -1117,21 +1183,109 @@ export function createConversationV4Gateway(
       //   （workspaceKey = identity，sessions-index topic / 隔离语义不变）。
       // shared parser 统一兼容 WSL legacy 与显式 user identity；非远程格式继续按
       // 本地 workspacePath 处理。
-      const created = await createSessionRecordForV4(context, {
-        workspace: resolveWorkspaceRefFromId(workspaceId),
-        // 一律 deferred（draft 不进 sqlite）；提升时机归原生 prompt-turn。
-        persistence: "deferred",
-        // MCP 是 runtime 创建期配置；v4 createSession 必须与 legacy
-        // session/create 等价透传，否则创建的 session 永远不会启动这些工具。
+      const workspace = resolveWorkspaceRefFromId(workspaceId);
+      const managedWorkspaceSession = rawManagedWorkspaceSession
+        ? managedWorkspaceSessionAssociationSchema.parse(rawManagedWorkspaceSession)
+        : undefined;
+      if (
+        managedWorkspaceSession &&
+        managedWorkspaceSession.worktreeGeneration !== workspaceAdmissionGeneration
+      ) {
+        throw new Error("workspace-session-association-generation-mismatch");
+      }
+      const createParams = {
+        workspace,
+        // 普通 createSession 仍是 deferred prewarm draft；显式 managed owner 必须跨重启存在。
+        persistence: managedWorkspaceSession ? ("immediate" as const) : ("deferred" as const),
+        ...(managedWorkspaceSession && config?.modelSelection
+          ? { model: config.modelSelection }
+          : {}),
         mcpServers,
-        // Off-Peak 工具面 flag 同为 runtime 创建期配置，必须随 create 进入 record。
         ...(offPeakToolEnabled === true ? { offPeakToolEnabled: true } : {}),
-        // 动态工作流灰度门同为 runtime 创建期配置：
-        // v4 createSession 必须与 legacy session/create 等价透传，否则无界面创建的会话
-        // 会绕过 Host 的灰度判定，只剩进程级缺省。
         ...(dynamicWorkflowEnabled === true ? { dynamicWorkflowEnabled: true } : {}),
-      });
-      return { sessionId: created.sessionId };
+      };
+      if (managedWorkspaceSession) {
+        const store = context.deps.sessionStore;
+        if (!store?.getSession || !store.sessionEntries) {
+          throw new Error("managed-workspace-session-owner-persistence-unavailable");
+        }
+        const sessionId = managedNativeWorkspaceSessionId(
+          managedWorkspaceSession.targetId,
+          managedWorkspaceSession.requestId,
+        ) as SessionId;
+        const existing = await store.getSession(sessionId);
+        if (existing) {
+          const expectedWorkspaceId = workspace.workspaceIdentity ?? undefined;
+          if (
+            existing.directory !== workspace.workspacePath ||
+            (existing.workspaceID ?? undefined) !== expectedWorkspaceId
+          ) {
+            throw new Error("workspace-session-idempotency-conflict");
+          }
+          const entries = await store.sessionEntries({
+            sessionID: sessionId,
+            type: SESSION_ENTRY_WORKSPACE_GENERATION,
+          });
+          const saved = (
+            entries.find((entry) => entry.id === `${sessionId}:workspace-generation`) ??
+            entries.find((entry) => entry.id === "workspace-generation")
+          )?.data as
+            | { worktreeGeneration?: unknown; managedWorkspaceSession?: unknown }
+            | undefined;
+          if (
+            typeof saved?.worktreeGeneration === "string" &&
+            saved.worktreeGeneration !== managedWorkspaceSession.worktreeGeneration
+          ) {
+            throw new Error("workspace-session-idempotency-conflict");
+          }
+          if (saved?.managedWorkspaceSession) {
+            const parsed = managedWorkspaceSessionAssociationSchema.parse(
+              saved.managedWorkspaceSession,
+            );
+            if (
+              parsed.targetId !== managedWorkspaceSession.targetId ||
+              parsed.workspaceId !== managedWorkspaceSession.workspaceId ||
+              parsed.worktreeGeneration !== managedWorkspaceSession.worktreeGeneration ||
+              parsed.requestId !== managedWorkspaceSession.requestId ||
+              parsed.requestFingerprint !== managedWorkspaceSession.requestFingerprint
+            ) {
+              throw new Error("workspace-session-idempotency-conflict");
+            }
+            return { sessionId: String(sessionId) };
+          }
+          // ID is Host-derived from target+requestId and cannot be chosen by legacy sessions.
+          // This recovers the same owner if its row committed before the association entry.
+          await persistWorkspaceAdmissionEntry(
+            context,
+            sessionId,
+            managedWorkspaceSession.worktreeGeneration,
+            managedWorkspaceSession,
+            context.sessions.get(String(sessionId)),
+          );
+          return { sessionId: String(sessionId) };
+        }
+        const created = await createSessionRecordForV4(context, {
+          ...createParams,
+          sessionId: String(sessionId),
+        }, managedWorkspaceSession);
+        const record = context.sessions.get(created.sessionId);
+        if (!record) throw new Error("workspace-admission-session-generation-unavailable");
+        await persistWorkspaceAdmissionGeneration(
+          context,
+          record,
+          workspaceAdmissionGeneration,
+          managedWorkspaceSession,
+        );
+        return created;
+      }
+
+      const created = await createSessionRecordForV4(context, createParams);
+      if (workspaceAdmissionGeneration) {
+        const record = context.sessions.get(created.sessionId);
+        if (!record) throw new Error("workspace-admission-session-generation-unavailable");
+        await persistWorkspaceAdmissionGeneration(context, record, workspaceAdmissionGeneration);
+      }
+      return created;
     },
     createSelectionSideSession: async (sessionId, options) => {
       const record = context.sessions.get(sessionId);
@@ -1429,6 +1583,8 @@ export function createConversationV4Gateway(
   return new ConversationV4Gateway({
     cliVersion: context.deps.version,
     sessionExists: (sessionId) => context.sessions.has(sessionId),
+    acquireWorkspaceAdmission: (envelope) =>
+      acquireWorkspaceAdmissionForV4Command(context, envelope),
     onDebug: (message) => log?.debug(message),
     onTargetCompleted: (sessionId) => {
       const record = context.sessions.get(sessionId);
@@ -1560,6 +1716,136 @@ export function createConversationV4Gateway(
             isTaskListSessionType(record.taskType) && record.workspace.workspaceKey === workspaceId,
         )
         .map((record) => record.app.sessionId),
+    listManagedWorkspaceSessions: async (
+      request: V4ManagedWorkspaceSessionsParams,
+    ): Promise<V4ManagedWorkspaceSessionsResult> => {
+      const targetId = (context.deps.env ?? process.env).ZCODE_WORKSPACE_ADMISSION_TARGET_ID;
+      if (targetId && request.targetId !== targetId) {
+        throw new Error("managed-workspace-session-target-mismatch");
+      }
+      const store = context.deps.sessionStore;
+      if (!store?.listSessions || !store.sessionEntries) {
+        throw new Error("native-managed-workspace-session-index-unavailable");
+      }
+      const localWorkspace = request.workspaceIdentity === request.workspacePath;
+      const stored = await store.listSessions({
+        directory: request.workspacePath,
+        workspaceID: localWorkspace ? null : (request.workspaceIdentity as WorkspaceId),
+        includeArchived: true,
+        limit: 10_001,
+        taskTypes: [...TASK_LIST_SESSION_TYPES],
+      });
+      if (stored.length > 10_000) throw new Error("native-managed-workspace-session-index-incomplete");
+      const sessions: V4ManagedWorkspaceSessionsResult["sessions"] = [];
+      for (const session of stored) {
+        if (session.directory !== request.workspacePath) continue;
+        if (localWorkspace ? session.workspaceID !== undefined : session.workspaceID !== request.workspaceIdentity) {
+          continue;
+        }
+        const entries = await store.sessionEntries({ sessionID: session.id });
+        const workspaceGenerationEntries = entries.filter(
+          (entry) => entry.type === SESSION_ENTRY_WORKSPACE_GENERATION,
+        );
+        const data = (
+          workspaceGenerationEntries.find((entry) => entry.id === `${session.id}:workspace-generation`) ??
+          workspaceGenerationEntries.find((entry) => entry.id === "workspace-generation")
+        )?.data as
+          | { managedWorkspaceSession?: unknown }
+          | undefined;
+        if (data?.managedWorkspaceSession === undefined) continue;
+        const association = managedWorkspaceSessionAssociationSchema.parse(
+          data.managedWorkspaceSession,
+        );
+        if (
+          association.targetId !== request.targetId ||
+          association.workspaceId !== request.workspaceId ||
+          association.worktreeGeneration !== request.worktreeGeneration
+        ) {
+          continue;
+        }
+        const modelSelection = entries
+          .filter((entry) => entry.type === SESSION_ENTRY_MODEL_SELECTION)
+          .at(-1)?.data;
+        const modelBinding = workspaceSessionModelBindingSchema.safeParse({
+          kind: "native-selection",
+          selection: modelSelection,
+        });
+        sessions.push({
+          ownerKind: "native-v4",
+          sessionId: String(session.id),
+          targetId: association.targetId,
+          workspaceId: association.workspaceId,
+          worktreeGeneration: association.worktreeGeneration,
+          workspaceIdentity: request.workspaceIdentity,
+          workspacePath: session.directory,
+          harnessId: "zcode",
+          title: session.title.slice(0, 256),
+          ...(modelBinding.success ? { modelBinding: modelBinding.data } : {}),
+        });
+      }
+      return { sessions };
+    },
+    lookupManagedWorkspaceSession: async (request) => {
+      const targetId = (context.deps.env ?? process.env).ZCODE_WORKSPACE_ADMISSION_TARGET_ID;
+      if (targetId && request.targetId !== targetId) {
+        throw new Error("managed-workspace-session-target-mismatch");
+      }
+      const store = context.deps.sessionStore;
+      if (!store?.getSession || !store.sessionEntries) {
+        throw new Error("native-managed-workspace-session-index-unavailable");
+      }
+      const sessionId = request.sessionId as SessionId;
+      const session = await store.getSession(sessionId);
+      if (!session) return { owner: null };
+      const entries = await store.sessionEntries({
+        sessionID: sessionId,
+        type: SESSION_ENTRY_WORKSPACE_GENERATION,
+      });
+      const data = (
+        entries.find((entry) => entry.id === `${sessionId}:workspace-generation`) ??
+        entries.find((entry) => entry.id === "workspace-generation")
+      )?.data as
+        | { managedWorkspaceSession?: unknown }
+        | undefined;
+      const association =
+        data?.managedWorkspaceSession === undefined
+          ? null
+          : managedWorkspaceSessionAssociationSchema.parse(data.managedWorkspaceSession);
+      if (
+        association &&
+        managedNativeWorkspaceSessionId(association.targetId, association.requestId) !==
+          String(sessionId)
+      ) {
+        throw new Error("managed-workspace-session-owner-identity-mismatch");
+      }
+      return {
+        owner: {
+          sessionId: String(sessionId),
+          association,
+          workspacePath: session.directory,
+          ...(session.workspaceID ? { workspaceIdentity: String(session.workspaceID) } : {}),
+          title: session.title.slice(0, 256),
+        },
+      };
+    },
+    listStoredWorkspaceSessionIds: async (workspaceId, workspacePath) => {
+      const store = context.deps.sessionStore;
+      if (!store) throw new Error("native-session-index-unavailable");
+      const stored = await store.listSessions({
+        directory: workspacePath,
+        includeArchived: true,
+        limit: 10_001,
+        taskTypes: [...TASK_LIST_SESSION_TYPES],
+      });
+      if (stored.length > 10_000) throw new Error("native-session-index-incomplete");
+      // 修复依据：按路径会混入旧 identity 会话；只归属当前 workspaceKey，legacy 行单独返回为未知候选。
+      return stored
+        .filter(
+          (session) =>
+            session.workspaceID === workspaceId || session.workspaceID === undefined,
+        )
+        .map((session) => String(session.id));
+    },
     // draft 判定：deferred = 未发首条输入（prompt-turn 首发提升为 immediate）。
     // 旧 workspace prepare 预建的 deferred 会话不得以「新任务」漏进侧栏列表。
     isDraftSession: (sessionId) => context.sessions.get(sessionId)?.persistence === "deferred",

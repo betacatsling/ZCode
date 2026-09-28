@@ -12,6 +12,7 @@ import {
   IBroadcastService,
   IZCodeTaskService,
   IZCodeAgentService,
+  IAgentHostService,
   IZCodeSessionService,
   ICuaPermissionService,
   IConversationShareService,
@@ -41,6 +42,9 @@ import {
   IPromptAttachmentTransferService,
   IWindowControllerService,
   type IServiceAccessor,
+  IProjectCatalogService,
+  IWorktreeService,
+  ISessionHierarchyService,
 } from "@zcode/services";
 
 /**
@@ -62,6 +66,7 @@ export class RemoteServiceAccess implements IServiceAccessor {
   readonly zcodeTaskService: IZCodeTaskService;
   readonly windowControllerService: IWindowControllerService;
   readonly zcodeAgentService: IZCodeAgentService;
+  readonly agentHostService: IAgentHostService;
   readonly zcodeSessionService: IZCodeSessionService;
   // cuaPermissionService 在 IServiceAccessor 上是可选（远端/bots host 不提供），但桌面 renderer
   // 经 RPC 一定能拿到（main host 始终注册此 descriptor；非 macOS / 未启用时方法返回 available:false）。
@@ -92,6 +97,9 @@ export class RemoteServiceAccess implements IServiceAccessor {
   readonly settingsSyncService: ISettingsSyncService;
   readonly feedbackService: IFeedbackService;
   readonly promptAttachmentTransferService: IPromptAttachmentTransferService;
+  readonly projectCatalogService?: IProjectCatalogService;
+  readonly worktreeService?: IWorktreeService;
+  readonly sessionHierarchyService?: ISessionHierarchyService;
 
   constructor(channelClient: IChannelClient) {
     this.fileService = ProxyChannel.toService<IFileService>(
@@ -134,6 +142,9 @@ export class RemoteServiceAccess implements IServiceAccessor {
     );
     this.zcodeAgentService = ProxyChannel.toService<IZCodeAgentService>(
       channelClient.getChannel(IZCodeAgentService.channelName),
+    );
+    this.agentHostService = ProxyChannel.toService<IAgentHostService>(
+      channelClient.getChannel(IAgentHostService.channelName),
     );
     this.zcodeSessionService = ProxyChannel.toService<IZCodeSessionService>(
       channelClient.getChannel(IZCodeSessionService.channelName),
@@ -218,6 +229,15 @@ export class RemoteServiceAccess implements IServiceAccessor {
     );
     this.promptAttachmentTransferService = ProxyChannel.toService<IPromptAttachmentTransferService>(
       channelClient.getChannel(IPromptAttachmentTransferService.channelName),
+    );
+    this.projectCatalogService = ProxyChannel.toService<IProjectCatalogService>(
+      channelClient.getChannel(IProjectCatalogService.channelName),
+    );
+    this.worktreeService = ProxyChannel.toService<IWorktreeService>(
+      channelClient.getChannel(IWorktreeService.channelName),
+    );
+    this.sessionHierarchyService = ProxyChannel.toService<ISessionHierarchyService>(
+      channelClient.getChannel(ISessionHierarchyService.channelName),
     );
   }
 }

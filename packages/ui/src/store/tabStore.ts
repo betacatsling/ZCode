@@ -122,7 +122,14 @@ export interface TabStoreState {
   /** 打开设置标签页（窗口内唯一） */
   openSettingsTab: () => void;
   /** 通过 workspace 路径激活 tab（跨窗口 focus 用），返回是否找到 */
-  activateTabByPath: (path: string, options?: { workspaceIdentity?: string }) => boolean;
+  activateTabByPath: (
+    path: string,
+    options?: {
+      workspaceIdentity?: string;
+      remoteSessionId?: string;
+      targetKind?: "local" | "remote";
+    },
+  ) => boolean;
   /** 切换 workspace 的展开/收起态 */
   toggleWorkspaceExpanded: (path: string) => void;
   /** 展开当前任务区里的全部 workspace */
@@ -548,8 +555,18 @@ export function createTabStore(storage: StorageLike | null | undefined = undefin
           return false;
         }
 
+        if (options?.targetKind === "local") {
+          return !currentTab.workspaceIdentity?.trim() && !currentTab.remoteSessionId;
+        }
+
+        if (options?.targetKind === "remote" && !options.remoteSessionId) return false;
+
         if (options?.workspaceIdentity) {
-          return currentTab.workspaceIdentity === options.workspaceIdentity;
+          if (currentTab.workspaceIdentity !== options.workspaceIdentity) return false;
+        }
+
+        if (options?.remoteSessionId && currentTab.remoteSessionId !== options.remoteSessionId) {
+          return false;
         }
 
         return true;

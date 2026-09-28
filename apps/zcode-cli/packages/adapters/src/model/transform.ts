@@ -77,6 +77,31 @@ export function toAiSdkMessages(
         });
         break;
 
+      case "developer":
+        if (options.providerKind !== "openai" || options.apiFormat !== "openai-responses") {
+          throw new AiSdkModelAdapterError(
+            ModelErrorCode.InvalidModelRequest,
+            "Developer-priority messages require the OpenAI Responses provider",
+            { context: { role: message.role, apiFormat: options.apiFormat } },
+          );
+        }
+        if (
+          Array.isArray(message.content) &&
+          message.content.some((part) => part.type !== "text")
+        ) {
+          throw new AiSdkModelAdapterError(
+            ModelErrorCode.InvalidModelRequest,
+            "Developer-priority messages support text content only",
+            { context: { role: message.role } },
+          );
+        }
+        transformedMessages.push({
+          role: "system",
+          content: modelMessageContentToText(message.content),
+          ...providerOptionsForCacheControl(message.cacheControl),
+        });
+        break;
+
       case "user":
         transformedMessages.push({
           role: "user",

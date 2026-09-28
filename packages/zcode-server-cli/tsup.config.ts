@@ -39,7 +39,11 @@ export default defineConfig({
     "form-data",
     "combined-stream",
     "proxy-from-env",
+    // 修复依据：proxy-agent 间接加载的 CJS debug 使用 require("tty"); bundle 为 ESM 会在 Node 22 启动时报 Dynamic require。
+    "proxy-agent",
     "follow-redirects",
+    // 修复依据：feedbackLogArchive 间接加载 yazl；内联其 CJS 动态 require("fs") 会让发行版 ESM CLI 在 Node 22 启动失败。
+    "yazl",
     "@lydell/node-pty-darwin-arm64",
     "@lydell/node-pty-darwin-x64",
     "@lydell/node-pty-linux-arm64",

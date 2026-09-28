@@ -10,8 +10,14 @@ import { createModelExecutionContext } from "./model-execution.js";
 import type { SendInputOptions } from "../app/types.js";
 import { repairPersistedRemoteSessionPaths, type TurnAttachment } from "@zcode/core";
 import {
+  managedWorkspaceSessionAssociationSchema,
+  type ManagedWorkspaceSessionAssociation,
+} from "@zcode/shared/agent-host";
+import { managedNativeWorkspaceSessionId } from "@zcode/shared/node";
+import {
   CoreErrorType,
   SESSION_ENTRY_TARGET_COMPLETION_VERIFICATION,
+  SESSION_ENTRY_WORKSPACE_GENERATION,
   createMessageId,
   createPartId,
   createSessionId,
@@ -1229,10 +1235,67 @@ export async function createSession(
 export async function createSessionRecordForV4(
   context: ZCodeProtocolAgentServerContext,
   rawParams: unknown,
+  rawManagedWorkspaceSession?: ManagedWorkspaceSessionAssociation,
 ) {
-  return createSessionWithProjection(context, rawParams, undefined, async (record) => ({
-    value: { sessionId: record.app.sessionId },
-  }));
+  const managedWorkspaceSession = rawManagedWorkspaceSession
+    ? managedWorkspaceSessionAssociationSchema.parse(rawManagedWorkspaceSession)
+    : undefined;
+  return createSessionWithProjection(
+    context,
+    rawParams,
+    undefined,
+    async (record) => ({ value: { sessionId: record.app.sessionId } }),
+    managedWorkspaceSession,
+  );
+}
+
+export async function persistWorkspaceAdmissionGeneration(
+  context: ZCodeProtocolAgentServerContext,
+  record: ZCodeProtocolSessionRecord,
+  worktreeGeneration: string | undefined,
+  managedWorkspaceSession?: ManagedWorkspaceSessionAssociation,
+): Promise<void> {
+  await persistWorkspaceAdmissionEntry(
+    context,
+    record.app.sessionId,
+    worktreeGeneration,
+    managedWorkspaceSession,
+    record,
+  );
+}
+
+export async function persistWorkspaceAdmissionEntry(
+  context: ZCodeProtocolAgentServerContext,
+  sessionId: SessionId,
+  worktreeGeneration: string | undefined,
+  rawAssociation?: ManagedWorkspaceSessionAssociation,
+  record?: ZCodeProtocolSessionRecord,
+): Promise<void> {
+  if (!worktreeGeneration && !rawAssociation) return;
+  const association = rawAssociation
+    ? managedWorkspaceSessionAssociationSchema.parse(rawAssociation)
+    : undefined;
+  if (association && association.worktreeGeneration !== worktreeGeneration) {
+    throw new Error("workspace-session-association-generation-mismatch");
+  }
+  const store = context.deps.sessionStore;
+  if (!store?.saveSessionEntry) {
+    throw new Error("workspace-admission-session-generation-unavailable");
+  }
+  if (record && worktreeGeneration) record.workspaceAdmissionGeneration = worktreeGeneration;
+  const now = Date.now();
+  await store.saveSessionEntry({
+    // session_entry.id is a database-wide primary key; new owner facts are session-scoped.
+    id: `${sessionId}:workspace-generation`,
+    sessionID: sessionId,
+    type: SESSION_ENTRY_WORKSPACE_GENERATION,
+    touchSession: false,
+    time: { created: now, updated: now },
+    data: {
+      ...(worktreeGeneration ? { worktreeGeneration } : {}),
+      ...(association ? { managedWorkspaceSession: association } : {}),
+    },
+  });
 }
 
 async function createSessionWithProjection<T>(
@@ -1242,10 +1305,20 @@ async function createSessionWithProjection<T>(
   project: (
     record: ZCodeProtocolSessionRecord,
   ) => Promise<{ value: T; phaseDurationsMs?: SnapshotPhaseDurationsMs; messageCount?: number }>,
+  managedWorkspaceSession?: ManagedWorkspaceSessionAssociation,
 ): Promise<T> {
   const params = parseParams(zcodeSessionCreateParamsSchema, rawParams);
   const startedAt = Date.now();
-  if (params.sessionId && !params.importedHistory) {
+  if (managedWorkspaceSession) {
+    const expectedSessionId = managedNativeWorkspaceSessionId(
+      managedWorkspaceSession.targetId,
+      managedWorkspaceSession.requestId,
+    );
+    if (params.sessionId !== expectedSessionId) {
+      throw new Error("managed-workspace-session-owner-id-mismatch");
+    }
+  }
+  if (params.sessionId && !params.importedHistory && !managedWorkspaceSession) {
     // 普通 session/create 若允许外部指定 id，会覆盖 context.sessions 里的 active record，
     // 造成运行中会话被接管、runtime 泄漏或后续 setModel/sendPrompt 路由错位。
     throw new ProtocolRequestError(
@@ -2289,6 +2362,11 @@ export async function registerForkedSession(
     fork.forkedSessionId as SessionId,
     true,
     { kind: "inherit", parent: record },
+  );
+  await persistWorkspaceAdmissionGeneration(
+    context,
+    forkRecord,
+    record.workspaceAdmissionGeneration,
   );
   context.assertServing?.();
   context.sessions.set(fork.forkedSessionId, forkRecord);

@@ -51,6 +51,7 @@ import {
   type WorkbenchSessionBinding,
 } from "@/v4/workbenchGroupStore.js";
 import type { WorkbenchSessionDragPayload } from "@/v4/workbenchDragDrop.js";
+import type { AgentHostConversationSelection } from "@/v4/agentHostConversationOwner.js";
 import {
   canPlaceWorkbenchSessionInSplit,
   placeWorkbenchSessionInSplit,
@@ -77,6 +78,8 @@ interface V4WorkspaceChatAreaProps {
   remoteSessionId?: string;
   /** primary pane 绑定的 CLI session（既有选择态 activeTaskId）；null = draft。 */
   sessionId: string | null;
+  /** Explicit external owner selected by Project sidebar; never enters pane persistence. */
+  externalSessionSelection?: AgentHostConversationSelection;
   activeSelectionSideChatSessionId?: string | null;
   provider?: ZCodeProvider;
   /** primary pane createSession/fork 后接入既有选择路径（handleSelectTask）。 */
@@ -147,6 +150,7 @@ export function V4WorkspaceChatArea({
   foregroundEnabled = true,
   remoteSessionId,
   sessionId,
+  externalSessionSelection,
   activeSelectionSideChatSessionId = null,
   provider,
   onSessionCreated,
@@ -270,6 +274,7 @@ export function V4WorkspaceChatArea({
       isDesktop,
       readOnly,
       sessionId: primaryPaneSessionId,
+      externalSessionSelection,
       // primaryPaneSessionId 在 active task 被 split pane 接管时会刻意置空，
       // 辅助对话划词路由仍需保留 shell 真正的 active task id。
       activeSessionId: sessionId,
@@ -318,6 +323,7 @@ export function V4WorkspaceChatArea({
       isDesktop,
       readOnly,
       primaryPaneSessionId,
+      externalSessionSelection,
       activeSelectionSideChatSessionId,
       provider,
       onSessionCreated,

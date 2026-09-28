@@ -25,6 +25,7 @@ import {
   zcodeProtocolMcpServerSchema,
 } from "../zcode-protocol/index.js";
 import { sharedContextRefSchema } from "./shared-context-ref.js";
+import { managedWorkspaceSessionAssociationSchema } from "../agent-host/workspace-session.js";
 export type { SharedContextRef } from "./shared-context-ref.js";
 
 const createSessionRequestedConfigSchema = z.object({
@@ -320,20 +321,45 @@ export const ROW_TARGETING_COMMANDS: ReadonlySet<CommandType> = new Set([
 ]);
 
 // ── 信封 ──
-export const commandEnvelopeSchema = z.object({
-  ttft: localTtftContextSchema.optional(),
-  // uuid v7，客户端生成，重试不变。
-  commandId: z.string(),
-  clientId: z.string(),
-  // createSession 时为 null。
-  sessionId: z.string().nullable(),
-  baseRevision: z.number().optional(),
-  baseLogEpoch: z.string().trim().min(1).optional(),
-  type: commandTypeSchema,
-  payload: z.unknown(),
-  // 客户端时钟，仅遥测；服务端不用于任何裁决。
-  issuedAt: timestampSchema,
-});
+export const commandEnvelopeSchema = z
+  .object({
+    ttft: localTtftContextSchema.optional(),
+    // Host-stamped generation; the renderer cannot authorize another worktree generation.
+    workspaceAdmissionGeneration: z.string().trim().min(1).max(256).optional(),
+    // Only the Host's explicit workspace-session path stamps this; automatic draft creation omits it.
+    managedWorkspaceSession: managedWorkspaceSessionAssociationSchema.optional(),
+    // uuid v7，客户端生成，重试不变。
+    commandId: z.string(),
+    clientId: z.string(),
+    // createSession 时为 null。
+    sessionId: z.string().nullable(),
+    baseRevision: z.number().optional(),
+    baseLogEpoch: z.string().trim().min(1).optional(),
+    type: commandTypeSchema,
+    payload: z.unknown(),
+    // 客户端时钟，仅遥测；服务端不用于任何裁决。
+    issuedAt: timestampSchema,
+  })
+  .superRefine((envelope, context) => {
+    if (!envelope.managedWorkspaceSession) return;
+    if (envelope.type !== "createSession") {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["managedWorkspaceSession"],
+        message: "managed workspace association is valid only for createSession",
+      });
+      return;
+    }
+    if (
+      envelope.workspaceAdmissionGeneration !== envelope.managedWorkspaceSession.worktreeGeneration
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["managedWorkspaceSession", "worktreeGeneration"],
+        message: "managed workspace association must match the Host-stamped generation",
+      });
+    }
+  });
 export type CommandEnvelope = z.infer<typeof commandEnvelopeSchema>;
 
 /** 校验信封并按 type 校验 payload（信封 schema 无法静态关联 payload，收口在这里）。 */

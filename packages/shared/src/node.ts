@@ -5,6 +5,7 @@
  */
 export { acquireFileLock } from "./node/atomicFileLock.js";
 export { scanOfficialPluginCacheRoots } from "./node/officialPluginCache.js";
+export { managedNativeWorkspaceSessionId } from "./node/managedWorkspaceSessionId.js";
 export {
   migrateUserSubagentMarkdown,
   migrateSubagentStateFile,
@@ -15,6 +16,14 @@ export {
   withFileLock,
   type SharedFileLockOptions,
 } from "./node/privateFilePersistence.js";
+export {
+  withWorkspaceAdmissionFence,
+  acquireWorkspaceAdmissionFence,
+  WorkspaceAdmissionFenceError,
+  workspaceAdmissionFenceFilePath,
+  type WorkspaceAdmissionFenceErrorCode,
+  type WorkspaceAdmissionFenceRequest,
+} from "./node/workspaceAdmissionFence.js";
 export {
   createNodeSelfResourceSampler,
   NODE_SELF_RESOURCE_SAMPLE_INTERVAL_MS,

@@ -49,6 +49,9 @@ async function createSession(
   }
   const { sessionId } = await host.createSessionRecord({
     workspaceId: payload.workspaceId,
+    workspaceAdmissionGeneration: envelope.workspaceAdmissionGeneration,
+    managedWorkspaceSession: envelope.managedWorkspaceSession,
+    config: payload.config,
     mcpServers: payload.mcpServers,
     offPeakToolEnabled: payload.offPeakToolEnabled,
     dynamicWorkflowEnabled: payload.dynamicWorkflowEnabled,
@@ -57,7 +60,7 @@ async function createSession(
   // 模式）在首发之前应用并补发事件，首条 turn 即用所选配置。必须在 firstInput 之前。
   // 应用失败不连坐会话创建（record 已建成，failed ACK 只会泄漏会话）：降级 warn，
   // 会话保持 runtime 缺省。
-  if (payload.config) {
+  if (payload.config && !envelope.managedWorkspaceSession) {
     const record = requireRecord(host, sessionId);
     try {
       await applyRequestedSessionConfig(host, record, payload.config);

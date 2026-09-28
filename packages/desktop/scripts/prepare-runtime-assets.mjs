@@ -2,6 +2,7 @@
 
 import process from "node:process";
 import { dirname, resolve } from "node:path";
+import { copyFile, mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { resolveNativeSearchReleasePlan } from "../../../scripts/native-search-tools-config.mjs";
 import { runCommand } from "../../../scripts/spawn-command.mjs";
@@ -9,6 +10,7 @@ import { getTargetPlatform } from "./target-platform.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const desktopRoot = resolve(scriptDir, "..");
+const workspaceRoot = resolve(desktopRoot, "../..");
 const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const target = getTargetPlatform();
 const nativeSearchReleasePlan = resolveNativeSearchReleasePlan({
@@ -61,4 +63,33 @@ if (!shouldSkipRemoteAssets) {
 
 for (const scriptName of localRuntimeScripts) {
   runTimedPnpmScript(scriptName);
+}
+
+// Desktop-local and SSH tasks need the same versioned Supervisor/Core runtime.
+// Stage the local target plus Linux x64 (the first SSH target) using the existing
+// server-cli release packager; each archive remains separate from the app bundle.
+const persistentTargetPlatforms = [...new Set([target.key, "linux-x64"])];
+for (const targetKey of persistentTargetPlatforms) {
+  const startedAt = Date.now();
+  console.log(`[ci][timer] prepare-runtime-assets:persistent-target:${targetKey} start`);
+  try {
+    runCommand(
+      pnpmCommand,
+      ["--filter", "@zcode/server-cli", "stage", "--", "--target", targetKey],
+      { cwd: workspaceRoot, env: process.env },
+    );
+    const extension = targetKey.startsWith("win32-") ? "zip" : "tar.gz";
+    const releaseArchive = resolve(
+      workspaceRoot,
+      "packages/zcode-server-cli/dist-release",
+      `zcode-server-${targetKey}.${extension}`,
+    );
+    const targetRuntimeDir = resolve(desktopRoot, "resources/persistent-target");
+    await mkdir(targetRuntimeDir, { recursive: true });
+    await copyFile(releaseArchive, resolve(targetRuntimeDir, `${targetKey}.${extension}`));
+  } finally {
+    console.log(
+      `[ci][timer] prepare-runtime-assets:persistent-target:${targetKey} end duration_ms=${Date.now() - startedAt}`,
+    );
+  }
 }

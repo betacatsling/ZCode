@@ -81,9 +81,21 @@ function hasAcceptedInputProjection(
 ): boolean {
   if (!snapshot) return false;
   if (snapshot.queue.items.some((item) => item.sourceCommandId === commandId)) return true;
+  if (snapshot.control.activeWorks.some((work) => work.foregroundExecutionId === commandId)) {
+    // The external Host freezes turnId=commandId; activeWorks remains in the
+    // bounded snapshot even when the turn header has paged out of rows.window.
+    return true;
+  }
   return snapshot.rows.window.some(
     (row) =>
-      row.kind === "userInput" && row.origin === "realUser" && row.sourceCommandId === commandId,
+      (row.kind === "userInput" &&
+        row.origin === "realUser" &&
+        row.sourceCommandId === commandId) ||
+      // External Host freezes turnId=commandId at admission when its adapter does
+      // not echo a separate userInput row. The turn header is then the authoritative
+      // projection acknowledgement; it is never a renderer-created optimistic fact.
+      (row.kind === "turnHeader" &&
+        (row.sourceCommandId === commandId || row.turnId === commandId)),
   );
 }
 
@@ -1304,6 +1316,9 @@ export class ConversationProjectionStore {
       if (row.kind === "userInput" && row.sourceCommandId) {
         acknowledged.add(row.sourceCommandId);
         if (row.origin === "realUser") inputProjectionIds.add(row.sourceCommandId);
+      }
+      if (row.kind === "turnHeader") {
+        inputProjectionIds.add(row.sourceCommandId ?? row.turnId);
       }
     }
     const remaining = this.state.optimisticCommands.filter((command) =>

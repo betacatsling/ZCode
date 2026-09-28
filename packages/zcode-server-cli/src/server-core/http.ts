@@ -16,6 +16,9 @@ import {
 import {
   createZCodeAgentConnectionScope,
   IZCodeAgentService,
+  IAgentHostService,
+  IProviderProvisioningTargetService,
+  getProjectWorkspaceWriteExclusions,
   ServiceCollection,
 } from "@zcode/services";
 import { createServiceLogger } from "@zcode/services/node";
@@ -102,9 +105,16 @@ function exposeWebSocket(
         role: clientMode === "desktop-continuous" ? "trusted-host-relay" : "terminal-client",
       })
     : undefined;
+  const excludedChannels = new Set(getProjectWorkspaceWriteExclusions(clientMode));
+  if (clientMode !== "desktop-continuous") {
+    // 修复依据：外部会话 RPC 只能通过已消费的一次性 host capability 进入；通用 /ws 不能获得 Host 写入与历史读取。
+    excludedChannels.add(IAgentHostService.channelName);
+    excludedChannels.add(IProviderProvisioningTargetService.channelName);
+  }
   services.exposeOnChannelServer(
     server,
     scope ? new Map([[IZCodeAgentService.channelName, scope.service]]) : new Map(),
+    excludedChannels,
   );
   socket.onClose(() => {
     void scope?.dispose();
@@ -140,6 +150,7 @@ export async function createCoreHttpServer(
       desktopContinuous: true,
       websocketRpc: true,
       processResourceTelemetry: true,
+      agentHost: services.getOptional(IAgentHostService) !== undefined,
     },
   };
   // 裸 Set 无法落实 expiresAt，未消费的 capability 会一直有效并持续累积。

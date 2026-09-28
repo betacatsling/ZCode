@@ -99,6 +99,7 @@ import type {
   V4ConversationResyncResult,
   V4ConversationSubscribeResult,
   V4SessionsIndexSubscribeResult,
+  V4WorkspaceAdmissionQuiescenceResult,
   V4WorkspaceConfigSubscribeResult,
   WorkspaceConfigTopicWireCandidate,
 } from "@zcode/shared/zcode-protocol-v4";
@@ -453,6 +454,12 @@ export interface ZCodeAgentConversationCommandParams extends ZCodeAgentWorkspace
   clientMode?: ZCodeTaskClientMode;
 }
 
+export interface ZCodeAgentWorkspaceAdmissionParams extends ZCodeAgentWorkspaceTarget {
+  workspaceId: string;
+  worktreeGeneration: string;
+  startIfMissing?: boolean;
+}
+
 export interface ZCodeAgentCommandsQueryParams extends ZCodeAgentWorkspaceTarget {
   clock?: true;
   commands: CommandKey[];
@@ -583,6 +590,9 @@ export interface IZCodeAgentService {
   getWorkspaceRuntimeIdentity(
     params: ZCodeAgentWorkspaceTarget,
   ): Promise<ZCodeAgentWorkspaceRuntimeIdentity>;
+  readWorkspaceAdmissionQuiescence(
+    params: ZCodeAgentWorkspaceAdmissionParams,
+  ): Promise<V4WorkspaceAdmissionQuiescenceResult>;
   createSession(params: ZCodeAgentCreateSessionParams): Promise<ZCodeSessionStateSnapshot>;
   resumeSession(params: ZCodeAgentResumeSessionParams): Promise<ZCodeSessionStateSnapshot>;
   listSessions(params: ZCodeAgentListSessionsParams): Promise<ZCodeSessionInfo[]>;

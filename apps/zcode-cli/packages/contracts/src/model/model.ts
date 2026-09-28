@@ -30,6 +30,8 @@ export interface ModelOptions {
 
 export interface ModelRequest {
   messages: ModelInputMessage[];
+  /** Highest-priority instruction layer for providers with a native instructions field. */
+  systemInstructions?: string;
   tools?: ModelToolContract[];
   responseJsonSchema?: JsonSchema;
   options?: ModelOptions;

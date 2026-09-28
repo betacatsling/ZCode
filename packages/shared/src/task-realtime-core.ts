@@ -14,6 +14,8 @@ import { workspaceHookReviewDecisionSchema } from "./zcode-protocol-v4/workspace
 import { errorAttributionSchema } from "./zcode-protocol-v4/snapshot.js";
 
 const nonEmptyString = z.string().trim().min(1);
+const workspaceFilesystemPath = z.string().min(1).max(4096);
+const workspaceIdentityKey = z.string().min(1).max(4096);
 const zcodeTaskModeRealtimeValues = [
   "yolo",
   "plan",
@@ -48,7 +50,7 @@ const taskMetaRealtimeSchema = z.object({
   traceId: nonEmptyString,
   title: z.string(),
   titleOverridden: z.boolean().optional(),
-  workspacePath: nonEmptyString,
+  workspacePath: workspaceFilesystemPath,
   workspaceIdentity: nonEmptyString.optional(),
   createdAt: z.number().int().nonnegative(),
   updatedAt: z.number().int().nonnegative(),
@@ -104,9 +106,9 @@ export const taskRealtimeHostDeliveryKindSchema = z.enum(["desktop_window", "rel
 const taskRealtimeEnvelopeSchema = z
   .object({
     eventId: nonEmptyString,
-    workspacePath: nonEmptyString,
+    workspacePath: workspaceFilesystemPath,
     workspaceIdentity: nonEmptyString.optional(),
-    workspaceKey: nonEmptyString,
+    workspaceKey: workspaceIdentityKey,
     traceId: nonEmptyString,
     createdAt: z.number().int().nonnegative(),
   })
@@ -251,9 +253,9 @@ export const taskStreamMirrorOpSchema = z.discriminatedUnion("kind", [
 ]);
 const taskStreamMirrorTargetRawSchema = z
   .object({
-    workspacePath: nonEmptyString,
+    workspacePath: workspaceFilesystemPath,
     workspaceIdentity: nonEmptyString.optional(),
-    workspaceKey: nonEmptyString,
+    workspaceKey: workspaceIdentityKey,
     taskId: nonEmptyString,
     runId: nonEmptyString,
     traceId: nonEmptyString,
@@ -311,9 +313,9 @@ export const taskRunLeaseResultSchema = z.discriminatedUnion("acquired", [
 const taskOwnerCommandBaseSchema = z
   .object({
     commandRequestId: nonEmptyString,
-    workspacePath: nonEmptyString,
+    workspacePath: workspaceFilesystemPath,
     workspaceIdentity: nonEmptyString.optional(),
-    workspaceKey: nonEmptyString,
+    workspaceKey: workspaceIdentityKey,
     taskId: nonEmptyString,
     runId: nonEmptyString,
   })
@@ -365,9 +367,9 @@ const zcodeTaskRuntimeCommandBaseSchema = z
     commandId: nonEmptyString,
     taskId: nonEmptyString,
     traceId: nonEmptyString,
-    workspacePath: nonEmptyString,
+    workspacePath: workspaceFilesystemPath,
     workspaceIdentity: nonEmptyString.optional(),
-    workspaceKey: nonEmptyString,
+    workspaceKey: workspaceIdentityKey,
     status: z.enum(["accepted", "running", "failed"]),
     createdAt: z.number().int().nonnegative(),
     updatedAt: z.number().int().nonnegative(),
@@ -482,6 +484,40 @@ export const taskOwnerCommandResultSchema = z.discriminatedUnion("success", [
     })
     .strict(),
 ]);
+
+const workspaceAdmissionActivityBaseSchema = z
+  .object({
+    requestId: nonEmptyString,
+    workspaceId: nonEmptyString,
+    workspacePath: z.string().min(1).max(4096),
+    workspaceIdentity: nonEmptyString.optional(),
+    workspaceKey: z.string().min(1).max(4096),
+    worktreeGeneration: nonEmptyString,
+    startIfMissing: z.boolean().optional(),
+  })
+  .strict();
+export const workspaceAdmissionActivityRequestSchema = workspaceAdmissionActivityBaseSchema;
+export const workspaceAdmissionActivityQuerySchema = workspaceAdmissionActivityBaseSchema
+  .extend({ requesterHostId: nonEmptyString })
+  .strict();
+export const workspaceAdmissionActivityFactSchema = z
+  .object({
+    complete: z.boolean(),
+    ownerPresent: z.boolean(),
+    state: z.enum(["idle", "busy", "unknown"]),
+    activeSessionCount: z.number().int().nonnegative(),
+    activeTurnCount: z.number().int().nonnegative(),
+    pendingCommandCount: z.number().int().nonnegative(),
+    pendingInputCount: z.number().int().nonnegative(),
+    pendingApprovalCount: z.number().int().nonnegative(),
+  })
+  .strict();
+export const workspaceAdmissionActivityResultSchema = z
+  .object({ requestId: nonEmptyString, fact: workspaceAdmissionActivityFactSchema })
+  .strict();
+export const workspaceAdmissionActivityQueryResultSchema = z
+  .object({ requestId: nonEmptyString, fact: workspaceAdmissionActivityFactSchema })
+  .strict();
 export const taskRealtimeEventSchema = z
   .discriminatedUnion("type", [
     taskSnapshotInvalidatedEventSchema,

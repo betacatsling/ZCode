@@ -29,6 +29,13 @@ export interface RemoteUploadOptions {
   signal?: AbortSignal;
 }
 
+export interface RemotePortForward {
+  host: "127.0.0.1";
+  port: number;
+  dispose(): void;
+  disposeAndWait(): Promise<void>;
+}
+
 export interface IRemoteBackend extends IDisposable {
   /** WSL 可选的运行时网络解析；其它远端类型保持未注入。 */
   resolveRuntimeProxy?(proxyUrl: string): Promise<string>;
@@ -46,4 +53,6 @@ export interface IRemoteBackend extends IDisposable {
   exists(remotePath: string): Promise<boolean>;
   /** Read a small remote file (e.g. version string) */
   readFile(remotePath: string): Promise<string>;
+  /** SSH-only loopback direct-tcpip forwarding for an already-started target Core. */
+  openLocalPortForward?(remoteLoopbackPort: number): Promise<RemotePortForward>;
 }

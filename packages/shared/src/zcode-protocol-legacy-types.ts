@@ -33,10 +33,11 @@ export const zcodeSyntheticUserMessageSourceSchema = z.enum([
 ]);
 export const zcodeWorkspaceRefSchema = z
   .object({
-    workspacePath: nonEmptyString,
+    // 修复依据：文件系统路径是 opaque locator；trim 会把尾随空格/换行路径映射到另一目录。
+    workspacePath: z.string().min(1).max(4096),
     workspaceIdentity: nonEmptyString.optional(),
     remoteSessionId: nonEmptyString.optional(),
-    workspaceKey: nonEmptyString,
+    workspaceKey: z.string().min(1).max(4096),
   })
   .strict();
 export const zcodePermissionDecisionSchema = z.enum(["allow", "deny", "escalate", "modify"]);

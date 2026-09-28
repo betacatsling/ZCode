@@ -11,15 +11,20 @@ export interface RemoteWorkspaceSession {
   dispose?: (reason?: Error) => void;
 }
 
+export interface RegisteredRemoteWorkspaceSession extends RemoteWorkspaceSession {
+  attachmentGeneration: number;
+}
+
 interface RemoteWorkspaceSessionState {
   baseServices: IServiceAccessor | null;
-  sessionsById: Record<string, RemoteWorkspaceSession>;
+  baseAttachmentGeneration: number;
+  sessionsById: Record<string, RegisteredRemoteWorkspaceSession>;
   sessionIdByWorkspacePath: Record<string, string>;
   // 之前只按 workspacePath 建索引，同路径不同远端会互相覆盖。
   // 这里补充 workspaceIdentity -> session 的映射，保证远程会话按“主机+路径”唯一绑定。
   sessionIdByWorkspaceIdentity: Record<string, string>;
-  registerBaseServices: (services: IServiceAccessor) => void;
-  registerSession: (session: RemoteWorkspaceSession) => void;
+  registerBaseServices: (services: IServiceAccessor, generation: number) => void;
+  registerSession: (session: RegisteredRemoteWorkspaceSession) => void;
   unregisterSession: (sessionId: string) => void;
   bindWorkspacePath: (workspacePath: string, sessionId: string) => void;
   unbindWorkspacePath: (workspacePath: string) => void;
@@ -27,14 +32,18 @@ interface RemoteWorkspaceSessionState {
   unbindWorkspaceIdentity: (workspaceIdentity: string) => void;
 }
 
+let nextAttachmentGeneration = 0;
+
 export const useRemoteWorkspaceSessionStore = create<RemoteWorkspaceSessionState>()((set) => ({
   baseServices: null,
+  baseAttachmentGeneration: 0,
   sessionsById: {},
   sessionIdByWorkspacePath: {},
   sessionIdByWorkspaceIdentity: {},
-  registerBaseServices: (services) =>
+  registerBaseServices: (services, generation) =>
     set({
       baseServices: services,
+      baseAttachmentGeneration: generation,
     }),
   registerSession: (session) =>
     set((state) => ({
@@ -129,11 +138,16 @@ export function registerRemoteWorkspaceSession(session: RemoteWorkspaceSession):
     // 先终结旧 transport，确保 provider sync 的 in-flight Promise 不会跨代永久悬置。
     previousSession.dispose?.(createRemoteWorkspaceDisconnectedError());
   }
-  useRemoteWorkspaceSessionStore.getState().registerSession(session);
+  useRemoteWorkspaceSessionStore.getState().registerSession({
+    ...session,
+    attachmentGeneration: ++nextAttachmentGeneration,
+  });
 }
 
 export function registerBaseWorkspaceServices(services: IServiceAccessor): void {
-  useRemoteWorkspaceSessionStore.getState().registerBaseServices(services);
+  useRemoteWorkspaceSessionStore
+    .getState()
+    .registerBaseServices(services, ++nextAttachmentGeneration);
 }
 
 export function unregisterRemoteWorkspaceSession(sessionId: string): void {

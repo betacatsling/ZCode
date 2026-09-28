@@ -37,6 +37,8 @@ interface CommandInboxHost {
   lookupChildCommand?: PersistentLookup;
   lookupDiscardedCommand?: PersistentLookup;
   now?(): number;
+  /** Native command owner holds the target workspace fence through command pinning. */
+  acquireWorkspaceAdmission?(envelope: CommandEnvelope): Promise<() => Promise<void>>;
 }
 
 interface InFlightEntry {
@@ -77,6 +79,33 @@ export function queueItemIdForCommand(commandId: string): string {
 }
 
 type GateRelease = () => void;
+
+function requiresWorkspaceAdmission(envelope: CommandEnvelope): boolean {
+  switch (envelope.type) {
+    case "createSession":
+    case "createSelectionSideSession":
+    case "forkAssistant":
+    case "sendText":
+    case "sendQueuedNow":
+    case "retryTurn":
+    case "editUserQuery":
+    case "applyFileRewind":
+    case "compact":
+    case "resumeGoal":
+    case "resumeWorkflowRun":
+    case "startSavedWorkflow":
+      return true;
+    case "resolveInteraction": {
+      const answer = (envelope.payload as { answer?: { action?: string } }).answer;
+      // 明确拒绝/取消审批是控制操作；旧客户端没有 action 时按可能批准执行保守冻结。
+      return answer?.action !== "decline" && answer?.action !== "cancel";
+    }
+    case "setAutoDrain":
+      return (envelope.payload as { autoDrain?: boolean }).autoDrain === true;
+    default:
+      return false;
+  }
+}
 
 /**
  * FIFO async gate。返回显式 release 是因为 per-session gate 要跨过 gateway execute，
@@ -138,8 +167,9 @@ export class CommandInbox {
 
       // 固定锁序：key gate → per-session admission gate。session gate 持有到 settle，
       // 因而同 session 不同 commandId 以 CLI 实际执行 admission 的顺序串行。
-      const releaseSession = await this.sessionGates.acquire(bucketKey);
-      try {
+        const releaseSession = await this.sessionGates.acquire(bucketKey);
+        let releaseWorkspace: (() => Promise<void>) | undefined;
+        try {
         // 等待 session gate 期间，上一条命令可能增量写入了本 key 的持久化事实。
         const afterWaitPinned = this.inFlight.get(bucketKey)?.get(envelope.commandId);
         if (afterWaitPinned) {
@@ -150,6 +180,23 @@ export class CommandInbox {
         if (afterWait) {
           releaseSession();
           return this.ackOnly(this.retryAck(afterWait));
+        }
+
+        if (requiresWorkspaceAdmission(envelope) && this.host.acquireWorkspaceAdmission) {
+          try {
+            releaseWorkspace = await this.host.acquireWorkspaceAdmission(envelope);
+          } catch (error) {
+            releaseSession();
+            const message = error instanceof Error ? error.message : String(error);
+            return this.ackOnly({
+              commandId: envelope.commandId,
+              status: "rejected",
+              reasonCode: "guard.workspaceAdmissionUnavailable",
+              message,
+              revisionAtDecision:
+                envelope.sessionId === null ? 0 : (this.host.getRevision(envelope.sessionId) ?? 0),
+            });
+          }
         }
 
         const decision = this.decide(envelope);
@@ -204,6 +251,8 @@ export class CommandInbox {
       } catch (error) {
         releaseSession();
         throw error;
+      } finally {
+        await releaseWorkspace?.();
       }
     } catch (error) {
       return this.ackOnly(this.queryUnavailableAck(key, error));
@@ -252,6 +301,21 @@ export class CommandInbox {
       (this.inFlight.get(bucketKey)?.size ?? 0) > 0 ||
       (this.liveInputs.get(bucketKey)?.size ?? 0) > 0
     );
+  }
+
+  /** Counts authoritative in-flight and pinned accepted input for exact workspace sessions. */
+  workspacePins(sessionIds: readonly string[]): {
+    pendingCommandCount: number;
+    pendingInputCount: number;
+  } {
+    const buckets = new Set([GLOBAL_BUCKET, ...sessionIds]);
+    let pendingCommandCount = 0;
+    let pendingInputCount = 0;
+    for (const bucket of buckets) {
+      pendingCommandCount += this.inFlight.get(bucket)?.size ?? 0;
+      pendingInputCount += this.liveInputs.get(bucket)?.size ?? 0;
+    }
+    return { pendingCommandCount, pendingInputCount };
   }
 
   /**

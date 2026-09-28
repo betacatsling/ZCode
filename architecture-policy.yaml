@@ -31,6 +31,42 @@ modules:
     layers: { domain: domain, app: app, adapters: adapters }
     layerOrder: [domain, app, adapters]
     owner: desktop-settings
+  - id: project-catalog
+    roots: [packages/services/src/project-catalog]
+    managed: true
+    requires: [shared]
+    publicEntrypoints:
+      [packages/services/src/project-catalog/contract.ts, packages/services/src/project-catalog/index.ts]
+    layers: { domain: domain, app: app, adapters: adapters }
+    layerOrder: [domain, app, adapters]
+    owner: project-catalog
+  - id: worktree
+    roots: [packages/services/src/worktree]
+    managed: true
+    requires: [shared]
+    publicEntrypoints:
+      [packages/services/src/worktree/contract.ts, packages/services/src/worktree/removalContract.ts, packages/services/src/worktree/index.ts]
+    layers: { domain: domain, app: app, adapters: adapters }
+    layerOrder: [domain, app, adapters]
+    owner: target-worktree
+  - id: session-hierarchy
+    roots: [packages/services/src/session-hierarchy]
+    managed: true
+    requires: [shared]
+    publicEntrypoints:
+      [packages/services/src/session-hierarchy/contract.ts, packages/services/src/session-hierarchy/index.ts]
+    layers: { domain: domain, app: app, adapters: adapters }
+    layerOrder: [domain, app, adapters]
+    owner: session-migration
+  - id: model-gateway
+    roots: [packages/services/src/model-gateway]
+    managed: true
+    requires: [zcode-cli]
+    publicEntrypoints:
+      [packages/services/src/model-gateway/contract.ts, packages/services/src/model-gateway/index.ts, packages/services/src/model-gateway/targetModelGateway.ts]
+    layers: { domain: domain, app: app, adapters: adapters }
+    layerOrder: [domain, app, adapters]
+    owner: target-model-gateway
   - id: client
     roots: [packages/client/src]
     managed: false

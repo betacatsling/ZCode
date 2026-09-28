@@ -398,6 +398,9 @@ interface ConversationComposerProps {
   /** SessionPane 从目标 Host 原子读取的选择事实；Composer 不自行解析 Host。 */
   modelSelectionView?: ModelSelectionView | null;
   modelSelectionState?: ModelSelectionState;
+  /** External sessions expose only input, approvals, stop, and history controls. */
+  supportsSessionConfiguration?: boolean;
+  supportsAttachments?: boolean;
   /** Model Selection 首次读取失败后的显式重试入口。 */
   modelSelectionReload?: () => void;
   /** 草稿态使用预热 session 作附件 transaction 载体。 */
@@ -503,6 +506,8 @@ function ConversationComposerImpl({
   remoteSessionId,
   modelSelectionView = null,
   modelSelectionState = MODEL_SELECTION_LOADING_STATE,
+  supportsSessionConfiguration = true,
+  supportsAttachments = true,
   modelSelectionReload,
   attachmentSessionId = null,
   attachmentPut,
@@ -623,34 +628,37 @@ function ConversationComposerImpl({
     workspacePath,
     workspaceIdentity,
     remoteSessionId,
-    scopeId: draftScopeId,
-    attachmentSessionId,
+    scopeId: supportsAttachments ? draftScopeId : `external-readonly:${draftScopeId}`,
+    attachmentSessionId: supportsAttachments ? attachmentSessionId : null,
     attachmentPut,
     onRuntimeRestart,
     onRuntimeLifecycle,
-    disabled,
-    listenAddToChatEvents: listenAddToChatEvents && !disabled,
+    disabled: disabled || !supportsAttachments,
+    listenAddToChatEvents: listenAddToChatEvents && !disabled && supportsAttachments,
   });
   // 对齐旧版 useChatComposer：窗口级 dragover 会在指针进入 ChatView 前预先点亮
   // 整个聊天区与桌面草稿标题栏；workspace payload 的文案优先于系统附件。
   const { externalFileDragging, workspaceFileDragging } = usePromptEditorDragState({
-    enableExternalFileDrop: true,
-    enableWorkspaceFileDrop: true,
+    enableExternalFileDrop: supportsAttachments,
+    enableWorkspaceFileDrop: supportsSessionConfiguration,
   });
   const handleConversationDragOver = useCallback(
     (event: DragEvent<HTMLElement>) => {
+      if (!supportsAttachments) return;
       attachmentsApi.handleDragOverComposer(event);
     },
-    [attachmentsApi.handleDragOverComposer],
+    [attachmentsApi.handleDragOverComposer, supportsAttachments],
   );
   const handleConversationDragLeave = useCallback(
     (event: DragEvent<HTMLElement>) => {
+      if (!supportsAttachments) return;
       attachmentsApi.handleDragLeaveComposer(event);
     },
-    [attachmentsApi.handleDragLeaveComposer],
+    [attachmentsApi.handleDragLeaveComposer, supportsAttachments],
   );
   const handleConversationDrop = useCallback(
     (event: DragEvent<HTMLElement>) => {
+      if (!supportsAttachments) return;
       const workspaceFilePayload = readWorkspaceFileDragPayload(event.dataTransfer);
       if (workspaceFilePayload) {
         // 文件树 payload 与 OS File[] 语义不同：只插入 mention，绝不能进入上传队列。
@@ -668,14 +676,23 @@ function ConversationComposerImpl({
       }
       attachmentsApi.handleDropComposer(event);
     },
-    [attachmentsApi.handleDropComposer, updateText, workspaceIdentity, workspacePath],
+    [
+      attachmentsApi.handleDropComposer,
+      supportsAttachments,
+      updateText,
+      workspaceIdentity,
+      workspacePath,
+    ],
   );
-  const conversationDragKind = workspaceFileDragging
-    ? "workspace"
-    : externalFileDragging
-      ? "attachment"
-      : (attachmentsApi.composerDragKind ??
-        (attachmentsApi.isDraggingOverComposer ? "attachment" : null));
+  const conversationDragKind =
+    !supportsAttachments && !supportsSessionConfiguration
+      ? null
+      : workspaceFileDragging
+        ? "workspace"
+        : externalFileDragging
+          ? "attachment"
+          : (attachmentsApi.composerDragKind ??
+            (attachmentsApi.isDraggingOverComposer ? "attachment" : null));
   const dropTargetController = useMemo<ConversationDropTargetController>(
     () => ({
       active: conversationDragKind !== null,
@@ -706,7 +723,7 @@ function ConversationComposerImpl({
   const videoAttachmentPreviewTitle = intl.formatMessage({
     id: "chat.attachments.preview.openVideo",
   });
-  const hasAttachments = attachmentsApi.hasAttachments;
+  const hasAttachments = supportsAttachments && attachmentsApi.hasAttachments;
   const {
     contexts: webElementContexts,
     hasContexts: hasWebElementContexts,
@@ -717,7 +734,7 @@ function ConversationComposerImpl({
     workspaceIdentity,
     // queue 撤回等待 ACK 时 composer 处于 disabled；此时也要阻止全局 add-to-chat
     // 写入网页上下文，避免权威删除成功后撞上 ACK 窗口内的新草稿。
-    listenAddToChatEvents: listenAddToChatEvents && !disabled,
+    listenAddToChatEvents: listenAddToChatEvents && !disabled && supportsSessionConfiguration,
     scopeId: draftScopeId,
   });
   const {
@@ -729,7 +746,7 @@ function ConversationComposerImpl({
     workspacePath,
     workspaceIdentity,
     remoteSessionId,
-    listenAddToChatEvents: listenAddToChatEvents && !disabled,
+    listenAddToChatEvents: listenAddToChatEvents && !disabled && supportsSessionConfiguration,
     scopeId: draftScopeId,
   });
   const openPptxElementReference = useOpenPptxElementReference({
@@ -866,7 +883,7 @@ function ConversationComposerImpl({
     getContexts: getCodeCommentContexts,
   } = useCodeCommentContexts({
     // queue 撤回等待 ACK 时 composer 处于 disabled；与网页上下文保持同一写入门禁。
-    listenAddToChatEvents: listenAddToChatEvents && !disabled,
+    listenAddToChatEvents: listenAddToChatEvents && !disabled && supportsSessionConfiguration,
     onContextRemoved: handleCodeCommentRemoved,
     requestFocus: requestComposerFocus,
     scopeKey: `${workspaceKey}\0${draftScopeId}`,
@@ -881,7 +898,7 @@ function ConversationComposerImpl({
         currentWorkspaceKey: workspaceKey,
         hasDraftContent:
           textRef.current.length > 0 ||
-          attachmentsApi.attachments.length > 0 ||
+          (supportsAttachments && attachmentsApi.attachments.length > 0) ||
           codeCommentContexts.length > 0 ||
           webElementContexts.length > 0 ||
           pptxElementReferences.length > 0 ||
@@ -923,6 +940,7 @@ function ConversationComposerImpl({
     replaceComposerDraft,
     requestComposerFocus,
     scheduleDraftPersist,
+    supportsAttachments,
     sessionId,
     updateText,
     webElementContexts.length,
@@ -1124,7 +1142,7 @@ function ConversationComposerImpl({
   // V4 重构时把 guide 当成“不可提交”状态，导致按钮和 Enter 同时失效；
   // guide 是 CLI 已授权的 busy 输入路由，是否最终 steer 或回退 queue 由命令层裁决。
   const routingAllowsSend = draftMode || (snapshot !== null && mode !== "reject");
-  const attachmentsReady = !attachmentsApi.hasUnreadyAttachments;
+  const attachmentsReady = !supportsAttachments || !attachmentsApi.hasUnreadyAttachments;
   const canSend =
     !disabled &&
     !pending &&
@@ -1149,7 +1167,7 @@ function ConversationComposerImpl({
       const trimmed = textRef.current.trim();
       const submittedQueueItemIds =
         snapshotRef.current?.queue.items.map((item) => item.queueItemId) ?? [];
-      const hasPendingAttachments = attachmentsApi.attachments.length > 0;
+      const hasPendingAttachments = supportsAttachments && attachmentsApi.attachments.length > 0;
       const currentCodeCommentContexts = getCodeCommentContexts();
       const hasPendingCodeCommentContexts = currentCodeCommentContexts.length > 0;
       const currentWebElementContexts = webElementContexts;
@@ -1165,7 +1183,9 @@ function ConversationComposerImpl({
       const submittedDraft = snapshotDraftOfEditor();
       let cleanupRevision = contentRevisionRef.current;
       const submission = createSubmissionFromComposer?.() ?? null;
-      const submittedAttachmentIds = attachmentsApi.attachments.map((item) => item.id);
+      const submittedAttachmentIds = supportsAttachments
+        ? attachmentsApi.attachments.map((item) => item.id)
+        : [];
       if (
         (!trimmed &&
           !hasPendingAttachments &&
@@ -1177,7 +1197,7 @@ function ConversationComposerImpl({
         pendingRef.current ||
         !submissionReady ||
         (createSubmissionFromComposer !== undefined && submission === null) ||
-        attachmentsApi.hasUnreadyAttachments
+        (supportsAttachments && attachmentsApi.hasUnreadyAttachments)
       ) {
         return;
       }
@@ -1285,7 +1305,9 @@ function ConversationComposerImpl({
       };
       try {
         // 二次门禁：只消费预传完成的 ref，不在点击发送时回落上传。
-        const readyAttachmentRefs = await attachmentsApi.prepareForSend();
+        const readyAttachmentRefs = supportsAttachments
+          ? await attachmentsApi.prepareForSend()
+          : [];
         if (readyAttachmentRefs === null) {
           if (telemetrySeed.localTtft)
             getLocalTtftObserver()?.exclude(telemetrySeed.localTtft, "rejected");
@@ -1457,6 +1479,7 @@ function ConversationComposerImpl({
       removeWebElementContext,
       sessionId,
       snapshotDraftOfEditor,
+      supportsAttachments,
       updateText,
       updateComposerContent,
       webElementContexts,
@@ -1640,27 +1663,30 @@ function ConversationComposerImpl({
   }, [conversationTelemetry, intl, sessionId, telemetryVisible, visibleError]);
 
   const attachmentAction = useMemo(
-    () => ({
-      label: intl.formatMessage({ id: "chat.composer.attachment" }),
-      menuItemTestId: TID_CHAT_ATTACHMENT_MENU_ITEM,
-      onSelect: () =>
-        runUserAction({
-          input: {
-            featureId: "conversation.composer.attachment",
-            action: "add",
-            trigger: "button",
-          },
-          operation: attachmentsApi.openAttachmentPicker,
-          completed: { resultSource: "local_commit" },
-          failureStage: "attachment_picker",
-        }),
-      testId: TID_CHAT_ATTACHMENT_BUTTON,
-    }),
-    [intl, attachmentsApi.openAttachmentPicker],
+    () =>
+      supportsAttachments
+        ? {
+            label: intl.formatMessage({ id: "chat.composer.attachment" }),
+            menuItemTestId: TID_CHAT_ATTACHMENT_MENU_ITEM,
+            onSelect: () =>
+              runUserAction({
+                input: {
+                  featureId: "conversation.composer.attachment",
+                  action: "add",
+                  trigger: "button",
+                },
+                operation: attachmentsApi.openAttachmentPicker,
+                completed: { resultSource: "local_commit" },
+                failureStage: "attachment_picker",
+              }),
+            testId: TID_CHAT_ATTACHMENT_BUTTON,
+          }
+        : undefined,
+    [attachmentsApi.openAttachmentPicker, intl, supportsAttachments],
   );
 
   // ── 附件预览网格 ──
-  const composerAttachments = attachmentsApi.attachments;
+  const composerAttachments = supportsAttachments ? attachmentsApi.attachments : [];
   const orderedComposerAttachments = useMemo(() => {
     // 媒体组（图片/视频）优先、文件在后；组内保持添加顺序。
     const media: (typeof composerAttachments)[number][] = [];
@@ -2035,104 +2061,119 @@ function ConversationComposerImpl({
       }),
     [onSelectModel],
   );
-  const submitControlNode = useMemo(
-    () => (
+  const submitControlNode = useMemo(() => {
+    const stopButton = (
+      <Button
+        type="button"
+        variant="secondary"
+        size="icon-md"
+        onClick={handleStopClick}
+        data-testid={TID_V4_STOP}
+        aria-label={stopTooltipTitle}
+      >
+        <SquareIcon className="size-4 fill-current" />
+        <span className="sr-only">{stopTooltipTitle}</span>
+      </Button>
+    );
+    const sendButton = (
+      <Button
+        type="submit"
+        size="icon-md"
+        disabled={!canSend}
+        onClick={handleSendButtonClick}
+        data-testid={TID_V4_COMPOSER_SEND}
+        aria-label={resolvedSendTooltipTitle}
+        title={resolvedSendTooltipTitle}
+        className="cursor-pointer gap-1 rounded-lg bg-brand text-ui-base text-foreground-inverse hover:bg-brand/80"
+      >
+        {pending ? <Spinner className="size-4" /> : <ArrowUpIcon className="size-4" />}
+        <span className="sr-only">{resolvedSendTooltipTitle}</span>
+      </Button>
+    );
+    return (
       <div className="flex min-w-0 items-center gap-1">
-        <span className="flex min-w-0 shrink items-center gap-1 overflow-hidden empty:hidden">
-          <V4ComposerModelControls
-            workspacePath={workspacePath}
-            workspaceIdentity={workspaceIdentity}
-            modelSelectionView={modelSelectionView}
-            modelSelectionState={modelSelectionState}
-            modelSelectionReload={modelSelectionReload}
-            sessionId={sessionId ?? null}
-            phase={composerPhase}
-            provider={provider}
-            draftMode={draftMode}
-            draftConfig={draftConfig}
-            usage={composerUsage}
-            disabled={disabled}
-            activeConfigPicker={activeConfigPicker}
-            onConfigPickerOpenChange={handleConfigPickerOpenChange}
-            onSelectModel={handleSelectModelTrace}
-            onSelectThought={onSelectThought}
-            onSwitchMode={onSwitchMode}
-            onRecoverCustomModelSelection={onRecoverCustomModelSelection}
-            onSendCompressionCommand={onSendCompressionCommand}
-          />
-        </span>
+        {supportsSessionConfiguration ? (
+          <span className="flex min-w-0 shrink items-center gap-1 overflow-hidden empty:hidden">
+            <V4ComposerModelControls
+              workspacePath={workspacePath}
+              workspaceIdentity={workspaceIdentity}
+              modelSelectionView={modelSelectionView}
+              modelSelectionState={modelSelectionState}
+              modelSelectionReload={modelSelectionReload}
+              sessionId={sessionId ?? null}
+              phase={composerPhase}
+              provider={provider}
+              draftMode={draftMode}
+              draftConfig={draftConfig}
+              usage={composerUsage}
+              disabled={disabled}
+              activeConfigPicker={activeConfigPicker}
+              onConfigPickerOpenChange={handleConfigPickerOpenChange}
+              onSelectModel={handleSelectModelTrace}
+              onSelectThought={onSelectThought}
+              onSwitchMode={onSwitchMode}
+              onRecoverCustomModelSelection={onRecoverCustomModelSelection}
+              onSendCompressionCommand={onSendCompressionCommand}
+            />
+          </span>
+        ) : null}
         {showStopControl ? (
-          <ControlHintTooltip title={stopTooltipTitle} shortcut="Esc">
-            <Button
-              type="button"
-              variant="secondary"
-              size="icon-md"
-              onClick={handleStopClick}
-              data-testid={TID_V4_STOP}
-              aria-label={stopTooltipTitle}
-            >
-              <SquareIcon className="size-4 fill-current" />
-              <span className="sr-only">{stopTooltipTitle}</span>
-            </Button>
-          </ControlHintTooltip>
-        ) : (
+          supportsSessionConfiguration ? (
+            <ControlHintTooltip title={stopTooltipTitle} shortcut="Esc">
+              {stopButton}
+            </ControlHintTooltip>
+          ) : (
+            stopButton
+          )
+        ) : supportsSessionConfiguration ? (
           <ControlHintTooltip
             title={resolvedSendTooltipTitle}
             shortcut={resolvedSendTooltipShortcut}
             open={Boolean(modifierTooltip) || sendTooltipOpen}
             onOpenChange={setSendTooltipOpen}
           >
-            <Button
-              type="submit"
-              size="icon-md"
-              disabled={!canSend}
-              onClick={handleSendButtonClick}
-              data-testid={TID_V4_COMPOSER_SEND}
-              aria-label={resolvedSendTooltipTitle}
-              className="cursor-pointer gap-1 rounded-lg bg-brand text-ui-base text-foreground-inverse hover:bg-brand/80"
-            >
-              {pending ? <Spinner className="size-4" /> : <ArrowUpIcon className="size-4" />}
-              <span className="sr-only">{resolvedSendTooltipTitle}</span>
-            </Button>
+            {sendButton}
           </ControlHintTooltip>
+        ) : (
+          sendButton
         )}
       </div>
-    ),
-    [
-      canSend,
-      activeConfigPicker,
-      composerPhase,
-      composerUsage,
-      disabled,
-      draftConfig,
-      draftMode,
-      handleStopClick,
-      handleSendButtonClick,
-      handleConfigPickerOpenChange,
-      mode,
-      handleSelectModelTrace,
-      modelSelectionReload,
-      modelSelectionState,
-      modelSelectionView,
-      onSelectThought,
-      onRecoverCustomModelSelection,
-      onSendCompressionCommand,
-      onSwitchMode,
-      pending,
-      provider,
-      modifierTooltip,
-      resolvedSendTooltipShortcut,
-      resolvedSendTooltipTitle,
-      sendTooltipOpen,
-      sendShortcut,
-      sendTooltipTitle,
-      sessionId,
-      showStopControl,
-      stopTooltipTitle,
-      workspaceIdentity,
-      workspacePath,
-    ],
-  );
+    );
+  }, [
+    canSend,
+    activeConfigPicker,
+    composerPhase,
+    composerUsage,
+    disabled,
+    draftConfig,
+    draftMode,
+    handleStopClick,
+    handleSendButtonClick,
+    handleConfigPickerOpenChange,
+    mode,
+    handleSelectModelTrace,
+    modelSelectionReload,
+    modelSelectionState,
+    modelSelectionView,
+    onSelectThought,
+    onRecoverCustomModelSelection,
+    onSendCompressionCommand,
+    supportsSessionConfiguration,
+    onSwitchMode,
+    pending,
+    provider,
+    modifierTooltip,
+    resolvedSendTooltipShortcut,
+    resolvedSendTooltipTitle,
+    sendTooltipOpen,
+    sendShortcut,
+    sendTooltipTitle,
+    sessionId,
+    showStopControl,
+    stopTooltipTitle,
+    workspaceIdentity,
+    workspacePath,
+  ]);
 
   // 左下：模式选择 + CUA 入口 + 当前 session 后台任务入口。followupMode 由 app 设置页同步到 CLI，
   // 不在 composer 暴露局部开关；后台入口只消费同一 snapshot，不维护第二份任务状态。
@@ -2267,11 +2308,11 @@ function ConversationComposerImpl({
           enterSubmits={enterSubmits}
           onModifiedSubmit={modifiedEnterSubmits ? handleModifiedEditorSubmit : undefined}
           submitLabel={sendTooltipTitle}
-          showSlashButton
+          showSlashButton={supportsSessionConfiguration}
           // @ 是 Plugin / 文件 / 对话 / 画板主入口；# 会话与 $ / ¥ / ￥ Skills
           // 仍由 MentionPlugin 保留兼容触发，但不在 + 菜单重复展示。
-          showMentionButton
-          topContent={topContentNode}
+          showMentionButton={supportsSessionConfiguration}
+          topContent={supportsSessionConfiguration ? topContentNode : undefined}
           attachmentAction={attachmentAction}
           inputTestId={TID_V4_COMPOSER_INPUT}
           inputApiRef={inputApiRef}
@@ -2279,18 +2320,20 @@ function ConversationComposerImpl({
           // 命令目录必须完整来自 CLI workspace slash catalog；UI 只在
           // secondary pane 按产品能力隐藏 goal，不再追加任何内建命令或别名。
           excludedSlashCommandNames={suppressGoalCommands ? ["goal"] : undefined}
-          appSlashCommands={appSlashCommands}
-          enableMentionPanel
-          leadingActions={leadingActionsNode}
+          appSlashCommands={supportsSessionConfiguration ? appSlashCommands : undefined}
+          enableMentionPanel={supportsSessionConfiguration}
+          leadingActions={supportsAttachments ? leadingActionsNode : undefined}
           submitControl={submitControlNode}
           className="p-0"
           onChange={handleEditorChange}
           onFocus={handleEditorFocus}
           onSubmit={handleEditorSubmit}
-          onWhiteboardMentionSelected={attachmentsApi.handleWhiteboardMentionSelected}
-          onPaste={attachmentsApi.handlePaste}
+          onWhiteboardMentionSelected={
+            supportsAttachments ? attachmentsApi.handleWhiteboardMentionSelected : undefined
+          }
+          onPaste={supportsAttachments ? attachmentsApi.handlePaste : undefined}
         />
-        {attachmentsApi.attachmentError ? (
+        {supportsAttachments && attachmentsApi.attachmentError ? (
           <p className="flex items-start gap-2 p-3 text-ui-base text-warning">
             <InfoIcon className="mt-0.5 size-4 shrink-0" />
             <span>{attachmentsApi.attachmentError}</span>

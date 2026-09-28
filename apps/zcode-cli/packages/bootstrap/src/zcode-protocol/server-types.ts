@@ -103,6 +103,7 @@ export interface ZCodeProtocolSessionRecord {
   unsubscribe?: () => void;
   updatedAt: number;
   workspace: ZCodeWorkspaceRef;
+  workspaceAdmissionGeneration?: string;
   activeAbortController?: AbortController;
   /** background runner 释放 ready lock 后，持久化/snapshot/broadcast 尚未完成的引用计数。 */
   residencyFinalizationCount?: number;

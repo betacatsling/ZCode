@@ -198,9 +198,18 @@ export function V4InteractionDialogs({
         content?: Record<string, unknown>;
       },
     ) => {
+      const baseLogEpoch = currentSnapshot?.logEpoch;
+      if (!baseLogEpoch) {
+        logger.warn("[v4-interaction] resolveInteraction 缺少当前 snapshot epoch", {
+          interactionId,
+          sessionId,
+        });
+        return false;
+      }
       const envelope = createCommandEnvelope({
         type: "resolveInteraction",
         sessionId,
+        baseLogEpoch,
         payload: { interactionId, answer },
       });
       // 权限/freeText/content 不落盘；registry 只持摘要，用于 ACK 丢失后的 query 对账。
@@ -225,7 +234,7 @@ export function V4InteractionDialogs({
         onCommandSettled?.(envelope.commandId);
       }
     },
-    [onCommandSettled, sendCommand, sessionId],
+    [currentSnapshot, onCommandSettled, sendCommand, sessionId],
   );
 
   const snoozeAutoResolution = useCallback(

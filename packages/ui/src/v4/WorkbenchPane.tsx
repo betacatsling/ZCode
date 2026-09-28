@@ -40,7 +40,9 @@ import type {
 import { SessionPane } from "@/v4/SessionPane.js";
 import type { PaneWorkspaceBadge } from "@/v4/ConversationHeader.js";
 import type { ConversationDropTargetController } from "@/v4/composer/conversationDropTarget.js";
+import { V4AgentHostConversationProvider } from "@/v4/V4AgentHostConversationProvider.js";
 import { V4PaneConversationProvider } from "@/v4/V4ConversationContext.js";
+import type { AgentHostConversationSelection } from "@/v4/agentHostConversationOwner.js";
 import {
   paneWorkspaceKey,
   V4_PRIMARY_PANE_ID,
@@ -259,6 +261,7 @@ export interface WorkbenchShellBinding {
   isDesktop?: boolean;
   readOnly?: boolean;
   sessionId: string | null;
+  externalSessionSelection?: AgentHostConversationSelection;
   /** Shell 当前真正激活的 task；split pane 接管 active task 时不等于 primary sessionId。 */
   activeSessionId?: string | null;
   activeSelectionSideChatSessionId?: string | null;
@@ -337,6 +340,26 @@ function workspaceBadgeFor(scope: PaneWorkspaceScope): PaneWorkspaceBadge {
   };
 }
 
+function PaneConversationOwnerProvider({
+  scope,
+  externalSelection,
+  isDesktop,
+  children,
+}: {
+  scope: PaneWorkspaceScope;
+  externalSelection?: AgentHostConversationSelection;
+  isDesktop?: boolean;
+  children: ReactNode;
+}) {
+  return externalSelection ? (
+    <V4AgentHostConversationProvider selection={externalSelection} isDesktop={isDesktop}>
+      {children}
+    </V4AgentHostConversationProvider>
+  ) : (
+    <V4PaneConversationProvider scope={scope}>{children}</V4PaneConversationProvider>
+  );
+}
+
 export function WorkbenchLeafPane({
   paneId,
   rect,
@@ -359,6 +382,7 @@ export function WorkbenchLeafPane({
   const [dropSide, setDropSide] = useState<PaneSplitSide | null>(null);
   const isPrimary = paneId === V4_PRIMARY_PANE_ID;
   const isGroupPrimary = isPrimary && Boolean(primaryBinding);
+  const externalSelection = isPrimary ? shell.externalSessionSelection : undefined;
   const scope = useMemo<PaneWorkspaceScope>(() => {
     if (!isPrimary && binding) {
       return binding.workspaceScope;
@@ -507,14 +531,28 @@ export function WorkbenchLeafPane({
     return null;
   }
 
-  const isShellWorkspace = paneWorkspaceKey(scope) === shellWorkspaceKey;
-  const sessionId = isPrimary
-    ? (primaryBinding?.sessionId ?? shell.sessionId)
-    : (binding?.sessionId ?? null);
-  const readOnly = Boolean(
-    (isPrimary ? primaryBinding?.readOnly : binding?.readOnly) ||
-    (isShellWorkspace && shell.readOnly),
-  );
+  const isShellWorkspace = !externalSelection && paneWorkspaceKey(scope) === shellWorkspaceKey;
+  const sessionId = externalSelection
+    ? externalSelection.sessionSpec.hostSessionId
+    : isPrimary
+      ? (primaryBinding?.sessionId ?? shell.sessionId)
+      : (binding?.sessionId ?? null);
+  const conversationWorkspacePath =
+    externalSelection?.ownerRecord.workspacePath ?? scope.workspacePath;
+  const conversationWorkspaceIdentity = externalSelection
+    ? externalSelection.remoteSessionId
+      ? externalSelection.sessionSpec.execution.workspaceIdentity
+      : undefined
+    : scope.workspaceIdentity;
+  const conversationRemoteSessionId = externalSelection
+    ? (externalSelection.remoteSessionId ?? undefined)
+    : scope.remoteSessionId;
+  const readOnly = externalSelection
+    ? false
+    : Boolean(
+        (isPrimary ? primaryBinding?.readOnly : binding?.readOnly) ||
+        (isShellWorkspace && shell.readOnly),
+      );
   const shouldUseShellStatusPanel = isShellWorkspace;
   const paneSearchResultHighlightRequest =
     sessionId === shell.searchResultHighlightRequest?.taskId
@@ -535,8 +573,14 @@ export function WorkbenchLeafPane({
       onDrop={handleDrop}
       restoredUnvalidated={Boolean((isPrimary ? primaryBinding : binding)?.restoredUnvalidated)}
     >
-      <V4PaneConversationProvider scope={scope}>
-        {(isPrimary ? primaryBinding : binding)?.restoredUnvalidated && sessionId ? (
+      <PaneConversationOwnerProvider
+        scope={scope}
+        externalSelection={externalSelection}
+        isDesktop={shell.isDesktop}
+      >
+        {!externalSelection &&
+        (isPrimary ? primaryBinding : binding)?.restoredUnvalidated &&
+        sessionId ? (
           <PaneRestoredGuard
             paneId={paneId}
             scope={scope}
@@ -550,26 +594,36 @@ export function WorkbenchLeafPane({
           readOnly={readOnly}
           sessionId={sessionId}
           openTrigger={isPrimary ? "sidebar" : "split"}
-          activeSelectionSideChatSessionId={resolvePaneActiveSelectionSideChatSessionId(
-            sessionId,
-            shell.activeSessionId ?? shell.sessionId,
-            shell.activeSelectionSideChatSessionId,
-          )}
-          workspacePath={scope.workspacePath}
-          workspaceIdentity={scope.workspaceIdentity}
-          remoteSessionId={scope.remoteSessionId}
+          activeSelectionSideChatSessionId={
+            externalSelection
+              ? null
+              : resolvePaneActiveSelectionSideChatSessionId(
+                  sessionId,
+                  shell.activeSessionId ?? shell.sessionId,
+                  shell.activeSelectionSideChatSessionId,
+                )
+          }
+          workspacePath={conversationWorkspacePath}
+          workspaceIdentity={conversationWorkspaceIdentity}
+          remoteSessionId={conversationRemoteSessionId}
           isDesktop={shell.isDesktop}
-          provider={isPrimary && isShellWorkspace ? shell.provider : undefined}
-          onSessionCreated={handleSessionCreated}
-          onSessionDeleted={handleSessionDeleted}
+          provider={
+            !externalSelection && isPrimary && isShellWorkspace ? shell.provider : undefined
+          }
+          onSessionCreated={externalSelection ? undefined : handleSessionCreated}
+          onSessionDeleted={externalSelection ? undefined : handleSessionDeleted}
           focused={focused}
-          onSplitRight={canSplit && onSplit ? handleSplitRight : undefined}
-          onSplitDown={canSplit && onSplit ? handleSplitDown : undefined}
+          onSplitRight={!externalSelection && canSplit && onSplit ? handleSplitRight : undefined}
+          onSplitDown={!externalSelection && canSplit && onSplit ? handleSplitDown : undefined}
           onClosePane={isPrimary ? undefined : handleClosePane}
           workspaceBadge={!isPrimary && !isShellWorkspace ? workspaceBadgeFor(scope) : undefined}
-          draftComposerHeader={isPrimary && !primaryBinding ? shell.draftComposerHeader : undefined}
+          draftComposerHeader={
+            !externalSelection && isPrimary && !primaryBinding
+              ? shell.draftComposerHeader
+              : undefined
+          }
           onDropTargetControllerChange={
-            isPrimary && !primaryBinding
+            !externalSelection && isPrimary && !primaryBinding
               ? shell.onPrimaryDraftDropTargetControllerChange
               : undefined
           }
@@ -581,7 +635,9 @@ export function WorkbenchLeafPane({
           gitWorktreeChangeSummary={
             shouldUseShellStatusPanel ? shell.gitWorktreeChangeSummary : undefined
           }
-          activeTaskChangeSummary={isPrimary ? shell.activeTaskChangeSummary : undefined}
+          activeTaskChangeSummary={
+            !externalSelection && isPrimary ? shell.activeTaskChangeSummary : undefined
+          }
           summaryPanelVariantOverride={
             shouldUseShellStatusPanel ? shell.summaryPanelVariantOverride : undefined
           }
@@ -590,34 +646,44 @@ export function WorkbenchLeafPane({
           }
           onRefreshGit={shouldUseShellStatusPanel ? shell.onRefreshGit : undefined}
           onOpenGitReview={shouldUseShellStatusPanel ? shell.onOpenGitReview : undefined}
-          onOpenBrowserUrl={shell.onOpenBrowserUrl}
-          onOpenAutomationsMain={shell.onOpenAutomationsMain}
-          onOpenCodeViewer={shell.onOpenCodeViewer}
-          onAutoOpenAssistantPptx={shell.onAutoOpenAssistantPptx}
-          onOpenFileLink={shell.onOpenFileLink}
-          onOpenSubagentSession={shell.onOpenSubagentSession}
-          onOpenBackgroundBash={shell.onOpenBackgroundBash}
-          onOpenSubagentDirectory={shell.onOpenSubagentDirectory}
-          onSyncSubagentSessionTabs={shell.onSyncSubagentSessionTabs}
-          onOpenSelectionSideChat={shell.onOpenSelectionSideChat}
-          onOpenPlanDetail={shell.onOpenPlanDetail}
-          onOpenWorkflowRun={shell.onOpenWorkflowRun}
-          onOpenWorkflowArtifact={shell.onOpenWorkflowArtifact}
-          onOpenWorkflowRunDirectory={shell.onOpenWorkflowRunDirectory}
-          onOpenWorkflowActorSession={shell.onOpenWorkflowActorSession}
-          onOpenWorkflowWorkspace={shell.onOpenWorkflowWorkspace}
-          conversationFindQuery={focused ? shell.conversationFindQuery : ""}
-          conversationFindActiveIndex={focused ? (shell.conversationFindActiveIndex ?? -1) : -1}
+          onOpenBrowserUrl={externalSelection ? undefined : shell.onOpenBrowserUrl}
+          onOpenAutomationsMain={externalSelection ? undefined : shell.onOpenAutomationsMain}
+          onOpenCodeViewer={externalSelection ? undefined : shell.onOpenCodeViewer}
+          onAutoOpenAssistantPptx={externalSelection ? undefined : shell.onAutoOpenAssistantPptx}
+          onOpenFileLink={externalSelection ? undefined : shell.onOpenFileLink}
+          onOpenSubagentSession={externalSelection ? undefined : shell.onOpenSubagentSession}
+          onOpenBackgroundBash={externalSelection ? undefined : shell.onOpenBackgroundBash}
+          onOpenSubagentDirectory={externalSelection ? undefined : shell.onOpenSubagentDirectory}
+          onSyncSubagentSessionTabs={
+            externalSelection ? undefined : shell.onSyncSubagentSessionTabs
+          }
+          onOpenSelectionSideChat={externalSelection ? undefined : shell.onOpenSelectionSideChat}
+          onOpenPlanDetail={externalSelection ? undefined : shell.onOpenPlanDetail}
+          onOpenWorkflowRun={externalSelection ? undefined : shell.onOpenWorkflowRun}
+          onOpenWorkflowArtifact={externalSelection ? undefined : shell.onOpenWorkflowArtifact}
+          onOpenWorkflowRunDirectory={
+            externalSelection ? undefined : shell.onOpenWorkflowRunDirectory
+          }
+          onOpenWorkflowActorSession={
+            externalSelection ? undefined : shell.onOpenWorkflowActorSession
+          }
+          onOpenWorkflowWorkspace={externalSelection ? undefined : shell.onOpenWorkflowWorkspace}
+          conversationFindQuery={focused && !externalSelection ? shell.conversationFindQuery : ""}
+          conversationFindActiveIndex={
+            focused && !externalSelection ? (shell.conversationFindActiveIndex ?? -1) : -1
+          }
           conversationFindNavigationRequestId={
-            focused ? (shell.conversationFindNavigationRequestId ?? 0) : 0
+            focused && !externalSelection ? (shell.conversationFindNavigationRequestId ?? 0) : 0
           }
           onConversationFindMatchStateChange={
-            focused ? shell.onConversationFindMatchStateChange : undefined
+            focused && !externalSelection ? shell.onConversationFindMatchStateChange : undefined
           }
-          searchResultHighlightRequest={paneSearchResultHighlightRequest}
-          onSearchResultHighlightDone={shell.onSearchResultHighlightDone}
+          searchResultHighlightRequest={externalSelection ? null : paneSearchResultHighlightRequest}
+          onSearchResultHighlightDone={
+            externalSelection ? undefined : shell.onSearchResultHighlightDone
+          }
         />
-      </V4PaneConversationProvider>
+      </PaneConversationOwnerProvider>
     </ChatPaneShell>
   );
 }

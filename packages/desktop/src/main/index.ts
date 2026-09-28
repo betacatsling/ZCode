@@ -145,6 +145,10 @@ import {
 } from "./desktopWindowLifecycle.js";
 import { resolveZCodeBuiltinProviderConfigFilePath } from "./desktopProviderConfig.js";
 import {
+  createPersistentDesktopTargetManager,
+  resolveDesktopPersistentTargetResourcesPath,
+} from "./persistentDesktopTarget.js";
+import {
   getCredentialsDir,
   isDockerDaemonAvailable,
   listSSHConfigAliases,
@@ -789,6 +793,16 @@ const remoteSessionManager = createRemoteWorkspaceSessionManager({
 });
 
 const deviceMid = ensureDesktopDeviceMidSync();
+const localPersistentTargetManager = createPersistentDesktopTargetManager({
+  targetId: `local:${deviceMid}`,
+  resourcesDirectory: resolveDesktopPersistentTargetResourcesPath({
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    desktopPackageRoot: resolve(import.meta.dirname, "../.."),
+  }),
+  dataBaseDir: getDataBaseDir(),
+  environment: { ...hostProcessLocalEnv, ...process.env },
+});
 // 帮助配置是公开读取，不能复用下面附带账号鉴权的灰度响应缓存。
 const readHelpConfig = createDesktopHelpConfigReader({
   appVersion: ZCODE_VERSION || app.getVersion(),
@@ -1696,6 +1710,15 @@ function createWindowInstance(startupBootstrap: StartupWindowBootstrap = {}) {
     windowHostProcessMap,
     onHostProcessReady: (windowKey) => cuaPipFocusRouter.refreshWindow(windowKey),
     awaitFirstHostSpawnDecision,
+    ensureLocalPersistentTarget: async () => {
+      const target = await localPersistentTargetManager.ensure();
+      return {
+        host: target.host,
+        port: target.port,
+        targetId: target.targetId,
+        runtimeArchives: target.runtimeArchives,
+      };
+    },
     spawnHostProcess: (win, label, initMessage) =>
       spawnHostProcess(
         win,

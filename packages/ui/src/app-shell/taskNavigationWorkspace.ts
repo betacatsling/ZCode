@@ -1,3 +1,5 @@
+import type { RemoteTarget } from "@zcode/shared";
+
 type TaskNavigationWorkspaceResult =
   | { accepted: true; openedLocalTab: boolean }
   | { accepted: false; reason: "remote_attachment_missing" };
@@ -5,20 +7,47 @@ type TaskNavigationWorkspaceResult =
 export function ensureTaskNavigationWorkspace(params: {
   workspacePath: string;
   workspaceIdentity?: string;
-  activateTabByPath: (workspacePath: string, options?: { workspaceIdentity?: string }) => boolean;
+  remoteSessionId?: string;
+  remoteTarget?: RemoteTarget;
+  targetKind?: "local" | "remote";
+  activateTabByPath: (
+    workspacePath: string,
+    options?: {
+      workspaceIdentity?: string;
+      remoteSessionId?: string;
+      targetKind?: "local" | "remote";
+    },
+  ) => boolean;
   addLocalWorkspaceTab: (workspacePath: string) => void;
+  addRemoteWorkspaceTab: (
+    workspacePath: string,
+    options: { workspaceIdentity?: string; remoteSessionId: string; remoteTarget: RemoteTarget },
+  ) => void;
 }): TaskNavigationWorkspaceResult {
   const workspaceIdentity = params.workspaceIdentity?.trim();
   if (
-    params.activateTabByPath(
-      params.workspacePath,
-      workspaceIdentity ? { workspaceIdentity } : undefined,
-    )
+    params.activateTabByPath(params.workspacePath, {
+      ...(workspaceIdentity ? { workspaceIdentity } : {}),
+      ...(params.remoteSessionId ? { remoteSessionId: params.remoteSessionId } : {}),
+      ...(params.targetKind ? { targetKind: params.targetKind } : {}),
+    })
   ) {
     return { accepted: true, openedLocalTab: false };
   }
 
-  if (workspaceIdentity) {
+  if (params.targetKind === "remote") {
+    if (!params.remoteSessionId || !params.remoteTarget) {
+      return { accepted: false, reason: "remote_attachment_missing" };
+    }
+    params.addRemoteWorkspaceTab(params.workspacePath, {
+      ...(workspaceIdentity ? { workspaceIdentity } : {}),
+      remoteSessionId: params.remoteSessionId,
+      remoteTarget: params.remoteTarget,
+    });
+    return { accepted: true, openedLocalTab: false };
+  }
+
+  if (workspaceIdentity || params.remoteSessionId) {
     // 远程 workspace 的 identity 只表达隔离身份，不能据此重建 SSH/WSL/Docker
     // attachment。当前窗口没有匹配 tab 时必须 fail-closed，避免创建无法连接的伪远程 tab。
     return { accepted: false, reason: "remote_attachment_missing" };

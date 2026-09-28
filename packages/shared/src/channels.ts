@@ -96,6 +96,14 @@ export const ServiceChannels = {
   WindowController: "window-controller",
   /** ZCode Protocol agent 服务 */
   ZCodeAgent: "zcode-agent",
+  /** Target-local external agent sessions; never aliases the native V4 channel. */
+  AgentHost: "agent-host",
+  /** Profile-local Project Catalog metadata and workspace references. */
+  ProjectCatalog: "project-catalog",
+  /** Target-local Git worktree discovery, adoption, and revalidation. */
+  Worktree: "worktree",
+  /** Metadata-only legacy session hierarchy migration service. */
+  SessionHierarchy: "session-hierarchy",
   /** ZCode session 应用服务 */
   ZCodeSession: "zcode-session",
   /** 会话分享发布、预览与 continuation API 编排 */
@@ -537,6 +545,10 @@ export const HostMessageTypes = {
   TaskOwnerCommandDeliver: "task-owner-command-deliver",
   /** main → host：deliver owner command result to requester */
   TaskOwnerCommandResult: "task-owner-command-result",
+  /** main → host: ask this Host's session owner for a read-only admission fact. */
+  WorkspaceAdmissionActivityQuery: "workspace-admission-activity-query",
+  /** main → requester: aggregate owner admission fact. */
+  WorkspaceAdmissionActivityQueryResult: "workspace-admission-activity-query-result",
   /** main → host：Bot 远端 workspace 重连结果 */
   BotRemoteWorkspaceReconnectResult: "bot-remote-workspace-reconnect-result",
   /** main → host：Bot 远端 workspace 连接状态查询结果 */
@@ -628,6 +640,10 @@ export const HostResponseTypes = {
   TaskOwnerCommandRequest: "task-owner-command-request",
   /** host → main：owner 返回 task command result */
   TaskOwnerCommandResult: "task-owner-command-result",
+  /** host → main: ask all workspace session owners for read-only admission facts. */
+  WorkspaceAdmissionActivityRequest: "workspace-admission-activity-request",
+  /** host → main: one session owner returns its read-only admission fact. */
+  WorkspaceAdmissionActivityResult: "workspace-admission-activity-result",
   /** host → main：Bot 请求创建远端 workspace session */
   BotRemoteWorkspaceReconnectRequest: "bot-remote-workspace-reconnect-request",
   /** host → main：Bot 查询当前窗口是否已有远端 workspace session */

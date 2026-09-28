@@ -193,6 +193,36 @@ export type TaskOwnerCommandResult =
       code?: TaskOwnerCommandErrorCode;
     };
 
+export interface WorkspaceAdmissionActivityRequest {
+  requestId: string;
+  workspaceId: string;
+  workspacePath: string;
+  workspaceIdentity?: string;
+  workspaceKey: string;
+  worktreeGeneration: string;
+  startIfMissing?: boolean;
+}
+
+export interface WorkspaceAdmissionActivityQuery extends WorkspaceAdmissionActivityRequest {
+  requesterHostId: string;
+}
+
+export interface WorkspaceAdmissionActivityFact {
+  complete: boolean;
+  ownerPresent: boolean;
+  state: "idle" | "busy" | "unknown";
+  activeSessionCount: number;
+  activeTurnCount: number;
+  pendingCommandCount: number;
+  pendingInputCount: number;
+  pendingApprovalCount: number;
+}
+
+export interface WorkspaceAdmissionActivityResult {
+  requestId: string;
+  fact: WorkspaceAdmissionActivityFact;
+}
+
 export type TaskRealtimeEvent =
   | TaskSnapshotInvalidatedEvent
   | WorkspaceTaskListInvalidatedEvent

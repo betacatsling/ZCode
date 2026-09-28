@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Project sidebar real multi-target services</title>
+    <style>
+      html,
+      body,
+      #root {
+        height: 100%;
+        margin: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root">Loading fixture</div>
+    <script>
+      window.addEventListener("error", (event) => {
+        document.body.dataset.fixtureError =
+          event.error?.stack || event.message || "script-load-error";
+        document.getElementById("root").textContent =
+          `Fixture error: ${document.body.dataset.fixtureError}`;
+      });
+      window.addEventListener("unhandledrejection", (event) => {
+        document.body.dataset.fixtureError = event.reason?.stack || String(event.reason);
+        document.getElementById("root").textContent =
+          `Fixture error: ${document.body.dataset.fixtureError}`;
+      });
+    </script>
+    <script type="module" id="fixture-module" src="/projectSidebarMultiTargetBrowserFixture.tsx"></script>
+    <script>
+      document.body.dataset.inlineBootstrap = "true";
+      const fixtureModule = document.getElementById("fixture-module");
+      fixtureModule.addEventListener("load", () => {
+        document.body.dataset.moduleLoaded = "true";
+      });
+      fixtureModule.addEventListener("error", () => {
+        document.body.dataset.moduleError = "true";
+        document.getElementById("root").textContent = "Fixture module graph failed";
+      });
+    </script>
+  </body>
+</html>

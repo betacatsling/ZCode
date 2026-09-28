@@ -71,6 +71,11 @@ import type {
   ConversationTelemetryFact,
   CuaPermissionObservation,
   ConversationOpenTiming,
+  V4WorkspaceAdmissionQuiescenceResult,
+  V4ManagedWorkspaceSessionsParams,
+  V4ManagedWorkspaceSessionsResult,
+  V4ManagedWorkspaceSessionLookupParams,
+  V4ManagedWorkspaceSessionLookupResult,
 } from "@zcode/shared/zcode-protocol-v4";
 import {
   DELIVERY_PROFILES,
@@ -121,6 +126,12 @@ import {
   v4ConversationResyncParamsSchema,
   v4ConversationSubscribeParamsSchema,
   v4ConversationUnsubscribeParamsSchema,
+  v4WorkspaceAdmissionQuiescenceParamsSchema,
+  v4ManagedWorkspaceSessionsParamsSchema,
+  v4ManagedWorkspaceSessionsResultSchema,
+  v4ManagedWorkspaceSessionLookupParamsSchema,
+  v4ManagedWorkspaceSessionLookupResultSchema,
+  v4WorkspaceAdmissionQuiescenceResultSchema,
 } from "@zcode/shared/zcode-protocol-v4";
 import { AttachmentUploadRegistry } from "./attachment-upload-registry.js";
 import {
@@ -262,6 +273,20 @@ export interface V4GatewayHost {
   ): Promise<SessionUsageSeed | null> | SessionUsageSeed | null;
   /** sessions-index：某 workspace 下当前在册的会话 id（冷启动 snapshot 用）。 */
   listWorkspaceSessionIds?(workspaceId: string): string[];
+  /** Complete persisted membership, including archived sessions; used only by safety preflight. */
+  listStoredWorkspaceSessionIds?(
+    workspaceId: string,
+    workspacePath: string,
+    workspaceIdentity?: string,
+  ): Promise<readonly string[]>;
+  /** Exact current native owner association facts; does not inspect transcript content. */
+  listManagedWorkspaceSessions?(
+    request: V4ManagedWorkspaceSessionsParams,
+  ): Promise<V4ManagedWorkspaceSessionsResult>;
+  lookupManagedWorkspaceSession?(
+    request: V4ManagedWorkspaceSessionLookupParams,
+  ): Promise<V4ManagedWorkspaceSessionLookupResult>;
+  acquireWorkspaceAdmission?(envelope: CommandEnvelope): Promise<() => Promise<void>>;
   /**
    * sessions-index：draft 判定——deferred 持久化且未发首条输入的会话不进列表。
    * 旧 workspace prepare 路径会预建 deferred 会话（历史上列表读 sqlite、
@@ -670,6 +695,9 @@ export class ConversationV4Gateway {
       lookupTimelineCommand: (key) => this.host.lookupTimelineCommand?.(key) ?? null,
       lookupChildCommand: (key) => this.host.lookupChildCommand?.(key) ?? null,
       lookupDiscardedCommand: (key) => this.host.lookupDiscardedCommand?.(key) ?? null,
+      ...(this.host.acquireWorkspaceAdmission
+        ? { acquireWorkspaceAdmission: (envelope: CommandEnvelope) => this.host.acquireWorkspaceAdmission!(envelope) }
+        : {}),
       now: this.now,
     });
     this.attachmentUploads = new AttachmentUploadRegistry({
@@ -2560,6 +2588,102 @@ export class ConversationV4Gateway {
     return commandsQueryResultSchema.parse({
       results: await this.inbox.query(params.commands),
     });
+  }
+
+  /** Read only the native owner facts needed by linked-worktree removal. */
+  async workspaceAdmissionQuiescence(
+    rawParams: unknown,
+  ): Promise<V4WorkspaceAdmissionQuiescenceResult> {
+    const request = v4WorkspaceAdmissionQuiescenceParamsSchema.parse(rawParams);
+    const workspaceId = request.workspaceIdentity?.trim() || request.workspacePath;
+    const sessionIds = new Set(this.host.listWorkspaceSessionIds?.(workspaceId) ?? []);
+    let complete = this.host.listStoredWorkspaceSessionIds !== undefined;
+    try {
+      const stored = await this.host.listStoredWorkspaceSessionIds?.(
+        workspaceId,
+        request.workspacePath,
+        request.workspaceIdentity,
+      );
+      if (!stored) complete = false;
+      else for (const sessionId of stored) sessionIds.add(sessionId);
+    } catch {
+      complete = false;
+    }
+
+    let activeSessionCount = 0;
+    let activeTurnCount = 0;
+    let pendingApprovalCount = 0;
+    let projectedPendingCommandCount = 0;
+    let projectedPendingInputCount = 0;
+    let hasBusy = false;
+    let hasUnknown = false;
+    for (const sessionId of sessionIds) {
+      const publisher = this.publishers.get(sessionId);
+      if (!publisher) {
+        complete = false;
+        hasUnknown = true;
+        continue;
+      }
+      const snapshot = publisher.getSnapshot();
+      const pendingApprovals = snapshot.pendingInteractions.length;
+      const activeWorks = snapshot.control.activeWorks.length;
+      const queuedInputs = snapshot.queue.items.length;
+      const pendingCommands = snapshot.pendingCommands.length;
+      pendingApprovalCount += pendingApprovals;
+      projectedPendingCommandCount += pendingCommands;
+      projectedPendingInputCount += queuedInputs;
+      const activePhase = snapshot.control.phase === "running" || snapshot.control.phase === "prewarming";
+      const uncertainPhase = snapshot.control.phase === "error";
+      if (activePhase || activeWorks > 0) {
+        activeSessionCount += 1;
+        activeTurnCount += Math.max(1, activeWorks);
+        hasBusy = true;
+      }
+      if (pendingApprovals > 0 || queuedInputs > 0 || pendingCommands > 0) hasBusy = true;
+      if (uncertainPhase) hasUnknown = true;
+    }
+    const pins = this.inbox.workspacePins([...sessionIds]);
+    const pendingCommandCount = pins.pendingCommandCount + projectedPendingCommandCount;
+    const pendingInputCount = pins.pendingInputCount + projectedPendingInputCount;
+    if (pendingCommandCount > 0 || pendingInputCount > 0 || pendingApprovalCount > 0) hasBusy = true;
+    const state = !complete || hasUnknown ? "unknown" : hasBusy ? "busy" : "idle";
+    return v4WorkspaceAdmissionQuiescenceResultSchema.parse({
+      protocolVersion: 1,
+      ownerEpoch: this.localTtft.instanceId,
+      ownerPresent: true,
+      worktreeGeneration: request.worktreeGeneration,
+      complete,
+      state,
+      activeSessionCount,
+      activeTurnCount,
+      pendingCommandCount,
+      pendingInputCount,
+      pendingApprovalCount,
+    });
+  }
+
+  async managedWorkspaceSessions(
+    rawParams: unknown,
+  ): Promise<V4ManagedWorkspaceSessionsResult> {
+    const request = v4ManagedWorkspaceSessionsParamsSchema.parse(rawParams);
+    if (!this.host.listManagedWorkspaceSessions) {
+      throw new Error("native-managed-workspace-session-index-unavailable");
+    }
+    return v4ManagedWorkspaceSessionsResultSchema.parse(
+      await this.host.listManagedWorkspaceSessions(request),
+    );
+  }
+
+  async managedWorkspaceSessionLookup(
+    rawParams: unknown,
+  ): Promise<V4ManagedWorkspaceSessionLookupResult> {
+    const request = v4ManagedWorkspaceSessionLookupParamsSchema.parse(rawParams);
+    if (!this.host.lookupManagedWorkspaceSession) {
+      throw new Error("native-managed-workspace-session-index-unavailable");
+    }
+    return v4ManagedWorkspaceSessionLookupResultSchema.parse(
+      await this.host.lookupManagedWorkspaceSession(request),
+    );
   }
 
   getQueueItem(sessionId: string, queueItemId: string): QueueItem | null {

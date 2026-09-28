@@ -7,6 +7,7 @@ import { scheduleArmsBrowserPerfLoadNudge } from "./armsBrowserPerfLoadNudge.js"
 import { createBrowserWindow } from "./desktopWindowChrome.js";
 import type { HostInitMessage, WindowBootstrapOptions } from "./desktopHostProcess.js";
 import type { StartupWorkspaceWarmupTarget } from "./startupWorkspace.js";
+import type { DesktopPersistentTargetEndpoint } from "./persistentDesktopTarget.js";
 import { handleDarwinWindowCloseRequest } from "./desktopDarwinCloseBehavior.js";
 import {
   parseWindowUnreadCount,
@@ -67,6 +68,8 @@ export function createWindow(options: {
   awaitFirstHostSpawnDecision?: () => Promise<void>;
   /** Local Host map insertion completed; presentation facts can now be replayed safely. */
   onHostProcessReady?: (windowKey: number) => void;
+  /** Main ensures and queries the existing local Supervisor before a window Host attaches. */
+  ensureLocalPersistentTarget?: () => Promise<DesktopPersistentTargetEndpoint>;
   resolveBrowserViewOwner?: Parameters<typeof createBrowserWindow>[0]["resolveBrowserViewOwner"];
 }) {
   const win = createBrowserWindow({
@@ -185,7 +188,11 @@ export function createWindow(options: {
       await options.awaitFirstHostSpawnDecision();
     }
 
-    const spawnLocalHost = (runtimeProcessEnvPatch: Record<string, string>) => {
+    const spawnLocalHost = async (runtimeProcessEnvPatch: Record<string, string>) => {
+      if (currentDomReadyGeneration !== domReadyGeneration || win.isDestroyed()) {
+        return;
+      }
+      const persistentTarget = await options.ensureLocalPersistentTarget?.();
       if (currentDomReadyGeneration !== domReadyGeneration || win.isDestroyed()) {
         return;
       }
@@ -199,6 +206,7 @@ export function createWindow(options: {
           ? { agentWarmupTargets: [...options.agentWarmupTargets] }
           : {}),
         runtimeProcessEnvPatch,
+        ...(persistentTarget ? { persistentTarget } : {}),
         // 同一窗口会后台索引所有已恢复 workspace，不只索引启动时的 active workspace。
         // fallback 必须跟随 local Host 生命周期常驻，否则非 active 历史目录被删除后会用失效 cwd 反复 spawn。
         agentSpawnFallbackCwd: options.agentSpawnFallbackCwd,
@@ -210,9 +218,17 @@ export function createWindow(options: {
       options.syncPostUpdateReleaseNotesToWindow(win);
       options.reattachRemoteWorkspaceSessionsForWindow(win, `${label}:renderer-ready`);
     };
+    const spawnLocalHostSafely = (runtimeProcessEnvPatch: Record<string, string>) => {
+      void spawnLocalHost(runtimeProcessEnvPatch).catch((error: unknown) => {
+        options.logger.warn(
+          `[createWindow] persistent local target startup failed (${label})`,
+          error,
+        );
+      });
+    };
 
     if (!options.runtimeProcessEnvPatchPromise) {
-      spawnLocalHost(options.runtimeProcessEnvFallbackPatch);
+      spawnLocalHostSafely(options.runtimeProcessEnvFallbackPatch);
       return;
     }
     let settled = false;
@@ -239,7 +255,7 @@ export function createWindow(options: {
       if (cancelRuntimeProcessEnvWait === cancelWait) {
         cancelRuntimeProcessEnvWait = null;
       }
-      spawnLocalHost(runtimeProcessEnvPatch);
+      spawnLocalHostSafely(runtimeProcessEnvPatch);
     };
     cancelRuntimeProcessEnvWait = cancelWait;
     timeout = setTimeout(() => {

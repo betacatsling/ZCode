@@ -404,7 +404,7 @@ export async function stageRelease(options: StageOptions): Promise<StagedRelease
 
   // 入口 bundle 与 sourcemap 同名复制，文件名必须与 cli.ts 的相对路径解析保持一致。
   const bundleSources: string[] = [];
-  for (const entryName of ["server-cli.js", "server-core.js"]) {
+  for (const entryName of ["server-cli.js", "server-core.js", "piWorker.js"]) {
     const sourcePath = join(options.distDir, entryName);
     const contents = await readFile(sourcePath, "utf8");
     bundleSources.push(contents);
@@ -501,6 +501,7 @@ export async function stageRelease(options: StageOptions): Promise<StagedRelease
       paths: [
         "runtime/server-cli.js",
         "runtime/server-core.js",
+        "runtime/piWorker.js",
         "runtime/package.json",
         "runtime/node_modules",
         "runtime/THIRD-PARTY-NOTICES.md",

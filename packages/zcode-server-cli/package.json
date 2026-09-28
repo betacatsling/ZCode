@@ -7,10 +7,11 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./main": "./src/main.ts"
+    "./main": "./src/main.ts",
+    "./target": "./src/target.ts"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && tsup --config tsup.worker.config.ts",
     "stage": "pnpm run build && tsx src/packaging/stageCli.ts",
     "lint": "oxlint src"
   },
@@ -21,7 +22,9 @@
     "@zcode/services": "workspace:*",
     "@zcode/shared": "workspace:*",
     "hono": "^4.12.9",
+    "proxy-agent": "^8.0.1",
     "ws": "^8.20.0",
+    "yazl": "^3.3.1",
     "yauzl": "^3.3.0",
     "zod": "4.6.5"
   },

@@ -381,6 +381,9 @@ export const V4_METHODS = {
   attachmentPreviewSource: "v4/attachment/previewSource",
   commandsQuery: "v4/commands/query",
   command: "v4/command",
+  workspaceAdmissionQuiescence: "v4/workspace/admissionQuiescence",
+  managedWorkspaceSessions: "v4/workspace/managedSessions",
+  managedWorkspaceSessionLookup: "v4/workspace/managedSessionLookup",
 } as const;
 export type V4Method = (typeof V4_METHODS)[keyof typeof V4_METHODS];
 

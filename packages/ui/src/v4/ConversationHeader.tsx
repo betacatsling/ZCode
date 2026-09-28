@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useCallback } from "react";
 import {
   TID_V4_PANE_WORKSPACE_BADGE,
   TID_V4_SESSION_TITLE,
@@ -8,6 +8,10 @@ import { XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { runUserAction } from "@/lib/userActionTelemetry.js";
+import { HarnessBadge } from "@/harness/HarnessBadge.js";
+import { useHarnessIdentity } from "@/harness/HarnessIdentityContext.js";
+import { useHarnessDirectoryEntry } from "@/harness/useHarnessDirectory.js";
+import { useOptionalServices } from "@/hooks/useServices.js";
 
 /** 跨 workspace pane 的归属徽标（未来跨 workspace session 的多路径徽标在此扩展）。 */
 export interface PaneWorkspaceBadge {
@@ -30,15 +34,25 @@ interface ConversationHeaderProps {
   onClosePane?: () => void;
   /** 跨 workspace pane 的归属徽标（pane workspace ≠ shell 当前 workspace 时下发）。 */
   workspaceBadge?: PaneWorkspaceBadge;
+  /** 当前 V4 owner 的主题解析结果。 */
+  appearance: "light" | "dark";
 }
 
 /**
  * pane chrome：不占布局高度，只在右上角悬浮拆分/关闭入口。
  * 保留 title data 节点，供 E2E 读取投影但不恢复旧横条。
  */
-function ConversationHeaderImpl({ title, onClosePane, workspaceBadge }: ConversationHeaderProps) {
+function ConversationHeaderImpl({ title, onClosePane, workspaceBadge, appearance }: ConversationHeaderProps) {
   const { intl } = useZCodeIntl();
-  const hasFloatingActions = Boolean(workspaceBadge) || Boolean(onClosePane);
+  const harnessId = useHarnessIdentity();
+  const harnessEntry = useHarnessDirectoryEntry(harnessId);
+  const agentHostService = useOptionalServices()?.agentHostService;
+  const loadAsset = useCallback(
+    (assetId: string) =>
+      agentHostService ? agentHostService.getHarnessAsset(assetId) : Promise.resolve(null),
+    [agentHostService],
+  );
+  const hasFloatingActions = Boolean(harnessEntry) || Boolean(workspaceBadge) || Boolean(onClosePane);
 
   return (
     <>
@@ -48,6 +62,7 @@ function ConversationHeaderImpl({ title, onClosePane, workspaceBadge }: Conversa
           data-v4-pane-actions="floating"
           className="pointer-events-none absolute left-2 top-2 z-20 flex max-w-[calc(100%-1rem)] items-center gap-1"
         >
+          <HarnessBadge entry={harnessEntry} appearance={appearance} loadAsset={loadAsset} />
           {workspaceBadge ? (
             <span
               data-testid={TID_V4_PANE_WORKSPACE_BADGE}

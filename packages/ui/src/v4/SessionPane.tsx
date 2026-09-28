@@ -124,6 +124,7 @@ import { shouldIgnoreEscapeForStopGeneration } from "@/v4/composer/escapeStop.js
 import { ConversationDraftEmptyState } from "@/v4/ConversationDraftEmptyState.js";
 import { ConversationDraftSuggestedPromptsContainer } from "@/v4/ConversationDraftSuggestedPromptsContainer.js";
 import { ConversationHeader, type PaneWorkspaceBadge } from "@/v4/ConversationHeader.js";
+import { resolveTheme } from "@/useTheme.js";
 import { ConversationQueuePanel } from "@/v4/ConversationQueuePanel.js";
 import { projectPendingGuideQueue } from "@/v4/pendingGuideProjection.js";
 import { ConversationQuotaBanner } from "@/v4/ConversationQuotaBanner.js";
@@ -543,6 +544,7 @@ export function SessionPane({
 }: SessionPaneProps) {
   const {
     layer,
+    ownerKind,
     sendCommand,
     attachmentPut,
     attachmentRead,
@@ -552,6 +554,7 @@ export function SessionPane({
     fileChanges,
     fileRewindPreview,
   } = useV4Conversation();
+  const isAgentHostSession = ownerKind === "agent-host";
   const platform = useOptionalPlatform();
   const { conversationShareService, modelSelectionService, zcodeSessionService, zcodeTaskService } =
     useServices();
@@ -610,7 +613,7 @@ export function SessionPane({
   const publishedShareUrl = shareDock.publishedShareUrl;
   const shareError = shareDock.error;
   const shareWarnings = shareDock.warnings;
-  const shareActive = shareDraft?.scope === "partial";
+  const shareActive = !isAgentHostSession && shareDraft?.scope === "partial";
   const shareInSelectionStage = shareActive && (shareDraft?.stage ?? "selection") === "selection";
   // 遮罩、选择面板和背景滚动锁定必须共用同一裁决，否则面板收起后遮罩会残留。
   const shareSelectionPanelVisible = resolveConversationShareSelectionPanelVisible({
@@ -1807,7 +1810,7 @@ export function SessionPane({
     // 无差别发这条查询等于拿子会话 id 去问一条按**父会话**建键的 journal；CLI 的冷会话前置
     // 随即为正在运行的 detached actor 会话物化第二个 runtime（幽灵），双写事件日志，
     // 直播冻结在「已工作 xx 秒」。只读 pane 也不消费 join 回退与任务列表页脚，直接关掉。
-    enabled: !readOnly,
+    enabled: !readOnly && !isAgentHostSession,
     live: state.status === "live",
     limit: WORKFLOW_RUN_DIRECTORY_LIMIT,
     refreshKey: workflowRunDirectoryRefreshKey(snapshot?.workflowRuns?.runs),
@@ -2109,7 +2112,7 @@ export function SessionPane({
     snapshot?.control.activeWorks ?? [],
   );
   // 子智能体详情的会话内容仍只读；文件撤销恢复的是 workspace，必须作为独立能力判断。
-  const workspaceFileRewindEnabled = !readOnly || allowWorkspaceFileRewind;
+  const workspaceFileRewindEnabled = !isAgentHostSession && (!readOnly || allowWorkspaceFileRewind);
   // cancelBackgroundWork：启动卡 / 后台任务卡的「取消」入口。定义在 rowContext memo 之前，
   // 供其绑定（onOpenWorkflowRun 同样在 memo 前定义）；只读模式下不下发（与 4213 处一致）。
   const handleCancelBackgroundWork = useCallback(
@@ -2165,7 +2168,7 @@ export function SessionPane({
       workspaceHomePath,
       workspaceIdentity,
       workspaceRemoteSessionId: remoteSessionId ?? undefined,
-      modelSelectionView,
+      modelSelectionView: isAgentHostSession ? undefined : modelSelectionView,
       logEpoch: snapshot?.logEpoch,
       theme,
       codePreviewSettings,
@@ -2191,32 +2194,34 @@ export function SessionPane({
       onOpenWorkflowActor: onOpenWorkflowActorSession ? handleOpenWorkflowActorSession : undefined,
       onOpenWorkflowWorkspace: onOpenWorkflowWorkspace ? handleOpenWorkflowWorkspace : undefined,
       onOpenWorkflowArtifact: onOpenWorkflowArtifact ? handleOpenWorkflowArtifact : undefined,
-      onCancelBackgroundWork: readOnly ? undefined : handleCancelBackgroundWork,
+      onCancelBackgroundWork:
+        isAgentHostSession || readOnly ? undefined : handleCancelBackgroundWork,
       // Resume 进入会话上下文的唯一供给点；灰度与只读两道门都在 resolveWorkflowResumeHandler 里，
       // 断在这里等于工具卡页脚与摘要卡的按钮一起消失。
       onResumeWorkflowRun: resolveWorkflowResumeHandler({
-        readOnly,
+        readOnly: readOnly || isAgentHostSession,
         dynamicWorkflowEnabled,
         handler: handleResumeWorkflowRun,
       }),
-      onAmendWorkflowRunSettings: sessionId
-        ? resolveWorkflowResumeHandler({
-            readOnly,
-            dynamicWorkflowEnabled,
-            handler: handleAmendWorkflowRunSettings,
-          })
-        : undefined,
+      onAmendWorkflowRunSettings:
+        sessionId && !isAgentHostSession
+          ? resolveWorkflowResumeHandler({
+              readOnly,
+              dynamicWorkflowEnabled,
+              handler: handleAmendWorkflowRunSettings,
+            })
+          : undefined,
       ...(workflowSessionModel === undefined ? {} : { workflowSessionModel }),
       workflowRunByToolCallId,
       workflowRunByRunId,
       workflowRunPendingQuestionsByRunId,
       workflowGraphByToolCallId,
       workflowDraftByToolCallId,
-      fetchFileChanges: handleFetchFileChanges,
+      fetchFileChanges: isAgentHostSession ? undefined : handleFetchFileChanges,
       previewFileRewind: workspaceFileRewindEnabled ? handlePreviewFileRewind : undefined,
       applyFileRewind: workspaceFileRewindEnabled ? handleApplyFileRewind : undefined,
-      readAttachment: attachmentRead,
-      readAttachmentRange: attachmentReadRange,
+      readAttachment: isAgentHostSession ? undefined : attachmentRead,
+      readAttachmentRange: isAgentHostSession ? undefined : attachmentReadRange,
     }),
     [
       workspacePath,
@@ -2225,6 +2230,7 @@ export function SessionPane({
       remoteSessionId,
       modelSelectionView,
       snapshot?.logEpoch,
+      isAgentHostSession,
       theme,
       codePreviewSettings,
       sessionId,
@@ -2399,9 +2405,9 @@ export function SessionPane({
   }, [layer, effectiveSessionId]);
 
   useEffect(() => {
-    if (!sessionId || !lease || snapshot?.sessionId !== sessionId) return;
+    if (isAgentHostSession || !sessionId || !lease || snapshot?.sessionId !== sessionId) return;
     void lease.store.refreshPlans();
-  }, [lease, sessionId, snapshot?.sessionId, state.planDirectoryRevision]);
+  }, [isAgentHostSession, lease, sessionId, snapshot?.sessionId, state.planDirectoryRevision]);
 
   // 预热会话订阅失败（CLI 重启内存会话消失等）→ 丢弃回落无预热路径，不进错误 UI。
   useEffect(() => {
@@ -2538,9 +2544,11 @@ export function SessionPane({
       const readyAttachments = options?.attachments ?? [];
       const sharedContextRefs = options?.sharedContextRefs;
       const contextAttachmentCount = options?.contextAttachmentCount ?? 0;
-      let slashCommand = parseV4VisibleSlashCommand(text, readyAttachments, {
-        contextAttachmentCount,
-      });
+      let slashCommand = isAgentHostSession
+        ? null
+        : parseV4VisibleSlashCommand(text, readyAttachments, {
+            contextAttachmentCount,
+          });
 
       // `/plan` 首版只消费纯文本。必须在 provider readiness 和任何 command admission 之前
       // 拒绝附件/context，否则原始 `/plan ...` 会退化成普通 prompt，既绕过产品边界又清空草稿。
@@ -2556,7 +2564,7 @@ export function SessionPane({
         if (!slashCommand.task) return "sent" as const;
       }
 
-      if (!(await ensureDraftModelReadyForSend())) {
+      if (!isAgentHostSession && !(await ensureDraftModelReadyForSend())) {
         return "blocked" as const;
       }
 
@@ -2601,7 +2609,9 @@ export function SessionPane({
         toast(intl.formatMessage({ id: "chat.goal.planModeBlocked" }));
         return "blocked" as const;
       }
-      if (!submission) {
+      // Bug 原因：外部会话的模型绑定由 Host SessionSpec 冻结，Renderer 没有原生 Composer Submission；
+      // 将它按缺少模型配置拦截会导致 Pi 输入永远发不出去。AgentHost transport 只提交文本和控制命令。
+      if (!submission && !isAgentHostSession) {
         logger.warn("[v4-pane] Submission 缺少完整模型或模式配置");
         return "blocked" as const;
       }
@@ -2615,13 +2625,16 @@ export function SessionPane({
         // resumeGoal 等控制命令也不应被发送消息确认框截获。
         return "confirmationRequired" as const;
       }
-      if (slashCommand === null || slashCommand.kind === "sendGoalCommand") {
-        const original = submission.modelSelection;
+      if (
+        !isAgentHostSession &&
+        (slashCommand === null || slashCommand.kind === "sendGoalCommand")
+      ) {
+        const original = submission!.modelSelection;
         const chosen = await recommendStartPlan(original);
         if (!chosen) return "blocked" as const;
         if (chosen !== original) {
           onAcceptedSelection = captureAcceptedModelSelection(chosen, original);
-          submission = { ...submission, modelSelection: chosen };
+          submission = { ...submission!, modelSelection: chosen };
         }
       }
       const prewarmTargetBeforeSend =
@@ -2641,7 +2654,7 @@ export function SessionPane({
           snapshotRef.current?.revision,
           heldQueueDisposition,
           expectedHeldQueueItemIds,
-          submission,
+          submission ?? undefined,
         );
         if (consumed === "confirmationRequired") return consumed;
         if (consumed) {
@@ -2667,7 +2680,7 @@ export function SessionPane({
             undefined,
             heldQueueDisposition,
             expectedHeldQueueItemIds,
-            submission,
+            submission ?? undefined,
           );
           return;
         }
@@ -2680,7 +2693,7 @@ export function SessionPane({
               0,
               heldQueueDisposition,
               expectedHeldQueueItemIds,
-              submission,
+              submission ?? undefined,
               (messageId) => reportDraftCreated(prewarm.sessionId, createSourceAtSend, messageId),
             );
             if (consumed === "confirmationRequired") return consumed;
@@ -2705,7 +2718,7 @@ export function SessionPane({
           }
         }
         const draftConfigPayload = buildDraftCreateConfigPayload(
-          { ...draftConfigRef.current, modelSelection: submission.modelSelection },
+          { ...draftConfigRef.current, modelSelection: submission!.modelSelection },
           appFollowupMode,
         );
         const createAck = await dispatchSubmissionCommand(
@@ -2728,7 +2741,7 @@ export function SessionPane({
           0,
           heldQueueDisposition,
           expectedHeldQueueItemIds,
-          submission,
+          submission ?? undefined,
           (messageId) => reportDraftCreated(newSessionId, createSourceAtSend, messageId),
         );
         return;
@@ -2786,7 +2799,7 @@ export function SessionPane({
         // fallback 有 prewarm 投影时必须以 Agent 当前配置为 base；只有从未拿到投影
         // 才使用冻结的初始化元组。否则 provider fallback 后会把 localStorage 旧模型重新写回。
         const draftConfigPayload = buildDraftCreateConfigPayload(
-          { ...draftConfigRef.current, modelSelection: submission.modelSelection },
+          { ...draftConfigRef.current, modelSelection: submission!.modelSelection },
           appFollowupMode,
         );
         if (readyAttachments.length === 0 && !sharedContextRefs?.length) {
@@ -2907,6 +2920,7 @@ export function SessionPane({
       handleDraftSwitchMode,
       handleOpenSelectionSideConversationWithPrompt,
       intl,
+      isAgentHostSession,
       lease,
       resolveInitialDraftConfig,
       createSubmissionFromComposer,
@@ -3564,10 +3578,13 @@ export function SessionPane({
         sessionId,
         foregroundExecutionId: foregroundExecutionId ?? "",
       });
+      // Bug 原因：stop 只带执行 ID、遗漏当前 logEpoch 时，远端 owner 无法验证执行代际并必须拒绝。
       void dispatchCommand(
         "stop",
         foregroundExecutionId ? { expectedForegroundExecutionId: foregroundExecutionId } : {},
         sessionId,
+        undefined,
+        current.logEpoch,
       ).catch((error) => {
         logger.lifecycle.warn(`[v4-pane] stop 失败: ${String(error)}`);
       });
@@ -3686,12 +3703,15 @@ export function SessionPane({
   });
   // retry 的产品裁决属于行级权威投影。这里仅提供命令能力，入口是否展示
   // 完全读取 row.actions.canRetry，禁止再用 pane phase 形成第二套 guard。
-  const retryActionsEnabled = !readOnly && !selectionSideChat && Boolean(sessionId);
+  const retryActionsEnabled =
+    !isAgentHostSession && !readOnly && !selectionSideChat && Boolean(sessionId);
   // fork 可用性完全由 row.actions.canFork（CLI stable resolver 投影）裁决；pane 只提供命令回调。
-  const forkActionsEnabled = !readOnly && !selectionSideChat && Boolean(sessionId);
+  const forkActionsEnabled =
+    !isAgentHostSession && !readOnly && !selectionSideChat && Boolean(sessionId);
   // editUserQuery 已由 command 层防御 latest real user query，并在 running
   // 提交时先 stop barrier 再 rewind/rerun；UI 不应再用 completed gate 把入口整轮隐藏。
-  const editActionsEnabled = !readOnly && !selectionSideChat && Boolean(sessionId);
+  const editActionsEnabled =
+    !isAgentHostSession && !readOnly && !selectionSideChat && Boolean(sessionId);
   const isDraft = sessionId === null;
   // 滚动恢复必须使用与 sessionId 匹配的 lease projection。切换 session 的 render 与
   // passive effect 不在同一时刻，旧 lease 的 rows 若提前交给 timeline，会让新记忆按旧
@@ -3712,7 +3732,7 @@ export function SessionPane({
       ? shareHandoverContext.contextId
       : null;
   useEffect(() => {
-    if (!importedShareContextId) {
+    if (isAgentHostSession || !importedShareContextId) {
       setImportedShare(null);
       return;
     }
@@ -3735,7 +3755,7 @@ export function SessionPane({
     return () => {
       disposed = true;
     };
-  }, [conversationShareService, importedShareContextId, workspacePath]);
+  }, [conversationShareService, importedShareContextId, isAgentHostSession, workspacePath]);
   // normalizeConversationShareMarkdown 在 artifactNames 里找不到匹配名字时，会把正文里的
   // 文件引用替换成空字符串（直接删掉）。不接这份映射，只读块里的文件引用会静默消失。
   const importedShareArtifactNames = useMemo(
@@ -4376,15 +4396,17 @@ export function SessionPane({
       draftConfig={draftConfig}
       composerDraft={composerDraft}
       replaceComposerDraft={replaceComposerDraft}
-      submissionReady={composerSubmissionReady}
+      submissionReady={isAgentHostSession || composerSubmissionReady}
       updateComposerContent={updateComposerContent}
-      createSubmissionFromComposer={createSubmissionFromComposer}
+      createSubmissionFromComposer={isAgentHostSession ? undefined : createSubmissionFromComposer}
       contextHeader={isDraft ? draftComposerHeader : undefined}
       centered={isDraft}
       blockingRequestId={blockingInteractionId}
-      listenAddToChatEvents={focused}
-      externalTextInsertRequest={focused && sessionId === null ? composerTextInsertRequest : null}
-      onExternalTextInsertApplied={handleExternalTextInsertApplied}
+      listenAddToChatEvents={focused && !isAgentHostSession}
+      externalTextInsertRequest={
+        !isAgentHostSession && focused && sessionId === null ? composerTextInsertRequest : null
+      }
+      onExternalTextInsertApplied={isAgentHostSession ? undefined : handleExternalTextInsertApplied}
       autoFocusEnabled={focused}
       disabled={
         connecting ||
@@ -4397,14 +4419,18 @@ export function SessionPane({
       remoteSessionId={remoteSessionId ?? undefined}
       modelSelectionView={modelSelectionView}
       modelSelectionState={modelSelectionRead.state}
-      modelSelectionReload={modelSelectionRead.reload}
-      attachmentSessionId={effectiveSessionId}
+      modelSelectionReload={isAgentHostSession ? undefined : modelSelectionRead.reload}
+      supportsSessionConfiguration={!isAgentHostSession}
+      supportsAttachments={!isAgentHostSession}
+      attachmentSessionId={isAgentHostSession ? null : effectiveSessionId}
       attachmentPut={attachmentPut}
       onRuntimeRestart={onRuntimeRestart}
       onRuntimeLifecycle={onRuntimeLifecycle}
       provider={provider}
       telemetryDraftConfig={telemetryDraftConfig}
-      telemetryVisible={telemetryVisible && conversationTelemetryForegroundEnabled}
+      telemetryVisible={
+        !isAgentHostSession && telemetryVisible && conversationTelemetryForegroundEnabled
+      }
       readPlanIdentitySnapshot={readPlanIdentitySnapshot}
       onSendText={handleSendText}
       onDraftStateChange={handleComposerDraftStateChange}
@@ -4415,23 +4441,29 @@ export function SessionPane({
       onSelectThought={handleSelectThought}
       onSwitchMode={handleSwitchMode}
       onOpenRunningBackgroundWorks={
-        sessionId && runningBackgroundWorkCount > 0 ? handleOpenRunningBackgroundWorks : undefined
+        !isAgentHostSession && sessionId && runningBackgroundWorkCount > 0
+          ? handleOpenRunningBackgroundWorks
+          : undefined
       }
       backgroundWorkOpenTarget={soleRunningWorkflowRunTarget ? "workflow-run" : "panel"}
       // 父轮结束后 subagents.running 的目录投影可能短暂落后于仍为 running 的
       // backgroundWorks；Composer 若直接读目录会提前隐藏 Agent 入口。这里复用状态面板按
       // childSessionId 精确回退后的计数，让两个入口共享同一份运行态真值。
-      runningSubagentCount={runningAgentCount}
-      onRecoverCustomModelSelection={handleRecoverCustomModelSelection}
-      onSendCompressionCommand={handleSendCompressionCommand}
+      runningSubagentCount={isAgentHostSession ? 0 : runningAgentCount}
+      onRecoverCustomModelSelection={
+        isAgentHostSession ? undefined : handleRecoverCustomModelSelection
+      }
+      onSendCompressionCommand={isAgentHostSession ? undefined : handleSendCompressionCommand}
       error={composerError}
       onDismissError={handleDismissComposerError}
-      onOpenModelSettings={handleOpenModelSettings}
-      onOpenModelUpgrade={handleOpenModelUpgrade}
-      onOpenCodeViewer={onOpenCodeViewer}
+      onOpenModelSettings={isAgentHostSession ? undefined : handleOpenModelSettings}
+      onOpenModelUpgrade={isAgentHostSession ? undefined : handleOpenModelUpgrade}
+      onOpenCodeViewer={isAgentHostSession ? undefined : onOpenCodeViewer}
       suppressGoalCommands={selectionSideChat}
-      appSlashCommands={appSlashCommands}
-      onDropTargetControllerChange={handleDropTargetControllerChange}
+      appSlashCommands={isAgentHostSession ? undefined : appSlashCommands}
+      onDropTargetControllerChange={
+        isAgentHostSession ? undefined : handleDropTargetControllerChange
+      }
     />
   );
   const pendingGuideProjection = snapshot ? projectPendingGuideQueue(snapshot.queue) : null;
@@ -4613,6 +4645,7 @@ export function SessionPane({
       ) : null}
       <ConversationHeader
         title={snapshot?.meta.title ?? ""}
+        appearance={resolveTheme(theme)}
         onSplitRight={onSplitRight}
         onSplitDown={onSplitDown}
         onClosePane={onClosePane}
@@ -4668,12 +4701,18 @@ export function SessionPane({
             onRefreshGit={onRefreshGit}
             onOpenGitReview={onOpenGitReview}
             onPauseGoal={
-              !readOnly && !selectionSideChat && snapshot?.availability.pauseGoal.allowed
+              !isAgentHostSession &&
+              !readOnly &&
+              !selectionSideChat &&
+              snapshot?.availability.pauseGoal.allowed
                 ? handlePauseGoal
                 : undefined
             }
             onResumeGoal={
-              !readOnly && !selectionSideChat && snapshot?.availability.resumeGoal.allowed
+              !isAgentHostSession &&
+              !readOnly &&
+              !selectionSideChat &&
+              snapshot?.availability.resumeGoal.allowed
                 ? handleResumeGoal
                 : undefined
             }
@@ -4692,7 +4731,9 @@ export function SessionPane({
                     })
                 : undefined
             }
-            onCancelBackgroundWork={readOnly ? undefined : handleCancelBackgroundWork}
+            onCancelBackgroundWork={
+              isAgentHostSession || readOnly ? undefined : handleCancelBackgroundWork
+            }
             onOpenSubagentSession={onOpenSubagentSession ? handleOpenSubagentSession : undefined}
             onOpenSubagentDirectory={
               onOpenSubagentDirectory ? handleOpenSubagentDirectory : undefined
@@ -4746,7 +4787,9 @@ export function SessionPane({
               onFork={forkActionsEnabled ? handleFork : undefined}
               onRetry={retryActionsEnabled ? handleRetry : undefined}
               onFeedbackChange={
-                !readOnly && !selectionSideChat && sessionId ? handleAssistantFeedback : undefined
+                !isAgentHostSession && !readOnly && !selectionSideChat && sessionId
+                  ? handleAssistantFeedback
+                  : undefined
               }
               onEdit={editActionsEnabled ? handleEdit : undefined}
               canLoadOlder={timelineSnapshot ? hasOlderRows(timelineSnapshot) : false}

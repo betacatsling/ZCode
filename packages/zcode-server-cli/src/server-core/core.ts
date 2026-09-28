@@ -3,18 +3,38 @@ import {
   disposeServiceResourcesAndWait,
   materializeZCodeBuiltinProviderConfig,
   getAppConfigDir,
+  getConversationWorkspaceDir,
   ZCODE_BUILTIN_PROVIDER_CONFIG_FILE_ENV,
 } from "@zcode/services/node";
-import { IZCodeAgentService } from "@zcode/services";
+import { IAgentHostService, IZCodeAgentService } from "@zcode/services";
 import { ZCODE_VERSION } from "@zcode/shared";
 import { createCoreHttpServer } from "./http.js";
 import { installParentDisconnectHandler } from "./parentDisconnect.js";
 import { resolveCoreServerId } from "./serverIdentity.js";
 import { createTaskActivityTracker } from "./taskActivityTracker.js";
+import type { ExternalTaskActivitySource } from "./taskActivityTracker.js";
+import { mkdir } from "node:fs/promises";
 
 declare const __ZCODE_BUILTIN_PROVIDER_CONFIG_JSON__: string | undefined;
 
-export async function runServerCore(generation: number): Promise<void> {
+type CoreServices = ReturnType<typeof createLocalServices>;
+
+/** Internal lifecycle ports for packaged and embedded Server Core runners. */
+export interface ServerCoreRuntimePorts {
+  createServices?: (options: Parameters<typeof createLocalServices>[0]) => CoreServices;
+  disposeServices?: (services: CoreServices) => Promise<void>;
+}
+
+export async function loadExternalTaskActivity(
+  agentHost: Pick<IAgentHostService, "listActivityIndex">,
+) {
+  return await agentHost.listActivityIndex();
+}
+
+export async function runServerCore(
+  generation: number,
+  ports: ServerCoreRuntimePorts = {},
+): Promise<void> {
   let shutdown: ((reason: string) => Promise<void>) | undefined;
   let parentDisconnected = false;
   let disposeParentDisconnectHandler = (): void => undefined;
@@ -37,12 +57,31 @@ export async function runServerCore(generation: number): Promise<void> {
       `当前构建未嵌入 ZCode Built-in Provider Config，且未设置 ${ZCODE_BUILTIN_PROVIDER_CONFIG_FILE_ENV}`,
     );
   }
-  const services = createLocalServices({
+  const serverId = await resolveCoreServerId();
+  const spawnFallbackCwd = getConversationWorkspaceDir();
+  await mkdir(spawnFallbackCwd, { recursive: true, mode: 0o700 });
+  const services = (ports.createServices ?? createLocalServices)({
     zcodeBuiltinProviderConfigFilePath,
     serviceAuthorityMode: "standalone-server",
+    agentHostTargetId: serverId,
+    // 缺失 cwd 的只读 session/history 查询可使用该稳定目录；写入入口会在 getClient 再验证原路径。
+    zcodeAgentSpawnFallbackCwd: spawnFallbackCwd,
+    // Target credential provisioning is available only through the protected desktop Host channel.
+    providerProvisioningTargetEnabled: true,
   });
-  const taskActivityTracker = createTaskActivityTracker(services.getOptional(IZCodeAgentService));
-  const http = await createCoreHttpServer(services, { serverId: await resolveCoreServerId() });
+  const agentHost = services.getOptional(IAgentHostService);
+  const externalActivity: ExternalTaskActivitySource | undefined = agentHost
+    ? {
+        onEvent: agentHost.onEvent,
+        readIndex: () => loadExternalTaskActivity(agentHost),
+      }
+    : undefined;
+  const taskActivityTracker = createTaskActivityTracker(
+    services.getOptional(IZCodeAgentService),
+    externalActivity,
+  );
+  await taskActivityTracker.whenReady();
+  const http = await createCoreHttpServer(services, { serverId });
   const send = (message: unknown): Promise<void> => {
     if (typeof process.send !== "function" || process.connected === false) return Promise.resolve();
     return new Promise((resolve) => {
@@ -71,6 +110,10 @@ export async function runServerCore(generation: number): Promise<void> {
       void send({ type: "task-activity", runningTaskCount });
     },
   );
+  if (lastRunningTaskCount > 0) {
+    // 修复依据：重启 Core 时初始索引可能含 execution-unknown；ready 后立即发布，不能等心跳窗口让更新门暂时报 idle。
+    await send({ type: "task-activity", runningTaskCount: lastRunningTaskCount });
+  }
   let heartbeatInFlight: Promise<void> | undefined;
   const heartbeat = setInterval(() => {
     if (heartbeatInFlight) return;
@@ -97,7 +140,9 @@ export async function runServerCore(generation: number): Promise<void> {
     activitySubscription.dispose();
     taskActivityTracker.dispose();
     await http.close().catch(() => undefined);
-    await disposeServiceResourcesAndWait(services).catch(() => undefined);
+    await (ports.disposeServices ?? disposeServiceResourcesAndWait)(services).catch(
+      () => undefined,
+    );
     await send({ type: "shutdown-ack" });
     await send({ type: "exit", reason });
     try {

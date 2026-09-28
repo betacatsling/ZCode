@@ -82,6 +82,9 @@ export const zcodeProtocolErrorCodes = {
 } as const;
 
 const nonEmptyString = z.string().trim().min(1);
+// Filesystem locations and identity-fallback keys must preserve whitespace exactly.
+const workspaceFilesystemPath = z.string().min(1).max(4096);
+const workspaceIdentityKey = z.string().min(1).max(4096);
 const jsonObjectSchema = z.record(z.string(), z.unknown());
 const timestampMsSchema = z.number().int().nonnegative();
 const protocolInstantSchema = z.union([timestampMsSchema, nonEmptyString, z.date()]);
@@ -2298,8 +2301,8 @@ export const zcodeBrowserListParamsSchema = z
     requestId: nonEmptyString,
     sessionId: nonEmptyString,
     turnId: nonEmptyString.optional(),
-    workspaceKey: nonEmptyString,
-    workspacePath: nonEmptyString,
+    workspaceKey: workspaceIdentityKey,
+    workspacePath: workspaceFilesystemPath,
     workspaceIdentity: nonEmptyString.optional(),
     remoteSessionId: nonEmptyString.optional(),
     clientMode: browserClientModeSchema,
@@ -2319,8 +2322,8 @@ export const zcodeBrowserExecuteParamsSchema = z
     turnId: nonEmptyString.optional(),
     browserId: nonEmptyString.optional(),
     browserGeneration: z.number().int().nonnegative().optional(),
-    workspaceKey: nonEmptyString.optional(),
-    workspacePath: nonEmptyString.optional(),
+    workspaceKey: workspaceIdentityKey.optional(),
+    workspacePath: workspaceFilesystemPath.optional(),
     workspaceIdentity: nonEmptyString.optional(),
     remoteSessionId: nonEmptyString.optional(),
     clientMode: browserClientModeSchema.optional(),

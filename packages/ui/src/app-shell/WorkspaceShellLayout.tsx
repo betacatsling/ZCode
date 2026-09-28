@@ -23,6 +23,10 @@ import {
 } from "@/v4/workflowRunOpenContext.js";
 import type { ConversationDropTargetController } from "@/v4/composer/conversationDropTarget.js";
 import type { WorkbenchSessionBinding } from "@/v4/workbenchGroupStore.js";
+import type {
+  AgentHostConversationAttachment,
+  AgentHostConversationSelection,
+} from "@/v4/agentHostConversationOwner.js";
 import {
   canPlaceWorkbenchSessionInSplit,
   placeWorkbenchSessionInSplit,
@@ -49,6 +53,7 @@ import { PluginStorePage } from "@/settings/PluginStorePage.js";
 import { TaskFindDialog } from "@/quickpick/TaskFindDialog.js";
 import { WorkspaceHeader } from "@/WorkspaceHeader.js";
 import { WorkspaceSidebar, type SidebarFileTreeOpenRequest } from "@/WorkspaceSidebar.js";
+import { ProjectSidebarMount } from "@/project-sidebar/ProjectSidebarMount.js";
 import { AnimatedSidePanePanel } from "@/app-shell/AnimatedSidePanePanel.js";
 import {
   findScreenshotSurfaceTabForRender,
@@ -94,6 +99,7 @@ import {
 import type { WorkspaceShellLayoutProps } from "@/app-shell/types.js";
 import { useTabStoreApi } from "@/store/TabStoreProvider.js";
 import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
+import { selectWorkspaceZCodeState } from "@/store/zcodeSessionStoreSelectors.js";
 import type { ComposerMentionPrefill } from "@/store/zcodeSessionStoreTypes.js";
 
 const WORKSPACE_SIDEBAR_DEFAULT_WIDTH_PX = 264;
@@ -360,6 +366,58 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
   );
   const [isSidebarFileTreeOpen, setIsSidebarFileTreeOpen] = useState(false);
   const workspaceKey = workspaceIdentity?.trim() || workspaceAbsPath;
+  const externalSelectionGenerationRef = useRef(0);
+  const [selectedExternalSession, setSelectedExternalSession] = useState<
+    | (AgentHostConversationSelection & {
+        readonly sourceWorkspaceKey: string;
+        readonly nativeSessionIdAtSelection: string | null;
+      })
+    | null
+  >(null);
+  const activeExternalSession =
+    selectedExternalSession &&
+    selectedExternalSession.sourceWorkspaceKey === workspaceKey &&
+    selectedExternalSession.nativeSessionIdAtSelection === activeTaskId &&
+    selectedExternalSession.remoteSessionId === (workspaceRemoteSessionId ?? null)
+      ? selectedExternalSession
+      : null;
+  const handleSelectExternalSession = useCallback(
+    (selection: AgentHostConversationAttachment) => {
+      const owner = selection.ownerRecord;
+      const workspacePath = owner.workspacePath;
+      // owner 中的 identity 可能是带有效空白的 canonical key；导航保留原字节，缺省才用 path fallback。
+      const workspaceIdentity = owner.workspaceIdentity;
+      const remoteSessionId = selection.remoteSessionId ?? undefined;
+      const targetKind = remoteSessionId ? "remote" : "local";
+      const navigation = ensureTaskNavigationWorkspace({
+        workspacePath,
+        ...(workspaceIdentity ? { workspaceIdentity } : {}),
+        ...(remoteSessionId ? { remoteSessionId } : {}),
+        ...(selection.remoteTarget ? { remoteTarget: selection.remoteTarget } : {}),
+        targetKind,
+        activateTabByPath: (path, options) =>
+          tabStoreApi.getState().activateTabByPath(path, options),
+        addLocalWorkspaceTab: (path) => tabStoreApi.getState().addTab(path),
+        addRemoteWorkspaceTab: (path, options) => tabStoreApi.getState().addTab(path, options),
+      });
+      if (!navigation.accepted) {
+        toast(intl.formatMessage({ id: "projectSidebar.externalConversationUnavailable" }));
+        return;
+      }
+      const targetActiveTaskId = selectWorkspaceZCodeState(
+        useZCodeSessionStore.getState(),
+        workspacePath,
+        workspaceIdentity,
+      ).activeTaskId;
+      setSelectedExternalSession({
+        ...selection,
+        selectionGeneration: ++externalSelectionGenerationRef.current,
+        sourceWorkspaceKey: workspaceIdentity?.trim() || workspacePath,
+        nativeSessionIdAtSelection: targetActiveTaskId,
+      });
+    },
+    [intl, tabStoreApi],
+  );
   const screenshotSurfaceRequest = useBrowserScreenshotSurfaceRequest(sidePaneState?.tabs ?? []);
   const screenshotSurfaceTab = screenshotSurfaceRequest
     ? findScreenshotSurfaceTabForRender(sidePaneState?.tabs ?? [], screenshotSurfaceRequest)
@@ -870,16 +928,25 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
       targetWorkspacePath: string,
       taskId: string,
       targetWorkspaceIdentity?: string,
-      targetRemoteSessionId?: string,
+      targetRemoteSessionId?: string | null,
       expectedUnreadAt?: number,
+      targetKind?: "local" | "remote",
+      targetRemoteTarget?: import("@zcode/shared").RemoteTarget,
     ) => {
       {
         const workspaceResult = ensureTaskNavigationWorkspace({
           workspacePath: targetWorkspacePath,
           workspaceIdentity: targetWorkspaceIdentity,
-          activateTabByPath: tabStoreApi.getState().activateTabByPath,
+          remoteSessionId: targetRemoteSessionId ?? undefined,
+          ...(targetRemoteTarget ? { remoteTarget: targetRemoteTarget } : {}),
+          targetKind,
+          activateTabByPath: (workspacePath, options) =>
+            tabStoreApi.getState().activateTabByPath(workspacePath, options),
           addLocalWorkspaceTab: (workspacePath) => {
             tabStoreApi.getState().addTab(workspacePath);
+          },
+          addRemoteWorkspaceTab: (workspacePath, options) => {
+            tabStoreApi.getState().addTab(workspacePath, options);
           },
         });
         if (!workspaceResult.accepted) {
@@ -898,12 +965,14 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
           });
         }
         const resolvedRemoteSessionId =
-          targetRemoteSessionId ??
-          workspaceTabs.find(
-            (tab) =>
-              (tab.workspaceIdentity?.trim() || tab.workspacePath) ===
-              (targetWorkspaceIdentity?.trim() || targetWorkspacePath),
-          )?.remoteSessionId;
+          targetKind === "local"
+            ? undefined
+            : (targetRemoteSessionId ??
+              workspaceTabs.find(
+                (tab) =>
+                  (tab.workspaceIdentity?.trim() || tab.workspacePath) ===
+                  (targetWorkspaceIdentity?.trim() || targetWorkspacePath),
+              )?.remoteSessionId);
         const target: V4SplitPaneSessionTarget = {
           workspacePath: targetWorkspacePath,
           ...(targetWorkspaceIdentity?.trim()
@@ -923,6 +992,29 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
       }
     },
     [handleSelectTask, intl, shellWorkbenchBinding, showChatMainView, tabStoreApi, workspaceTabs],
+  );
+  const handleSelectProjectSidebarNativeSession = useCallback(
+    (
+      targetWorkspacePath: string,
+      sessionId: string,
+      targetWorkspaceIdentity?: string,
+      targetRemoteSessionId?: string | null,
+      _targetId?: string,
+      targetKind?: "local" | "remote",
+      targetRemoteTarget?: import("@zcode/shared").RemoteTarget,
+    ) => {
+      setSelectedExternalSession(null);
+      handleSelectTaskInChat(
+        targetWorkspacePath,
+        sessionId,
+        targetWorkspaceIdentity,
+        targetRemoteSessionId,
+        undefined,
+        targetKind,
+        targetRemoteTarget,
+      );
+    },
+    [handleSelectTaskInChat],
   );
   // 中枢直接启动 accepted 后切到新会话（run 卡已在顶部）：复用运行历史那条导航，
   // target 恒带工作流所属项目坐标（不变式 7），remoteSessionId 决定连接 endpoint。
@@ -1601,6 +1693,18 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
                     onOpenPluginStore={handleOpenPluginStore}
                     pluginStoreActive={workspaceMainView === "plugin-store"}
                     onFileTreeOpenChange={setIsSidebarFileTreeOpen}
+                    projectSidebarContent={(legacyContent) => (
+                      <ProjectSidebarMount
+                        fallback={legacyContent}
+                        workspacePath={workspaceAbsPath}
+                        workspaceIdentity={workspaceIdentity}
+                        workspaceRemoteSessionId={workspaceRemoteSessionId}
+                        theme={theme}
+                        onSelectTask={handleSelectProjectSidebarNativeSession}
+                        onSelectExternalSession={handleSelectExternalSession}
+                        onReconnectTarget={onOpenRemoteWorkspace}
+                      />
+                    )}
                   />
                 </WorkflowRunOpenProvider>
               </V4SplitPaneEntryProvider>
@@ -1844,10 +1948,21 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
                               isDesktop={isDesktop === true}
                               remoteSessionId={workspaceRemoteSessionId}
                               sessionId={activeTaskId}
-                              activeSelectionSideChatSessionId={activeSelectionSideChatSessionId}
-                              provider={activeTaskProvider ?? undefined}
-                              onSessionCreated={handleV4SessionCreated}
-                              onSessionDeleted={handleV4SessionDeleted}
+                              externalSessionSelection={activeExternalSession ?? undefined}
+                              activeSelectionSideChatSessionId={
+                                activeExternalSession ? null : activeSelectionSideChatSessionId
+                              }
+                              provider={
+                                activeExternalSession
+                                  ? undefined
+                                  : (activeTaskProvider ?? undefined)
+                              }
+                              onSessionCreated={
+                                activeExternalSession ? undefined : handleV4SessionCreated
+                              }
+                              onSessionDeleted={
+                                activeExternalSession ? undefined : handleV4SessionDeleted
+                              }
                               draftComposerHeader={draftComposerHeader}
                               onPrimaryDraftDropTargetControllerChange={
                                 setDraftHeaderDropTargetController
@@ -1863,7 +1978,9 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
                               }
                               onRefreshGit={handleRefreshGit}
                               onOpenGitReview={handleOpenGitReview}
-                              onPaneActiveSessionChange={handlePaneActiveSessionChange}
+                              onPaneActiveSessionChange={
+                                activeExternalSession ? undefined : handlePaneActiveSessionChange
+                              }
                               onOpenBrowserUrl={handleOpenBrowserUrl}
                               onOpenAutomationsMain={handleOpenAutomations}
                               onOpenCodeViewer={handleOpenCodeViewer}

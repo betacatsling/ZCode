@@ -7,6 +7,10 @@ import {
   type TaskRealtimeDeliveredEvent,
   type TaskRealtimeEvent,
   type TaskRunLeaseResult,
+  type WorkspaceAdmissionActivityFact,
+  type WorkspaceAdmissionActivityQuery,
+  type WorkspaceAdmissionActivityRequest,
+  type WorkspaceAdmissionActivityResult,
   HostMessageTypes,
   HostResponseTypes,
   hostIncomingMessageSchema,
@@ -66,6 +70,16 @@ function createTaskRealtimeBridge(params: {
       reject(error: Error): void;
     }
   >();
+  const pendingWorkspaceAdmissionQueries = new Map<
+    string,
+    {
+      resolve(fact: WorkspaceAdmissionActivityFact): void;
+      reject(error: Error): void;
+    }
+  >();
+  const workspaceAdmissionQueryListeners = new Set<
+    (query: WorkspaceAdmissionActivityQuery) => void
+  >();
   const seenEventIds = new Set<string>();
   const seenEventOrder: string[] = [];
   const seenEventLimit = Math.max(1, params.seenEventLimit ?? DEFAULT_SEEN_EVENT_LIMIT);
@@ -116,6 +130,19 @@ function createTaskRealtimeBridge(params: {
       }
       pendingOwnerCommands.delete(parsed.data.result.commandRequestId);
       pending.resolve(parsed.data.result);
+      return;
+    }
+
+    if (parsed.data.type === HostMessageTypes.WorkspaceAdmissionActivityQueryResult) {
+      const pending = pendingWorkspaceAdmissionQueries.get(parsed.data.result.requestId);
+      if (!pending) return;
+      pendingWorkspaceAdmissionQueries.delete(parsed.data.result.requestId);
+      pending.resolve(parsed.data.result.fact);
+      return;
+    }
+
+    if (parsed.data.type === HostMessageTypes.WorkspaceAdmissionActivityQuery) {
+      for (const listener of workspaceAdmissionQueryListeners) listener(parsed.data.request);
       return;
     }
 
@@ -238,6 +265,33 @@ function createTaskRealtimeBridge(params: {
         result,
       });
     },
+    queryWorkspaceAdmissionActivity(
+      request: Omit<WorkspaceAdmissionActivityRequest, "requestId">,
+    ): Promise<WorkspaceAdmissionActivityFact> {
+      if (disposed) return Promise.reject(new Error("task realtime bridge disposed"));
+      const requestId = createUuid();
+      return new Promise((resolve, reject) => {
+        pendingWorkspaceAdmissionQueries.set(requestId, { resolve, reject });
+        params.parentPort.postMessage({
+          type: HostResponseTypes.WorkspaceAdmissionActivityRequest,
+          request: { ...request, requestId },
+        });
+      });
+    },
+    onDidReceiveWorkspaceAdmissionActivityQuery(
+      listener: (query: WorkspaceAdmissionActivityQuery) => void,
+    ): { dispose(): void } {
+      if (disposed) return { dispose: () => undefined };
+      workspaceAdmissionQueryListeners.add(listener);
+      return { dispose: () => workspaceAdmissionQueryListeners.delete(listener) };
+    },
+    respondWorkspaceAdmissionActivityQuery(result: WorkspaceAdmissionActivityResult): void {
+      if (disposed) return;
+      params.parentPort.postMessage({
+        type: HostResponseTypes.WorkspaceAdmissionActivityResult,
+        result,
+      });
+    },
     dispose(): void {
       if (disposed) {
         return;
@@ -250,10 +304,13 @@ function createTaskRealtimeBridge(params: {
       for (const pending of pendingOwnerCommands.values()) {
         pending.reject(error);
       }
+      for (const pending of pendingWorkspaceAdmissionQueries.values()) pending.reject(error);
       pendingLeaseRequests.clear();
       pendingOwnerCommands.clear();
+      pendingWorkspaceAdmissionQueries.clear();
       listeners.clear();
       ownerCommandListeners.clear();
+      workspaceAdmissionQueryListeners.clear();
       seenEventIds.clear();
       seenEventOrder.length = 0;
       params.parentPort.off("message", onMessage);

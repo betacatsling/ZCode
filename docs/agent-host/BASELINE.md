@@ -1,0 +1,37 @@
+# Multi-harness P0 baseline (in progress)
+
+- Source commit at inspection: `328c1a0c0ffaa5a4f65e8fa199af5e4c20706e5f` (plan's pinned baseline); `origin/main` subsequently changed to a different commit with the same title, so do not fast-forward a worktree with local edits without reviewing that divergence.
+- Required tools (`mise.toml`): Node 24.14.0, pnpm 10.33.2. Initial shell: Node 26.8.1, no `mise` or `pnpm` on PATH, no `node_modules`. The pinned toolchain is available locally through `npm exec --yes --package=node@24.14.0 --package=pnpm@10.33.2 -- <command>` (verified versions). `pi --version`: 0.87.1; `claude --version`: 2.1.263; `codex --version`: 0.156.1. These installed CLI versions are observations, not pinned adapter dependencies or certified compatibility.
+- Isolated development data directory: use `ZCODE_DATA_BASE_DIR` pointing at a temporary directory, never a production session/credential directory. No account-consuming or destructive live tests may run without separately authorized credentials and budget.
+
+## Ownership and current links
+
+```text
+Desktop/Web UI (packages/ui/src/v4/transport.ts, agentConversationTransport.ts)
+    -> IZCodeAgentService v4 forwarding (packages/services/src/zcode-agent)
+    -> ZCodeAgentProcessManager (workspace-scoped, stdio ZCode protocol)
+    -> CLI V4 CommandInbox + native projection (apps/zcode-cli)
+    -> CLI ApiProviderModelRuntime -> provider registry -> AiSdkModelAdapter -> Model
+
+SSH client (packages/server/src/remote/backend.ts: detect/upload/exec)
+    -> remote server / workspace agent via stdio, owned by current attachment
+```
+
+Native V4 command inbox, native context and projection are owned by the CLI, not by renderer. Renderer transport has command ACK/query, topic subscribe/resync, snapshots/deltas, history pagination. Remote `exec()` returns attached stdio; this alone is not a lifecycle guarantee after SSH disconnect or GUI exit. The legacy `glm` provider schema is native-only and must not be extended to stand in for third-party sessions. See `CONTRACT.md` for the new separate owner.
+
+## Verification log
+
+| Gate | Evidence | Status |
+|---|---|---|
+| workspace freshness (initial) | `node scripts/check-workspace-freshness.mjs`: fresh at `328c1a0` before implementation. Subsequent check reports upstream branch divergence; pinned plan commit intentionally retained. | Initial pass; subsequent divergence under review |
+| dependency install | `npm exec --yes --package=pnpm@10.33.2 -- pnpm install --frozen-lockfile` | **failed** (initial attempt): Node 26 used; optional ssh2 crypto build failed; desktop postinstall Electron 41 headers fetch from `artifacts.electronjs.org` ECONNRESET. **Resolved 2026-09-24**: `brew install mise` + `mise install` + `mise run install` (14.6s) under pinned Node 24.14.0/pnpm 10.33.2 with `ELECTRON_MIRROR` active; `electron-rebuild -o node-pty` completed. Partial `node_modules/electron` repaired by re-running `node install.js` under `mise exec`; `electron --version` = v41.0.3, dist 282M, `node-pty` prebuild present. ssh2 optional crypto not re-verified. |
+| architecture check | `pnpm architecture:check --changed` under pinned Node/pnpm | pass, 0 new/baseline violations after P1 code |
+| deterministic contract tests | `pnpm exec tsx --test packages/services/test/agentHost{Contracts,Journal,NativeCompat}.test.ts` | 7/7 pass |
+| native create/send/tools/stop/approval/resume | requires isolated desktop/runtime | not run |
+| SSH actual execution | requires target + isolated remote runtime | not run |
+| root typecheck / lint (current worktree) | `pnpm typecheck` under pinned Node/pnpm after building `@zcode/cli...`; `pnpm lint` | typecheck pass; lint exit 0 (74 warnings, including the newly added host warnings that were then removed; rerun before release) |
+| Pi SDK deterministic integration | `tsx --test packages/services/test/agentHost*.test.ts packages/ui/test/agentHostConversationFacade.test.ts` | 20/20 pass; real Pi SDK worker, **fake model only**, isolated worktree, approval denial + two-turn read/write/test fixture; not two live Provider certification |
+| SSH target probe | non-interactive SSH target probe showed Linux x86_64, Node v20.19.2; remote `npm exec node@24.14.0` still ran v20 | SSH login/command pass; pinned runtime and ZCode target execution not yet verified |
+| packaged desktop native binary | requires Electron headers and isolated runtime | not run; first postinstall failed |
+
+Every unavailable gate is an environment/test gap, not a passing certification. Do not silently move a native owner into an external session to make a test appear green.

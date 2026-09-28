@@ -566,6 +566,12 @@ export class ZCodeProtocolAgentServer {
         return this.requireV4Gateway().handleCommand(request.params);
       case V4_METHODS.commandsQuery:
         return this.requireV4Gateway().queryCommands(request.params);
+      case V4_METHODS.workspaceAdmissionQuiescence:
+        return this.requireV4Gateway().workspaceAdmissionQuiescence(request.params);
+      case V4_METHODS.managedWorkspaceSessions:
+        return this.requireV4Gateway().managedWorkspaceSessions(request.params);
+      case V4_METHODS.managedWorkspaceSessionLookup:
+        return this.requireV4Gateway().managedWorkspaceSessionLookup(request.params);
       case zcodeProtocolMethods.sessionCreate:
         return await createSession(this.context, request.params, request.trace);
       case zcodeProtocolMethods.sessionResume:

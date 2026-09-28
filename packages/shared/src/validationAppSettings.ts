@@ -105,13 +105,13 @@ const remoteWorkspaceTargetSchema = z.discriminatedUnion("kind", [
 const appWorkspaceSessionEntrySchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("local"),
-    workspacePath: nonEmptyStringSchema,
+    workspacePath: z.string().min(1).max(4096),
     workspacePurpose: z.enum(["project", "conversation"]).default("project"),
   }),
   z.object({
     kind: z.literal("remote"),
-    workspacePath: nonEmptyStringSchema,
-    localWorkspacePath: nonEmptyStringSchema.optional(),
+    workspacePath: z.string().min(1).max(4096),
+    localWorkspacePath: z.string().min(1).max(4096).optional(),
     workspaceIdentity: nonEmptyStringSchema.optional(),
     target: remoteWorkspaceTargetSchema,
     lastOpenedAt: z.number().int().nonnegative(),
@@ -249,8 +249,8 @@ function migrateLegacyLocalePreference(value: unknown): unknown {
 
 const legacyRemoteWorkspaceHistoryEntrySchema = z.object({
   id: nonEmptyStringSchema,
-  workspacePath: nonEmptyStringSchema,
-  localWorkspacePath: nonEmptyStringSchema.optional(),
+  workspacePath: z.string().min(1).max(4096),
+  localWorkspacePath: z.string().min(1).max(4096).optional(),
   workspaceIdentity: nonEmptyStringSchema.optional(),
   target: remoteWorkspaceTargetSchema,
   lastOpenedAt: z.number().int().nonnegative(),

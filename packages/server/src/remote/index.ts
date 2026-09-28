@@ -3,6 +3,7 @@ export type {
   RemoteEnvironment,
   RemoteUploadOptions,
   RemoteUploadProgress,
+  RemotePortForward,
   StdioStream,
 } from "./backend.js";
 export { createRemoteBackend } from "./create-backend.js";
@@ -18,6 +19,11 @@ export {
 export { deployServer, type DeployLockMode, type DeployOptions } from "./deploy.js";
 export type { RemoteAssetNetworkPort } from "./remoteAssetNetwork.js";
 export { wrapStdioStream } from "./stdio-socket.js";
+export {
+  connectToPersistentTarget,
+  type PersistentTargetClientOptions,
+  type PersistentTargetConnection,
+} from "./persistentTargetClient.js";
 export { performHandshake, type HandshakeResult } from "./handshake.js";
 export { DockerBackend } from "./docker-backend.js";
 export {

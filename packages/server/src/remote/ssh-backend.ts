@@ -2,6 +2,7 @@
 import { Client as SSHClient } from "ssh2";
 import type { ConnectConfig } from "ssh2";
 import { createReadStream } from "node:fs";
+import { createServer, type Server as NetServer, type Socket } from "node:net";
 import { posix } from "node:path";
 import { Emitter } from "@zcode/rpc";
 import { resolveZCodeRuntimeEnv } from "@zcode/shared";
@@ -10,6 +11,7 @@ import type {
   RemoteDisconnectEvent,
   RemoteDisconnectReason,
   RemoteEnvironment,
+  RemotePortForward,
   RemoteUploadOptions,
   StdioStream,
 } from "@zcode/server/remote/backend.js";
@@ -99,6 +101,7 @@ export class SSHBackend implements IRemoteBackend {
   private hasEverConnected = false;
   private disconnectReported = false;
   private readonly disconnectEmitter = new Emitter<RemoteDisconnectEvent>();
+  private readonly portForwards = new Set<RemotePortForward>();
   readonly onDidDisconnect = this.disconnectEmitter.event;
 
   private readonly onClientError = (error: unknown): void => {
@@ -206,6 +209,7 @@ export class SSHBackend implements IRemoteBackend {
 
     this.connected = false;
     this.homeDirPromise = null;
+    for (const forward of this.portForwards) forward.dispose();
 
     if (!shouldReport) {
       return;
@@ -314,6 +318,95 @@ export class SSHBackend implements IRemoteBackend {
         });
       });
     });
+  }
+
+  async openLocalPortForward(remoteLoopbackPort: number): Promise<RemotePortForward> {
+    if (
+      !Number.isInteger(remoteLoopbackPort) ||
+      remoteLoopbackPort < 1 ||
+      remoteLoopbackPort > 65535
+    ) {
+      throw new Error("Remote Core port is invalid");
+    }
+    await this.ensureConnected();
+    this.assertNotDisposed();
+    const sockets = new Set<Socket>();
+    const server: NetServer = createServer((socket) => {
+      sockets.add(socket);
+      socket.once("close", () => sockets.delete(socket));
+      if (this.disposed) {
+        socket.destroy();
+        return;
+      }
+      this.client.forwardOut(
+        "127.0.0.1",
+        socket.remotePort ?? 0,
+        "127.0.0.1",
+        remoteLoopbackPort,
+        (error, channel) => {
+          if (error || this.disposed || socket.destroyed) {
+            channel?.destroy();
+            socket.destroy();
+            return;
+          }
+          channel.on("error", () => socket.destroy());
+          socket.on("error", () => channel.destroy());
+          socket.pipe(channel).pipe(socket);
+        },
+      );
+    });
+    await new Promise<void>((resolve, reject) => {
+      const onError = (error: Error) => {
+        server.off("listening", onListening);
+        reject(error);
+      };
+      const onListening = () => {
+        server.off("error", onError);
+        server.on("error", () => sockets.forEach((socket) => socket.destroy()));
+        resolve();
+      };
+      server.once("error", onError);
+      server.once("listening", onListening);
+      server.listen(0, "127.0.0.1");
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      server.close();
+      throw new Error("Local SSH tunnel did not expose a TCP port");
+    }
+    let disposed = false;
+    let closePromise: Promise<void> | undefined;
+    const forward: RemotePortForward = {
+      host: "127.0.0.1",
+      port: address.port,
+      dispose: () => {
+        if (disposed) return;
+        disposed = true;
+        sockets.forEach((socket) => socket.destroy());
+        if (server.listening) {
+          server.close();
+        }
+        this.portForwards.delete(forward);
+      },
+      disposeAndWait: () => {
+        if (!closePromise) {
+          closePromise = new Promise<void>((resolve) => {
+            if (disposed && !server.listening) {
+              resolve();
+              return;
+            }
+            disposed = true;
+            sockets.forEach((socket) => socket.destroy());
+            if (server.listening) server.close(() => resolve());
+            else resolve();
+            this.portForwards.delete(forward);
+          });
+        }
+        return closePromise;
+      },
+    };
+    this.portForwards.add(forward);
+    return forward;
   }
 
   async exists(remotePath: string): Promise<boolean> {
@@ -600,6 +693,7 @@ export class SSHBackend implements IRemoteBackend {
       return;
     }
     this.disposed = true;
+    for (const forward of this.portForwards) forward.dispose();
     // 首次握手失败后，ssh2 可能在 socket end/close 之后继续发出 error。
     // dispose 后保留 onClientError 作为 no-op sink，不能按 end/close 事件时序提前移除，
     // 否则迟到事件会逃逸为 uncaughtException，让共享 Window Host 连带退出其它 workspace。

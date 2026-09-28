@@ -12,6 +12,9 @@ import {
   IBroadcastService,
   IZCodeTaskService,
   IZCodeAgentService,
+  IAgentHostService,
+  IWorktreeService,
+  ISessionHierarchyService,
   IZCodeSessionService,
   IConversationShareService,
   IBotsService,
@@ -379,6 +382,15 @@ export function createRemoteWorkspaceServiceCollection(params: {
       createSettingsSyncService({ settingService: localSettingService }),
     )
     .register(IPromptAttachmentTransferService, params.promptAttachmentTransferService);
+  if (params.connectionServices.agentHostService) {
+    services.register(IAgentHostService, params.connectionServices.agentHostService);
+  }
+  if (params.connectionServices.worktreeService) {
+    services.register(IWorktreeService, params.connectionServices.worktreeService);
+  }
+  if (params.connectionServices.sessionHierarchyService) {
+    services.register(ISessionHierarchyService, params.connectionServices.sessionHierarchyService);
+  }
   registerHostApiNetworkTransportForDispose(services, hostApiNetworkTransport);
   registerRemoteProviderProvisioningExecutor(services, remoteProviderProvisioningService);
   return services;
