@@ -3,7 +3,7 @@
  *
  * Proves same-protocol Agents register via explicit factory + loadExplicit trust list
  * without changing lazy Host defaults or the shared ACP session machine. Goose SessionHost
- * path is symmetric to OpenCode (#75). Late prompt + transport fault/disconnect still journal via SessionHost (OpenCode + Goose). Resume-after-disconnect: SessionHost.open attach via negotiated session/load then send again. Cancel-after-disconnect: after fault fence, cancel of the dead turn is stale; after reopen+session/load, cancel mid-prompt journals cancelled (OpenCode + Goose). Double-fault/reopen: fault→reopen→fault→reopen stays idempotent (session/load, no session/new) then send succeeds (OpenCode + Goose). Mid-tool-call disconnect: tool_call + pending permission then fault → reopen session/load → send (OpenCode + Goose). Permission-denied-then-disconnect: Host denies permission, peer then faults the prompt (OpenCode + Goose). Cancel-during-permission: Host cancelTurn while permission pending journals cancelled (OpenCode + Goose). Permission-resolve-after-reopen: fault mid-permission → reopen → deny still clean (OpenCode + Goose). Allow-after-reopen: fault mid-permission → reopen → fresh allow completes send (OpenCode + Goose). Double-cancel: cancelTurn×2 mid-prompt is idempotent (one cancelled outcome; OpenCode + Goose). Allow-then-disconnect: Host allows permission then peer faults mid-turn (OpenCode + Goose). Cancel-then-disconnect: Host cancel mid-prompt then peer faults (OpenCode + Goose). Deny-then-cancel: Host deny pending permission then cancelTurn journals clean (OpenCode + Goose). Allow-then-cancel: Host allow pending permission then cancelTurn journals clean (OpenCode + Goose). Fault-during-session-load: reopen attach session/load mid-fault fails clean (OpenCode + Goose). Load-then-cancel: after reopen session/load succeeds, cancelTurn before first send is stale (OpenCode + Goose). Cancel-during-session-load: while reopen session/load is held in-flight, aborting the pending load rejects open clean (Host.cancelTurn cannot race mid-load — open awaits attach; OpenCode + Goose). Load-then-disconnect: after reopen session/load succeeds, peer transport close before first send stays idle until next send faults clean (OpenCode + Goose). Permission-during-session-load: while reopen session/load is held in-flight, peer session/request_permission is rejected as stale (no active turn) then load completes (OpenCode + Goose). Disconnect-during-session-load: while reopen session/load is held in-flight, peer idle transport.close (no JSON-RPC error reply) rejects open clean (OpenCode + Goose). Load-then-send / mid-load prompt: while reopen session/load held, peer agent_message_chunk is replay-swallowed (acp.replay applied:false) then first send succeeds (OpenCode + Goose). Load-then-permission-deny: after reopen session/load succeeds, first send hits permission and Host deny journals clean with no new fault (OpenCode + Goose). Load-then-permission-allow: after reopen session/load succeeds, first send hits permission and Host allow completes the turn with no new fault (OpenCode + Goose). Disconnect-during-permission: Host journals interaction.requested then peer JSON-RPC faults+closes before resolve/cancel → fault/unknown, no interaction.resolved (OpenCode + Goose). Disconnect-during-permission-then-reopen: after that fence, SessionHost.open session/load then first send succeeds (OpenCode + Goose). Idle-close-during-permission: after interaction.requested, peer closes transport without a JSON-RPC error reply → fault/unknown, no interaction.resolved or reopen round (OpenCode + Goose). Idle-close-during-permission-then-reopen: after that idle-close fence, SessionHost.open session/load then first send succeeds (OpenCode + Goose). Idle-close-then-fault/reopen: idle-close-during-permission→reopen→JSON-RPC fault mid-prompt→reopen stays idempotent (session/load, no session/new) then send succeeds (OpenCode + Goose). Cancel-after-idle-close: after #236 idle-close-during-permission fence, cancelTurn of the dead turn is stale-turn and resolveInteraction is stale-interaction; after reopen+session/load, cancel mid-prompt journals cancelled (OpenCode + Goose). Allow-after-idle-close-reopen: after #236 idle-close-during-permission fence, SessionHost.open session/load then fresh permission allow completes send (OpenCode + Goose; ≠ #136 JSON-RPC fault fence / ≠ #242 send-without-permission / ≠ #256 cancel path).
+ * path is symmetric to OpenCode (#75). Late prompt + transport fault/disconnect still journal via SessionHost (OpenCode + Goose). Resume-after-disconnect: SessionHost.open attach via negotiated session/load then send again. Cancel-after-disconnect: after fault fence, cancel of the dead turn is stale; after reopen+session/load, cancel mid-prompt journals cancelled (OpenCode + Goose). Double-fault/reopen: fault→reopen→fault→reopen stays idempotent (session/load, no session/new) then send succeeds (OpenCode + Goose). Mid-tool-call disconnect: tool_call + pending permission then fault → reopen session/load → send (OpenCode + Goose). Permission-denied-then-disconnect: Host denies permission, peer then faults the prompt (OpenCode + Goose). Cancel-during-permission: Host cancelTurn while permission pending journals cancelled (OpenCode + Goose). Permission-resolve-after-reopen: fault mid-permission → reopen → deny still clean (OpenCode + Goose). Allow-after-reopen: fault mid-permission → reopen → fresh allow completes send (OpenCode + Goose). Double-cancel: cancelTurn×2 mid-prompt is idempotent (one cancelled outcome; OpenCode + Goose). Allow-then-disconnect: Host allows permission then peer faults mid-turn (OpenCode + Goose). Cancel-then-disconnect: Host cancel mid-prompt then peer faults (OpenCode + Goose). Deny-then-cancel: Host deny pending permission then cancelTurn journals clean (OpenCode + Goose). Allow-then-cancel: Host allow pending permission then cancelTurn journals clean (OpenCode + Goose). Fault-during-session-load: reopen attach session/load mid-fault fails clean (OpenCode + Goose). Load-then-cancel: after reopen session/load succeeds, cancelTurn before first send is stale (OpenCode + Goose). Cancel-during-session-load: while reopen session/load is held in-flight, aborting the pending load rejects open clean (Host.cancelTurn cannot race mid-load — open awaits attach; OpenCode + Goose). Load-then-disconnect: after reopen session/load succeeds, peer transport close before first send stays idle until next send faults clean (OpenCode + Goose). Permission-during-session-load: while reopen session/load is held in-flight, peer session/request_permission is rejected as stale (no active turn) then load completes (OpenCode + Goose). Disconnect-during-session-load: while reopen session/load is held in-flight, peer idle transport.close (no JSON-RPC error reply) rejects open clean (OpenCode + Goose). Load-then-send / mid-load prompt: while reopen session/load held, peer agent_message_chunk is replay-swallowed (acp.replay applied:false) then first send succeeds (OpenCode + Goose). Load-then-permission-deny: after reopen session/load succeeds, first send hits permission and Host deny journals clean with no new fault (OpenCode + Goose). Load-then-permission-allow: after reopen session/load succeeds, first send hits permission and Host allow completes the turn with no new fault (OpenCode + Goose). Disconnect-during-permission: Host journals interaction.requested then peer JSON-RPC faults+closes before resolve/cancel → fault/unknown, no interaction.resolved (OpenCode + Goose). Disconnect-during-permission-then-reopen: after that fence, SessionHost.open session/load then first send succeeds (OpenCode + Goose). Idle-close-during-permission: after interaction.requested, peer closes transport without a JSON-RPC error reply → fault/unknown, no interaction.resolved or reopen round (OpenCode + Goose). Idle-close-during-permission-then-reopen: after that idle-close fence, SessionHost.open session/load then first send succeeds (OpenCode + Goose). Idle-close-then-fault/reopen: idle-close-during-permission→reopen→JSON-RPC fault mid-prompt→reopen stays idempotent (session/load, no session/new) then send succeeds (OpenCode + Goose). Cancel-after-idle-close: after #236 idle-close-during-permission fence, cancelTurn of the dead turn is stale-turn and resolveInteraction is stale-interaction; after reopen+session/load, cancel mid-prompt journals cancelled (OpenCode + Goose). Allow-after-idle-close-reopen: after #236 idle-close-during-permission fence, SessionHost.open session/load then fresh permission allow completes send (OpenCode + Goose; ≠ #136 JSON-RPC fault fence / ≠ #242 send-without-permission / ≠ #256 cancel path). Deny-after-idle-close-reopen: after #236 idle-close-during-permission fence, stale deny is stale-interaction; after reopen session/load, fresh permission deny journals clean (OpenCode + Goose; ≠ #260 allow / ≠ #134 JSON-RPC fault fence / ≠ #195 load-then-permission-deny / ≠ #256 cancel).
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -3700,6 +3700,287 @@ test("SessionHost + opt-in OpenCode ACP: allow-after-idle-close-reopen succeeds 
 
 test("SessionHost + opt-in Goose ACP: allow-after-idle-close-reopen succeeds send (symmetric)", async (t) => {
   await assertSessionHostAllowAfterIdleCloseReopen({
+    t,
+    label: "goose",
+    harnessId: "goose",
+    agentName: "Goose",
+    createHarness: (openTransport) =>
+      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+  });
+});
+
+async function assertSessionHostDenyAfterIdleCloseReopen(input: {
+  t: { after: (fn: () => void | Promise<void>) => void };
+  label: string;
+  harnessId: "opencode" | "goose";
+  agentName: string;
+  createHarness: (openTransport: () => AcpTransport) => ReturnType<
+    typeof createExperimentalRegistryOpenCodeAcpHarness
+  >;
+}): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-daicr-`));
+  const worktree = join(root, "worktree");
+  const journalRoot = join(root, "journal");
+  await mkdir(worktree, { recursive: true });
+  input.t.after(() => rm(root, { recursive: true, force: true }));
+
+  const backendSessionId = `${input.harnessId}-daicr-session`;
+  const hostSessionId = `${input.harnessId}-daicr-1`;
+  const spec = {
+    schemaVersion: 1 as const,
+    hostSessionId,
+    execution: {
+      targetId: "local",
+      workspaceIdentity: `workspace-${input.harnessId}-daicr`,
+      worktreePath: worktree,
+    },
+    harness: { id: input.harnessId, adapterVersion: ACP_ADAPTER_VERSION },
+    modelBinding: { kind: "harness-managed" as const },
+  };
+  const target = {
+    id: "local",
+    kind: "local" as const,
+    platform: process.platform as "darwin" | "linux" | "win32",
+    available: true,
+  };
+  const catalog = {
+    fingerprint: "registry-v1",
+    validateSelection: () => ({ ok: true as const }),
+  };
+
+  // Round 1: #236 idle-close-during-permission fence (≠ #134 JSON-RPC mid-permission fault).
+  const peersFault: FakePeer[] = [];
+  const registryLive = new HarnessRegistry();
+  registryLive.register(
+    input.createHarness(() =>
+      openFakeTransport(
+        input.agentName,
+        backendSessionId,
+        { loadSession: true, disconnectDuringPermission: true },
+        peersFault,
+      ),
+    ),
+  );
+
+  const host = await SessionHost.create({
+    root: journalRoot,
+    spec,
+    target,
+    catalog,
+    registry: registryLive,
+  });
+
+  const idleReceipt = await host.dispatch({
+    type: "send",
+    commandId: `${input.harnessId}-daicr-idle`,
+    hostSessionId,
+    turnId: "turn-daicr-idle",
+    text: "idle close while permission pending",
+  });
+  assert.equal(idleReceipt.status, "accepted");
+
+  const idleDeadline = Date.now() + 5_000;
+  let idleInteractionId: string | undefined;
+  while (Date.now() < idleDeadline) {
+    const requested = host.eventsSince(0).find((event) => event.kind === "interaction.requested");
+    if (requested && requested.kind === "interaction.requested") {
+      idleInteractionId = requested.interactionId;
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.ok(idleInteractionId, "expected interaction.requested before peer idle close");
+
+  await waitForCondition(
+    () => peersFault.some((peer) => peer.holdingPermission),
+    "FakePeer hold mid permission",
+  );
+  const held = peersFault.find((peer) => peer.holdingPermission);
+  assert.ok(held, "expected FakePeer holding permission");
+  await held.idleCloseDuringPendingPermission();
+  await host.whenIdle();
+
+  const faultEvents = host.eventsSince(0);
+  assert.ok(faultEvents.some((event) => event.kind === "tool.started"));
+  assert.ok(faultEvents.some((event) => event.kind === "interaction.requested"));
+  const error = faultEvents.find((event) => event.kind === "session.error");
+  assert.ok(error && error.kind === "session.error");
+  assert.match(error.message, /ACP transport closed/);
+  const idleFinished = faultEvents.find(
+    (event) => event.kind === "turn.finished" && event.turnId === "turn-daicr-idle",
+  );
+  assert.ok(idleFinished && idleFinished.kind === "turn.finished");
+  assert.equal(idleFinished.outcome, "unknown");
+  assert.ok(
+    faultEvents.every((event) => event.kind !== "interaction.resolved"),
+    "idle close before Host resolve must not journal interaction.resolved",
+  );
+
+  // Stale deny against the dead idle-close turn must be rejected (thin post-fault; ≠ #260 stale allow).
+  const staleDeny = await host.dispatch({
+    type: "resolveInteraction",
+    commandId: `${input.harnessId}-daicr-stale-deny`,
+    hostSessionId,
+    runtimeEpoch: host.binding.runtimeEpoch!,
+    turnId: "turn-daicr-idle",
+    interactionId: idleInteractionId,
+    decision: "deny",
+  });
+  assert.equal(staleDeny.status, "rejected");
+  assert.equal(staleDeny.reasonCode, "stale-interaction");
+
+  await host.close();
+
+  // Round 2: reopen + session/load; fresh permission deny journals clean (≠ #260 allow / ≠ #195 load fence).
+  const peersAfter: FakePeer[] = [];
+  const registryReopen = new HarnessRegistry();
+  registryReopen.register(
+    input.createHarness(() =>
+      openFakeTransport(
+        input.agentName,
+        backendSessionId,
+        { loadSession: true, awaitPermissionThenContinue: true },
+        peersAfter,
+      ),
+    ),
+  );
+
+  const resumed = await SessionHost.open({
+    root: journalRoot,
+    spec,
+    target,
+    catalog,
+    registry: registryReopen,
+  });
+
+  assert.ok(
+    peersAfter.some((peer) => peer.methods.includes("session/load")),
+    "reopen after idle-close must session/load",
+  );
+  assert.ok(
+    peersAfter.every((peer) => !peer.methods.includes("session/new")),
+    "resume must not session/new",
+  );
+
+  const errorCountBefore = resumed.eventsSince(0).filter((event) => event.kind === "session.error")
+    .length;
+
+  const sendReceipt = await resumed.dispatch({
+    type: "send",
+    commandId: `${input.harnessId}-daicr-send`,
+    hostSessionId,
+    turnId: "turn-daicr-live",
+    text: "deny after idle-close reopen",
+  });
+  assert.equal(sendReceipt.status, "accepted");
+
+  const liveDeadline = Date.now() + 5_000;
+  let liveInteractionId: string | undefined;
+  while (Date.now() < liveDeadline) {
+    const requested = resumed.eventsSince(0).find(
+      (event) =>
+        event.kind === "interaction.requested" && event.turnId === "turn-daicr-live",
+    );
+    if (requested && requested.kind === "interaction.requested") {
+      liveInteractionId = requested.interactionId;
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.ok(liveInteractionId, "expected fresh interaction.requested after idle-close reopen");
+
+  const denyReceipt = await resumed.dispatch({
+    type: "resolveInteraction",
+    commandId: `${input.harnessId}-daicr-deny`,
+    hostSessionId,
+    runtimeEpoch: resumed.binding.runtimeEpoch!,
+    turnId: "turn-daicr-live",
+    interactionId: liveInteractionId,
+    decision: "deny",
+  });
+  assert.equal(denyReceipt.status, "completed");
+  await resumed.whenIdle();
+
+  const after = resumed.eventsSince(0);
+  assert.ok(
+    after.some(
+      (event) =>
+        event.kind === "interaction.resolved" &&
+        event.turnId === "turn-daicr-live" &&
+        event.decision === "deny",
+    ),
+  );
+  assert.ok(
+    after.some(
+      (event) =>
+        event.kind === "message.finished" && event.text === "deny after idle-close reopen",
+    ),
+  );
+  const liveFinished = after.find(
+    (event) => event.kind === "turn.finished" && event.turnId === "turn-daicr-live",
+  );
+  assert.ok(liveFinished && liveFinished.kind === "turn.finished");
+  assert.equal(liveFinished.outcome, "success");
+  assert.equal(
+    after.filter((event) => event.kind === "session.error").length,
+    errorCountBefore,
+    "Host deny after idle-close reopen must not journal a new session.error",
+  );
+
+  await resumed.close();
+  const persisted = await SessionHost.eventsSinceHistory(journalRoot, spec, 0);
+  assert.ok(
+    persisted.some(
+      (event) =>
+        event.kind === "turn.finished" &&
+        event.turnId === "turn-daicr-idle" &&
+        event.outcome === "unknown",
+    ),
+  );
+  assert.ok(
+    persisted.every(
+      (event) =>
+        !(
+          event.kind === "interaction.resolved" &&
+          event.turnId === "turn-daicr-idle"
+        ),
+    ),
+    "fault-era journal must not contain interaction.resolved for the idle-close turn",
+  );
+  assert.ok(
+    persisted.some(
+      (event) =>
+        event.kind === "interaction.resolved" &&
+        event.turnId === "turn-daicr-live" &&
+        event.decision === "deny",
+    ),
+  );
+  assert.ok(
+    persisted.some(
+      (event) =>
+        event.kind === "message.finished" && event.text === "deny after idle-close reopen",
+    ),
+  );
+  assert.equal(
+    persisted.filter((event) => event.kind === "session.error").length,
+    errorCountBefore,
+    "persisted journal must keep prior idle-close errors only",
+  );
+}
+
+test("SessionHost + opt-in OpenCode ACP: deny-after-idle-close-reopen journals clean", async (t) => {
+  await assertSessionHostDenyAfterIdleCloseReopen({
+    t,
+    label: "opencode",
+    harnessId: "opencode",
+    agentName: "OpenCode",
+    createHarness: (openTransport) =>
+      createExperimentalRegistryOpenCodeAcpHarness({ openTransport }),
+  });
+});
+
+test("SessionHost + opt-in Goose ACP: deny-after-idle-close-reopen journals clean (symmetric)", async (t) => {
+  await assertSessionHostDenyAfterIdleCloseReopen({
     t,
     label: "goose",
     harnessId: "goose",
