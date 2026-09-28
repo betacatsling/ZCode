@@ -3,7 +3,7 @@
  *
  * Proves same-protocol Agents register via explicit factory + loadExplicit trust list
  * without changing lazy Host defaults or the shared ACP session machine. Goose SessionHost
- * path is symmetric to OpenCode (#75).
+ * path is symmetric to OpenCode (#75). Late prompt reply still journals via SessionHost.
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -29,17 +29,24 @@ import { SessionHost } from "../src/agent-host/sessionHost.js";
 const here = dirname(fileURLToPath(import.meta.url));
 const lazySrc = join(here, "../src/agent-host/lazyTargetService.ts");
 
+interface FakePeerOptions {
+  /** Delay before answering session/prompt (late-response path). */
+  readonly promptDelayMs?: number;
+}
+
 /** Minimal fake ACP peer: initialize / session/new / session/prompt. */
 class FakePeer {
   readonly methods: string[] = [];
   readonly #transport: AcpTransport;
   readonly #sessionId: string;
   readonly #agentName: string;
+  readonly #options: FakePeerOptions;
 
-  constructor(transport: AcpTransport, sessionId: string, agentName: string) {
+  constructor(transport: AcpTransport, sessionId: string, agentName: string, options: FakePeerOptions = {}) {
     this.#transport = transport;
     this.#sessionId = sessionId;
     this.#agentName = agentName;
+    this.#options = options;
     transport.subscribe((message) => {
       void this.#receive(message);
     });
@@ -70,6 +77,8 @@ class FakePeer {
       return;
     }
     if (message.method === "session/prompt") {
+      const delay = this.#options.promptDelayMs ?? 0;
+      if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
       const text = readPrompt(message.params);
       await this.#transport.send({
         jsonrpc: "2.0",
@@ -101,9 +110,13 @@ function readPrompt(params: unknown): string {
   return typeof text === "string" ? text : "";
 }
 
-function openFakeTransport(agentName: string, sessionId: string): AcpTransport {
+function openFakeTransport(
+  agentName: string,
+  sessionId: string,
+  options: FakePeerOptions = {},
+): AcpTransport {
   const link = linkAcpTransports();
-  new FakePeer(link.agent, sessionId, agentName);
+  new FakePeer(link.agent, sessionId, agentName, options);
   return link.client;
 }
 
@@ -317,4 +330,72 @@ test("SessionHost + opt-in Goose ACP: create/send journals a fake-transport turn
   await host.close();
   const persisted = await SessionHost.eventsSinceHistory(journalRoot, spec, 0);
   assert.ok(persisted.some((event) => event.kind === "message.finished"));
+});
+
+test("SessionHost + opt-in OpenCode ACP: late prompt reply still journals the turn", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "zcode-opencode-acp-late-"));
+  const worktree = join(root, "worktree");
+  const journalRoot = join(root, "journal");
+  await mkdir(worktree, { recursive: true });
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  let connection = 0;
+  const registry = new HarnessRegistry();
+  registry.register(
+    createExperimentalRegistryOpenCodeAcpHarness({
+      openTransport: () => {
+        connection += 1;
+        return openFakeTransport("OpenCode", `oc-late-${connection}`, { promptDelayMs: 40 });
+      },
+    }),
+  );
+
+  const hostSessionId = "opencode-late-1";
+  const spec = {
+    schemaVersion: 1 as const,
+    hostSessionId,
+    execution: {
+      targetId: "local",
+      workspaceIdentity: "workspace-opencode-late",
+      worktreePath: worktree,
+    },
+    harness: { id: "opencode", adapterVersion: ACP_ADAPTER_VERSION },
+    modelBinding: { kind: "harness-managed" as const },
+  };
+  const target = {
+    id: "local",
+    kind: "local" as const,
+    platform: process.platform as "darwin" | "linux" | "win32",
+    available: true,
+  };
+  const catalog = {
+    fingerprint: "registry-v1",
+    validateSelection: () => ({ ok: true as const }),
+  };
+
+  const host = await SessionHost.create({
+    root: journalRoot,
+    spec,
+    target,
+    catalog,
+    registry,
+  });
+
+  const started = Date.now();
+  const receipt = await host.dispatch({
+    type: "send",
+    commandId: "oc-late-1",
+    hostSessionId,
+    turnId: "turn-late",
+    text: "late reply please",
+  });
+  assert.equal(receipt.status, "accepted");
+  await host.whenIdle();
+  assert.ok(Date.now() - started >= 35, "expected prompt delay to elapse before idle");
+  assert.equal(host.queryCommand("oc-late-1")?.status, "completed");
+
+  const message = host.eventsSince(0).find((event) => event.kind === "message.finished");
+  assert.ok(message && message.kind === "message.finished");
+  assert.equal(message.text, "late reply please");
+  await host.close();
 });
