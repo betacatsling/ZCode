@@ -131,7 +131,7 @@ export function CodingPlanStatusPanel({
   providerName,
   status,
   viewState,
-  loginLoading,
+  statusSyncLoading,
   disconnectLoading,
   purchaseUrl,
   planLevel,
@@ -159,7 +159,7 @@ export function CodingPlanStatusPanel({
   providerName: string;
   status: CodingPlanStatus;
   viewState?: CodingPlanStatusPanelViewState;
-  loginLoading?: boolean;
+  statusSyncLoading?: boolean;
   disconnectLoading?: boolean;
   purchaseUrl?: string;
   planLevel?: string | null;
@@ -211,7 +211,7 @@ export function CodingPlanStatusPanel({
     displayStatus: status,
     actionStatus: status,
     balanceStatus: status,
-    loginLoading: loginLoading === true,
+    statusSyncLoading: statusSyncLoading === true,
   };
   const isDisconnected = effectiveViewState.displayStatus === "disconnected";
   const isChecking = effectiveViewState.displayStatus === "checking";
@@ -379,7 +379,7 @@ export function CodingPlanStatusPanel({
     isPurchased &&
     (isStartPlanProvider || hasDisplayableCodingPlanUsageLimits(quotaLimits));
   const trailingAction = retryVisible ? (
-    <Button type="button" size="lg" onClick={onRetry} disabled={effectiveViewState.loginLoading}>
+    <Button type="button" size="lg" onClick={onRetry} disabled={effectiveViewState.statusSyncLoading}>
       {intl.formatMessage({ id: "common.retry" })}
     </Button>
   ) : buyAction ? (

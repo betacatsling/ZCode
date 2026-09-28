@@ -4,7 +4,7 @@ export interface CodingPlanStatusPanelViewState {
   displayStatus: CodingPlanStatus;
   actionStatus: CodingPlanStatus;
   balanceStatus: CodingPlanStatus;
-  loginLoading: boolean;
+  statusSyncLoading: boolean;
 }
 
 export function resolveCodingPlanStatusPanelViewState({
@@ -31,18 +31,18 @@ export function resolveCodingPlanStatusPanelViewState({
     displayStatus: "checking",
     actionStatus: status,
     balanceStatus: status,
-    loginLoading: true,
+    statusSyncLoading: true,
   };
 }
 
 function buildStableCodingPlanStatusPanelViewState(
   status: CodingPlanStatus,
-  loginLoading: boolean,
+  statusSyncLoading: boolean,
 ): CodingPlanStatusPanelViewState {
   return {
     displayStatus: status,
     actionStatus: status,
     balanceStatus: status,
-    loginLoading,
+    statusSyncLoading,
   };
 }

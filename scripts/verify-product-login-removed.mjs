@@ -54,7 +54,7 @@
  *   (KEEP prepareAccountConnectionSwitch + individual-coding-plan path; Display/entitlement KEPT).
  * Hard (also): #158 Detail / StatusCards / CodingPlanStatusActions must not revive
  *   loginActionVisible / loginVisible / loginButtonId (KEEP productPurchaseRemovedVisible +
- *   productPurchaseRemoved body; loginLoading status-sync may remain).
+ *   productPurchaseRemoved body; statusSyncLoading status-sync may remain).
  * Hard (also): #159 codingPlanOwnedEntryPlans.ts must stay deleted; buildOwnedEntryPlanList /
  *   codingPlanOwnedEntryPlans must stay absent under packages/ui (KEEP
  *   EnterpriseCodingPlanProductDisplay in enterpriseCodingPlanProducts.ts).
@@ -773,7 +773,7 @@ function assertDeletedSurfaces() {
   }
 
   // #158: loginActionVisible rename — old prop names hard-absent.
-  // KEEP productPurchaseRemovedVisible + productPurchaseRemoved body (loginLoading may remain).
+  // KEEP productPurchaseRemovedVisible + productPurchaseRemoved body (statusSyncLoading may remain).
   const productPurchaseRemovedVisibleFiles = [
     [
       "settings/model-provider-section/Detail.tsx",
