@@ -7,7 +7,6 @@ import {
 import {
   BIGMODEL_PROVIDER_ID,
   BUILTIN_MODEL_PROVIDER_IDS,
-  DesktopCommandIds,
   isStartPlanModelProviderId,
   type BuiltinModelProviderId,
   type ModelConnectivityResult,
@@ -824,10 +823,6 @@ export function ModelProviderSection({
           currentDomain: sharedSettings?.providerFamilyDomain,
         });
         // 产品 OAuth 已拆除。解绑只清本地 family 展示，不再调用 logout。
-        // Coding Plan 官网 webview 使用独立持久 partition，provider Unlink 也属于账号边界。
-        if (typeof platform.executeDesktopCommand === "function") {
-          await platform.executeDesktopCommand(DesktopCommandIds.ClearCodingPlanWebviewStorage);
-        }
         await updateSharedSettings({
           providerFamilyDomain: (nextProviderFamilyDomain ?? "") as never,
           providerFamilyDomainUpdatedAt: Date.now(),
