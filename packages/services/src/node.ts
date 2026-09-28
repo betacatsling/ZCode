@@ -2962,11 +2962,11 @@ export function createLocalServices(options: {
       target: {
         id: options.agentHostTargetId,
         kind:
-          options.serviceAuthorityMode === "desktop-local"
-            ? "local"
-            : process.platform === "linux"
-              ? "ssh"
-              : "local",
+          // 身份按 service authority，不用操作系统推断。
+          // desktop-local 是本机 Core（local）。standalone-server 是 SSH
+          // direct-tcpip 附着到的远端 Core（ssh）。旧的 Linux→ssh 会把非 Linux
+          // 远端标成 local，从而把未认证的远端凭据说成 supported。
+          options.serviceAuthorityMode === "desktop-local" ? "local" : "ssh",
         platform: process.platform as "darwin" | "linux" | "win32",
         // Native ZCode workspace-owner operations are available on all supported desktop platforms;
         // each external Harness still proves its own platform capability at admission.

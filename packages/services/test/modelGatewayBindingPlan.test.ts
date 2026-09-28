@@ -395,6 +395,7 @@ test("compatibility matrix uses shared capability reports and refuses Chat Compl
     route: "responses-gateway",
   });
   assert.equal(remote.report.support, "experimental");
+  assert.match(remote.report.reason ?? "", /loopback Gateway must run on the target host/);
   assert.match(remote.report.reason ?? "", /remote credential/);
   const reasoned = describeGatewayCompatibility({
     harnessId: "codex",
