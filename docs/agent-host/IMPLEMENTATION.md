@@ -202,7 +202,7 @@ P5 必须按 Harness 拆成 control/event 认证和 host-managed model ingress �
 | **disconnect-during-session-load** | **已合 #187** | session/load 未 settle 时 transport 断开；仍 ≠ live |
 | **load-then-permission-deny** | **已合 #195** | reopen `session/load` 后再遇 permission deny；仍 ≠ live |
 | **load-then-permission-allow** | **已合 #202** | reopen `session/load` 后再遇 permission allow；仍 ≠ live |
-| **permission-during-session-load** | 未做 | load 持有期间 permission 到达 |
+| **permission-during-session-load** | 已合 #211 (still ≠ live) | load 持有期间 permission 到达；OpenCode+Goose fake-transport |
 | **load-then-send / mid-load prompt** | 未做 | load 进行中或刚完成后的 prompt 竞态（相对 late prompt / load-then-* 已有轴） |
 | 其它 mid-load × cancel/permission/disconnect 组合 | 未穷尽 | 以 Planner 薄刀派单为准；扩矩阵 ≠ live 认证 |
 
@@ -258,7 +258,7 @@ UI/REMOVE 侧（**非 Track A 默认刀**；交界说明以免误抢）：
 
 - **已卸（契约测锁；摘）**：既有 chrome/funnel/oauth/purchase/StartPlan/api-key/CTA/usage/badge（至 #181）+enterprise products/acquisition/Welcome login orphans/regionTag 迁 key/slash-help/desktop `login.html`（#107–#116）+enterprise callers/Automations toast/orphan hook/Title i18n/refreshTeamPlanProducts/team flatMap/Settings·V4·sidebar 空 `subscribedTeamProducts`/usage-sources builder/`codingPlanLogin` noop/purchase-complete/`oauthTeamPricing`/family `teamProducts`/`loginActionVisible`→`productPurchaseRemovedVisible`/owned-entry helper（#119–#159）；verify hard-pin `loginActionVisible` 旧名（#160）；dead `teamPlanDisplayName`/`codingPlanErrorMessage`（#162）；owned-entry verify hard-pin（#163）；#164 dead-residual hard-pin；#166 login 注释清；#168 dead purchase locale；#169/#171 P6 tip docs；#170 purchase locale hard-pin；#172 plan-mode/access/pricing 死 i18n；#173/#175 tip docs/verify；#176 dead subscription DTOs；#178 `loginLoading`→`statusSyncLoading`；#179 billing/relogin locales；#181 DTO verify pin；#190 Catalog rename（CodingPlanSubscriptionProviderId→Catalog）。verify 脚本随 tip 硬缺席（#113/#117/#127/#130/#139/#154/#156/#160/#163 等）。
 - **StatusCards 现状**：升级/purchase CTA 与空 team 产品门控已卸；`productPurchaseRemoved` 正文 KEEP；可见性改名 `productPurchaseRemovedVisible`（#158）；quota/entitlement/manage·planCard KEEP。
-- **与 Track A**：Agent Host / ACP / MULTI_HARNESS 不依赖 REMOVE UI；SessionHost fake-transport 矩阵（至 #202；仍缺 permission-during-session-load 等，见上表）+ #98/#100/#102/#106 install-diag/L stubs 已在 tip。
+- **与 Track A**：Agent Host / ACP / MULTI_HARNESS 不依赖 REMOVE UI；SessionHost fake-transport 矩阵（至 #211；仍缺 load-then-send / mid-load prompt 等，见上表）+ #98/#100/#102/#106 install-diag/L stubs 已在 tip。
 
 ### `oauth.ts` / purchase × P6 交界（只读 scout @ `dd31baf`）
 
@@ -329,7 +329,7 @@ Worktree 服务现有 archive 元数据/fence 与确认式 remove；remove 会�
 | 08A  | worktree removal admission、重建、离线重同步、archive/hide                    | Worktree 移除/fence/native+external 准入与隔离 Git/CLI 测试已实现；UI/SSH 离线重同步未验收            | 依赖 08；UI/E2E、SSH 离线恢复及删除竞态矩阵                    |
 | 09   | Gateway core + Responses + Codex                                              | 部分完成 / FakeModel only：core + Responses + Codex 控制/绑定已在 tip；#26 SSH 共享 TargetModelGateway 仅为 FakeModel admission，兼容仍 experimental | 依赖 08；live Provider、真实 SSH 凭据与生产组合仍未认证        |
 | 10   | Messages + Claude structured adapter                                          | 部分完成 / FakeModel only：structured/Messages 实验路径已有，Gateway 仍 adapter-local，不是共享 owner | 依赖 09；共享 TargetModelGateway owner 与 live Provider 未认证 |
-| 11   | 通用 ACP + 一个长尾 Agent                                                     | 部分完成 @ tip `dd31baf`：opt-in SessionHost fake-transport 矩阵至 #202（仍缺 permission-during-session-load 等；≠ live）；#94/#98/#100/#102/#106 LIVE-CERT/I stubs（无实跑）；honesty；#69 MULTI_HARNESS；生产接线/发布加固未做 | 依赖 08 和已验证 model binding；勿把 print-mode/honesty/opt-in/fake-transport 写成 ACP 完成 |
+| 11   | 通用 ACP + 一个长尾 Agent                                                     | 部分完成 @ tip `dd31baf`：opt-in SessionHost fake-transport 矩阵至 #211（仍缺 load-then-send / mid-load prompt 等；≠ live）；#94/#98/#100/#102/#106 LIVE-CERT/I stubs（无实跑）；honesty；#69 MULTI_HARNESS；生产接线/发布加固未做 | 依赖 08 和已验证 model binding；勿把 print-mode/honesty/opt-in/fake-transport 写成 ACP 完成 |
 | 12   | 层级/并发/focus 压测、迁移回滚、版本锁定发布                                  | 未实现                                                                                                | 依赖 08A/09/10/11；50 worktree、10 session、8h、fault matrix   |
 
 建议执行顺序：
