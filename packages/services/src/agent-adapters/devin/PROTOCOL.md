@@ -10,8 +10,9 @@ Sources: [Devin CLI Quickstart](https://docs.devin.ai/cli), [Essential Commands]
 | CLI probe                      | Done   | Isolated `--version`; missing CLI → `unsupported` with readable reason                                                      |
 | SessionHost create + one send  | Done   | harness-managed admission; print-mode turn events in Host journal                                                           |
 | Tests                          | Done   | `devinHarnessAdmission.test.ts`, `devinCapabilitiesHonesty.test.ts`, `devinSessionHost.integration.test.ts` (fake CLI argv) |
+| Optional ACP profile           | Done   | `packages/services/src/agent-adapters/acp/agents/devin.ts` (`args: ["acp"]`); covered by `acpHarness.test.ts` + coexistence contract |
 
-**Session path is `-p` only.** Each `send` spawns a short-lived process and exits; there is no persistent REPL/ACP child.
+**Default Host session path is still `-p` only** (lazy `createDevinHarness`). Each print-mode `send` spawns a short-lived process and exits. Editors that opt into ACP use `createAcpHarness({ profile: devinAcpProfile })` instead — same harness id `devin`, so the two adapters must not both register on one `HarnessRegistry`.
 
 ## What Devin CLI exposes vs what Host uses
 
@@ -20,7 +21,7 @@ Sources: [Devin CLI Quickstart](https://docs.devin.ai/cli), [Essential Commands]
 | Interactive REPL    | `devin` / `devin -- <prompt>`                 | Not used (TTY UI).                                                |
 | Print / single-turn | `devin -p [PROMPT]` or `devin -p -- <prompt>` | **Only wired session path.** Stdout = assistant text.             |
 | Resume              | `-c` / `-r <id>`                              | **Not wired** — no native session id stored on `BackendBinding`.  |
-| ACP server          | `devin acp`                                   | **Not wired** (future JSON-RPC).                                  |
+| ACP server          | `devin acp`                                   | **Optional ACP profile** — `devinAcpProfile` / `createAcpHarness` (stdio JSON-RPC). Host lazy path still print-mode. |
 | Auth / models       | `devin auth …`                                | Harness-managed; Host does **not** inject Provider Registry keys. |
 
 Non-interactive `-p` cannot show the workspace trust prompt → Host always passes `--respect-workspace-trust false`.
@@ -71,12 +72,12 @@ The six `unsupported` fields share one reason that names print mode, `-p`, and e
 5. **No images** — `images` is `unsupported`. `AgentCommand.send` carries text only.
 6. **No modelSwitch** — `modelSwitch` is `unsupported`. Models stay harness-managed; Host does not switch models inside a print-mode turn.
 7. **Auth is ambient** — relies on user `devin auth` / env (`WINDSURF_API_KEY` / `DEVIN_API_KEY` if present); Host never mints tokens.
-8. **Not a substitute for ACP** — editors should eventually use `devin acp`; Wave 2 deliberately stays on print mode.
+8. **Print mode is not ACP** — Host lazy registration stays on `-p`. The optional ACP profile speaks `devin acp` via the shared ACP session machine. Do not register print-mode and ACP adapters together under id `devin`.
 9. **Real CLI not required for CI** — admission/SessionHost tests use a fake executable that answers `--version` and requires `-p` plus `--respect-workspace-trust false`.
 
 ## Out of scope (later waves)
 
-- Full `devin acp` JSON-RPC session.
-- Capturing native session id for `-r` resume.
-- Tool / approval / file-change event translation.
+- Switching Host lazy admission from print-mode to ACP by default (id collision / migration).
+- Capturing native session id for `-r` resume on the print-mode path.
+- Tool / approval / file-change event translation beyond what ACP negotiation already exposes.
 - Cloud (`--cloud`) and SSH session steering.
