@@ -771,7 +771,15 @@ test("capabilities name the unsupported slice instead of pretending it works", a
   assert.ok(report.resumeExecution.reason);
   assert.equal(report.images.support, "unsupported");
   assert.equal(report.modelSwitch.support, "unsupported");
-  assert.equal(report.hostManagedModel?.support, "supported");
+  assert.equal(report.hostManagedModel?.support, "experimental");
+  assert.match(report.hostManagedModel?.reason ?? "", /does not call Model\.streamText/);
+  const modelSupport = await adapter.hostManagedSupport(target, {
+    providerId: "provider-a",
+    modelId: "model-a",
+    options: { reasoningLevel: "off" },
+  });
+  assert.equal(modelSupport.support, "experimental");
+  assert.equal(modelSupport.constraints?.execution, "not-this-adapter");
   const ssh = await adapter.probe({ ...target, kind: "ssh", id: "ssh-1" });
   assert.equal(ssh.support, "unsupported");
 });

@@ -26,7 +26,7 @@ command → ClaudeCodeHarnessAdapter → 单个会话状态 → 假传输/ACP �
 - `message.finished` 是完整快照，不再追加一份相同正文。
 - 晚到的 cancel / approval 必须命中原 epoch、turn、interaction，否则拒绝且不改变活动轮次。
 - 拒绝审批后不再投递该轮后续的工具成功事件。
-- `host-managed` 只有在端口证据 `kind === "model-execution-layer"` 且生效模型与请求一致时，才可以是 `supported`。否则路线记为 `harness-managed`，支持度记为 `experimental` 或 `unsupported`（模型不一致时拒绝降级）。
+- 没有 `modelFactory` 时，`host-managed` 只有在端口证据 `kind === "model-execution-layer"` 且生效模型与请求一致时，报告函数才返回 `supported`。这仍不是 Responses 轮次完成：完成必须是 `prepareModel` 交给现有 Model runtime，并由 Gateway 调用 `Model.streamText`。mock、ACP，或模型不一致，分别是 `experimental` / `unsupported`。
 - 生产 `hostManagedRoute` 是 `messages-gateway`。没有 `modelFactory` 时，默认 mock 端口和 ACP 传输打不到执行层，`hostManagedSupport` 保持 `experimental` 或 `unsupported`。注入的 `modelFactory` 必须是现有 Model runtime：此时规划结果为 `supported`，Gateway Responses 准入 `messages-gateway`，`prepareModel` 调用该 factory，再由 `POST /v1/responses` 进入 `Model.streamText`。只报 `model-execution-layer` 证据、不提供 factory 的端口不能把 Responses 轮次标成完成。`capabilities.hostManagedModel` 保持 `experimental`。
 - 不支持的能力返回 `{ support: "unsupported", reason }`。
 - 配置标记和事件不包含 API key。调用方传入的机密字符串会被替换成 `[redacted]`。

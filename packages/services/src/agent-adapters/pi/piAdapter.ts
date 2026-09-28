@@ -83,7 +83,9 @@ export class PiAdapter {
       terminateSession: yes,
       viewHistory: yes,
       hostManagedModel: {
-        support: "supported",
+        support: "experimental",
+        reason:
+          "Pi control plane records the route only. It does not call Model.streamText; the Pi worker does.",
         constraints: { route: this.hostManagedRoute, credentialInjection: "refused" },
       },
     };
@@ -99,8 +101,10 @@ export class PiAdapter {
       return { support: "unsupported", reason: "host-managed selection is missing" };
     }
     return {
-      support: "supported",
-      constraints: { route: this.hostManagedRoute, execution: "existing-model-runtime" },
+      support: "experimental",
+      reason:
+        "Pi control plane has no model factory. Host-managed execution stays on PiHarnessAdapter.prepareModel and Model.streamText.",
+      constraints: { route: this.hostManagedRoute, execution: "not-this-adapter" },
     };
   }
 

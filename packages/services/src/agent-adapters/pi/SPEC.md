@@ -30,7 +30,7 @@ Pi 的 agent loop、上下文和工具执行留在传输对面的 Pi 进程。�
 
 本目录不实现第二套 `ModelBindingPlanner`。契约基线还没有 PR #3 的 `ModelBindingPlanner` 类时，测试注入同形端口。
 
-生产 `hostManagedRoute` 仍是 `pi-sdk`。`PiHarnessAdapter.hostManagedSupport` 为 `supported` 且推理级别被 Responses 接受时，Gateway `openai-responses` 准入这条路由：`prepareModel` 调用注入的现有 Model runtime，再由 `POST /v1/responses` 进入 `Model.streamText`。假响应只来自 loopback。控制面 `PiAdapter` 不走这条调用栈，保持 `experimental`。测试不会用跳过执行层的假 Model 把 worker 标成已完成。
+生产 `hostManagedRoute` 仍是 `pi-sdk`。`PiHarnessAdapter.hostManagedSupport` 为 `supported` 且推理级别被 Responses 接受时，Gateway `openai-responses` 准入这条路由：`prepareModel` 调用注入的现有 Model runtime，再由 `POST /v1/responses` 进入 `Model.streamText`。假响应只来自 loopback。控制面 `PiAdapter` 的 `hostManagedModel` 和 `hostManagedSupport` 保持 `experimental`，因为它不调用 `Model.streamText`。测试不会用跳过执行层的假 Model 把 worker 标成已完成。
 
 ## 迁移
 
