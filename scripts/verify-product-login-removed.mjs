@@ -2,10 +2,10 @@
 /**
  * Product-login removal gate (scripts-only knife; docs/inventory sync after Dialog unload).
  *
- * Tip state (origin/cursor/wave4-harness-integration-b7a9 @ da104ce / #140–#165 (#155 SessionHost OUT; #156/#160/#163/#164 hard-pins; #157 family team feed soft; #158/#159/#162 gated; #161/#165 P6 docs)):
+ * Tip state (origin/cursor/wave4-harness-integration-b7a9 @ ad22130 / #140–#174 (#155 SessionHost OUT; #156/#160/#163/#164/#168/#170/#172 hard-pins; #157 family team feed soft; #158/#159/#162 gated; #161/#165/#169/#171/#173 P6 docs; #174 load-then-cancel SessionHost OUT; #166 status-comment scrub; #167 ledger)):
  *   P1–P4 landed; CodingPlanUpgradeDialog / Provider + Root wrap unloaded (Ex1 /
  *   9ce3088); EntryGate CTA / CodingPlanEntryButton / useCodingPlanEntryGate gone;
- *   soft remainingUiInventory first landed in #57; #103–#165 clearances hard-gated below.
+ *   soft remainingUiInventory first landed in #57; #103–#172 clearances hard-gated below; #173 docs/#174 load-then-cancel are soft ledger OUT.
  *
  * Hard gates (must exit 0 on tip):
  *   - CLI login-command / tui-auth / create.ts stubs (P3)
@@ -63,9 +63,14 @@
  *   under packages/ui/src (KEEP EnterpriseCodingPlanProductDisplay).
  * Hard (also): #168 sample dead purchase/webview/pricing locale keys + zai/bigmodel plan|purchase
  *   prefixes must stay absent (KEEP manage / planCard / productPurchaseRemoved / quota presentation).
+ * Hard (also): #172 sample dead Start Plan acquisition/preview/highlight + plan-access connectionMode
+ *   locale keys must stay absent (KEEP live connectionMode labels, startPlan.status.* / balance.title /
+ *   refreshEntitlement / expiresAt / pendingUntil, manage · planCard, productPurchaseRemoved).
  * Soft ledger also records SessionHost #140/#143/#147/#149/#153/#155 (OUT of this scripts gate) +
  *   #144/#151 productList comment scrubs + #157 family team products feed drop
- *   (resolveFirstSubscribedTeamPlanConnectionWithContext / teamProducts) + #161/#165 P6 tip docs.
+ *   (resolveFirstSubscribedTeamPlanConnectionWithContext / teamProducts) + #161/#165/#169/#171 P6 tip
+ *   docs + #166 status-comment scrub + #167 tip-ledger sync + #168/#170 purchase-locale pins +
+ *   #172 plan-mode/access/pricing dead i18n.
  *
  * Run from repo root: node scripts/verify-product-login-removed.mjs
  */
@@ -395,6 +400,27 @@ function assertDeletedSurfaces() {
     "settings.modelProvider.codingPlan.unit.usd.month",
     "settings.modelProvider.codingPlan.productsLoading",
     "settings.modelProvider.codingPlan.paypalUnsupported",
+    // #172 sample: Start Plan acquisition/preview/highlight + dead plan-access connectionMode
+    // (Ex3 knife / contract test has full 31-key list)
+    "settings.modelProvider.useSubscription",
+    "settings.modelProvider.connectionMode.oauth",
+    "settings.modelProvider.connectionMode.startPlanCount",
+    "settings.modelProvider.connectionMode.switchToStartPlan",
+    "settings.modelProvider.connectionMode.switchToStartPlanPrefix",
+    "settings.modelProvider.connectionMode.usageBasedApi",
+    "settings.modelProvider.connectionMode.noAvailablePlan",
+    "settings.modelProvider.startPlan.login",
+    "settings.modelProvider.startPlan.title",
+    "settings.modelProvider.startPlan.meta.today",
+    "settings.modelProvider.startPlan.quotaSectionTitle",
+    "settings.modelProvider.startPlan.eligibleNewUser",
+    "settings.modelProvider.startPlan.preview.unit.tokens",
+    "settings.modelProvider.startPlan.preview.period.daily",
+    "settings.modelProvider.startPlan.balance.remaining",
+    "settings.modelProvider.startPlan.balance.used",
+    "settings.modelProvider.startPlan.highlight.trial.label",
+    "settings.modelProvider.startPlan.highlight.quota.value",
+    "settings.modelProvider.startPlan.compatibility",
     // #112: old botsUi regionTag path must stay absent (moved off login.oauth)
     "login.oauth.regionTag.zai",
     "login.oauth.regionTag.bigmodel",
@@ -483,6 +509,9 @@ function assertDeletedSurfaces() {
     "settings.modelProvider.codingPlan.bigmodel.plan.",
     "settings.modelProvider.codingPlan.zai.purchase.",
     "settings.modelProvider.codingPlan.bigmodel.purchase.",
+    // #172 Start Plan preview/highlight acquisition matrix
+    "settings.modelProvider.startPlan.preview.",
+    "settings.modelProvider.startPlan.highlight.",
   ];
   for (const localeFile of ["en-US.ts", "zh-CN.ts"]) {
     const localePath = join(uiLocaleDir, localeFile);
@@ -501,6 +530,17 @@ function assertDeletedSurfaces() {
       "settings.modelProvider.codingPlan.productPurchaseRemoved",
       "settings.modelProvider.planCard.codingPlan",
       "settings.modelProvider.planCard.startPlan",
+      // #172 KEEP live connectionMode labels + Start Plan status/balance/entitlement
+      "settings.modelProvider.connectionMode",
+      "settings.modelProvider.connectionMode.startPlan",
+      "settings.modelProvider.connectionMode.codingPlan",
+      "settings.modelProvider.startPlan.status.expired",
+      "settings.modelProvider.startPlan.status.noPlan",
+      "settings.modelProvider.startPlan.status.loginExpired",
+      "settings.modelProvider.startPlan.balance.title",
+      "settings.modelProvider.startPlan.refreshEntitlement",
+      "settings.modelProvider.startPlan.expiresAt",
+      "settings.modelProvider.startPlan.pendingUntil",
     ]) {
       if (!localeSrc.includes(`"${keepKey}"`)) {
         fails.push(`UI locales must keep ${keepKey} in ${localeFile}`);
@@ -1019,7 +1059,7 @@ function remainingUiInventory() {
   ].map(fileStatus);
 
   const note =
-    "Tip da104ce (#165 / after #103–#164): Dialog/Provider/Entry/EmbeddedWebview + CLI loginRequired→modelSetupRequired hard. UI locale dead product loginRequired / Coding Plan login + orphan Welcome/login.* shell + #103–#107 upgrade/purchase/usage/enterprise acquisition i18n hard-gated. login.oauth.regionTag.* absent; KEEP settings.modelProvider.regionTag.* + share-import signInRequired + manage/planCard + productPurchaseRemoved body + live personal API-key / MCP OAuth copy. #114 slash-help /login+/logout off Coding Plan/Z.ai OAuth acquisition → model-setup/API-key guidance hard-gated (KEEP MCP help). #123 useEnterpriseCodingPlanProducts.ts hard-absent; #124 productPurchaseRemovedTitle absent; #126 refreshTeamPlanProducts hard-absent (KEEP entitlement refresh); #128/#Ex1/#142 usageSources buildCodingPlanUsageSources hard-absent (KEEP CodingPlanUsageSource / personal builder / sidebar resolver); #131–#135+/#141 Settings/V4/sidebar/MPS/visibility subscribedTeamProducts stubs+wiring hard-absent; #145 teamSources/team audience hard-absent; #146/#148 codingPlanLogin noop (onCodingPlanLogin/handleCodingPlanLogin) hard-absent (KEEP codingPlanLoginPending); #150 onCodingPlanPurchaseComplete/codingPlanPurchaseToken/refreshPurchaseTokenState hard-absent (KEEP quota/OAuth refresh); #152/#156 oauthTeamPricing.ts + account-loss getEnterprisePricingProducts/productList team fallback hard-absent (KEEP prepareAccountConnectionSwitch + individual-coding-plan); soft ledger #140/#143/#147/#149/#153/#155 SessionHost OUT + #144/#151 productList comment scrubs + #157 family team feed (resolveFirstSubscribedTeamPlanConnectionWithContext/teamProducts) soft; #158/#160 loginActionVisible→productPurchaseRemovedVisible hard-gated (KEEP productPurchaseRemovedVisible + body); #159/#163 codingPlanOwnedEntryPlans/buildOwnedEntryPlanList hard-absent (KEEP Display); #162/#164 teamPlanDisplayName/codingPlanErrorMessage hard-absent (KEEP Display); #161/#165 P6 tip docs; #168 sample dead purchase/webview/pricing locale + zai/bigmodel plan|purchase prefixes hard-gated (KEEP manage/planCard/productPurchaseRemoved). Soft inventory thinned — cleared symbol scans dropped. Inventory does not fail this gate.";
+    "Tip ad22130 (#174 / after #103–#174): Dialog/Provider/Entry/EmbeddedWebview + CLI loginRequired→modelSetupRequired hard. UI locale dead product loginRequired / Coding Plan login + orphan Welcome/login.* shell + #103–#107 upgrade/purchase/usage/enterprise acquisition i18n hard-gated. login.oauth.regionTag.* absent; KEEP settings.modelProvider.regionTag.* + share-import signInRequired + manage/planCard + productPurchaseRemoved body + live personal API-key / MCP OAuth copy. #114 slash-help /login+/logout off Coding Plan/Z.ai OAuth acquisition → model-setup/API-key guidance hard-gated (KEEP MCP help). #123 useEnterpriseCodingPlanProducts.ts hard-absent; #124 productPurchaseRemovedTitle absent; #126 refreshTeamPlanProducts hard-absent (KEEP entitlement refresh); #128/#Ex1/#142 usageSources buildCodingPlanUsageSources hard-absent (KEEP CodingPlanUsageSource / personal builder / sidebar resolver); #131–#135+/#141 Settings/V4/sidebar/MPS/visibility subscribedTeamProducts stubs+wiring hard-absent; #145 teamSources/team audience hard-absent; #146/#148 codingPlanLogin noop (onCodingPlanLogin/handleCodingPlanLogin) hard-absent (KEEP codingPlanLoginPending); #150 onCodingPlanPurchaseComplete/codingPlanPurchaseToken/refreshPurchaseTokenState hard-absent (KEEP quota/OAuth refresh); #152/#156 oauthTeamPricing.ts + account-loss getEnterprisePricingProducts/productList team fallback hard-absent (KEEP prepareAccountConnectionSwitch + individual-coding-plan); soft ledger #140/#143/#147/#149/#153/#155 SessionHost OUT + #144/#151 productList comment scrubs + #157 family team feed (resolveFirstSubscribedTeamPlanConnectionWithContext/teamProducts) soft; #158/#160 loginActionVisible→productPurchaseRemovedVisible hard-gated (KEEP productPurchaseRemovedVisible + body); #159/#163 codingPlanOwnedEntryPlans/buildOwnedEntryPlanList hard-absent (KEEP Display); #162/#164 teamPlanDisplayName/codingPlanErrorMessage hard-absent (KEEP Display); #161/#165 P6 tip docs; #168/#170 sample dead purchase/webview/pricing locale + zai/bigmodel plan|purchase prefixes hard-gated (KEEP manage/planCard/productPurchaseRemoved); #166 status-comment scrub; #167 tip-ledger; #169/#171 P6 tip docs; #173 docs + #174 load-then-cancel SessionHost OUT; #172 sample Start Plan acquisition/preview/highlight + dead connectionMode plan-access i18n hard-gated (KEEP live connectionMode labels + startPlan.status/balance.title/refreshEntitlement/expiresAt/pendingUntil). Soft inventory thinned — cleared symbol scans dropped. Inventory does not fail this gate.";
 
   return {
     note,
