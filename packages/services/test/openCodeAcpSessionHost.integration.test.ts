@@ -3,7 +3,7 @@
  *
  * Proves same-protocol Agents register via explicit factory + loadExplicit trust list
  * without changing lazy Host defaults or the shared ACP session machine. Goose SessionHost
- * path is symmetric to OpenCode (#75). Late prompt + transport fault/disconnect still journal via SessionHost (OpenCode + Goose). Resume-after-disconnect: SessionHost.open attach via negotiated session/load then send again. Cancel-after-disconnect: after fault fence, cancel of the dead turn is stale; after reopen+session/load, cancel mid-prompt journals cancelled (OpenCode + Goose). Double-fault/reopen: fault→reopen→fault→reopen stays idempotent (session/load, no session/new) then send succeeds (OpenCode + Goose). Mid-tool-call disconnect: tool_call + pending permission then fault → reopen session/load → send (OpenCode + Goose). Permission-denied-then-disconnect: Host denies permission, peer then faults the prompt (OpenCode + Goose). Cancel-during-permission: Host cancelTurn while permission pending journals cancelled (OpenCode + Goose). Permission-resolve-after-reopen: fault mid-permission → reopen → deny still clean (OpenCode + Goose). Allow-after-reopen: fault mid-permission → reopen → fresh allow completes send (OpenCode + Goose). Double-cancel: cancelTurn×2 mid-prompt is idempotent (one cancelled outcome; OpenCode + Goose). Allow-then-disconnect: Host allows permission then peer faults mid-turn (OpenCode + Goose). Cancel-then-disconnect: Host cancel mid-prompt then peer faults (OpenCode + Goose). Deny-then-cancel: Host deny pending permission then cancelTurn journals clean (OpenCode + Goose). Allow-then-cancel: Host allow pending permission then cancelTurn journals clean (OpenCode + Goose). Fault-during-session-load: reopen attach session/load mid-fault fails clean (OpenCode + Goose). Load-then-cancel: after reopen session/load succeeds, cancelTurn before first send is stale (OpenCode + Goose). Cancel-during-session-load: while reopen session/load is held in-flight, aborting the pending load rejects open clean (Host.cancelTurn cannot race mid-load — open awaits attach; OpenCode + Goose).
+ * path is symmetric to OpenCode (#75). Late prompt + transport fault/disconnect still journal via SessionHost (OpenCode + Goose). Resume-after-disconnect: SessionHost.open attach via negotiated session/load then send again. Cancel-after-disconnect: after fault fence, cancel of the dead turn is stale; after reopen+session/load, cancel mid-prompt journals cancelled (OpenCode + Goose). Double-fault/reopen: fault→reopen→fault→reopen stays idempotent (session/load, no session/new) then send succeeds (OpenCode + Goose). Mid-tool-call disconnect: tool_call + pending permission then fault → reopen session/load → send (OpenCode + Goose). Permission-denied-then-disconnect: Host denies permission, peer then faults the prompt (OpenCode + Goose). Cancel-during-permission: Host cancelTurn while permission pending journals cancelled (OpenCode + Goose). Permission-resolve-after-reopen: fault mid-permission → reopen → deny still clean (OpenCode + Goose). Allow-after-reopen: fault mid-permission → reopen → fresh allow completes send (OpenCode + Goose). Double-cancel: cancelTurn×2 mid-prompt is idempotent (one cancelled outcome; OpenCode + Goose). Allow-then-disconnect: Host allows permission then peer faults mid-turn (OpenCode + Goose). Cancel-then-disconnect: Host cancel mid-prompt then peer faults (OpenCode + Goose). Deny-then-cancel: Host deny pending permission then cancelTurn journals clean (OpenCode + Goose). Allow-then-cancel: Host allow pending permission then cancelTurn journals clean (OpenCode + Goose). Fault-during-session-load: reopen attach session/load mid-fault fails clean (OpenCode + Goose). Load-then-cancel: after reopen session/load succeeds, cancelTurn before first send is stale (OpenCode + Goose). Cancel-during-session-load: while reopen session/load is held in-flight, aborting the pending load rejects open clean (Host.cancelTurn cannot race mid-load — open awaits attach; OpenCode + Goose). Load-then-disconnect: after reopen session/load succeeds, peer transport close before first send stays idle until next send faults clean (OpenCode + Goose).
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -135,6 +135,14 @@ class FakePeer {
     if (!this.#holdingSessionLoad) throw new Error("session/load is not held");
     for (const wake of this.#sessionLoadHoldWaiters) wake();
     this.#sessionLoadHoldWaiters = [];
+  }
+
+  /**
+   * Idle peer transport fault: close without an in-flight RPC
+   * (load-then-disconnect after successful session/load).
+   */
+  async disconnect(): Promise<void> {
+    await this.#transport.close();
   }
 
   async #agentRequest(method: string, params: unknown): Promise<unknown> {
@@ -3675,6 +3683,231 @@ test("SessionHost + opt-in OpenCode ACP: cancel-during-session-load aborts held 
 
 test("SessionHost + opt-in Goose ACP: cancel-during-session-load aborts held open clean (symmetric)", async (t) => {
   await assertSessionHostCancelDuringSessionLoad({
+    t,
+    label: "goose",
+    harnessId: "goose",
+    agentName: "Goose",
+    createHarness: (openTransport) =>
+      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+  });
+});
+
+
+async function assertSessionHostLoadThenDisconnect(input: {
+  t: { after: (fn: () => void | Promise<void>) => void };
+  label: string;
+  harnessId: "opencode" | "goose";
+  agentName: string;
+  createHarness: (openTransport: () => AcpTransport) => ReturnType<
+    typeof createExperimentalRegistryOpenCodeAcpHarness
+  >;
+}): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-ltd-`));
+  const worktree = join(root, "worktree");
+  const journalRoot = join(root, "journal");
+  await mkdir(worktree, { recursive: true });
+  input.t.after(() => rm(root, { recursive: true, force: true }));
+
+  const backendSessionId = `${input.harnessId}-ltd-session`;
+  const hostSessionId = `${input.harnessId}-ltd-1`;
+  const spec = {
+    schemaVersion: 1 as const,
+    hostSessionId,
+    execution: {
+      targetId: "local",
+      workspaceIdentity: `workspace-${input.harnessId}-ltd`,
+      worktreePath: worktree,
+    },
+    harness: { id: input.harnessId, adapterVersion: ACP_ADAPTER_VERSION },
+    modelBinding: { kind: "harness-managed" as const },
+  };
+  const target = {
+    id: "local",
+    kind: "local" as const,
+    platform: process.platform as "darwin" | "linux" | "win32",
+    available: true,
+  };
+  const catalog = {
+    fingerprint: "registry-v1",
+    validateSelection: () => ({ ok: true as const }),
+  };
+
+  // Round 1: negotiate loadSession, disconnect mid-prompt, close — same fence as load-then-cancel.
+  const registryLive = new HarnessRegistry();
+  registryLive.register(
+    input.createHarness(() =>
+      openFakeTransport(input.agentName, backendSessionId, {
+        loadSession: true,
+        disconnectOnPrompt: true,
+      }),
+    ),
+  );
+
+  const host = await SessionHost.create({
+    root: journalRoot,
+    spec,
+    target,
+    catalog,
+    registry: registryLive,
+  });
+
+  const faultReceipt = await host.dispatch({
+    type: "send",
+    commandId: `${input.harnessId}-ltd-fault`,
+    hostSessionId,
+    turnId: "turn-ltd-fault",
+    text: "die mid-prompt",
+  });
+  assert.equal(faultReceipt.status, "accepted");
+  await host.whenIdle();
+  assert.ok(host.eventsSince(0).some((event) => event.kind === "session.error"));
+  await host.close();
+
+  // Round 2: reopen attach via session/load (must succeed — no faultOnSessionLoad).
+  const peersAfter: FakePeer[] = [];
+  const registryReopen = new HarnessRegistry();
+  registryReopen.register(
+    input.createHarness(() =>
+      openFakeTransport(
+        input.agentName,
+        backendSessionId,
+        { loadSession: true },
+        peersAfter,
+      ),
+    ),
+  );
+
+  const resumed = await SessionHost.open({
+    root: journalRoot,
+    spec,
+    target,
+    catalog,
+    registry: registryReopen,
+  });
+
+  assert.ok(
+    peersAfter.some((peer) => peer.methods.includes("session/load")),
+    "reopen must attach via session/load",
+  );
+  assert.ok(
+    peersAfter.every((peer) => !peer.methods.includes("session/new")),
+    "successful load must not fall back to session/new",
+  );
+
+  const errorCountBefore = resumed.eventsSince(0).filter((event) => event.kind === "session.error")
+    .length;
+
+  // Peer disconnect before any new send: no active turn after successful load.
+  // Host ignores idle peer close until the next RPC (honest fake-transport semantics).
+  // peersAfter may include a capabilities-probe transport (initialize only); disconnect the live load peer.
+  const livePeer = peersAfter.find((peer) => peer.methods.includes("session/load"));
+  assert.ok(livePeer, "expected live peer after session/load");
+  await livePeer.disconnect();
+
+  await resumed.whenIdle();
+  assert.equal(
+    resumed.eventsSince(0).filter((event) => event.kind === "session.error").length,
+    errorCountBefore,
+    "idle peer close must not journal a new session.error until next RPC",
+  );
+
+  // Next send surfaces the transport fault cleanly (no hang).
+  const probeReceipt = await resumed.dispatch({
+    type: "send",
+    commandId: `${input.harnessId}-ltd-probe`,
+    hostSessionId,
+    turnId: "turn-ltd-probe",
+    text: "probe after idle disconnect",
+  });
+  assert.equal(probeReceipt.status, "accepted");
+  await resumed.whenIdle();
+
+  const after = resumed.eventsSince(0);
+  const newErrors = after.filter((event) => event.kind === "session.error");
+  assert.ok(
+    newErrors.length > errorCountBefore,
+    "next send after idle disconnect must journal session.error",
+  );
+  const latestError = newErrors[newErrors.length - 1]!;
+  assert.equal(latestError.kind, "session.error");
+  assert.match(latestError.message, /ACP transport closed/);
+  const probeFinished = after.find(
+    (event) => event.kind === "turn.finished" && event.turnId === "turn-ltd-probe",
+  );
+  assert.ok(probeFinished && probeFinished.kind === "turn.finished");
+  assert.equal(probeFinished.outcome, "unknown");
+
+  await resumed.close();
+
+  // Prior round-1 fault remains in journal; probe fault also persisted.
+  const persisted = await SessionHost.eventsSinceHistory(journalRoot, spec, 0);
+  assert.ok(
+    persisted.filter((event) => event.kind === "session.error").length >= 2,
+    "journal must keep prior fault and the idle-disconnect probe fault",
+  );
+  assert.ok(
+    persisted.some(
+      (event) =>
+        event.kind === "turn.finished" &&
+        event.turnId === "turn-ltd-probe" &&
+        event.outcome === "unknown",
+    ),
+  );
+
+  // Optional thin recovery: further reopen still attaches via session/load and can send.
+  const peersRecover: FakePeer[] = [];
+  const registryRecover = new HarnessRegistry();
+  registryRecover.register(
+    input.createHarness(() =>
+      openFakeTransport(
+        input.agentName,
+        backendSessionId,
+        { loadSession: true },
+        peersRecover,
+      ),
+    ),
+  );
+  const recovered = await SessionHost.open({
+    root: journalRoot,
+    spec,
+    target,
+    catalog,
+    registry: registryRecover,
+  });
+  assert.ok(
+    peersRecover.some((peer) => peer.methods.includes("session/load")),
+    "recovery reopen must attach via session/load",
+  );
+  const recoverReceipt = await recovered.dispatch({
+    type: "send",
+    commandId: `${input.harnessId}-ltd-recover`,
+    hostSessionId,
+    turnId: "turn-ltd-recover",
+    text: "hello after load-then-disconnect",
+  });
+  assert.equal(recoverReceipt.status, "accepted");
+  await recovered.whenIdle();
+  const recoverFinished = recovered.eventsSince(0).find(
+    (event) => event.kind === "turn.finished" && event.turnId === "turn-ltd-recover",
+  );
+  assert.ok(recoverFinished && recoverFinished.kind === "turn.finished");
+  assert.equal(recoverFinished.outcome, "success");
+  await recovered.close();
+}
+
+test("SessionHost + opt-in OpenCode ACP: load-then-disconnect faults on next send", async (t) => {
+  await assertSessionHostLoadThenDisconnect({
+    t,
+    label: "opencode",
+    harnessId: "opencode",
+    agentName: "OpenCode",
+    createHarness: (openTransport) =>
+      createExperimentalRegistryOpenCodeAcpHarness({ openTransport }),
+  });
+});
+
+test("SessionHost + opt-in Goose ACP: load-then-disconnect faults on next send (symmetric)", async (t) => {
+  await assertSessionHostLoadThenDisconnect({
     t,
     label: "goose",
     harnessId: "goose",
