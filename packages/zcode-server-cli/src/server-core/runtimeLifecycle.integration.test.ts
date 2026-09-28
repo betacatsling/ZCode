@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { fork } from "node:child_process";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -123,8 +123,19 @@ function sendCommand(hostSessionId: string, commandId: string, turnId: string): 
   };
 }
 
+async function createRuntimeTempDir(): Promise<string> {
+  if (process.platform !== "darwin") {
+    return mkdtemp(join(tmpdir(), "zcode-runtime-host-process-"));
+  }
+  // macOS 默认临时目录过长，server/run/control.sock 会 listen EINVAL。
+  // /tmp 与 realpath 后的目录也不相同，mock 授权会报 unauthorized execution target or worktree。
+  // 因此 darwin 上改用短目录并做 realpath。Linux / Windows 仍用 os.tmpdir()。
+  const shortRoot = await realpath("/tmp");
+  return realpath(await mkdtemp(join(shortRoot, "zcode-runtime-host-process-")));
+}
+
 test("forked Supervisor/Core keep Host work alive across client detach and fence crash recovery", async () => {
-  const temp = await mkdtemp(join(tmpdir(), "zcode-runtime-host-process-"));
+  const temp = await createRuntimeTempDir();
   const serverRoot = join(temp, "server");
   const worktreePath = join(temp, "worktree");
   const configPath = join(temp, "provider-config.json");

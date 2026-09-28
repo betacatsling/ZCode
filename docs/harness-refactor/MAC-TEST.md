@@ -4,6 +4,8 @@
 
 基线是合成分支 PR #15。本机常驻进程只用现有 `server-cli serve --daemon`。在 darwin 上且没有把 `ZCODE_SERVER_SKIP_SERVICE_REGISTRATION` 设为 `1` 时，这条命令注册并拉起 launchd。窗口关闭和退出整个 Electron 都只断开附着，不停止 Core。
 
+自动恢复集成测试在 macOS 上使用短目录，并先做 realpath。它使用 Mock Harness，不能把下面三项实机检查记为通过。
+
 不要把凭据、主机名、token、prompt 正文写进仓库、提交或下面的结果模板。
 
 ## 准备
