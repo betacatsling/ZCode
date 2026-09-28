@@ -11,9 +11,6 @@ import {
 } from "@zcode/ui";
 import "@zcode/ui/styles.css";
 import { connectViaWebSocket } from "@zcode/client";
-import { WebCallbackPage } from "./auth/WebCallbackPage.js";
-import { createWebAuthService } from "./auth/webAuthService.js";
-import { parseOAuthState, resolveSafeAppReturnTo } from "./auth/oauthStateCodec.js";
 import { resolveWebCommunityUrl, resolveWebHelpConfig } from "./communityUrl.js";
 import {
   ConversationShareLandingLoader,
@@ -70,7 +67,6 @@ async function resolveFeedbackUrl(): Promise<string | undefined> {
 }
 
 const root = createRoot(document.getElementById("root")!);
-const webAuthService = createWebAuthService();
 
 // 初始化 Web 端流式 clientId，确保所有 hook 在首次渲染前就使用稳定 ID
 {
@@ -84,33 +80,6 @@ interface WebBootstrapResult {
   initialTaskId?: string;
   restoreSession?: boolean;
   allowOpenWorkspace?: boolean;
-}
-
-function isWebOAuthCallback(params: URLSearchParams): boolean {
-  return (
-    ["/cn/share/callback", "/share/callback"].includes(window.location.pathname) &&
-    params.has("state") &&
-    (params.has("code") || params.has("error"))
-  );
-}
-
-function renderWebAuthCallbackPage(): void {
-  document.title = "ZCode - Sign In";
-  const callbackState = parseOAuthState(
-    new URLSearchParams(window.location.search).get("state") ?? "",
-  );
-  const safeRetryTarget = resolveSafeAppReturnTo(callbackState?.app_return_to);
-  root.render(
-    <WebCallbackPage
-      authService={webAuthService}
-      onSuccess={({ appReturnTo }) => {
-        window.location.replace(appReturnTo ?? "/");
-      }}
-      onRetry={() => {
-        window.location.replace(safeRetryTarget ?? "/");
-      }}
-    />,
-  );
 }
 
 async function renderConversationSharePage(): Promise<void> {
@@ -153,30 +122,19 @@ async function renderConversationSharePage(): Promise<void> {
     mockMode && window.sessionStorage.getItem("zcode:share:mock-auth") === "owner"
       ? "mock-owner-token"
       : null;
-  const onLogout = () => {
-    if (mockMode) {
-      window.sessionStorage.removeItem("zcode:share:mock-auth");
-      window.location.reload();
-      return;
-    }
-    void webAuthService.logout();
-  };
+  // 产品浏览器 OAuth 已移除：token 只来自分享 mock，logout 不碰产品凭据仓库。
+  // login_required 由分享页展示 productLoginRemoved 文案，这里不发起 authorize。
+  const onLogout = mockMode
+    ? () => {
+        window.sessionStorage.removeItem("zcode:share:mock-auth");
+        window.location.reload();
+      }
+    : undefined;
   root.render(
     <ConversationShareLandingLoader
       shareCode={shareCode}
       client={client}
-      getAccessToken={() => getMockToken() ?? webAuthService.getZCodeJwtToken()}
-      onLogin={(_provider) => {
-        if (mockMode) {
-          window.sessionStorage.setItem("zcode:share:mock-auth", "owner");
-          window.location.reload();
-          return;
-        }
-        // Product Web OAuth entry closed (P3). Do not start Z.ai authorize.
-        window.alert(
-          "Product account login was removed. Configure a personal model provider instead.",
-        );
-      }}
+      getAccessToken={() => getMockToken()}
       onLogout={onLogout}
       locale={routeLocale}
       theme={resolveWebThemePreference("zai-light")}
@@ -420,12 +378,6 @@ function renderWebBootstrapError(error: unknown): void {
 }
 
 async function bootstrapWebApp() {
-  const params = new URLSearchParams(window.location.search);
-  if (isWebOAuthCallback(params)) {
-    renderWebAuthCallbackPage();
-    return;
-  }
-
   if (isConversationSharePath(window.location.pathname)) {
     await renderConversationSharePage();
     return;
