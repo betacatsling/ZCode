@@ -1,8 +1,14 @@
 interface RootStartupGateState {
-  isResolvingStartupAuthState: boolean;
   isResolvingProviderStartupState: boolean;
   isRestoring: boolean;
   isBootstrappingInitialWorkspace: boolean;
+}
+
+interface StartupProductLoginInput {
+  hasUser: boolean;
+  providerFamilyDomain: string | null | undefined;
+  hasUsableProvider: boolean;
+  modelSelectionFailed: boolean;
 }
 
 interface RootStartupLoadingVisibilityState extends RootStartupGateState {
@@ -16,7 +22,6 @@ interface FallbackWorkspaceCreateState {
 }
 
 interface ProviderStartupSyncState {
-  providerFamilyDomainMigrationComplete: boolean;
   modelSelectionViewHydrated: boolean;
 }
 
@@ -26,12 +31,22 @@ interface ProviderStartupResolutionState {
 }
 
 export function shouldBlockRootRender(state: RootStartupGateState): boolean {
+  // 产品 user / OAuth 恢复不再挡住工作区、历史和设置。
+  // 仍等待模型视图读取结束（失败由调用方标成已结束）以及既有 tab/workspace 引导。
   return (
-    state.isResolvingStartupAuthState ||
     state.isResolvingProviderStartupState ||
     state.isRestoring ||
     state.isBootstrappingInitialWorkspace
   );
+}
+
+export function shouldRedirectStartupToProductLogin(input: StartupProductLoginInput): boolean {
+  // 没有产品账号、provider family 或可执行模型时，都不能打开产品登录。
+  // 模型目录读取失败保留数据错误提示，发送/创建入口自行解释缺项。
+  if (input.modelSelectionFailed) return false;
+  if (!input.providerFamilyDomain) return false;
+  if (!input.hasUser || !input.hasUsableProvider) return false;
+  return false;
 }
 
 export function shouldShowRootStartupLoading(state: RootStartupLoadingVisibilityState): boolean {
@@ -55,5 +70,5 @@ export function shouldOpenFallbackWorkspaceAfterCreate(
 }
 
 export function isProviderStartupSyncPending(state: ProviderStartupSyncState): boolean {
-  return !state.providerFamilyDomainMigrationComplete || !state.modelSelectionViewHydrated;
+  return !state.modelSelectionViewHydrated;
 }

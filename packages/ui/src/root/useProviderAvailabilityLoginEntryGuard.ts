@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { UserInfo } from "@zcode/shared";
 import type { ModelSelectionView } from "@zcode/services";
 import { resolveProviderAvailabilityState } from "@/lib/modelProviderAvailability.js";
+import { shouldRedirectStartupToProductLogin } from "@/lib/rootStartupGate.js";
 import { logger } from "@/logger.js";
 
 interface ProviderAvailabilityLoginEntryGuardResult {
@@ -13,7 +14,6 @@ interface ProviderAvailabilityLoginEntryGuardResult {
 export function useProviderAvailabilityLoginEntryGuard({
   enabled = true,
   user,
-  isRestoringOAuthSession,
   providerFamilyDomain,
   modelSelectionView,
   modelSelectionError,
@@ -23,7 +23,6 @@ export function useProviderAvailabilityLoginEntryGuard({
 }: {
   enabled?: boolean;
   user: UserInfo | null;
-  isRestoringOAuthSession: boolean;
   providerFamilyDomain: string | null | undefined;
   modelSelectionView: ModelSelectionView | null;
   modelSelectionError?: Error;
@@ -54,10 +53,14 @@ export function useProviderAvailabilityLoginEntryGuard({
         : modelSelectionView;
       const availability = resolveProviderAvailabilityState({ modelSelectionView: refreshedView });
       const { hasUsableProvider, providerCount } = availability;
-      const shouldOpenLoginEntry = !providerFamilyDomain || (!user && !hasUsableProvider);
+      const shouldOpenLoginEntry = shouldRedirectStartupToProductLogin({
+        hasUser: Boolean(user),
+        providerFamilyDomain,
+        hasUsableProvider,
+        modelSelectionFailed: false,
+      });
 
-      // 未登录且没有可用模型配置时必须引导用户连接账号或填写 API Key。
-      // 启动检查、API Key 设置回流等入口统一走这里，避免各处复制判断后语义分叉。
+      // 缺模型不再打开产品登录。启动检查只记录目录是否可读，发送/创建自行拦截。
       logger.info("[Root] provider 可用性登录入口守卫完成检查", {
         reason: options.reason,
         source: availability.source,
@@ -100,11 +103,7 @@ export function useProviderAvailabilityLoginEntryGuard({
       return;
     }
 
-    if (
-      startupCheckCompletedRef.current ||
-      isRestoringOAuthSession ||
-      !providerAvailabilityHydrated
-    ) {
+    if (startupCheckCompletedRef.current || !providerAvailabilityHydrated) {
       return;
     }
 
@@ -116,7 +115,6 @@ export function useProviderAvailabilityLoginEntryGuard({
     });
   }, [
     enabled,
-    isRestoringOAuthSession,
     modelSelectionError,
     providerAvailabilityHydrated,
     syncLoginEntryWithProviderAvailability,

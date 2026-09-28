@@ -55,8 +55,7 @@ interface QuickPickCommandHandlers {
   openFeedback: () => void | Promise<void>;
   openCommunity: () => void | Promise<void>;
   openProductDocs: () => void | Promise<void>;
-  login?: () => void | Promise<void>;
-  logout?: () => void | Promise<void>;
+  openModelHarnessSettings: () => void | Promise<void>;
   toggleSidebar: () => void;
   toggleTerminal: () => void;
   togglePreview: () => void;
@@ -69,7 +68,6 @@ interface CreateQuickPickCommandsOptions {
   allowOpenWorkspace: boolean;
   canOpenCommunity: boolean;
   isSidebarVisible: boolean;
-  isLoggedIn: boolean;
   supportsEmbeddedBrowser?: boolean;
   supportsTerminal?: boolean;
   supportsReview?: boolean;
@@ -87,7 +85,6 @@ export function createQuickPickCommands({
   allowOpenWorkspace,
   canOpenCommunity,
   isSidebarVisible,
-  isLoggedIn,
   supportsEmbeddedBrowser = true,
   supportsTerminal = true,
   supportsReview = true,
@@ -268,26 +265,14 @@ export function createQuickPickCommands({
     run: handlers.openProductDocs,
   });
 
-  if (isLoggedIn && handlers.logout) {
-    commands.push({
-      id: "logout",
-      sectionId: "app",
-      titleId: "quickPick.command.logout",
-      icon: "logout",
-      keywords: ["disconnect", "logout", "sign out", "断开连接", "登出"],
-      run: handlers.logout,
-    });
-  } else if (!isLoggedIn && handlers.login) {
-    commands.push({
-      id: "login",
-      sectionId: "app",
-      titleId: "quickPick.command.login",
-      icon: "login",
-      // 命令面板的账号动作对用户表达为“连接/断开连接”，搜索词也要同步。
-      keywords: ["connect", "login", "sign in", "连接", "登录"],
-      run: handlers.login,
-    });
-  }
+  commands.push({
+    id: "model-harness-settings",
+    sectionId: "configure",
+    titleId: "quickPick.command.modelHarnessSettings",
+    icon: "settings",
+    keywords: ["model", "harness", "provider", "api key", "模型", "设置"],
+    run: handlers.openModelHarnessSettings,
+  });
 
   return commands.filter(
     (command) =>
