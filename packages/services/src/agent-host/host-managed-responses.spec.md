@@ -25,6 +25,8 @@ ModelBindingPlanner.plan
 
 `anthropic-messages` 仍然只准入 `messages-gateway`。`native`、`mock`、`harness-managed` 不能进入 Responses。
 
+`ExecutionTarget.kind = "ssh"` 的 Gateway 兼容行保持 `experimental`。共享 `TargetModelGateway` 由 SSH 附着到的远端 Core 持有，并只注入 Codex；Claude 仍使用自己的实例。FakeModel 只证明这条注入路径，不认证远端凭据，也不把 SSH 升为 `supported`。SSH 隧道断开不关闭 Gateway。
+
 下面这些组合打不到执行层，保持 `experimental`，不能用跳过执行层的假 Model 标成完成：
 
 - Claude Code 默认 mock 端口、ACP 传输，以及只注入 `kind: "model-execution-layer"` 证据、没有 `modelFactory` 的端口。

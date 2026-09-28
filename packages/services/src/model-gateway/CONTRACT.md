@@ -4,6 +4,8 @@
 
 `TargetModelGateway` owns one Gateway instance for one target-local Host owner and is shared by target Harness adapters. It rejects requests for a second target and closes its grants and listener with the owner.
 
+On an SSH execution target that owner is the remote Core reached by `direct-tcpip` and `serve --daemon`, not a listener on the GUI. Host composition constructs one `TargetModelGateway` per target service and injects it into Codex. Claude keeps a separate adapter-local instance in this slice, so one target that loads both harnesses may still have two loopback listeners until Claude is wired to the shared owner. Dropping the SSH tunnel closes the tunnel only. It does not close the Gateway or revoke its grants. `explicit-stop` stops the Core, and the Core's dispose closes the shared Gateway.
+
 Each grant belongs to exactly one configured target and one Host session. It binds one protocol (`openai-responses` or `anthropic-messages`), a frozen model-binding fingerprint, one public model alias, expiry, and strict resource limits. Same-binding renewal extends expiry without changing the bound Model or token; it requires the exact binding fingerprint and cannot revive a revoked grant. A Host may hold one bounded lease for one active Host turn, renew only that turn's lease, and end it on the matching terminal event. Lease renewal never widens the grant's protocol, route, session or model alias. A changed binding requires revoking the old grant and issuing a new token. The opaque session capability is returned once, stored only as a digest, and revocation removes access and aborts active work. It is not a Provider API key. The server never trusts the request's model or endpoint to choose an executor.
 
 The `prompt_cache_key` field sent by the observed Codex version is accepted as bounded compatibility metadata and deliberately not forwarded. This module does not implement prompt caching.
@@ -28,7 +30,7 @@ When `createGrant` receives a `BindingPlan`, that plan is the only route and cap
 
 ## Compatibility matrix
 
-`describeGatewayCompatibility` reports one row with gateway version, harness id and version, model source, reasoning parameter, and target kind/platform. Support uses the shared `CapabilityReport` and does not add capability fields. Chat Completions is `unsupported` because no harness ingress requires it. Messages is `experimental`: the HTTP interface exists, and this slice does not certify a Claude adapter or a live Provider chain. An SSH row does not certify remote credentials.
+`describeGatewayCompatibility` reports one row with gateway version, harness id and version, model source, reasoning parameter, and target kind/platform. Support uses the shared `CapabilityReport` and does not add capability fields. Chat Completions is `unsupported` because no harness ingress requires it. Messages is `experimental`: the HTTP interface exists, and this slice does not certify a Claude adapter or a live Provider chain. An SSH row stays `experimental`: the loopback Gateway must run on the target host, and remote credential paths are not certified. A FakeModel request with `ExecutionTarget.kind = "ssh"` proves the shared-owner inject path only. It does not promote SSH to `supported` and it does not certify a live SSH target.
 
 ## Bound model limits
 

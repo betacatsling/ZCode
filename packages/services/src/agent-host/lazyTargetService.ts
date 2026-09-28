@@ -10,8 +10,9 @@ import {
   type SessionSpec,
   type WorkspaceSessionBindingCapabilityRequest,
 } from "@zcode/shared/agent-host";
+import { TargetModelGateway } from "@zcode/services/model-gateway";
 import type { IWorktreeService } from "../projectWorkspaceServices.js";
-import { HarnessRegistry } from "./harnessRegistry.js";
+import { HarnessRegistry, type HarnessAdapter } from "./harnessRegistry.js";
 import { createAgentHostConversationBridge } from "./conversationBridge.js";
 import { createRegistryModelCatalog } from "./registryCatalog.js";
 import { createRpcAgentHostService } from "./rpcTargetService.js";
@@ -37,9 +38,23 @@ export function createLazyTargetAgentHostService(input: {
   checkAdmissionFence?: WorkspaceAdmissionFenceChecker;
   // 继续透传 owner generation，避免懒加载 Host 丢掉已有 owner fence。
   ownerGeneration?: number;
-}): { service: IAgentHostService; dispose(): Promise<void> } {
+  /** 只读观察已注册 harness，不改变准入，也不另建 Gateway。 */
+  observeRegisteredHarness?: (harness: HarnessAdapter) => void;
+}): {
+  service: IAgentHostService;
+  /**
+   * 这个目标 Core 上的唯一共享 Gateway。
+   * 只注入 Codex；Claude 继续自建。dispose 是唯一关闭者。
+   * SSH 隧道断开不会调用它。
+   */
+  targetModelGateway: TargetModelGateway;
+  dispose(): Promise<void>;
+} {
   let target: AgentHostTargetService | undefined;
   let flight: Promise<AgentHostTargetService> | undefined;
+  // 一份 owner 覆盖整个目标服务，包括尚未 warm 的阶段。
+  // Codex 使用它；Claude 不接收，避免本 PR 改 Claude 适配器。
+  const targetModelGateway = new TargetModelGateway();
   let targetDispose: (() => void) | undefined;
   let disposed = false;
   const events = new Emitter<TargetHostEvent>();
@@ -98,40 +113,42 @@ export function createLazyTargetAgentHostService(input: {
       flight = (async () => {
         await input.registry.start();
         const { createRegistryPiHarness } = await import("../agent-adapters/pi/createPiHarness.js");
-        const { createExperimentalRegistryCodexHarness } = await import(
-          "../agent-adapters/codex/createCodexHarness.js"
-        );
-        const { createExperimentalRegistryClaudeHarness } = await import(
-          "../agent-adapters/claude/createClaudeHarness.js"
-        );
-        const { createExperimentalRegistryDevinHarness } = await import(
-          "../agent-adapters/devin/createDevinHarness.js"
-        );
+        const { createExperimentalRegistryCodexHarness } =
+          await import("../agent-adapters/codex/createCodexHarness.js");
+        const { createExperimentalRegistryClaudeHarness } =
+          await import("../agent-adapters/claude/createClaudeHarness.js");
+        const { createExperimentalRegistryDevinHarness } =
+          await import("../agent-adapters/devin/createDevinHarness.js");
         const modelAdapter = new AiSdkModelAdapter({});
         const harnesses = new HarnessRegistry();
         const workerRoot = join(input.root, "workers");
-        harnesses.register(
+        const register = (harness: HarnessAdapter) => {
+          harnesses.register(harness);
+          input.observeRegisteredHarness?.(harness);
+        };
+        register(
           createRegistryPiHarness({
             root: workerRoot,
             registry: input.registry,
             adapter: modelAdapter,
           }),
         );
-        harnesses.register(
+        register(
           createExperimentalRegistryCodexHarness({
             root: workerRoot,
             registry: input.registry,
             adapter: modelAdapter,
+            targetModelGateway,
           }),
         );
-        harnesses.register(
+        register(
           createExperimentalRegistryClaudeHarness({
             root: workerRoot,
             registry: input.registry,
             adapter: modelAdapter,
           }),
         );
-        harnesses.register(
+        register(
           createExperimentalRegistryDevinHarness({
             root: workerRoot,
           }),
@@ -189,9 +206,7 @@ export function createLazyTargetAgentHostService(input: {
       target: input.target,
       harnesses: [
         ...(input.nativeOwner ? ["zcode"] : []),
-        ...(input.allowNewSessions()
-          ? ["pi", "codex", "claude-code", "devin"]
-          : []),
+        ...(input.allowNewSessions() ? ["pi", "codex", "claude-code", "devin"] : []),
       ],
       admissionEnabled:
         input.target.available && (Boolean(input.nativeOwner) || input.allowNewSessions()),
@@ -290,6 +305,7 @@ export function createLazyTargetAgentHostService(input: {
   };
   return {
     service,
+    targetModelGateway,
     async dispose() {
       disposed = true;
       conversationFrameSubscription.dispose();
@@ -299,7 +315,10 @@ export function createLazyTargetAgentHostService(input: {
       conversationFrames.dispose();
       // Process shutdown with an active turn leaves durable accepted/unknown; no
       // fabricated completion or implicit prompt replay on the next target epoch.
+      // Codex 不拥有注入的 Gateway，所以要在 harness shutdown 之后由这里关闭。
+      // ssh-disconnect 不会走到 dispose。
       if (target) await target.close();
+      await targetModelGateway.close();
       await historyOnly.close();
     },
   };

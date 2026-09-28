@@ -21,7 +21,8 @@ export function assertResidentLifetime(lifetime: "resident-service" | "connectio
 /**
  * 窗口关闭、GUI 退出、SSH 断开只关闭附着。
  * SSH 附着是 direct-tcpip 到目标 loopback Core；关掉隧道不等于停止 Core。
- * 停止任务必须走 explicit-stop。
+ * Model Gateway 与该 Core 同寿命：ssh-disconnect 不关闭 Gateway，也不撤销 grant。
+ * 停止任务必须走 explicit-stop；Core dispose 才会关掉共享 Gateway。
  */
 export function planAttachmentClose(reason: AttachmentCloseReason): AttachmentClosePlan {
   if (reason === "explicit-stop") {

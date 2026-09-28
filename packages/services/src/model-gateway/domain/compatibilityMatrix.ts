@@ -68,6 +68,7 @@ function reportFor(
   if (route !== "responses-gateway" && route !== "pi-sdk" && route !== "messages-gateway") {
     return { support: "unsupported", reason: "route is not served by Model Gateway" };
   }
+  // SSH 保持 experimental。FakeModel 只证明共享 Gateway 注入，不认证远端凭据。
   if (target.kind === "ssh") {
     return {
       support: "experimental",

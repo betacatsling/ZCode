@@ -24,7 +24,7 @@ import {
 import type { CodexSessionRuntime } from "./codexRuntime.js";
 import { CodexRuntimeEvents } from "./codexRuntimeEvents.js";
 import { CodexSessionRegistry } from "./codexSessionRegistry.js";
-import { CodexTargetGateway } from "./codexTargetGateway.js";
+import { resolveCodexTargetGateway } from "./codexTargetGateway.js";
 import { createCodexHarnessSession } from "./codexSessionFactory.js";
 import { CodexTurnLifecycle } from "./codexTurnLifecycle.js";
 import {
@@ -91,8 +91,12 @@ export class CodexHarnessAdapter implements HarnessAdapter {
     this.#now = options.now ?? Date.now;
     this.#isSelectionAuthorized =
       options.isSelectionAuthorized ?? options.isBindingCurrent ?? (() => true);
-    this.#ownsTargetGateway = options.targetModelGateway === undefined;
-    this.#targetGateway = options.targetModelGateway ?? new CodexTargetGateway({ now: this.#now });
+    const resolvedGateway = resolveCodexTargetGateway({
+      ...(options.targetModelGateway ? { injected: options.targetModelGateway } : {}),
+      now: this.#now,
+    });
+    this.#ownsTargetGateway = resolvedGateway.ownsGateway;
+    this.#targetGateway = resolvedGateway.gateway;
     this.#sandboxMode = options.sandboxMode ?? "workspace-write";
     this.#approvalPolicy = options.approvalPolicy ?? HOST_APPROVAL_POLICY;
     this.#onProcess = options.onProcess;
@@ -109,6 +113,11 @@ export class CodexHarnessAdapter implements HarnessAdapter {
       stopRuntime: (runtime) => this.#stopRuntime(runtime),
       markUnknown: (runtime, turn, message) => this.#events.markUnknown(runtime, turn, message),
     });
+  }
+
+  /** 适配器实际使用的 Gateway owner。注入的共享实例不会在 shutdown 时被关闭。 */
+  boundTargetGateway(): TargetModelGatewayPort {
+    return this.#targetGateway;
   }
 
   async probe(target: ExecutionTarget) {

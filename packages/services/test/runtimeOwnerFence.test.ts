@@ -201,7 +201,9 @@ test("window close, GUI quit, and SSH disconnect do not stop the resident Core",
     assert.equal(plan.stopSupervisor, false);
     assert.equal(plan.stopWorkers, false);
   }
+  // ssh-disconnect 只关隧道。远端 Core 上的 Model Gateway 继续活着，直到 explicit-stop。
   assert.equal(planAttachmentClose("ssh-disconnect").closeTunnel, true);
+  assert.equal(planAttachmentClose("ssh-disconnect").stopSupervisor, false);
   assert.equal(planAttachmentClose("window-close").closeTunnel, false);
   assert.equal(planAttachmentClose("explicit-stop").stopSupervisor, true);
   assert.equal(planAttachmentClose("explicit-stop").stopWorkers, true);

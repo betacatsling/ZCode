@@ -7,7 +7,10 @@ import { CodexHarnessAdapter } from "./codexHarnessAdapter.js";
 import type { FakeModelCompatibilityEvidence } from "./codexCapabilities.js";
 import type { TargetModelGatewayPort } from "@zcode/services/model-gateway";
 
-/** Explicit opt-in factory. The default composition does not register Codex automatically. */
+/**
+ * Explicit opt-in factory. The default composition does not register Codex automatically.
+ * 注入的 targetModelGateway 原样传给适配器，适配器不得再包一层新的 owner。
+ */
 export function createExperimentalRegistryCodexHarness(options: {
   root: string;
   registry: ProviderRegistryService;
@@ -24,9 +27,7 @@ export function createExperimentalRegistryCodexHarness(options: {
   return new CodexHarnessAdapter({
     root: options.root,
     ...(options.executablePath ? { executablePath: options.executablePath } : {}),
-    ...(options.targetModelGateway
-      ? { targetModelGateway: options.targetModelGateway }
-      : {}),
+    ...(options.targetModelGateway ? { targetModelGateway: options.targetModelGateway } : {}),
     ...(options.launchAppServer ? { launchAppServer: options.launchAppServer } : {}),
     isOpenAiResponsesSelection: (selection) =>
       options.registry.getProvider(selection.providerId)?.config.api.type === "openai-responses",
