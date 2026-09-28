@@ -62,7 +62,6 @@ import {
   consumePendingSettingsModelProviderTarget,
   type SettingsModelProviderTarget,
 } from "@/lib/settingsNavigation.js";
-import type { EnterpriseCodingPlanProductDisplay } from "@/settings/model-provider-section/enterpriseCodingPlanProducts.js";
 
 export {
   fuzzyMatch,
@@ -390,8 +389,8 @@ export function ModelProviderSection({
     error: sharedSettingsError,
     update: updateSharedSettings,
   } = useSettings();
-  // 企业 pricing/获客服务已拆除；Team 已购身份走 entitlement。空列表保留导航签名。
-  const subscribedTeamProducts = useMemo<EnterpriseCodingPlanProductDisplay[]>(() => [], []);
+  // 企业 productList 已恒空（#128/#131–#133）；Team 已购身份走 entitlement，
+  // 不再拼空 productList / named subscribedTeamProducts stub。导航签名用内联 []。
   const connectionSelections = sharedSettings?.providerFamilyConnectionSelections ?? {};
   const familyConnectionSettingsFailed = sharedSettingsError !== null && sharedSettings === null;
   const effectiveConnectionSelections = useMemo(
@@ -640,7 +639,7 @@ export function ModelProviderSection({
       modelProvidersLoading: loading,
       displayOrder,
       codingPlanEntitlements,
-      subscribedTeamProducts,
+      subscribedTeamProducts: [],
       providerFamilyDomain: effectiveProviderFamilyDomain,
       connectionSelections: effectiveConnectionSelections,
       pendingConnectionSelections,
