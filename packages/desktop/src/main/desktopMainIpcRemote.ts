@@ -253,11 +253,6 @@ export function registerRemoteIpcHandlers(options: {
     );
   }
 
-  // 产品 OAuth state 注册已卸：保留 channel 监听以免旧 renderer 报错，但不建路由表。
-  ipcMain.on(PlatformChannels.OAuthRegisterState, (_event, _payload: unknown) => {
-    options.logger.warn("[oauth-register-state] 产品 OAuth deep-link 路由已移除，忽略 registerOAuthState");
-  });
-
   ipcMain.on(PlatformChannels.OpenExternal, (event, payload: unknown) => {
     const request = parseOpenExternalRequest(payload);
     if (!request) {
@@ -358,9 +353,6 @@ export function registerRemoteIpcHandlers(options: {
       );
     }
   });
-
-  // 产品 OAuth callback 已卸：旧 renderer 若仍回执 handled，忽略即可。
-  ipcMain.on(PlatformChannels.OAuthCallbackHandled, (_event) => {});
 
   ipcMain.on(PlatformChannels.ShowTaskNotification, (event, payload: unknown) => {
     dispatchTaskNotification({ event, payload, logger: options.logger });
