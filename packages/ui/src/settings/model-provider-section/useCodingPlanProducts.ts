@@ -10,7 +10,6 @@ import {
   type StartPlanPreviewConfig,
   isZaiCodingPlanProviderId,
 } from "@zcode/shared";
-import { useOptionalServices } from "@/hooks/useServices.js";
 import { logger } from "@/logger.js";
 import {
   normalizeCodingPlanCardCopyItems,
@@ -53,8 +52,8 @@ export function useCodingPlanProducts(
   providerId: CodingPlanProviderId,
   options?: { remotePreviewEnabled?: boolean },
 ) {
-  const services = useOptionalServices();
-  const service = services?.codingPlanSubscriptionService;
+  // 产品订阅服务已拆除。套餐目录不再发请求，已有静态兜底仍可展示。
+  const service = undefined;
   const supportedProvider =
     providerId === BUILTIN_MODEL_PROVIDER_IDS.bigmodelIndividualCodingPlan ||
     isZaiCodingPlanProviderId(providerId);
@@ -154,7 +153,13 @@ export function useCodingPlanProducts(
 
 async function loadCodingPlanProductsForTest(
   providerId: CodingPlanProviderId,
-  service: NonNullable<ReturnType<typeof useOptionalServices>>["codingPlanSubscriptionService"],
+  service: {
+    batchPreview(request: {
+      providerId: CodingPlanProviderId;
+    }): Promise<CodingPlanBatchPreviewResponse>;
+    getStartPlanPreview(): Promise<StartPlanPreviewConfig | null>;
+    getStaticProducts(): Promise<CodingPlanStaticProductsConfig>;
+  },
   force: boolean,
   staticProducts?: CodingPlanStaticProduct[],
 ): Promise<CodingPlanProductsSnapshot> {
@@ -197,7 +202,13 @@ async function loadCodingPlanProductsForTest(
 
 async function loadCodingPlanStaticProductsSnapshotForTest(
   providerId: CodingPlanProviderId,
-  service: NonNullable<ReturnType<typeof useOptionalServices>>["codingPlanSubscriptionService"],
+  service: {
+    batchPreview(request: {
+      providerId: CodingPlanProviderId;
+    }): Promise<CodingPlanBatchPreviewResponse>;
+    getStartPlanPreview(): Promise<StartPlanPreviewConfig | null>;
+    getStaticProducts(): Promise<CodingPlanStaticProductsConfig>;
+  },
 ): Promise<CodingPlanProductsSnapshot> {
   const staticProducts = await loadCodingPlanStaticProductListForTest(providerId, service);
   return buildStaticProductsSnapshotFromList(providerId, staticProducts);
@@ -222,7 +233,13 @@ function invalidateCodingPlanProductsCache(providerId: CodingPlanProviderId) {
 
 async function loadBatchPreviewWithStaticProducts(
   providerId: CodingPlanProviderId,
-  service: NonNullable<ReturnType<typeof useOptionalServices>>["codingPlanSubscriptionService"],
+  service: {
+    batchPreview(request: {
+      providerId: CodingPlanProviderId;
+    }): Promise<CodingPlanBatchPreviewResponse>;
+    getStartPlanPreview(): Promise<StartPlanPreviewConfig | null>;
+    getStaticProducts(): Promise<CodingPlanStaticProductsConfig>;
+  },
   staticProducts: CodingPlanStaticProduct[],
 ): Promise<CodingPlanProductsSnapshot> {
   const previewSnapshot = await service.batchPreview({ providerId });
@@ -364,7 +381,13 @@ function buildStaticProductDisplayList(
 
 async function loadCodingPlanStaticProductListForTest(
   providerId: CodingPlanProviderId,
-  service: NonNullable<ReturnType<typeof useOptionalServices>>["codingPlanSubscriptionService"],
+  service: {
+    batchPreview(request: {
+      providerId: CodingPlanProviderId;
+    }): Promise<CodingPlanBatchPreviewResponse>;
+    getStartPlanPreview(): Promise<StartPlanPreviewConfig | null>;
+    getStaticProducts(): Promise<CodingPlanStaticProductsConfig>;
+  },
 ): Promise<CodingPlanStaticProduct[]> {
   try {
     const config = await loadCodingPlanStaticProductsConfig(service);
@@ -419,7 +442,13 @@ function filterCodingPlanPurchaseProducts<
 }
 
 async function loadCodingPlanStaticProductsConfig(
-  service: NonNullable<ReturnType<typeof useOptionalServices>>["codingPlanSubscriptionService"],
+  service: {
+    batchPreview(request: {
+      providerId: CodingPlanProviderId;
+    }): Promise<CodingPlanBatchPreviewResponse>;
+    getStartPlanPreview(): Promise<StartPlanPreviewConfig | null>;
+    getStaticProducts(): Promise<CodingPlanStaticProductsConfig>;
+  },
 ): Promise<CodingPlanStaticProductsConfig> {
   const now = Date.now();
   if (staticProductsConfigCache && staticProductsConfigCache.expiresAt > now) {

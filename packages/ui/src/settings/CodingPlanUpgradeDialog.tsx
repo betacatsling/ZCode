@@ -68,8 +68,7 @@ export function CodingPlanUpgradeDialog({
   onClose,
   onOpenResult,
 }: CodingPlanUpgradeDialogProps) {
-  const { providerSettingsService, credentialService, codingPlanSubscriptionService } =
-    useServices();
+  const { providerSettingsService, credentialService } = useServices();
   const providerSettingsRead = useProviderSettingsView();
   const providerSettingsView =
     providerSettingsRead.state.status === "ready" ? providerSettingsRead.state.view : null;
@@ -98,16 +97,7 @@ export function CodingPlanUpgradeDialog({
           providerId,
           refreshCodingPlanEntitlements,
           refreshProviderState,
-          refreshTeamPlanProducts:
-            teamPlanFamily !== null
-              ? () =>
-                  // 购买完成后会先关闭 webview 弹窗，弹窗内 hook 随即卸载。
-                  // 这里直接走 service 拉取当前 family 的团队项目，避免刷新请求被卸载时序吞掉。
-                  codingPlanSubscriptionService.getEnterprisePricing({
-                    authenticated: true,
-                    family: teamPlanFamily,
-                  })
-              : undefined,
+          refreshTeamPlanProducts: undefined,
         }),
       onRefreshError: (error) => {
         // 刷新失败不阻塞关闭：用户已付款成功，套餐会在下次自然刷新时更新。
@@ -119,7 +109,6 @@ export function CodingPlanUpgradeDialog({
       },
     });
   }, [
-    codingPlanSubscriptionService,
     onClose,
     productsProviderId,
     providerId,

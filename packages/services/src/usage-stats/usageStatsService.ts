@@ -1,5 +1,4 @@
 import type {
-  ApiClient,
   AppUsageRequest,
   AppUsageSnapshot,
   CodingPlanUsageRequest,
@@ -16,35 +15,19 @@ import type {
   UsageStatsSnapshot,
 } from "@zcode/shared";
 import { isCodingPlanModelProviderId } from "@zcode/shared";
-import type { ICredentialService } from "../credential/credential.js";
-import type { IAccountRequestAuthService } from "../model-provider/accountRequestAuthService.js";
 import type { IZCodeAgentService } from "../zcode-agent/zcodeAgent.js";
 import type { IUsageStatsService } from "./usageStats.js";
-import {
-  BigModelUsageQuotaProvider,
-  type UsageApiAuthorizationRequest,
-  type UsageApiAuthorization,
-} from "./providers/bigmodelUsageQuotaProvider.js";
-import type { OfficialMcpCredentialSource } from "./providers/zcodeMcpQuotaProvider.js";
+
+const PRODUCT_ACCOUNT_AUTH_REMOVED = "product_account_auth_removed";
 
 interface UsageStatsServiceDependencies {
-  apiClient: ApiClient;
-  accountRequestAuthService: Pick<
-    IAccountRequestAuthService,
-    "resolveAccessCurrent" | "resolveCurrent" | "assertCurrent"
-  >;
-  resolveApiAuthorization?: (
-    request: UsageApiAuthorizationRequest,
-  ) => Promise<UsageApiAuthorization | null>;
-  credentialService?: Pick<ICredentialService, "load">;
-  env?: NodeJS.ProcessEnv;
   /** App Usage 经 ZCode Protocol 读取 agent 数据库真实统计。 */
   zcodeAgentService: Pick<IZCodeAgentService, "getAppUsageStats">;
-  /**
-   * 官方 Server MCP 额度的凭证来源（与 server MCP 调用同一套 5 个身份头）。
-   * 缺省时 entitlement 快照不含 MCP 额度。
-   */
-  officialMcpCredentialSource?: OfficialMcpCredentialSource;
+}
+
+function retiredProductAccountAuth(): never {
+  // 产品账号派生的套餐额度/重置不再发请求。调用方看到明确失败，而不是匿名额度。
+  throw new Error(PRODUCT_ACCOUNT_AUTH_REMOVED);
 }
 
 function isCodingPlanProviderId(providerId: string | undefined): boolean {
@@ -54,17 +37,6 @@ function isCodingPlanProviderId(providerId: string | undefined): boolean {
 export function createUsageStatsService(
   dependencies: UsageStatsServiceDependencies,
 ): IUsageStatsService {
-  const quotaProvider = new BigModelUsageQuotaProvider({
-    apiClient: dependencies.apiClient,
-    accountRequestAuthService: dependencies.accountRequestAuthService,
-    resolveApiAuthorization: dependencies.resolveApiAuthorization,
-    credentialService: dependencies.credentialService,
-    env: dependencies.env,
-    ...(dependencies.officialMcpCredentialSource
-      ? { officialMcpCredentialSource: dependencies.officialMcpCredentialSource }
-      : {}),
-  });
-
   return {
     async getAppUsageSnapshot(request: AppUsageRequest): Promise<AppUsageSnapshot> {
       // App Usage 现读取 agent 数据库真实统计（model_usage/turn_usage/tool_usage），
@@ -78,11 +50,9 @@ export function createUsageStatsService(
       request: CodingPlanUsageRequest,
     ): Promise<CodingPlanUsageSnapshot> {
       if (!isCodingPlanProviderId(request.preferredProviderId)) {
-        // Coding Plan 页面只允许预置的 Z.AI/BigModel Coding Plan 账号。
-        // 普通 provider id 不能进入 monitor 链路，避免误读 API Key 或环境变量。
         throw new Error("no_bigmodel_api_key");
       }
-      return quotaProvider.getCodingPlanUsageSnapshot(request);
+      return retiredProductAccountAuth();
     },
     async getCodingPlanResetStatus(
       request: CodingPlanResetScopeRequest,
@@ -90,7 +60,7 @@ export function createUsageStatsService(
       if (!isCodingPlanProviderId(request.preferredProviderId)) {
         throw new Error("no_bigmodel_api_key");
       }
-      return quotaProvider.getCodingPlanResetStatus(request);
+      return retiredProductAccountAuth();
     },
     async requestCodingPlanResetOpportunity(
       request: CodingPlanResetOpportunityRequest,
@@ -98,7 +68,7 @@ export function createUsageStatsService(
       if (!isCodingPlanProviderId(request.preferredProviderId)) {
         throw new Error("no_bigmodel_api_key");
       }
-      return quotaProvider.requestCodingPlanResetOpportunity(request);
+      return retiredProductAccountAuth();
     },
     async useCodingPlanReset(
       request: CodingPlanResetUseRequest,
@@ -106,23 +76,33 @@ export function createUsageStatsService(
       if (!isCodingPlanProviderId(request.preferredProviderId)) {
         throw new Error("no_bigmodel_api_key");
       }
-      return quotaProvider.useCodingPlanReset(request);
+      return retiredProductAccountAuth();
     },
     async markCodingPlanResetHistoryRead(request: CodingPlanResetScopeRequest): Promise<void> {
       if (!isCodingPlanProviderId(request.preferredProviderId)) {
         throw new Error("no_bigmodel_api_key");
       }
-      await quotaProvider.markCodingPlanResetHistoryRead(request);
+      retiredProductAccountAuth();
     },
-    async getSnapshot(request: UsageStatsRequest): Promise<UsageStatsSnapshot> {
+    async getSnapshot(_request: UsageStatsRequest): Promise<UsageStatsSnapshot> {
       // App Usage 已迁移到 getAppUsageSnapshot（agent 数据库）。getSnapshot 仅服务 Coding Plan monitor 链路。
       // 任何 monitor 失败都不能回退本地数据，保持数据源隔离。
-      return quotaProvider.getUsageStatsSnapshot(request);
+      return retiredProductAccountAuth();
     },
     async getEntitlementSnapshot(
-      request: UsageEntitlementRequest = {},
+      _request: UsageEntitlementRequest = {},
     ): Promise<UsageEntitlementSnapshot> {
-      return quotaProvider.getSnapshotForRequest(request);
+      // 套餐额度查询依赖产品账号。这里返回未认证快照，不访问订阅或官方 MCP 额度接口。
+      return {
+        generatedAt: Date.now(),
+        authenticated: false,
+        unavailableReason: "not_authenticated",
+        provider: null,
+        remaining: null,
+        subscription: null,
+        quota: null,
+        mcpQuota: null,
+      };
     },
   };
 }

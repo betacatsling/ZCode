@@ -248,7 +248,7 @@ export function ModelProviderSection({
   const { intl, locale } = useZCodeIntl();
   const confirmDialog = useConfirmDialog();
   const platform = usePlatform();
-  const { modelSelectionService, oauthService, credentialService } = useServices();
+  const { modelSelectionService, credentialService } = useServices();
   const {
     modelProviders,
     providerTemplates,
@@ -834,7 +834,7 @@ export function ModelProviderSection({
         const nextProviderFamilyDomain = resolveLogoutProviderFamilyDomain({
           currentDomain: sharedSettings?.providerFamilyDomain,
         });
-        await oauthService.logout(providerId);
+        // 产品 OAuth 已拆除。解绑只清本地 family 展示，不再调用 logout。
         // Coding Plan 官网 webview 使用独立持久 partition，provider Unlink 也属于账号边界。
         if (typeof platform.executeDesktopCommand === "function") {
           await platform.executeDesktopCommand(DesktopCommandIds.ClearCodingPlanWebviewStorage);
@@ -864,7 +864,6 @@ export function ModelProviderSection({
       }
     },
     [
-      oauthService,
       platform,
       updateSharedSettings,
       sharedSettings?.providerFamilyDomain,

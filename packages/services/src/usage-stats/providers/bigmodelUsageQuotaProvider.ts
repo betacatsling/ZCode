@@ -29,12 +29,29 @@ import {
   buildRuntimeZaiBusinessUrl,
   buildRuntimeZCodeApiUrl,
 } from "@zcode/shared";
-import type { ProviderFamilyDomain } from "@zcode/shared";
+import type { ProviderFamilyDomain, ZCodeProviderAccountAccess } from "@zcode/shared";
 import { createServiceLogger } from "#src/logger/serviceLogger.js";
 import type { ICredentialService } from "../../credential/credential.js";
-import type { IAccountRequestAuthService } from "../../model-provider/accountRequestAuthService.js";
 import { readApiJson } from "../../providers/api/apiJson.js";
-import { readEnv } from "../../oauth/providers/configUtils.js";
+
+/** 产品账号鉴权已从装配拆除。本类型只让历史额度客户端文件保持可编译，Host 不再实例化它。 */
+interface RetiredAccountRequestAuth {
+  resolveAccessCurrent(access: ZCodeProviderAccountAccess): Promise<ZCodeAccountAccess | null>;
+  resolveCurrent(input: {
+    providerId: string;
+    modelId?: string;
+    accountAccess: ZCodeAccountAccess;
+    reason?: string;
+  }): Promise<{ apiKey?: string | null }>;
+  assertCurrent(input: { providerId: string; accountAccess?: ZCodeAccountAccess }): Promise<void>;
+}
+
+function readEnv(env: NodeJS.ProcessEnv, key: string): string | undefined {
+  const value = env[key];
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  return trimmed === "" ? undefined : trimmed;
+}
 import {
   buildZaiStartPlanBalanceUrl,
   fetchZaiStartPlanBalanceEnvelope,
@@ -125,7 +142,7 @@ export interface UsageApiAuthorization {
 interface BigModelUsageQuotaProviderOptions {
   apiClient: ApiClient;
   accountRequestAuthService: Pick<
-    IAccountRequestAuthService,
+    RetiredAccountRequestAuth,
     "resolveAccessCurrent" | "resolveCurrent" | "assertCurrent"
   >;
   resolveApiAuthorization?: (
@@ -173,7 +190,7 @@ type ZaiStartPlanBalance = NonNullable<
 export class BigModelUsageQuotaProvider {
   private readonly apiClient: ApiClient;
   private readonly accountRequestAuthService: Pick<
-    IAccountRequestAuthService,
+    RetiredAccountRequestAuth,
     "resolveAccessCurrent" | "resolveCurrent" | "assertCurrent"
   >;
   private readonly resolveApiAuthorization?: BigModelUsageQuotaProviderOptions["resolveApiAuthorization"];

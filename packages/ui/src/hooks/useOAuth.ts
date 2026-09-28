@@ -6,25 +6,14 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { OAuthProviderId, OAuthProviderMeta } from "@zcode/shared";
-import {
-  BIGMODEL_PROVIDER_ID,
-  isCredentialDecryptError,
-  resolveSafeTelemetryHostname,
-  ZAI_PROVIDER_ID,
-} from "@zcode/shared";
-import { reportAppTelemetryEvent } from "@/lib/appTelemetry.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import type { LoginEntryPurpose } from "@/store/index.js";
 import { useZCodeStore } from "@/store/StoreProvider.js";
 import { logger } from "../logger.js";
-import { usePlatform } from "./usePlatform.js";
-import { useServices } from "./useServices.js";
 
 type OAuthStatus = "idle" | "waiting" | "error";
 
 export function useOAuth() {
-  const { oauthService } = useServices();
-  const platform = usePlatform();
   const { intl } = useZCodeIntl();
   const [status, setStatus] = useState<OAuthStatus>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -36,33 +25,11 @@ export function useOAuth() {
   const setOAuthPollingActive = useZCodeStore((state) => state.setOAuthPollingActive);
 
   const refreshProviders = useCallback(async () => {
-    try {
-      setLoadingProviders(true);
-      const providerList = await oauthService.getProviders();
-      setProviders(providerList);
-
-      try {
-        const active = await oauthService.getActiveProvider();
-        setActiveProvider(active);
-      } catch (err) {
-        // 只有本地 OAuth 凭据解密失败才可恢复为未登录态；RPC/存储权限等错误需要走外层错误路径。
-        if (!isCredentialDecryptError(err)) {
-          throw err;
-        }
-
-        // active provider 只是登录态指针，解密失败时服务层会清理 OAuth 凭据。
-        // provider 列表仍然可用，不能让用户看到“没有登录渠道”。
-        logger.warn("[useOAuth] 加载 active provider 凭据失败，已按未登录处理:", err);
-        setActiveProvider(null);
-      }
-    } catch (err) {
-      logger.error("[useOAuth] 加载 provider 列表失败:", err);
-      setProviders([]);
-      setActiveProvider(null);
-    } finally {
-      setLoadingProviders(false);
-    }
-  }, [oauthService]);
+    // 产品 OAuth provider 列表已拆除。登录页保持空列表，不发请求。
+    setProviders([]);
+    setActiveProvider(null);
+    setLoadingProviders(false);
+  }, []);
 
   useEffect(() => {
     void refreshProviders();
@@ -76,39 +43,9 @@ export function useOAuth() {
         setError(null);
         setPendingProvider(provider);
 
-        const {
-          authorizeUrl,
-          state,
-          provider: startedProvider,
-        } = await oauthService.startOAuthWithPolling(provider);
-
-        if (loginAttemptRef.current !== loginAttempt) {
-          return;
-        }
-
-        platform.registerOAuthState({ state, provider: startedProvider });
-        setOAuthPollingActive(
-          startedProvider === ZAI_PROVIDER_ID || startedProvider === BIGMODEL_PROVIDER_ID,
-        );
-        platform.openExternal(authorizeUrl);
-        void reportAppTelemetryEvent(
-          platform,
-          {
-            elementName: "app_login_ck",
-            eventRegion: "app",
-            eventType: "ck",
-            eventExtraDetail: {
-              // 授权 URL 含 state/凭据参数；埋点只取 hostname，浏览器仍使用上面的完整地址。
-              login_url: resolveSafeTelemetryHostname(authorizeUrl),
-            },
-          },
-          "useOAuth",
-        );
-
-        logger.info("[useOAuth] OAuth 流程已启动，等待浏览器回调", {
-          provider: startedProvider,
-          purpose: options.purpose ?? "app-login",
-        });
+        // 产品 OAuth 已拆除。登录入口保留错误态，不再打开浏览器或轮询。
+        void options;
+        throw new Error("product_oauth_removed");
       } catch (err) {
         // 旧 init 的失败可能晚于新登录成功返回，不能反向关闭新 flow 的轮询或覆盖 UI。
         if (loginAttemptRef.current !== loginAttempt) {
@@ -123,19 +60,18 @@ export function useOAuth() {
         setPendingProvider(null);
       }
     },
-    [intl, oauthService, platform, setOAuthPollingActive],
+    [intl, setOAuthPollingActive],
   );
 
   const cancel = useCallback(
-    async (provider?: OAuthProviderId) => {
+    async (_provider?: OAuthProviderId) => {
       loginAttemptRef.current += 1;
-      await oauthService.cancelPending(provider);
       setOAuthPollingActive(false);
       setStatus("idle");
       setError(null);
       setPendingProvider(null);
     },
-    [oauthService, setOAuthPollingActive],
+    [setOAuthPollingActive],
   );
 
   const reset = useCallback(() => {

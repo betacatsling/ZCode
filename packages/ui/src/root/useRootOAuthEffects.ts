@@ -2,6 +2,7 @@
 import { useEffect, useRef } from "react";
 import type {
   IPlatformService,
+  OAuthCallbackResult,
   OAuthProviderId,
   OAuthSessionCallbackResult,
   UserInfo,
@@ -28,6 +29,11 @@ import { shouldApplyOAuthPollingFailure } from "@/root/oauthLoginAttemptGuard.js
 import { useAccountConnectionLossNotification } from "@/root/useAccountConnectionLossNotification.js";
 
 export { refreshRestoredOAuthProviderFamilyAfterStartup } from "@/root/oauthProviderFamilySelectionRefresh.js";
+
+/** 产品 OAuth 装配已拆除。声明联合返回类型，避免字面量 null 在后续分支被收成 never。 */
+function removedProductOAuthCallback(): OAuthCallbackResult | null {
+  return null;
+}
 
 async function handleOAuthCallbackSuccess(params: {
   result: OAuthSessionCallbackResult;
@@ -134,7 +140,7 @@ export function useRootOAuthEffects({
         // zai / bigmodel 的 OAuth token 生命周期较短，启动时如果仍走远端校验，
         // 用户会在 token 过期后被立刻打回“未登录”，和“已完成登录但未主动退出”的产品语义冲突。
         // 这里改为只读取登录成功时缓存的 user_info，展示态由“是否主动退出”决定，而不是由短 token 决定。
-        const result = await services.oauthService.restoreCachedSessionState();
+        const result = { status: "signed-out" as const };
 
         if (disposed) {
           return;
@@ -166,7 +172,7 @@ export function useRootOAuthEffects({
 
       try {
         if (hasRestoredUser) {
-          const activeProvider = await services.oauthService.getActiveProvider();
+          const activeProvider = null;
           if (disposed) return;
           await refreshRestoredOAuthProviderFamilyAfterStartup({
             activeProvider,
@@ -247,8 +253,7 @@ export function useRootOAuthEffects({
         return;
       }
       pollInFlight = true;
-      void services.oauthService
-        .pollPendingOAuth()
+      void Promise.resolve(removedProductOAuthCallback())
         .then(async (result) => {
           if (!result || result.kind !== "session") {
             return;
@@ -320,9 +325,9 @@ export function useRootOAuthEffects({
   ]);
 
   useEffect(() => {
-    const disposeOAuth = platform.onOAuthCallback(async (url) => {
+    const disposeOAuth = platform.onOAuthCallback(async (_url) => {
       try {
-        const result = await services.oauthService.handleCallback(url);
+        const result = removedProductOAuthCallback();
         // 取消或切换 flow 会使已接收的回调失效，正常空结果不能被当作登录异常。
         if (!result) {
           logger.info("[Root] 已忽略失效 OAuth 回调");

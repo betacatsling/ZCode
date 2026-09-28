@@ -2,7 +2,6 @@
 /* Host 派发时按当前票据构造逐请求鉴权材料；Provider/Model 静态事实由 Built-in Config 提供。 */
 import {
   BUILTIN_MODEL_PROVIDER_IDS,
-  resolveOffPeakProviderId,
   buildRuntimeZCodeApiUrl,
   type OffPeakCodingPlanKind,
   type OffPeakCodingPlanSupport,
@@ -11,8 +10,6 @@ import {
 } from "@zcode/shared";
 import { isOffPeakMockEnabled, startOffPeakMockGateway } from "./offPeakMockGateway.js";
 import type { ServiceLogger } from "../logger/serviceLogger.js";
-import { AccountRequestCredentialUnavailableError } from "../model-provider/accountProviderRequestAuthService.js";
-import type { IAccountRequestAuthService } from "../model-provider/accountRequestAuthService.js";
 
 /** 仅用于确定性配置错误；host 据类型输出 permanent，禁止依赖错误文本分流。 */
 export class OffPeakPermanentDispatchError extends Error {
@@ -56,9 +53,6 @@ export class OffPeakModelUnavailableError extends OffPeakPermanentDispatchError 
   }
 }
 
-const ZCODE_JWT_TOKEN_KEY = "zcodejwttoken";
-const ACTIVE_OAUTH_PROVIDER_KEY = "oauth:active_provider";
-
 export interface OffPeakCredentialSnapshot {
   jwt: string;
   codingPlanApiKey: string;
@@ -74,53 +68,12 @@ export interface OffPeakCredentialSnapshot {
 
 interface OffPeakCredentialResolverDeps {
   credentialService: { load(key: string): Promise<string | null | undefined> };
-  accountRequestAuthService: IAccountRequestAuthService;
   resolveAccountProvider(): Promise<{
     readonly providerId: string;
     readonly access: ZCodeAccountAccess;
     readonly baseURL?: string;
   } | null>;
   env?: NodeJS.ProcessEnv;
-}
-
-type SelectedOffPeakCodingPlan = Pick<
-  OffPeakCredentialSnapshot,
-  "kind" | "providerFamily" | "providerId" | "organizationId" | "projectId"
->;
-
-function resolveSelectedOffPeakCodingPlan(
-  provider: Awaited<ReturnType<OffPeakCredentialResolverDeps["resolveAccountProvider"]>>,
-): SelectedOffPeakCodingPlan {
-  if (!provider) {
-    throw new OffPeakCodingPlanUnavailableError("connection_unavailable");
-  }
-  const { access, providerId } = provider;
-  if (access.planKind === "start-plan") {
-    throw new OffPeakCodingPlanUnavailableError("start_plan_not_supported");
-  }
-  if (access.planKind === "individual-coding-plan") {
-    return {
-      kind: access.family === "zai" ? "zai-personal" : "bigmodel-personal",
-      providerFamily: access.family,
-      providerId,
-    };
-  }
-  if (access.planKind !== "team-coding-plan") {
-    throw new OffPeakCodingPlanUnavailableError("connection_unavailable");
-  }
-  return {
-    kind: access.family === "zai" ? "zai-team" : "bigmodel-team",
-    providerFamily: access.family,
-    providerId,
-    organizationId: access.organizationId,
-    projectId: access.projectId,
-  };
-}
-
-function createOffPeakSelectionFingerprint(
-  provider: Awaited<ReturnType<OffPeakCredentialResolverDeps["resolveAccountProvider"]>>,
-): string {
-  return JSON.stringify(provider ?? null);
 }
 
 /**
@@ -150,69 +103,9 @@ export async function resolveOffPeakCredentials(
     };
   }
 
-  // settings 可能在账号 Provider 解析期间切换。前后指纹不一致时重读一次，禁止拼接两代凭证。
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const provider = await deps.resolveAccountProvider();
-    const selection = resolveSelectedOffPeakCodingPlan(provider);
-    const activeProvider =
-      (await deps.credentialService.load(ACTIVE_OAUTH_PROVIDER_KEY))?.trim() ?? "";
-    if (activeProvider !== selection.providerFamily) {
-      // zcode JWT 是当前 App 登录身份的全局镜像；只校验 selectedKey 会把
-      // ZAI JWT 与 BigModel key（或反向）拼到同一请求，服务端只能在取号时才拒绝。
-      throw new OffPeakCodingPlanUnavailableError("provider_identity_mismatch");
-    }
-    const jwt = (await deps.credentialService.load(ZCODE_JWT_TOKEN_KEY))?.trim() ?? "";
-    if (!jwt) {
-      throw new OffPeakCredentialsUnavailableError("jwt");
-    }
-    const [latestProvider, latestActiveProvider] = await Promise.all([
-      deps.resolveAccountProvider(),
-      deps.credentialService.load(ACTIVE_OAUTH_PROVIDER_KEY),
-    ]);
-    if (
-      createOffPeakSelectionFingerprint(provider) !==
-        createOffPeakSelectionFingerprint(latestProvider) ||
-      activeProvider !== latestActiveProvider?.trim()
-    ) {
-      continue;
-    }
-
-    if (
-      !provider ||
-      provider.access.family !== selection.providerFamily ||
-      (selection.kind.endsWith("-team")
-        ? provider.access.planKind !== "team-coding-plan"
-        : provider.access.planKind !== "individual-coding-plan")
-    ) {
-      throw new OffPeakCodingPlanUnavailableError("connection_unavailable");
-    }
-    let codingPlanApiKey = "";
-    try {
-      const auth = await deps.accountRequestAuthService.resolveCurrent({
-        providerId: selection.providerId,
-        modelId: resolveOffPeakProviderId(selection.providerFamily),
-        accountAccess: provider.access,
-        reason: "off-peak",
-      });
-      codingPlanApiKey = auth.apiKey?.trim() ?? "";
-    } catch (error) {
-      if (error instanceof AccountRequestCredentialUnavailableError) {
-        throw new OffPeakCredentialsUnavailableError("codingPlanApiKey");
-      }
-      throw error;
-    }
-    if (!codingPlanApiKey) {
-      throw new OffPeakCredentialsUnavailableError("codingPlanApiKey");
-    }
-    return {
-      ...selection,
-      jwt,
-      codingPlanApiKey,
-      ...(provider.baseURL ? { providerBaseURL: provider.baseURL } : {}),
-    };
-  }
-
-  throw new OffPeakCodingPlanUnavailableError("selection_changed");
+  // 产品账号派生的 Coding Plan 双凭证已拆除。mock 仍可供本地演示；
+  // 真实派发不再读取产品 JWT，也不请求套餐 Key。
+  throw new OffPeakCodingPlanUnavailableError("connection_unavailable");
 }
 
 /**
@@ -289,12 +182,9 @@ export async function resolveOffPeakCodingPlanSupport(
  * mock 网关的上游解析：把 admitted 的 messages 代理到用户 coding plan 的 anthropic
  * 兼容端点（真模型、走用户自己的 key，仅开发/演示）。
  */
-export async function resolveOffPeakMockUpstream(deps: {
-  credentialService: OffPeakCredentialResolverDeps["credentialService"];
-  accountRequestAuthService: OffPeakCredentialResolverDeps["accountRequestAuthService"];
-  resolveAccountProvider: OffPeakCredentialResolverDeps["resolveAccountProvider"];
-  env?: NodeJS.ProcessEnv;
-}): Promise<{ url: string; headers: Record<string, string> }> {
+export async function resolveOffPeakMockUpstream(
+  deps: OffPeakCredentialResolverDeps,
+): Promise<{ url: string; headers: Record<string, string> }> {
   const credentials = await resolveOffPeakCredentials(deps, {
     // mock 自己的 placeholder 不能拿去代理上游；这里强制解析真实 selected connection。
     allowMockCredentials: false,

@@ -327,7 +327,6 @@ export function useRootWorkspaceActions({
     const nextProviderFamilyDomain = resolveLogoutProviderFamilyDomain({
       currentDomain: settingsBeforeLogout.providerFamilyDomain,
     });
-    await services.oauthService.logout();
     await updateAppSettings({
       providerFamilyDomain: (nextProviderFamilyDomain ?? "") as AppSettings["providerFamilyDomain"],
       providerFamilyDomainUpdatedAt: Date.now(),
@@ -351,7 +350,6 @@ export function useRootWorkspaceActions({
     refreshProviderState,
     onProviderFamilyDomainClearedAfterLogout,
     platform,
-    services.oauthService,
     services.modelSelectionService,
     services.settingService,
     setOAuthError,
