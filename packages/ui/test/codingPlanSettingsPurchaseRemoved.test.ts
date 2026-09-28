@@ -138,3 +138,18 @@ test("StartPlan acquisition preview and personal product list hooks are removed"
   assert.equal(enterpriseHook.includes("staticProductIds"), false);
 });
 
+test("StatusCards and Detail drop dead upgradePlansVisible acquisition gate", () => {
+  const statusCards = readFileSync(
+    new URL("model-provider-section/StatusCards.tsx", settingsRoot),
+    "utf8",
+  );
+  assert.equal(statusCards.includes("upgradePlansVisible"), false);
+
+  const detail = readFileSync(
+    new URL("model-provider-section/Detail.tsx", settingsRoot),
+    "utf8",
+  );
+  assert.equal(detail.includes("upgradePlansVisible"), false);
+  assert.equal(detail.includes("setUpgradePlansVisibleProviderId"), false);
+});
+

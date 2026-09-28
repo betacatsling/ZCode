@@ -151,7 +151,6 @@ export function CodingPlanStatusPanel({
   loginActionPlacement = "inline",
   loginActionVisible = false,
   usageDetailsVisible = true,
-  upgradePlansVisible: controlledUpgradePlansVisible,
   statusLabelId,
   statusMessage,
   teamPlanAvailabilityReason,
@@ -186,7 +185,6 @@ export function CodingPlanStatusPanel({
   loginActionPlacement?: "inline" | "trailing";
   loginActionVisible?: boolean;
   usageDetailsVisible?: boolean;
-  upgradePlansVisible?: boolean;
   statusLabelId?: string;
   statusMessage?: string | null;
   teamPlanAvailabilityReason?: TeamPlanAvailabilityReason;
@@ -197,7 +195,6 @@ export function CodingPlanStatusPanel({
 }) {
   const { intl } = useZCodeIntl();
   const [startPlanEntitlementRefreshing, setStartPlanEntitlementRefreshing] = useState(false);
-  const upgradePlansVisible = controlledUpgradePlansVisible ?? false;
   const refreshStartPlanEntitlement = async () => {
     if (!onQuotaResetEntitlementRefresh || startPlanEntitlementRefreshing) {
       return;
