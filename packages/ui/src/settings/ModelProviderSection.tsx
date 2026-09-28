@@ -295,7 +295,7 @@ export function ModelProviderSection({
     const providerId = resolveCodingPlanIntentProviderId(initialModelProviderTarget);
     return providerId ? resolveProviderFamilySideNodeKey(providerId) : null;
   });
-  const [presetSubscriptionProviderId, setPresetSubscriptionProviderId] =
+  const [presetCatalogProviderId, setPresetCatalogProviderId] =
     useState<BuiltinModelProviderId | null>(null);
   const [codingPlanStatusSyncProviderId, setCodingPlanStatusSyncProviderId] =
     useState<BuiltinModelProviderId | null>(null);
@@ -371,7 +371,7 @@ export function ModelProviderSection({
   const [activeOAuthProvider, setActiveOAuthProvider] = useState<OAuthProviderId | null>(null);
   const [pendingConnectionSelections, setPendingConnectionSelections] =
     useState<ProviderFamilyConnectionSelectionSettings>({});
-  const presetSubscriptionCompletionProviderIdRef = useRef<BuiltinModelProviderId | null>(null);
+  const presetCatalogCompletionProviderIdRef = useRef<BuiltinModelProviderId | null>(null);
   const codingPlanStatusSyncAttemptsRef = useRef(
     new Map<string, "inFlight" | "succeeded" | "failed">(),
   );
@@ -547,52 +547,52 @@ export function ModelProviderSection({
   );
 
   useEffect(() => {
-    if (!presetSubscriptionProviderId) {
+    if (!presetCatalogProviderId) {
       return;
     }
 
     const accountEntitled = Boolean(
-      resolveEntitledAccountProviderAccess(providerSettingsView, presetSubscriptionProviderId),
+      resolveEntitledAccountProviderAccess(providerSettingsView, presetCatalogProviderId),
     );
     if (accountEntitled) {
-      if (presetSubscriptionCompletionProviderIdRef.current === presetSubscriptionProviderId) {
+      if (presetCatalogCompletionProviderIdRef.current === presetCatalogProviderId) {
         return;
       }
 
-      presetSubscriptionCompletionProviderIdRef.current = presetSubscriptionProviderId;
+      presetCatalogCompletionProviderIdRef.current = presetCatalogProviderId;
       void (async () => {
         try {
           // 连接/重新授权成功后 provider apiKey 会先于权益接口结果落盘。
           // pending 必须等本轮权益刷新完成后再清，否则 Plan Card 会短暂显示旧套餐态或非 loading 状态。
           await refreshProviderPanelAfterAuthChange({});
         } finally {
-          presetSubscriptionCompletionProviderIdRef.current = null;
+          presetCatalogCompletionProviderIdRef.current = null;
           setCodingPlanStatusSyncProviderId((current) =>
-            current === presetSubscriptionProviderId ? null : current,
+            current === presetCatalogProviderId ? null : current,
           );
-          setPresetSubscriptionProviderId((current) =>
-            current === presetSubscriptionProviderId ? null : current,
+          setPresetCatalogProviderId((current) =>
+            current === presetCatalogProviderId ? null : current,
           );
         }
       })();
     }
   }, [
-    presetSubscriptionProviderId,
+    presetCatalogProviderId,
     providerSettingsView,
     refreshProviderPanelAfterAuthChange,
   ]);
 
   useEffect(() => {
-    if (!presetSubscriptionProviderId) {
+    if (!presetCatalogProviderId) {
       return;
     }
 
     const timeoutId = setTimeout(() => {
       setCodingPlanStatusSyncProviderId((current) =>
-        current === presetSubscriptionProviderId ? null : current,
+        current === presetCatalogProviderId ? null : current,
       );
-      setPresetSubscriptionProviderId((current) => {
-        if (current !== presetSubscriptionProviderId) {
+      setPresetCatalogProviderId((current) => {
+        if (current !== presetCatalogProviderId) {
           return current;
         }
         return null;
@@ -602,7 +602,7 @@ export function ModelProviderSection({
     return () => {
       clearTimeout(timeoutId);
     };
-  }, [presetSubscriptionProviderId]);
+  }, [presetCatalogProviderId]);
 
   const { navigationGroups, navigationItems, selectedNavItem, navigationUnavailable } =
     useModelProviderNavigation({
@@ -639,7 +639,7 @@ export function ModelProviderSection({
     }
     if (
       activeOAuthProvider !== selectedNavItem.oauthProviderId ||
-      presetSubscriptionProviderId === selectedNavItem.presetId ||
+      presetCatalogProviderId === selectedNavItem.presetId ||
       codingPlanDisconnectProviderId === selectedNavItem.presetId
     ) {
       return;
@@ -661,7 +661,7 @@ export function ModelProviderSection({
   }, [
     activeOAuthProvider,
     codingPlanDisconnectProviderId,
-    presetSubscriptionProviderId,
+    presetCatalogProviderId,
     selectedNavItem,
     syncCodingPlanProviderOnce,
   ]);
@@ -1038,7 +1038,7 @@ export function ModelProviderSection({
           })()}
           presetLoading={presetLoading}
           codingPlanAuthError={oauthError}
-          presetSubscriptionProviderId={presetSubscriptionProviderId}
+          presetCatalogProviderId={presetCatalogProviderId}
           codingPlanStatusSyncProviderId={codingPlanStatusSyncProviderId}
           codingPlanDisconnectProviderId={codingPlanDisconnectProviderId}
           onSave={handleSave}
@@ -1064,7 +1064,7 @@ export function ModelProviderSection({
           onOpenBigModelRegistration={() => {
             // 未注册提示来自一次失败的 OAuth checking 状态；跳转注册后要恢复普通状态，避免提示卡住。
             setOAuthError(null);
-            setPresetSubscriptionProviderId((current) =>
+            setPresetCatalogProviderId((current) =>
               current === BUILTIN_MODEL_PROVIDER_IDS.bigmodelIndividualCodingPlan ? null : current,
             );
             platform.openExternal(BIGMODEL_REGISTRATION_URL);
