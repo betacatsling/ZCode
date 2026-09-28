@@ -1,9 +1,5 @@
 import type { ApiClient } from "@zcode/shared";
-import {
-  buildRuntimeZCodeEndpointUrls,
-  normalizeOfficialGlmModelId,
-  ZCODE_VERSION,
-} from "@zcode/shared";
+import { buildRuntimeZCodeEndpointUrls, ZCODE_VERSION } from "@zcode/shared";
 import { readApiJson } from "../providers/api/apiJson.js";
 
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -124,34 +120,6 @@ export async function fetchZaiStartPlanBalanceEnvelope(
 
   requests.set(requestKey, request);
   return request;
-}
-
-export function resolveZaiStartPlanBalanceModelIds(payload: ZaiStartPlanBalanceEnvelope): string[] {
-  const seen = new Set<string>();
-  const modelIds: string[] = [];
-
-  for (const balance of payload.data?.balances ?? []) {
-    const fromCapabilities = (balance.capabilities ?? [])
-      .map((capability) => {
-        const normalized = capability.trim();
-        return normalized.toLowerCase().startsWith("model:")
-          ? normalized.slice("model:".length).trim()
-          : "";
-      })
-      .filter(Boolean);
-    const candidates = fromCapabilities.length > 0 ? fromCapabilities : [balance.show_name ?? ""];
-    for (const candidate of candidates) {
-      const modelId = normalizeOfficialGlmModelId(candidate.trim());
-      const key = modelId.toLowerCase();
-      if (!modelId || seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      modelIds.push(modelId);
-    }
-  }
-
-  return modelIds;
 }
 
 /** HTTP Date 与本次响应配对，避免旧 JSON 时间让过期 active 记录继续提供权益。 */
