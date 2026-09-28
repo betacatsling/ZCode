@@ -44,8 +44,8 @@ export function useAccountConnectionLossNotification(
           ? copy.formatMessage({
               id:
                 suggestion.selection.kind === "start-plan"
-                  ? "settings.modelProvider.codingPlan.purchaseBanner.startPlanTitle"
-                  : "settings.modelProvider.codingPlan.purchase.individualsSectionTitle",
+                  ? "settings.modelProvider.planCard.startPlan"
+                  : "settings.modelProvider.planCard.codingPlan",
             })
           : "");
       const target = suggestion;
