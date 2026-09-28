@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
-import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   createCodingPlanAuthInjectionScript,
@@ -12,12 +11,19 @@ import { shouldOfferCodingPlanOAuthPurchase } from "../src/settings/model-provid
 
 const settingsRoot = new URL("../src/settings/", import.meta.url);
 
-test("coding plan login recovery module is removed", () => {
-  const recoveryPath = fileURLToPath(new URL("../src/settings/codingPlanUpgradeLoginRecovery.ts", import.meta.url));
+test("coding plan login recovery and upgrade dialog modules are removed", () => {
+  const recoveryPath = fileURLToPath(
+    new URL("../src/settings/codingPlanUpgradeLoginRecovery.ts", import.meta.url),
+  );
+  const dialogPath = fileURLToPath(
+    new URL("../src/settings/CodingPlanUpgradeDialog.tsx", import.meta.url),
+  );
+  const providerPath = fileURLToPath(
+    new URL("../src/settings/CodingPlanUpgradeDialogProvider.tsx", import.meta.url),
+  );
   assert.equal(existsSync(recoveryPath), false);
-  const dialogSource = readFileSync(new URL("CodingPlanUpgradeDialog.tsx", settingsRoot), "utf8");
-  assert.equal(dialogSource.includes("beginCodingPlanUpgradeLogin"), false);
-  assert.equal(dialogSource.includes("resolvePendingCodingPlanUpgradeAfterLogin"), false);
+  assert.equal(existsSync(dialogPath), false);
+  assert.equal(existsSync(providerPath), false);
   assert.equal(shouldOfferCodingPlanOAuthPurchase({ forceOAuth: true }), false);
   assert.equal(isCodingPlanPurchaseAuthPending("loading"), false);
   assert.equal(isCodingPlanPurchaseAuthPending("authenticated"), false);
@@ -48,8 +54,6 @@ test("embedded coding plan script clears product credentials instead of injectin
 
 test("settings coding plan surface does not call product login entry", () => {
   const files = [
-    "CodingPlanUpgradeDialog.tsx",
-    "CodingPlanUpgradeDialogProvider.tsx",
     "CodingPlanEmbeddedWebviewDialog.tsx",
     "ModelProviderSection.tsx",
     "AutomationsSection.tsx",
