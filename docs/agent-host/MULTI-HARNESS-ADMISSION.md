@@ -27,4 +27,4 @@ Owner of the boolean read: `isMultiHarnessNewSessionAdmissionEnabled` in `packag
 
 ## Still open
 
-Full product E2E for flag on/off (Picker / sidebar / create mount) remains P2 acceptance work; this doc + unit test only lock the env contract.
+Full product E2E for flag on/off (Picker / sidebar / create mount) remains P2 acceptance work. Env boolean: `multiHarnessAdmission.test.ts`. Lazy Host Pi/Codex wiring cross-check: `multiHarnessPiCodexAdmission.test.ts` (#69) — flag off → unavailable; exact `"1"` → admit with matching `adapterVersion`. Neither replaces live Provider / UI E2E.
