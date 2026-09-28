@@ -1,70 +1,31 @@
 import { z } from "zod";
-import { executionTargetRefSchema, modelBindingRequestSchema } from "./session-spec.js";
+import {
+  pathSchema,
+  projectSchema,
+  repositoryBindingSchema,
+  stableIdSchema,
+  worktreeWorkspaceSchema,
+  type Project,
+  type RepositoryBinding,
+  type WorktreeWorkspace,
+} from "../project-workspaces/index.js";
+import {
+  cwdRelativeToWorktreeSchema,
+  executionTargetRefSchema,
+  modelBindingRequestSchema,
+  sessionSpecV2Schema,
+  type ModelBindingRequest,
+  type SessionSpecV2,
+} from "./session-spec.js";
 
-const stableIdSchema = z.string().trim().min(1).max(256);
-// Filesystem paths are opaque values: trimming would change a valid path with
-// a trailing space/newline and make target-owned identity appear different.
-const pathSchema = z.string().min(1).max(4096);
-
-/**
- * Project metadata is catalog-owned. The catalog does not infer repository or
- * worktree identity from a display name or from the currently open tabs.
- */
-export const projectSchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  id: stableIdSchema,
-  name: z.string().trim().min(1).max(256),
-  iconAssetId: stableIdSchema.optional(),
-  defaultWorkspaceId: stableIdSchema.optional(),
-  /** Target half of a scoped default; absent on legacy unscoped defaults. */
-  defaultWorkspaceTargetId: stableIdSchema.optional(),
-});
-export type Project = z.infer<typeof projectSchema>;
-
-/** A target-local repository instance; the path is locator data, not a stable identity. */
-export const repositoryBindingSchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  id: stableIdSchema,
-  projectId: stableIdSchema,
-  executionTargetId: stableIdSchema,
-  gitCommonDir: pathSchema,
-});
-export type RepositoryBinding = z.infer<typeof repositoryBindingSchema>;
-
-const worktreeHeadSchema = z.discriminatedUnion("kind", [
-  z.strictObject({
-    kind: z.literal("branch"),
-    ref: stableIdSchema,
-    oid: z.string().trim().min(1).nullable(),
-  }),
-  z.strictObject({
-    kind: z.literal("detached"),
-    oid: z.string().trim().min(1),
-  }),
-]);
-
-/**
- * Target Host-owned worktree facts. `verification` is separate from lifecycle:
- * an active record can still require target-local revalidation before admission.
- * A blank workspaceIdentity deliberately falls back to the worktree path when
- * deriving an execution snapshot; this function never invents a remote ID.
- */
-export const worktreeWorkspaceSchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  id: stableIdSchema,
-  projectId: stableIdSchema,
-  repositoryBindingId: stableIdSchema,
-  title: z.string().trim().min(1).max(256),
-  workspaceIdentity: z.string().max(2048).optional(),
-  worktreePath: pathSchema,
-  worktreeGeneration: stableIdSchema,
-  isMainWorktree: z.boolean(),
-  head: worktreeHeadSchema,
-  origin: z.enum(["created", "adopted"]),
-  lifecycle: z.enum(["active", "archived", "missing", "removed"]),
-  verification: z.enum(["verified", "needsVerification"]),
-});
-export type WorktreeWorkspace = z.infer<typeof worktreeWorkspaceSchema>;
+export {
+  projectSchema,
+  repositoryBindingSchema,
+  worktreeWorkspaceSchema,
+  type Project,
+  type RepositoryBinding,
+  type WorktreeWorkspace,
+};
 
 /**
  * A hierarchy session owns only its workspace association. Runtime state,
@@ -79,6 +40,8 @@ export const agentSessionSchema = z.strictObject({
   modelBinding: modelBindingRequestSchema.optional(),
 });
 export type AgentSession = z.infer<typeof agentSessionSchema>;
+/** Plan §13.2 name. `id` is the host session identity, not a second session id. */
+export type AgentSessionRecord = AgentSession;
 
 const hierarchySnapshotBaseSchema = z.strictObject({
   schemaVersion: z.literal(1),
@@ -210,21 +173,7 @@ export function resolveSessionOwnership(value: unknown, sessionId: string): Hier
   return { project, binding, workspace, session };
 }
 
-/** POSIX-relative lexical check only; target realpath/symlink checks remain a Host concern. */
-export const cwdRelativeToWorktreeSchema = z
-  .string()
-  .max(4096)
-  .refine(
-    (cwd) =>
-      cwd === "." ||
-      (cwd.length > 0 &&
-        !cwd.startsWith("/") &&
-        !/^[A-Za-z]:/.test(cwd) &&
-        !cwd.includes("\\") &&
-        !cwd.includes("\0") &&
-        cwd.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..")),
-    "cwd must be a safe relative worktree path",
-  );
+export { cwdRelativeToWorktreeSchema };
 
 const executionSnapshotExecutionSchema = executionTargetRefSchema.extend({
   // The existing SessionSpec v1 keeps its legacy trimmed path behavior. The
@@ -296,5 +245,34 @@ export function deriveExecutionSnapshot(input: DeriveExecutionSnapshotInput): Ex
       cwdRelativeToWorktree,
     },
     ...(session.modelBinding ? { modelBinding: session.modelBinding } : {}),
+  });
+}
+
+export interface BuildSessionSpecV2Input extends HierarchyOwnership {
+  readonly adapterVersion: string;
+  readonly modelBinding: ModelBindingRequest;
+  readonly cwdRelativeToWorktree?: string;
+}
+
+/**
+ * Plan §4 spec. `hostSessionId` is `AgentSession.id`; callers cannot supply a
+ * second session id or override the target derived from the repository binding.
+ */
+export function buildSessionSpecV2(input: BuildSessionSpecV2Input): SessionSpecV2 {
+  const derived = deriveExecutionSnapshot(input);
+  return sessionSpecV2Schema.parse({
+    schemaVersion: 2,
+    hostSessionId: input.session.id,
+    projectId: derived.projectId,
+    workspaceId: derived.workspaceId,
+    execution: {
+      targetId: derived.execution.targetId,
+      workspaceIdentity: derived.execution.workspaceIdentity,
+      worktreePath: derived.execution.worktreePath,
+      worktreeGeneration: derived.execution.worktreeGeneration,
+      cwdRelativeToWorktree: derived.execution.cwdRelativeToWorktree,
+    },
+    harness: { id: input.session.harnessId, adapterVersion: input.adapterVersion },
+    modelBinding: input.modelBinding,
   });
 }
