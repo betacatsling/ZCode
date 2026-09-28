@@ -2982,8 +2982,6 @@ const enUS: Record<string, string> = {
     "Could not verify Coding Plan entitlement. Connect again and retry.",
   "settings.modelProvider.codingPlan.description.unsupported":
     "This provider does not support Coding Plan status checks yet.",
-  "settings.modelProvider.codingPlan.productPurchaseRemovedTitle":
-    "Product sign-in and purchase removed",
   "settings.modelProvider.codingPlan.productPurchaseRemoved":
     "Product sign-in and plan purchase have been removed. Configure a personal API Key in model settings.",
   "settings.modelProvider.codingPlan.connect": "Connect to {provider}",
