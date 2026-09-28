@@ -3,7 +3,7 @@
  *
  * Proves same-protocol Agents register via explicit factory + loadExplicit trust list
  * without changing lazy Host defaults or the shared ACP session machine. Goose SessionHost
- * path is symmetric to OpenCode (#75). Late prompt + transport fault/disconnect still journal via SessionHost (OpenCode + Goose). Resume-after-disconnect: SessionHost.open attach via negotiated session/load then send again. Cancel-after-disconnect: after fault fence, cancel of the dead turn is stale; after reopen+session/load, cancel mid-prompt journals cancelled (OpenCode + Goose).
+ * path is symmetric to OpenCode (#75). Late prompt + transport fault/disconnect still journal via SessionHost (OpenCode + Goose). Resume-after-disconnect: SessionHost.open attach via negotiated session/load then send again. Cancel-after-disconnect: after fault fence, cancel of the dead turn is stale; after reopen+session/load, cancel mid-prompt journals cancelled (OpenCode + Goose). Double-fault/reopen: fault→reopen→fault→reopen stays idempotent (session/load, no session/new) then send succeeds (OpenCode + Goose).
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -989,6 +989,202 @@ test("SessionHost + opt-in OpenCode ACP: cancel-after-disconnect (stale then mid
 
 test("SessionHost + opt-in Goose ACP: cancel-after-disconnect (stale then mid-prompt cancel, symmetric)", async (t) => {
   await assertSessionHostCancelAfterDisconnect({
+    t,
+    label: "goose",
+    harnessId: "goose",
+    agentName: "Goose",
+    createHarness: (openTransport) =>
+      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+  });
+});
+
+async function assertSessionHostDoubleFaultReopen(input: {
+  t: { after: (fn: () => void | Promise<void>) => void };
+  label: string;
+  harnessId: "opencode" | "goose";
+  agentName: string;
+  createHarness: (openTransport: () => AcpTransport) => ReturnType<
+    typeof createExperimentalRegistryOpenCodeAcpHarness
+  >;
+}): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-dfr-`));
+  const worktree = join(root, "worktree");
+  const journalRoot = join(root, "journal");
+  await mkdir(worktree, { recursive: true });
+  input.t.after(() => rm(root, { recursive: true, force: true }));
+
+  const backendSessionId = `${input.harnessId}-dfr-session`;
+  const hostSessionId = `${input.harnessId}-dfr-1`;
+  const spec = {
+    schemaVersion: 1 as const,
+    hostSessionId,
+    execution: {
+      targetId: "local",
+      workspaceIdentity: `workspace-${input.harnessId}-dfr`,
+      worktreePath: worktree,
+    },
+    harness: { id: input.harnessId, adapterVersion: ACP_ADAPTER_VERSION },
+    modelBinding: { kind: "harness-managed" as const },
+  };
+  const target = {
+    id: "local",
+    kind: "local" as const,
+    platform: process.platform as "darwin" | "linux" | "win32",
+    available: true,
+  };
+  const catalog = {
+    fingerprint: "registry-v1",
+    validateSelection: () => ({ ok: true as const }),
+  };
+
+  async function createHostWithDisconnect(
+    peers: FakePeer[],
+  ): Promise<SessionHost> {
+    const registry = new HarnessRegistry();
+    registry.register(
+      input.createHarness(() =>
+        openFakeTransport(
+          input.agentName,
+          backendSessionId,
+          { loadSession: true, disconnectOnPrompt: true },
+          peers,
+        ),
+      ),
+    );
+    return SessionHost.create({
+      root: journalRoot,
+      spec,
+      target,
+      catalog,
+      registry,
+    });
+  }
+
+  async function openHostWith(
+    options: FakePeerOptions,
+    peers: FakePeer[],
+  ): Promise<SessionHost> {
+    const registry = new HarnessRegistry();
+    registry.register(
+      input.createHarness(() =>
+        openFakeTransport(input.agentName, backendSessionId, options, peers),
+      ),
+    );
+    return SessionHost.open({
+      root: journalRoot,
+      spec,
+      target,
+      catalog,
+      registry,
+    });
+  }
+
+  // Round 1: fault → close.
+  const peers1: FakePeer[] = [];
+  const host1 = await createHostWithDisconnect(peers1);
+  const fault1 = await host1.dispatch({
+    type: "send",
+    commandId: `${input.harnessId}-dfr-fault-1`,
+    hostSessionId,
+    turnId: "turn-dfr-fault-1",
+    text: "first fault",
+  });
+  assert.equal(fault1.status, "accepted");
+  await host1.whenIdle();
+  assert.ok(host1.eventsSince(0).some((event) => event.kind === "session.error"));
+  await host1.close();
+
+  // Round 2: reopen (session/load) → fault again → close.
+  const peers2: FakePeer[] = [];
+  const host2 = await openHostWith({ loadSession: true, disconnectOnPrompt: true }, peers2);
+  assert.ok(
+    peers2.some((peer) => peer.methods.includes("session/load")),
+    "first reopen must session/load",
+  );
+  assert.ok(
+    peers2.every((peer) => !peer.methods.includes("session/new")),
+    "first reopen must not session/new",
+  );
+
+  const fault2 = await host2.dispatch({
+    type: "send",
+    commandId: `${input.harnessId}-dfr-fault-2`,
+    hostSessionId,
+    turnId: "turn-dfr-fault-2",
+    text: "second fault",
+  });
+  assert.equal(fault2.status, "accepted");
+  await host2.whenIdle();
+  const afterSecondFault = host2.eventsSince(0);
+  const errorsAfterTwo = afterSecondFault.filter((event) => event.kind === "session.error");
+  assert.ok(errorsAfterTwo.length >= 2, `expected ≥2 session.error, got ${errorsAfterTwo.length}`);
+  assert.ok(
+    afterSecondFault.some(
+      (event) => event.kind === "turn.finished" && event.turnId === "turn-dfr-fault-2",
+    ),
+  );
+  await host2.close();
+
+  // Round 3: second reopen stays idempotent (session/load again), then healthy send.
+  const peers3: FakePeer[] = [];
+  const host3 = await openHostWith({ loadSession: true }, peers3);
+  assert.ok(
+    peers3.some((peer) => peer.methods.includes("session/load")),
+    "second reopen must session/load (idempotent)",
+  );
+  assert.ok(
+    peers3.every((peer) => !peer.methods.includes("session/new")),
+    "second reopen must not session/new",
+  );
+
+  const ok = await host3.dispatch({
+    type: "send",
+    commandId: `${input.harnessId}-dfr-ok`,
+    hostSessionId,
+    turnId: "turn-dfr-ok",
+    text: "after double fault",
+  });
+  assert.equal(ok.status, "accepted");
+  await host3.whenIdle();
+
+  const finalEvents = host3.eventsSince(0);
+  assert.ok(
+    finalEvents.some(
+      (event) => event.kind === "message.finished" && event.text === "after double fault",
+    ),
+  );
+  assert.ok(
+    finalEvents.some(
+      (event) => event.kind === "turn.finished" && event.turnId === "turn-dfr-ok",
+    ),
+  );
+
+  await host3.close();
+  const persisted = await SessionHost.eventsSinceHistory(journalRoot, spec, 0);
+  assert.ok(
+    persisted.filter((event) => event.kind === "session.error").length >= 2,
+    "journal must keep both fault fences",
+  );
+  assert.ok(
+    persisted.some(
+      (event) => event.kind === "message.finished" && event.text === "after double fault",
+    ),
+  );
+}
+
+test("SessionHost + opt-in OpenCode ACP: double-fault reopen idempotency then send", async (t) => {
+  await assertSessionHostDoubleFaultReopen({
+    t,
+    label: "opencode",
+    harnessId: "opencode",
+    agentName: "OpenCode",
+    createHarness: (openTransport) =>
+      createExperimentalRegistryOpenCodeAcpHarness({ openTransport }),
+  });
+});
+
+test("SessionHost + opt-in Goose ACP: double-fault reopen idempotency then send (symmetric)", async (t) => {
+  await assertSessionHostDoubleFaultReopen({
     t,
     label: "goose",
     harnessId: "goose",
