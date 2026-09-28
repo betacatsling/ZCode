@@ -1,13 +1,13 @@
 # ZCode 多 Harness v0.3 实施台账
 
-更新时间：2026-09-28（P6 tip 对照同步至 `c7d1a07`）
+更新时间：2026-09-28（P6 tip 对照同步至 `5475b95`）
 
 本台账以仓库当前源码、`package.json`、测试文件和
 `ZCode_Multi_Harness_Refactor_Plan_v0.3_Orca_Hierarchy.md` 为准。它记录“代码存在、确定性测试通过、真实环境认证通过”三种不同证据，不把契约、Mock、构建产物或协议探针当作产品完成。计划规定 P4 完成后才称为首个可用版本。
 
 ## 当前证据和环境
 
-- 计划固定的源码基线是 `328c1a0c0ffaa5a4f65e8fa199af5e4c20706e5f`。wave4 集成 tip（本台账对照用）以 `cursor/wave4-harness-integration-b7a9` @ `c7d1a07` 为准（含 #61–#67：lazy Devin print-mode、ACP Devin/OpenCode/Goose honesty、P6 ledger sync、CodingPlan/CLI login unload）；历史本地 checkout `438c257…` 与脏树记录不得与 tip 或计划基线混称，也不能清理与本任务无关的改动。
+- 计划固定的源码基线是 `328c1a0c0ffaa5a4f65e8fa199af5e4c20706e5f`。wave4 集成 tip（本台账对照用）以 `cursor/wave4-harness-integration-b7a9` @ `5475b95` 为准（含 #61–#72：ACP/Devin/OpenCode/Goose honesty、P6 ledger、#69 Pi/Codex MULTI_HARNESS lazy admission、CodingPlan/CLI OAuth unload）；历史本地 checkout `438c257…` 与脏树记录不得与 tip 或计划基线混称，也不能清理与本任务无关的改动。
 - `mise.toml` 要求 Node 24.14.0、pnpm 10.33.2。当前 shell 实测 Node 24.18.1、pnpm 10.33.2，`mise` 不在 PATH；后续认证必须使用固定工具链并在记录中注明实际版本。
 - 当前主开发 shell 是 Ubuntu 20.04.6、Linux 5.15、x86_64；本机未运行 macOS GUI。远端 Mac 已完成只读 capability probe，但源码构建、local worker 和桌面退出恢复仍未认证。
 - 本地 CLI 版本实测为 Pi 0.86.1、Claude Code 2.1.263、Codex CLI 0.154.0。仓库 Pi 依赖固定为 0.87.1，Codex 计划/探针要求 0.156.1；本地 CLI 版本差异不能算兼容认证。
@@ -109,7 +109,7 @@ P0 验收仍缺 native GUI 回归、SSH 实际任务、安装包和脱敏 trace�
 - facade/ConversationTransport 已有生产可消费 port；ProjectSidebar native selection 复用既有 task callback，external selection 在 mapping port 未就绪时 fail-closed disabled。完整 Harness Picker/Header 共用、external create mount 和 side-by-side UI regression 仍未认证。
 - Project Catalog、WorktreeService、只读发现和显式接管已有 service ports；ProjectSidebar UI 正在接入，主检出/linked worktree、旧 session owner 保留和跨 target 映射仍依赖迁移 source 联合。
 - 没有严格 sidecar migration、future-version write rejection、旧 session/model/permission 保留和回滚演练。
-- `ZCODE_MULTI_HARNESS_ENABLED`：env 契约已锁在 `docs/agent-host/MULTI-HARNESS-ADMISSION.md` 与 `isMultiHarnessNewSessionAdmissionEnabled`（仅 `"1"` 开启；生产 `node.ts` / server CLI 共用）。完整产品 E2E（Picker/侧栏/create mount on/off）仍缺。
+- `ZCODE_MULTI_HARNESS_ENABLED`：env 契约已锁在 `docs/agent-host/MULTI-HARNESS-ADMISSION.md` 与 `isMultiHarnessNewSessionAdmissionEnabled`（仅 `"1"` 开启；生产 `node.ts` / server CLI 共用）。lazy Host 交叉测：`multiHarnessPiCodexAdmission.test.ts`（#69）— flag off 时 Pi/Codex 不可用；exact `"1"` 时两者可 admission。完整产品 E2E（Picker/侧栏/create mount on/off）仍缺。
 
 P2 验收需要 native facade 开关 on/off、旧历史与设置保留、同工作区三会话不新增 worktree、后台不抢焦点、Picker/侧栏/Header 统一目录图标。当前只具备路由和隔离 channel 的确定性证据。
 
@@ -186,7 +186,7 @@ P5 必须按 Harness 拆成 control/event 认证和 host-managed model ingress �
 
 状态：**部分完成（脚手架 + 一个可选 Agent）；P6 未完成**。
 
-已在 tip `c7d1a07` 上、但不能标 P6 完成：
+已在 tip `5475b95` 上、但不能标 P6 完成：
 
 - 可复用 ACP transport/adapter 与 session machine：`packages/services/src/agent-adapters/acp/`（`COMPATIBILITY.md` / `SPEC.md`；SPEC 已写明 print-mode `agent-adapters/devin` 与可选 ACP 同 id）。
 - 长尾示例：Devin **可选** ACP profile（`agent-adapters/acp/agents/devin.ts`，`devin acp`）；与 print-mode `devin` 同 harness id，**不得**在同一 `HarnessRegistry` 双注册（`devinPrintAcpCoexistence.test.ts` / `devin/PROTOCOL.md`）。
@@ -198,7 +198,7 @@ P5 必须按 Harness 拆成 control/event 认证和 host-managed model ingress �
 
 交付依赖 P1 manifest/factory、P3/P4 已验证 model binding/target Host，以及至少一个真实可用 ACP Agent。验收必须证明第二个同协议 Agent 只增加 manifest、绑定配置和必要扩展，不修改公共会话状态机；不支持 resume 的 Agent 只能历史只读；未知扩展安全降级；协议升级回到实验状态。
 
-### P6「第二生产 ACP」缺口（scout @ `c7d1a07`）
+### P6「第二生产 ACP」缺口（scout；tip 对照 `5475b95`）
 
 inventory/honesty 已有 ≠ 生产第二 Agent。相对 tip：
 
@@ -271,7 +271,7 @@ Worktree 服务现有 archive 元数据/fence 与确认式 remove；remove 会�
 | 08A  | worktree removal admission、重建、离线重同步、archive/hide                    | Worktree 移除/fence/native+external 准入与隔离 Git/CLI 测试已实现；UI/SSH 离线重同步未验收            | 依赖 08；UI/E2E、SSH 离线恢复及删除竞态矩阵                    |
 | 09   | Gateway core + Responses + Codex                                              | 部分完成 / FakeModel only：core + Responses + Codex 控制/绑定已在 tip；#26 SSH 共享 TargetModelGateway 仅为 FakeModel admission，兼容仍 experimental | 依赖 08；live Provider、真实 SSH 凭据与生产组合仍未认证        |
 | 10   | Messages + Claude structured adapter                                          | 部分完成 / FakeModel only：structured/Messages 实验路径已有，Gateway 仍 adapter-local，不是共享 owner | 依赖 09；共享 TargetModelGateway owner 与 live Provider 未认证 |
-| 11   | 通用 ACP + 一个长尾 Agent                                                     | 部分完成 @ tip `c7d1a07`：Devin 可选 ACP + exclusivity/honesty（#61/#62）；OpenCode/Goose 档案 inventory + honesty（#65）；生产接线/发布加固未做 | 依赖 08 和已验证 model binding；勿把 print-mode/honesty/inventory 写成 ACP 完成 |
+| 11   | 通用 ACP + 一个长尾 Agent                                                     | 部分完成 @ tip `5475b95`：Devin 可选 ACP + exclusivity/honesty（#61/#62）；OpenCode/Goose inventory + honesty（#65）；#69 Pi/Codex MULTI_HARNESS；生产接线/发布加固未做 | 依赖 08 和已验证 model binding；勿把 print-mode/honesty/inventory 写成 ACP 完成 |
 | 12   | 层级/并发/focus 压测、迁移回滚、版本锁定发布                                  | 未实现                                                                                                | 依赖 08A/09/10/11；50 worktree、10 session、8h、fault matrix   |
 
 建议执行顺序：
