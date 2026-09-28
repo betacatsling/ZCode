@@ -165,11 +165,84 @@ test("settings StatusCards path drops dead Coding Plan upgrade/purchase CTA stri
     "settings.modelProvider.codingPlan.purchase.selectPlan",
     // #124: Title orphan after Automations toast removal; KEEP productPurchaseRemoved body
     "settings.modelProvider.codingPlan.productPurchaseRemovedTitle",
+    // #164 follow-up: zero-reference purchase/webview/pricing residue after teardown.
+    "purchase.entry.loading",
+    "purchase.entry.retry",
+    "settings.modelProvider.codingPlan.title",
+    "settings.modelProvider.codingPlan.webview.title",
+    "settings.modelProvider.codingPlan.webview.authInjectFailed",
+    "settings.modelProvider.codingPlan.webview.retry",
+    "settings.modelProvider.codingPlan.webview.loadFailed",
+    "settings.modelProvider.codingPlan.webview.openWebsite",
+    "settings.modelProvider.codingPlan.description.disconnected",
+    "settings.modelProvider.codingPlan.description.checking",
+    "settings.modelProvider.codingPlan.description.notPurchased",
+    "settings.modelProvider.codingPlan.description.purchased",
+    "settings.modelProvider.codingPlan.description.credentialFailed",
+    "settings.modelProvider.codingPlan.description.unavailable",
+    "settings.modelProvider.codingPlan.description.unsupported",
+    "settings.modelProvider.codingPlan.connect",
+    "settings.modelProvider.codingPlan.startPlan.expiredBadge",
+    "settings.modelProvider.codingPlan.startPlan.expiredAction",
+    "settings.modelProvider.codingPlan.recheck",
+    "settings.modelProvider.codingPlan.checkingPlans",
+    "settings.modelProvider.codingPlan.switchAccount",
+    "settings.modelProvider.codingPlan.useApiKeyProvider",
+    "settings.modelProvider.codingPlan.nextResetAt",
+    "settings.modelProvider.codingPlan.openApiKeyProvider",
+    "settings.modelProvider.codingPlan.plansTitle",
+    "settings.modelProvider.codingPlan.audience.personal",
+    "settings.modelProvider.codingPlan.audience.enterprise",
+    "settings.modelProvider.codingPlan.period.monthly",
+    "settings.modelProvider.codingPlan.period.quarterly",
+    "settings.modelProvider.codingPlan.period.yearly",
+    "settings.modelProvider.codingPlan.unit.usd.month",
+    "settings.modelProvider.codingPlan.unit.usd.quarter",
+    "settings.modelProvider.codingPlan.unit.usd.year",
+    "settings.modelProvider.codingPlan.unit.cny.month",
+    "settings.modelProvider.codingPlan.unit.cny.quarter",
+    "settings.modelProvider.codingPlan.unit.cny.year",
+    "settings.modelProvider.codingPlan.monthlyEquivalent",
+    "settings.modelProvider.codingPlan.monthlyFlexibleBilling",
+    "settings.modelProvider.codingPlan.providerFormDescription",
+    "settings.modelProvider.codingPlan.retry",
+    "settings.modelProvider.codingPlan.viewPrices",
+    "settings.modelProvider.codingPlan.productsLoading",
+    "settings.modelProvider.codingPlan.productsLoadingDescription",
+    "settings.modelProvider.codingPlan.productsError",
+    "settings.modelProvider.codingPlan.productsReconnectTitle",
+    "settings.modelProvider.codingPlan.reconnectToViewPlans",
+    "settings.modelProvider.codingPlan.productsEmpty",
+    "settings.modelProvider.codingPlan.productsEmptyDescription",
+    "settings.modelProvider.codingPlan.dynamicUnsupportedTitle",
+    "settings.modelProvider.codingPlan.dynamicUnsupportedDescription",
+    "settings.modelProvider.codingPlan.priceUnavailable",
+    "settings.modelProvider.codingPlan.systemBusy",
+    "settings.modelProvider.codingPlan.subscriptionBusy",
+    "settings.modelProvider.codingPlan.subscriptionBusyButton",
+    "settings.modelProvider.codingPlan.pendingOrder",
+    "settings.modelProvider.codingPlan.paymentTimeout",
+    "settings.modelProvider.codingPlan.zaiOverseasPaymentRequired",
+    "settings.modelProvider.codingPlan.paypalSetupRequired",
+    "settings.modelProvider.codingPlan.paypalApproveUrlMissing",
+    "settings.modelProvider.codingPlan.paypalUnsupported",
+    "settings.modelProvider.codingPlan.paypalCancelled",
+    "settings.modelProvider.codingPlan.paypalSubscribeFailed",
+  ];
+  const deadPrefixes = [
+    // The old pricing-card plan names/summaries and purchase detail matrix are gone as a group.
+    "settings.modelProvider.codingPlan.zai.plan.",
+    "settings.modelProvider.codingPlan.bigmodel.plan.",
+    "settings.modelProvider.codingPlan.zai.purchase.",
+    "settings.modelProvider.codingPlan.bigmodel.purchase.",
   ];
   for (const locale of ["en-US.ts", "zh-CN.ts"] as const) {
     const source = readFileSync(new URL(`../src/i18n/locales/${locale}`, import.meta.url), "utf8");
     for (const key of deadKeys) {
       assert.equal(source.includes(`"${key}"`), false, `${locale}:${key}`);
+    }
+    for (const prefix of deadPrefixes) {
+      assert.equal(source.includes(`"${prefix}`), false, `${locale}:${prefix}`);
     }
     assert.equal(source.includes('"settings.modelProvider.connection.selectPlan"'), true, locale);
     assert.equal(
