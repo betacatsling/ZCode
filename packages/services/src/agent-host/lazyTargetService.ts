@@ -98,15 +98,12 @@ export function createLazyTargetAgentHostService(input: {
       flight = (async () => {
         await input.registry.start();
         const { createRegistryPiHarness } = await import("../agent-adapters/pi/createPiHarness.js");
-        const { createExperimentalRegistryCodexHarness } = await import(
-          "../agent-adapters/codex/createCodexHarness.js"
-        );
-        const { createExperimentalRegistryClaudeHarness } = await import(
-          "../agent-adapters/claude/createClaudeHarness.js"
-        );
-        const { createExperimentalRegistryDevinHarness } = await import(
-          "../agent-adapters/devin/createDevinHarness.js"
-        );
+        const { createExperimentalRegistryCodexHarness } =
+          await import("../agent-adapters/codex/createCodexHarness.js");
+        const { createExperimentalRegistryClaudeHarness } =
+          await import("../agent-adapters/claude/createClaudeHarness.js");
+        const { createExperimentalRegistryDevinHarness } =
+          await import("../agent-adapters/devin/createDevinHarness.js");
         const modelAdapter = new AiSdkModelAdapter({});
         const harnesses = new HarnessRegistry();
         const workerRoot = join(input.root, "workers");
@@ -189,9 +186,7 @@ export function createLazyTargetAgentHostService(input: {
       target: input.target,
       harnesses: [
         ...(input.nativeOwner ? ["zcode"] : []),
-        ...(input.allowNewSessions()
-          ? ["pi", "codex", "claude-code", "devin"]
-          : []),
+        ...(input.allowNewSessions() ? ["pi", "codex", "claude-code", "devin"] : []),
       ],
       admissionEnabled:
         input.target.available && (Boolean(input.nativeOwner) || input.allowNewSessions()),

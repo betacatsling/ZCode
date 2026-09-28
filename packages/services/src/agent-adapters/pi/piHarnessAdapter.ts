@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { createRequire } from "node:module";
 import { Worker } from "node:worker_threads";
 import type { Model } from "@zcode/contracts";
 import type { ModelSelection } from "@zcode/shared/model-selection";
@@ -17,31 +16,12 @@ import type {
 import type { HarnessAdapter, PreparedHostBinding } from "../../agent-host/harnessRegistry.js";
 import type { FromPiWorker, PiWorkerBoot } from "./piProtocol.js";
 import { PiSessionStartupReservations, waitForPiWorkerReady } from "./piSessionStartup.js";
+import { assertPiWorkerNodeRuntime, piWorkerExecArgv } from "./piWorkerLaunch.js";
 import {
   failPiWorkerRuntime,
   routePiWorkerMessage,
   sendPiWorkerCommand,
 } from "./piWorkerMessageRouter.js";
-
-
-/** Source-mode Workers need Node >=24 so `--import tsx` loads `.ts` (and deps like node:sqlite). */
-function assertPiWorkerNodeRuntime(): void {
-  const major = Number(process.versions.node.split(".")[0] ?? 0);
-  if (Number.isFinite(major) && major >= 24) return;
-  throw new Error(
-    `Pi worker requires Node.js >=24.0.0 (engines); current process is ${process.versions.node}`,
-  );
-}
-
-function piWorkerExecArgv(sourceMode: boolean): string[] | undefined {
-  if (!sourceMode) return undefined;
-  try {
-    const require = createRequire(import.meta.url);
-    return ["--import", require.resolve("tsx")];
-  } catch {
-    return ["--import", "tsx"];
-  }
-}
 
 interface Pending {
   resolve(): void;

@@ -77,11 +77,9 @@ test(
   async (t) => {
     const root = await mkdtemp(join(tmpdir(), "zcode-devin-probe-"));
     const executable = join(root, "devin");
-    await writeFile(
-      executable,
-      "#!/usr/bin/env node\nprocess.stdout.write('devin 0.0.1\\n');\n",
-      { mode: 0o700 },
-    );
+    await writeFile(executable, "#!/usr/bin/env node\nprocess.stdout.write('devin 0.0.1\\n');\n", {
+      mode: 0o700,
+    });
     await chmod(executable, 0o700);
     t.after(() => rm(root, { recursive: true, force: true }));
 
@@ -160,12 +158,7 @@ test(
     });
 
     const kinds = events.map((event) => event.kind);
-    assert.deepEqual(kinds, [
-      "turn.started",
-      "text.delta",
-      "message.finished",
-      "turn.finished",
-    ]);
+    assert.deepEqual(kinds, ["turn.started", "text.delta", "message.finished", "turn.finished"]);
     const finished = events.find((event) => event.kind === "message.finished");
     assert.ok(finished && finished.kind === "message.finished");
     assert.equal(finished.text, "hello from fake devin");

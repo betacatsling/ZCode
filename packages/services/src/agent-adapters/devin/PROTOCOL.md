@@ -4,40 +4,40 @@ Sources: [Devin CLI Quickstart](https://docs.devin.ai/cli), [Essential Commands]
 
 ## Landed behavior (what works today)
 
-| Piece | Status | Evidence |
-| --- | --- | --- |
-| Host directory / lazy register | Done | `id: "devin"`, `adapterVersion: "0.1.0"`; `createExperimentalRegistryDevinHarness` in `lazyTargetService` |
-| CLI probe | Done | Isolated `--version`; missing CLI → `unsupported` with readable reason |
-| SessionHost create + one send | Done | harness-managed admission; print-mode turn events in Host journal |
-| Tests | Done | `devinHarnessAdmission.test.ts`, `devinSessionHost.integration.test.ts` (fake CLI) |
+| Piece                          | Status | Evidence                                                                                                  |
+| ------------------------------ | ------ | --------------------------------------------------------------------------------------------------------- |
+| Host directory / lazy register | Done   | `id: "devin"`, `adapterVersion: "0.1.0"`; `createExperimentalRegistryDevinHarness` in `lazyTargetService` |
+| CLI probe                      | Done   | Isolated `--version`; missing CLI → `unsupported` with readable reason                                    |
+| SessionHost create + one send  | Done   | harness-managed admission; print-mode turn events in Host journal                                         |
+| Tests                          | Done   | `devinHarnessAdmission.test.ts`, `devinSessionHost.integration.test.ts` (fake CLI)                        |
 
 **Session path is `-p` only.** Each `send` spawns a short-lived process and exits; there is no persistent REPL/ACP child.
 
 ## What Devin CLI exposes vs what Host uses
 
-| Surface | Command | Host use |
-| --- | --- | --- |
-| Interactive REPL | `devin` / `devin -- <prompt>` | Not used (TTY UI). |
-| Print / single-turn | `devin -p [PROMPT]` or `devin -p -- <prompt>` | **Only wired session path.** Stdout = assistant text. |
-| Resume | `-c` / `-r <id>` | **Not wired** — no native session id stored on `BackendBinding`. |
-| ACP server | `devin acp` | **Not wired** (future JSON-RPC). |
-| Auth / models | `devin auth …` | Harness-managed; Host does **not** inject Provider Registry keys. |
+| Surface             | Command                                       | Host use                                                          |
+| ------------------- | --------------------------------------------- | ----------------------------------------------------------------- |
+| Interactive REPL    | `devin` / `devin -- <prompt>`                 | Not used (TTY UI).                                                |
+| Print / single-turn | `devin -p [PROMPT]` or `devin -p -- <prompt>` | **Only wired session path.** Stdout = assistant text.             |
+| Resume              | `-c` / `-r <id>`                              | **Not wired** — no native session id stored on `BackendBinding`.  |
+| ACP server          | `devin acp`                                   | **Not wired** (future JSON-RPC).                                  |
+| Auth / models       | `devin auth …`                                | Harness-managed; Host does **not** inject Provider Registry keys. |
 
 Non-interactive `-p` cannot show the workspace trust prompt → Host always passes `--respect-workspace-trust false`.
 
 ## Host API mapping (implemented)
 
-| Host API | Behavior |
-| --- | --- |
-| `probe` | Resolve `devin` (PATH or `executablePath`); isolated version check → `supported` + `cliVersion` constraint, else `unsupported`. |
-| `harnessManagedSupport` | Same as probe (required for SessionHost admission). |
-| `hostManagedSupport` | Always `unsupported` (no Host Provider binding). |
-| `create` | Resolve CLI, allocate `BackendBinding` (`backendSessionId: devin-print-…`, new `runtimeEpoch`). No long-lived child. |
-| `attach` | Rehydrate binding in memory; does not restart a process. |
-| `send` | One print-mode spawn: `devin -p --respect-workspace-trust false -- <text>`, cwd = worktree. Emit `turn.started` → `text.delta` → `message.finished` → `turn.finished`. Non-zero exit → `session.error` + failed turn. `AgentCommand.send` has no `runtimeEpoch` (do not check it). |
-| `cancelTurn` | Kill active print-mode process tree (`runtimeEpoch` required). |
-| `resolveInteraction` | Throws — print mode has no Host-mediated approvals. |
-| `terminate` / `shutdown` | Drop session; kill any active child. |
+| Host API                 | Behavior                                                                                                                                                                                                                                                                           |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `probe`                  | Resolve `devin` (PATH or `executablePath`); isolated version check → `supported` + `cliVersion` constraint, else `unsupported`.                                                                                                                                                    |
+| `harnessManagedSupport`  | Same as probe (required for SessionHost admission).                                                                                                                                                                                                                                |
+| `hostManagedSupport`     | Always `unsupported` (no Host Provider binding).                                                                                                                                                                                                                                   |
+| `create`                 | Resolve CLI, allocate `BackendBinding` (`backendSessionId: devin-print-…`, new `runtimeEpoch`). No long-lived child.                                                                                                                                                               |
+| `attach`                 | Rehydrate binding in memory; does not restart a process.                                                                                                                                                                                                                           |
+| `send`                   | One print-mode spawn: `devin -p --respect-workspace-trust false -- <text>`, cwd = worktree. Emit `turn.started` → `text.delta` → `message.finished` → `turn.finished`. Non-zero exit → `session.error` + failed turn. `AgentCommand.send` has no `runtimeEpoch` (do not check it). |
+| `cancelTurn`             | Kill active print-mode process tree (`runtimeEpoch` required).                                                                                                                                                                                                                     |
+| `resolveInteraction`     | Throws — print mode has no Host-mediated approvals.                                                                                                                                                                                                                                |
+| `terminate` / `shutdown` | Drop session; kill any active child.                                                                                                                                                                                                                                               |
 
 `hostManagedRoute` is `"harness-managed"`.
 
