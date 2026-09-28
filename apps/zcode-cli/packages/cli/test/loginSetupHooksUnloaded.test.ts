@@ -19,6 +19,14 @@ test("create.ts /login always returns product-login-removed", () => {
   assert.equal(create.includes("login-flow"), false);
 });
 
+test("create.ts no-model gate uses isModelSetupRequired (not isLoginRequired)", () => {
+  const create = read("command-center/create.ts");
+  assert.match(create, /async function isModelSetupRequired/);
+  assert.match(create, /modelSetupRequired:\s*true/);
+  assert.equal(create.includes("isLoginRequired"), false);
+  assert.equal(/\bloginRequired\b/.test(create), false);
+});
+
 test("tui-prompt-handler no longer wires loginSetup API key / OAuth hooks", () => {
   const handler = read("tui-prompt-handler.ts");
   assert.equal(handler.includes("configureApiKeyForTui"), false);
