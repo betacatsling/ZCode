@@ -1,4 +1,4 @@
-/* eslint-disable max-lines -- footer 套餐徽标与 entitlement 探测共用同一份
+/* eslint-disable max-lines -- footer 套餐徽标、只读用量入口与 entitlement 探测共用同一份
    provider 选择与 family 过滤上下文，拆文件会让 zai/bigmodel 对称性难以追踪。 */
 import { useEffect, useMemo } from "react";
 import {
@@ -144,7 +144,7 @@ export function useWorkspaceSidebarFooterUsageSummaryState({
   // zai team plan 对称化需要 zai family 也独立拉一份 enterprise pricing。
   const zaiFamilyAllowed = providerFamilyDomain !== "bigmodel";
   const bigmodelEnterpriseProducts = useEnterpriseCodingPlanProducts({
-    // footer badge 需要识别 Team Plan。
+    // footer badge 与只读用量入口都需要识别 Team Plan。
     // Team 项目上下文只在企业 pricing/customerInfo 返回，账号级头像徽标也不能被当前连接方式卡住。
     enabled:
       enabled && !providerSourcesLoading && bigmodelFamilyAllowed && Boolean(bigmodelTeamProvider),
@@ -390,8 +390,7 @@ export function WorkspaceSidebarFooterUsageSummaryContent({
   onUsageClick?: () => void;
 }) {
   const { intl } = useZCodeIntl();
-  // 产品 Coding Plan 升级/续费 CTA 已卸：不再打开购买面板或暗示产品 OAuth。
-  // 保留「打开用量统计」只读入口。
+  // 获客升级/续费 CTA 已卸；仅保留「打开用量统计」只读入口。
 
   return (
     <>

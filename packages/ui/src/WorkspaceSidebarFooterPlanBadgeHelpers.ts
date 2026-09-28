@@ -1,5 +1,16 @@
 import type { UsageEntitlementSnapshot } from "@zcode/shared";
-import { hasActiveCodingPlanSnapshot } from "@/CodingPlanUsageRemainingPanel.js";
+
+/** Local copy so plan-badge does not import the UsageRemaining panel module. */
+function hasActiveCodingPlanSnapshot(
+  snapshot: UsageEntitlementSnapshot | null,
+  providerId: string,
+): boolean {
+  return (
+    snapshot?.provider?.id === providerId &&
+    snapshot.unavailableReason !== "no_plan" &&
+    Boolean(snapshot.subscription?.details.length)
+  );
+}
 
 type SidebarFooterProfilePlanBadge =
   | {
