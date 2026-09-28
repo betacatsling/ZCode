@@ -22,7 +22,6 @@ import {
   resolveEntitledAccountProviderAccessFingerprint,
 } from "@/lib/accountProviderAccess.js";
 import { buildUsageEntitlementCacheKey } from "@/lib/usageEntitlementCache.js";
-import { useEnterpriseCodingPlanProducts } from "@/settings/model-provider-section/useEnterpriseCodingPlanProducts.js";
 import {
   buildCodingPlanUsageSources,
   resolveSidebarCurrentCodingPlanUsageSource,
@@ -140,33 +139,8 @@ export function useWorkspaceSidebarFooterUsageSummaryState({
       ? null
       : selectedProviderIdFromSupplierKey;
   const bigmodelFamilyAllowed = providerFamilyDomain !== "zai";
-  // 原只有 bigmodelFamilyAllowed 单变量，zai family 下 enterprise products 完全不拉。
-  // zai team plan 对称化需要 zai family 也独立拉一份 enterprise pricing。
-  const zaiFamilyAllowed = providerFamilyDomain !== "bigmodel";
-  const bigmodelEnterpriseProducts = useEnterpriseCodingPlanProducts({
-    // footer badge 与只读用量入口都需要识别 Team Plan。
-    // Team 项目上下文只在企业 pricing/customerInfo 返回，账号级头像徽标也不能被当前连接方式卡住。
-    enabled:
-      enabled && !providerSourcesLoading && bigmodelFamilyAllowed && Boolean(bigmodelTeamProvider),
-    authenticated: true,
-    family: "bigmodel",
-  });
-  const zaiEnterpriseProducts = useEnterpriseCodingPlanProducts({
-    enabled: enabled && !providerSourcesLoading && zaiFamilyAllowed && Boolean(zaiTeamProvider),
-    authenticated: true,
-    family: "zai",
-  });
-  const subscribedTeamProducts = useMemo(
-    () => [
-      ...(bigmodelEnterpriseProducts.snapshot?.productList.filter(
-        (product) => product.subscribed === true,
-      ) ?? []),
-      ...(zaiEnterpriseProducts.snapshot?.productList.filter(
-        (product) => product.subscribed === true,
-      ) ?? []),
-    ],
-    [bigmodelEnterpriseProducts.snapshot?.productList, zaiEnterpriseProducts.snapshot?.productList],
-  );
+  // 企业 pricing 已拆除；Team 用量来源靠 team account access + entitlement，不再拼空 productList。
+  const subscribedTeamProducts = useMemo(() => [], []);
   const teamSources = useMemo(
     () =>
       buildCodingPlanUsageSources({

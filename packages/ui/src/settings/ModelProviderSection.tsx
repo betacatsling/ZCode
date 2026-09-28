@@ -62,7 +62,7 @@ import {
   consumePendingSettingsModelProviderTarget,
   type SettingsModelProviderTarget,
 } from "@/lib/settingsNavigation.js";
-import { useEnterpriseCodingPlanProducts } from "@/settings/model-provider-section/useEnterpriseCodingPlanProducts.js";
+import type { EnterpriseCodingPlanProductDisplay } from "@/settings/model-provider-section/enterpriseCodingPlanProducts.js";
 
 export {
   fuzzyMatch,
@@ -390,45 +390,9 @@ export function ModelProviderSection({
     error: sharedSettingsError,
     update: updateSharedSettings,
   } = useSettings();
-  const authenticatedEnterpriseProducts = useEnterpriseCodingPlanProducts({
-    enabled:
-      codingPlanPurchaseTokenAuthenticatedByProviderId[
-        BUILTIN_MODEL_PROVIDER_IDS.bigmodelTeamCodingPlan
-      ] === true,
-    authenticated: true,
-    family: "bigmodel",
-  });
-  // zai 与 bigmodel Team Plan 对称化。原仅 bigmodel 调 hook，
-  // zai 团队订阅永远拉不到、也无法展示对应团队。
-  // zai 独立调 hook（zai family 走 zai provider），下游合并两 family 的订阅产品。
-  const authenticatedZaiEnterpriseProducts = useEnterpriseCodingPlanProducts({
-    enabled:
-      codingPlanPurchaseTokenAuthenticatedByProviderId[
-        BUILTIN_MODEL_PROVIDER_IDS.zaiTeamCodingPlan
-      ] === true,
-    authenticated: true,
-    family: "zai",
-  });
-  const refreshAuthenticatedEnterpriseProducts = useCallback(async () => {
-    await Promise.all([
-      authenticatedEnterpriseProducts.refresh(),
-      authenticatedZaiEnterpriseProducts.refresh(),
-    ]);
-  }, [authenticatedEnterpriseProducts, authenticatedZaiEnterpriseProducts]);
-  const subscribedTeamProducts = useMemo(
-    () => [
-      ...(authenticatedEnterpriseProducts.snapshot?.productList.filter(
-        (product) => product.subscribed === true,
-      ) ?? []),
-      ...(authenticatedZaiEnterpriseProducts.snapshot?.productList.filter(
-        (product) => product.subscribed === true,
-      ) ?? []),
-    ],
-    [
-      authenticatedEnterpriseProducts.snapshot?.productList,
-      authenticatedZaiEnterpriseProducts.snapshot?.productList,
-    ],
-  );
+  // 企业 pricing/获客服务已拆除；Team 已购身份走 entitlement。空列表保留导航签名。
+  const subscribedTeamProducts = useMemo<EnterpriseCodingPlanProductDisplay[]>(() => [], []);
+  const refreshAuthenticatedEnterpriseProducts = useCallback(async () => {}, []);
   const connectionSelections = sharedSettings?.providerFamilyConnectionSelections ?? {};
   const familyConnectionSettingsFailed = sharedSettingsError !== null && sharedSettings === null;
   const effectiveConnectionSelections = useMemo(
