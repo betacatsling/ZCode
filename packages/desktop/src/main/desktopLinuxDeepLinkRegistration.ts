@@ -257,8 +257,8 @@ export function registerLinuxDeepLinkProtocol(options: RegisterLinuxDeepLinkProt
       changed = writeFileIfChanged(desktopFilePath, desktopEntry);
     }
     // AppImage 直跑不会像 deb 安装包一样稳定写入系统 desktop entry。
-    // deep link 是 OAuth/支付/工作区打开的核心链路，必须先完成用户级协议处理器刷新；
-    // 图标安装是可选增强，放到核心注册成功后独立降级，避免扩大登录回调失败域。
+    // deep link 仍承载工作区打开 / share import（产品 OAuth/支付回调已卸）；
+    // 必须先完成用户级协议处理器刷新。图标安装是可选增强，放到核心注册成功后独立降级。
     const updateResult = runCommand("update-desktop-database", [applicationsDir]);
     const defaultResult = runCommand("xdg-mime", [
       "default",

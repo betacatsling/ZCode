@@ -599,7 +599,7 @@ contextBridge.exposeInMainWorld("zcode", {
   /** 从权限浮窗拖拽 Helper.app 到 macOS 权限列表。必须是 send —— invoke 的往返会错过手势。 */
   startCuaHelperPermissionDrag: () =>
     ipcRenderer.send(PlatformChannels.StartCuaHelperPermissionDrag),
-  /** 注册支付 deep link 回调，返回 disposer */
+  /** 历史支付 deep-link IPC 表面；产品购买 Dialog 已卸，保留签名与通道。 */
   onPaymentCallback: (callback: (url: string) => void): (() => void) => {
     const handler = (_event: unknown, url: string) => callback(url);
     ipcRenderer.on(PlatformChannels.PaymentCallback, handler);
