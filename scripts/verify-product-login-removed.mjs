@@ -2,10 +2,10 @@
 /**
  * Product-login removal gate (scripts-only knife; docs/inventory sync after Dialog unload).
  *
- * Tip state (origin/cursor/wave4-harness-integration-b7a9 @ 8aa7792 / #114):
+ * Tip state (origin/cursor/wave4-harness-integration-b7a9 @ 3bf3626 / #124):
  *   P1–P4 landed; CodingPlanUpgradeDialog / Provider + Root wrap unloaded (Ex1 /
  *   9ce3088); EntryGate CTA / CodingPlanEntryButton / useCodingPlanEntryGate gone;
- *   soft remainingUiInventory first landed in #57; #103–#114 clearances hard-gated below.
+ *   soft remainingUiInventory first landed in #57; #103–#124 clearances hard-gated below.
  *
  * Hard gates (must exit 0 on tip):
  *   - CLI login-command / tui-auth / create.ts stubs (P3)
@@ -29,6 +29,9 @@
  *   i18n must stay absent.
  * Hard (also): #114 slash-help /login+/logout must not advertise Coding Plan / Z.ai OAuth
  *   acquisition; require model-setup / personal API-key guidance (KEEP MCP help entry).
+ * Hard (also): #123 orphan useEnterpriseCodingPlanProducts.ts must stay deleted; #124
+ *   productPurchaseRemovedTitle i18n must stay absent (KEEP productPurchaseRemoved body +
+ *   manage / planCard / Display types / entitlement).
  *
  * Run from repo root: node scripts/verify-product-login-removed.mjs
  */
@@ -191,6 +194,16 @@ function assertDeletedSurfaces() {
       "codingPlanPricingCards.ts must stay deleted (CodingPlanLoginOptions unload)",
     );
   }
+  // #123: orphan enterprise products hook must stay deleted (Display/entitlement KEPT).
+  const enterpriseProductsHook = join(
+    UI_SRC,
+    "settings/model-provider-section/useEnterpriseCodingPlanProducts.ts",
+  );
+  if (existsSync(enterpriseProductsHook)) {
+    fails.push(
+      "useEnterpriseCodingPlanProducts.ts must stay deleted (orphan hook unload #123)",
+    );
+  }
   const detailPath = join(UI_SRC, "settings/model-provider-section/Detail.tsx");
   if (existsSync(detailPath)) {
     const detailSrc = readFileSync(detailPath, "utf8");
@@ -336,6 +349,8 @@ function assertDeletedSurfaces() {
     "settings.modelProvider.codingPlan.purchase.individualsSectionTitle",
     "settings.modelProvider.codingPlan.purchaseBanner.startPlanTitle",
     "settings.modelProvider.codingPlan.purchase.selectPlan",
+    // #124: Title orphan after Automations toast (#121); KEEP productPurchaseRemoved body
+    "settings.modelProvider.codingPlan.productPurchaseRemovedTitle",
     // #112: old botsUi regionTag path must stay absent (moved off login.oauth)
     "login.oauth.regionTag.zai",
     "login.oauth.regionTag.bigmodel",
@@ -568,7 +583,7 @@ function remainingUiInventory() {
   ].map(fileStatus);
 
   const note =
-    "Tip 8aa7792 (#114 / after #103–#113): Dialog/Provider/Entry/EmbeddedWebview + CLI loginRequired→modelSetupRequired hard. UI locale dead product loginRequired / Coding Plan login + orphan Welcome/login.* shell + #103–#107 upgrade/purchase/usage/enterprise acquisition i18n hard-gated. login.oauth.regionTag.* absent; KEEP settings.modelProvider.regionTag.* + share-import signInRequired + manage/planCard + live personal API-key / MCP OAuth copy. #114 slash-help /login+/logout off Coding Plan/Z.ai OAuth acquisition → model-setup/API-key guidance hard-gated (KEEP MCP help). Soft inventory thinned — cleared symbol scans dropped. Inventory does not fail this gate.";
+    "Tip 3bf3626 (#124 / after #103–#123): Dialog/Provider/Entry/EmbeddedWebview + CLI loginRequired→modelSetupRequired hard. UI locale dead product loginRequired / Coding Plan login + orphan Welcome/login.* shell + #103–#107 upgrade/purchase/usage/enterprise acquisition i18n hard-gated. login.oauth.regionTag.* absent; KEEP settings.modelProvider.regionTag.* + share-import signInRequired + manage/planCard + productPurchaseRemoved body + live personal API-key / MCP OAuth copy. #114 slash-help /login+/logout off Coding Plan/Z.ai OAuth acquisition → model-setup/API-key guidance hard-gated (KEEP MCP help). #123 useEnterpriseCodingPlanProducts.ts hard-absent; #124 productPurchaseRemovedTitle absent. Soft inventory thinned — cleared symbol scans dropped. Inventory does not fail this gate.";
 
   return {
     note,
