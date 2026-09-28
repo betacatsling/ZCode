@@ -124,7 +124,7 @@ flowchart TD
 
 ### P5：清理、回归和发布说明
 
-- 清理废弃导出、依赖、国际化字符串、test IDs、平台接口、说明和示例；不按 auth/oauth/login 关键词盲删第三方认证或 login shell。
+- 清理废弃导出、依赖、国际化字符串、test IDs、平台接口、说明和示例；不按 auth/oauth/login 关键词盲删第三方认证或 login shell。`PlatformChannels.OAuth*` 与 `IPlatformService.registerOAuthState`/`onOAuthCallback` 已薄清（#40 后）；`oauth.ts` 领域类型仍保留。
 - 检查 Desktop、Web、CLI 构建、入口网络行为，以及下列验收矩阵；记录每个用例的 pass/fail/blocked，不以 skip 代替实机证据。
 - 发布说明列出账号功能移除、自有模型配置方式、旧配置处理和不再提供的托管功能。保留本地数据以支持回退，不承诺旧版可读未经验证的新 schema。
 
