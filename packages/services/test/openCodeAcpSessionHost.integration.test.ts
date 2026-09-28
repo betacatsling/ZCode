@@ -3,7 +3,7 @@
  *
  * Proves same-protocol Agents register via explicit factory + loadExplicit trust list
  * without changing lazy Host defaults or the shared ACP session machine. Goose SessionHost
- * path is symmetric to OpenCode (#75). Late prompt + transport fault/disconnect still journal via SessionHost (OpenCode + Goose). Resume-after-disconnect: SessionHost.open attach via negotiated session/load then send again. Cancel-after-disconnect: after fault fence, cancel of the dead turn is stale; after reopen+session/load, cancel mid-prompt journals cancelled (OpenCode + Goose). Double-fault/reopen: fault→reopen→fault→reopen stays idempotent (session/load, no session/new) then send succeeds (OpenCode + Goose). Mid-tool-call disconnect: tool_call + pending permission then fault → reopen session/load → send (OpenCode + Goose). Permission-denied-then-disconnect: Host denies permission, peer then faults the prompt (OpenCode + Goose). Cancel-during-permission: Host cancelTurn while permission pending journals cancelled (OpenCode + Goose). Permission-resolve-after-reopen: fault mid-permission → reopen → deny still clean (OpenCode + Goose). Allow-after-reopen: fault mid-permission → reopen → fresh allow completes send (OpenCode + Goose). Double-cancel: cancelTurn×2 mid-prompt is idempotent (one cancelled outcome; OpenCode + Goose). Allow-then-disconnect: Host allows permission then peer faults mid-turn (OpenCode + Goose). Cancel-then-disconnect: Host cancel mid-prompt then peer faults (OpenCode + Goose). Deny-then-cancel: Host deny pending permission then cancelTurn journals clean (OpenCode + Goose). Allow-then-cancel: Host allow pending permission then cancelTurn journals clean (OpenCode + Goose). Fault-during-session-load: reopen attach session/load mid-fault fails clean (OpenCode + Goose). Load-then-cancel: after reopen session/load succeeds, cancelTurn before first send is stale (OpenCode + Goose). Cancel-during-session-load: while reopen session/load is held in-flight, aborting the pending load rejects open clean (Host.cancelTurn cannot race mid-load — open awaits attach; OpenCode + Goose). Load-then-disconnect: after reopen session/load succeeds, peer transport close before first send stays idle until next send faults clean (OpenCode + Goose). Disconnect-during-session-load: while reopen session/load is held in-flight, peer idle transport.close (no JSON-RPC error reply) rejects open clean (OpenCode + Goose).
+ * path is symmetric to OpenCode (#75). Late prompt + transport fault/disconnect still journal via SessionHost (OpenCode + Goose). Resume-after-disconnect: SessionHost.open attach via negotiated session/load then send again. Cancel-after-disconnect: after fault fence, cancel of the dead turn is stale; after reopen+session/load, cancel mid-prompt journals cancelled (OpenCode + Goose). Double-fault/reopen: fault→reopen→fault→reopen stays idempotent (session/load, no session/new) then send succeeds (OpenCode + Goose). Mid-tool-call disconnect: tool_call + pending permission then fault → reopen session/load → send (OpenCode + Goose). Permission-denied-then-disconnect: Host denies permission, peer then faults the prompt (OpenCode + Goose). Cancel-during-permission: Host cancelTurn while permission pending journals cancelled (OpenCode + Goose). Permission-resolve-after-reopen: fault mid-permission → reopen → deny still clean (OpenCode + Goose). Allow-after-reopen: fault mid-permission → reopen → fresh allow completes send (OpenCode + Goose). Double-cancel: cancelTurn×2 mid-prompt is idempotent (one cancelled outcome; OpenCode + Goose). Allow-then-disconnect: Host allows permission then peer faults mid-turn (OpenCode + Goose). Cancel-then-disconnect: Host cancel mid-prompt then peer faults (OpenCode + Goose). Deny-then-cancel: Host deny pending permission then cancelTurn journals clean (OpenCode + Goose). Allow-then-cancel: Host allow pending permission then cancelTurn journals clean (OpenCode + Goose). Fault-during-session-load: reopen attach session/load mid-fault fails clean (OpenCode + Goose). Load-then-cancel: after reopen session/load succeeds, cancelTurn before first send is stale (OpenCode + Goose). Cancel-during-session-load: while reopen session/load is held in-flight, aborting the pending load rejects open clean (Host.cancelTurn cannot race mid-load — open awaits attach; OpenCode + Goose). Load-then-disconnect: after reopen session/load succeeds, peer transport close before first send stays idle until next send faults clean (OpenCode + Goose). Disconnect-during-session-load: while reopen session/load is held in-flight, peer idle transport.close (no JSON-RPC error reply) rejects open clean (OpenCode + Goose). Load-then-permission-deny: after reopen session/load succeeds, first send hits permission and Host deny journals clean with no new fault (OpenCode + Goose).
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -4090,3 +4090,224 @@ test("SessionHost + opt-in Goose ACP: disconnect-during-session-load rejects hel
       createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
+
+async function assertSessionHostLoadThenPermissionDeny(input: {
+  t: { after: (fn: () => void | Promise<void>) => void };
+  label: string;
+  harnessId: "opencode" | "goose";
+  agentName: string;
+  createHarness: (openTransport: () => AcpTransport) => ReturnType<
+    typeof createExperimentalRegistryOpenCodeAcpHarness
+  >;
+}): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-ltpd-`));
+  const worktree = join(root, "worktree");
+  const journalRoot = join(root, "journal");
+  await mkdir(worktree, { recursive: true });
+  input.t.after(() => rm(root, { recursive: true, force: true }));
+
+  const backendSessionId = `${input.harnessId}-ltpd-session`;
+  const hostSessionId = `${input.harnessId}-ltpd-1`;
+  const spec = {
+    schemaVersion: 1 as const,
+    hostSessionId,
+    execution: {
+      targetId: "local",
+      workspaceIdentity: `workspace-${input.harnessId}-ltpd`,
+      worktreePath: worktree,
+    },
+    harness: { id: input.harnessId, adapterVersion: ACP_ADAPTER_VERSION },
+    modelBinding: { kind: "harness-managed" as const },
+  };
+  const target = {
+    id: "local",
+    kind: "local" as const,
+    platform: process.platform as "darwin" | "linux" | "win32",
+    available: true,
+  };
+  const catalog = {
+    fingerprint: "registry-v1",
+    validateSelection: () => ({ ok: true as const }),
+  };
+
+  // Round 1: negotiate loadSession, disconnect mid-prompt, close — same fence as load-then-cancel
+  // (generic prompt fault, not mid-permission — distinct from permission-resolve-after-reopen).
+  const registryLive = new HarnessRegistry();
+  registryLive.register(
+    input.createHarness(() =>
+      openFakeTransport(input.agentName, backendSessionId, {
+        loadSession: true,
+        disconnectOnPrompt: true,
+      }),
+    ),
+  );
+
+  const host = await SessionHost.create({
+    root: journalRoot,
+    spec,
+    target,
+    catalog,
+    registry: registryLive,
+  });
+
+  const faultReceipt = await host.dispatch({
+    type: "send",
+    commandId: `${input.harnessId}-ltpd-fault`,
+    hostSessionId,
+    turnId: "turn-ltpd-fault",
+    text: "die mid-prompt",
+  });
+  assert.equal(faultReceipt.status, "accepted");
+  await host.whenIdle();
+  assert.ok(host.eventsSince(0).some((event) => event.kind === "session.error"));
+  assert.ok(
+    !host.eventsSince(0).some((event) => event.kind === "interaction.requested"),
+    "round-1 fence must not leave a mid-permission interaction (≠ permission-resolve-after-reopen)",
+  );
+  await host.close();
+
+  // Round 2: reopen attach via session/load succeeds; first send emits tool_call + permission.
+  const peersAfter: FakePeer[] = [];
+  const registryReopen = new HarnessRegistry();
+  registryReopen.register(
+    input.createHarness(() =>
+      openFakeTransport(
+        input.agentName,
+        backendSessionId,
+        { loadSession: true, awaitPermissionThenContinue: true },
+        peersAfter,
+      ),
+    ),
+  );
+
+  const resumed = await SessionHost.open({
+    root: journalRoot,
+    spec,
+    target,
+    catalog,
+    registry: registryReopen,
+  });
+
+  assert.ok(
+    peersAfter.some((peer) => peer.methods.includes("session/load")),
+    "reopen must attach via session/load",
+  );
+  assert.ok(
+    peersAfter.every((peer) => !peer.methods.includes("session/new")),
+    "successful load must not fall back to session/new",
+  );
+
+  const errorCountBefore = resumed.eventsSince(0).filter((event) => event.kind === "session.error")
+    .length;
+
+  const sendReceipt = await resumed.dispatch({
+    type: "send",
+    commandId: `${input.harnessId}-ltpd-send`,
+    hostSessionId,
+    turnId: "turn-ltpd-live",
+    text: "deny after load-then-permission",
+  });
+  assert.equal(sendReceipt.status, "accepted");
+
+  const deadline = Date.now() + 5_000;
+  let interactionId: string | undefined;
+  while (Date.now() < deadline) {
+    const requested = resumed.eventsSince(0).find(
+      (event) =>
+        event.kind === "interaction.requested" && event.turnId === "turn-ltpd-live",
+    );
+    if (requested && requested.kind === "interaction.requested") {
+      interactionId = requested.interactionId;
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.ok(interactionId, "expected first post-load send to request permission");
+
+  const denyReceipt = await resumed.dispatch({
+    type: "resolveInteraction",
+    commandId: `${input.harnessId}-ltpd-deny`,
+    hostSessionId,
+    runtimeEpoch: resumed.binding.runtimeEpoch!,
+    turnId: "turn-ltpd-live",
+    interactionId,
+    decision: "deny",
+  });
+  assert.equal(denyReceipt.status, "completed");
+  await resumed.whenIdle();
+
+  const after = resumed.eventsSince(0);
+  assert.ok(after.some((event) => event.kind === "tool.started"));
+  assert.ok(
+    after.some(
+      (event) =>
+        event.kind === "interaction.resolved" &&
+        event.turnId === "turn-ltpd-live" &&
+        event.decision === "deny",
+    ),
+  );
+  assert.ok(
+    after.some(
+      (event) =>
+        event.kind === "message.finished" && event.text === "deny after load-then-permission",
+    ),
+  );
+  const finished = after.find(
+    (event) => event.kind === "turn.finished" && event.turnId === "turn-ltpd-live",
+  );
+  assert.ok(finished && finished.kind === "turn.finished");
+  assert.equal(finished.outcome, "success");
+  assert.equal(
+    after.filter((event) => event.kind === "session.error").length,
+    errorCountBefore,
+    "Host deny after successful load must not journal a new session.error",
+  );
+
+  await resumed.close();
+  const persisted = await SessionHost.eventsSinceHistory(journalRoot, spec, 0);
+  assert.ok(persisted.some((event) => event.kind === "session.error"));
+  assert.equal(
+    persisted.filter((event) => event.kind === "session.error").length,
+    errorCountBefore,
+    "persisted journal must keep prior fault errors only",
+  );
+  assert.ok(
+    persisted.some(
+      (event) =>
+        event.kind === "interaction.resolved" &&
+        event.turnId === "turn-ltpd-live" &&
+        event.decision === "deny",
+    ),
+  );
+  assert.ok(
+    persisted.some(
+      (event) =>
+        event.kind === "turn.finished" &&
+        event.turnId === "turn-ltpd-live" &&
+        event.outcome === "success",
+    ),
+  );
+}
+
+test("SessionHost + opt-in OpenCode ACP: load-then-permission-deny journals clean after reopen", async (t) => {
+  await assertSessionHostLoadThenPermissionDeny({
+    t,
+    label: "opencode",
+    harnessId: "opencode",
+    agentName: "OpenCode",
+    createHarness: (openTransport) =>
+      createExperimentalRegistryOpenCodeAcpHarness({ openTransport }),
+  });
+});
+
+test("SessionHost + opt-in Goose ACP: load-then-permission-deny journals clean after reopen (symmetric)", async (t) => {
+  await assertSessionHostLoadThenPermissionDeny({
+    t,
+    label: "goose",
+    harnessId: "goose",
+    agentName: "Goose",
+    createHarness: (openTransport) =>
+      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+  });
+});
+
