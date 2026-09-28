@@ -5372,9 +5372,6 @@ const enUS: Record<string, string> = {
   "chat.quota.plan.productLoginRemoved":
     "Product sign-in has been removed. Configure an API Key in Settings to view quota.",
   "chat.quota.action.upgrade": "Upgrade",
-  "chat.quota.action.switchModel": "Switch model",
-  "chat.quota.action.switchProvider": "Switch provider",
-  "chat.quota.action.refresh": "Refresh quota",
 
   // Permissions
   "chat.permission.title": "Permission required",

@@ -5140,9 +5140,6 @@ const zhCN: Record<string, string> = {
   "chat.quota.plan.productLoginRemoved":
     "产品登录已移除。请在设置中配置 API Key 后查看额度。",
   "chat.quota.action.upgrade": "升级",
-  "chat.quota.action.switchModel": "切换模型",
-  "chat.quota.action.switchProvider": "切换供应商",
-  "chat.quota.action.refresh": "刷新额度",
 
   // 权限请求
   "chat.permission.title": "需要权限",
