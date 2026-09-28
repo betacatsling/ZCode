@@ -138,10 +138,6 @@ export interface ZCodeState {
   authSessionSeq: number;
   setUser: (user: UserInfo | null) => void;
 
-  /** 启动阶段是否仍在恢复 OAuth 登录态 */
-  isRestoringOAuthSession: boolean;
-  setIsRestoringOAuthSession: (restoring: boolean) => void;
-
   /** OAuth 回调错误（Root 层写入，统一登录入口读取） */
   oauthError: string | null;
   setOAuthError: (error: string | null) => void;
@@ -229,9 +225,6 @@ const STATE_CHANNEL_PREFIX = "state:";
  */
 export function createZCodeStore(
   broadcastService: IBroadcastService,
-  options: {
-    initialIsRestoringOAuthSession?: boolean;
-  } = {},
 ) {
   /** 标记：正在应用来自广播的更新，此时不再重复广播（防止循环） */
   let applyingBroadcast = false;
@@ -319,9 +312,6 @@ export function createZCodeStore(
         authSessionSeq:
           state.user === null && user !== null ? state.authSessionSeq + 1 : state.authSessionSeq,
       })),
-
-    isRestoringOAuthSession: options.initialIsRestoringOAuthSession ?? false,
-    setIsRestoringOAuthSession: (restoring: boolean) => set({ isRestoringOAuthSession: restoring }),
 
     oauthError: null,
     setOAuthError: (error: string | null) => set({ oauthError: error }),

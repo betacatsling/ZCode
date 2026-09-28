@@ -14,7 +14,7 @@
  *     registerOAuthState / onOAuthCallback; Root must not remount Provider
  *
  * Soft inventory (print-only; does not fail exit):
- *   - Root isRestoringOAuthSession; EmbeddedWebview / funnel / entry-plan leftovers
+ *   - EmbeddedWebview / funnel / pricing leftovers (isRestoringOAuthSession unloaded)
  *   - CLI TUI loginRequired / loginSetup residual naming
  *
  * Run from repo root: node scripts/verify-product-login-removed.mjs
@@ -351,7 +351,7 @@ function remainingUiInventory() {
   };
 
   const note =
-    "Tip 44fe40a+: Dialog/Provider/Root-wrap cleared (hard-gated). Soft remaining = Root isRestoringOAuthSession + EmbeddedWebview/funnel/pricing leftovers + CLI TUI loginRequired/loginSetup rename. useCodingPlanEntryPlanList deleted (zero callers). Inventory does not fail this gate.";
+    "Tip c7d1a07+: Dialog/Provider/Root-wrap cleared; Root isRestoringOAuthSession unloaded (hard-gated clear). Soft remaining = EmbeddedWebview/funnel/pricing leftovers + CLI TUI loginRequired/loginSetup rename. useCodingPlanEntryPlanList deleted (zero callers). Inventory does not fail this gate.";
 
   return {
     note,
