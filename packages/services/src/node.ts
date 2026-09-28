@@ -28,11 +28,7 @@ import {
   createSessionHierarchyService,
 } from "./session-hierarchy/index.js";
 import { createTaskIndexSessionSource } from "./session-hierarchy/app/taskIndexSource.js";
-import {
-  buildLocalMediaPreviewUrl,
-  isProviderProvisioningAccountCredentialKey,
-  type ProviderProvisioningTrigger,
-} from "@zcode/shared";
+import { buildLocalMediaPreviewUrl, type ProviderProvisioningTrigger } from "@zcode/shared";
 import { resolveWorkspaceAdmissionKey } from "@zcode/shared/agent-host";
 import type { IServiceAccessor } from "./accessor.js";
 
@@ -375,7 +371,6 @@ import { createProviderSettingsConnectivityTester } from "./model-provider/provi
 import {
   createProviderProvisioningSource,
   listProviderProvisioningCredentialKeys,
-  PROVIDER_PROVISIONING_OAUTH_CREDENTIAL_KEYS,
   resolveCredentialFilePath,
   type ProviderProvisioningSource,
 } from "./model-provider/providerProvisioningSource.js";
@@ -1461,14 +1456,9 @@ export function createLocalServices(options: {
     resolveRuntimeZCodeEndpointOrigin(process.env, {
       overrideOrigin: (await settingService.get()).zcodeEndpointOrigin,
     });
-  const provisioningOAuthKeys = new Set<string>(PROVIDER_PROVISIONING_OAUTH_CREDENTIAL_KEYS);
-  const credentialService = createCredentialService({
-    onDidMutate: ({ key }) => {
-      if (provisioningOAuthKeys.has(key) || isProviderProvisioningAccountCredentialKey(key)) {
-        options.onProviderProvisioningSourceChanged?.("credential");
-      }
-    },
-  });
+  // 产品 OAuth / account-provider 键的变更不再触发 provisioning 刷新。
+  // 新同步不导出这些键；旧凭据留在磁盘，保存或删除它们也不发起同步或授权。
+  const credentialService = createCredentialService();
   const broadcastService = createBroadcastService(options?.parentPort ?? null);
   const gitCheckpointService = createGitCheckpointService();
   const hostApiNetworkTransport =

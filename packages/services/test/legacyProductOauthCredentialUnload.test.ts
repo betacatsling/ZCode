@@ -64,7 +64,16 @@ function throwingCredentialService() {
   };
 }
 
-test("P4: idle telemetry readers do not load product oauth keys", () => {
+const IN_READER_FILES = [
+  "feedback/feedbackService.ts",
+  "model-provider/bigmodelStartPlanZcodeJwt.ts",
+  "usage-stats/providers/bigmodelUsageQuotaProvider.ts",
+  "node.ts",
+  "model-provider/providerProvisioningSource.ts",
+  "model-provider/providerProvisioningTarget.ts",
+];
+
+test("P4: IN readers do not load product oauth keys", () => {
   const node = readFileSync(join(here, "../src/node.ts"), "utf8");
   const start = node.indexOf("export function createTelemetryUserIdLoader(");
   const end = node.indexOf("export function disposeServiceResources(");
@@ -79,6 +88,23 @@ test("P4: idle telemetry readers do not load product oauth keys", () => {
   assert.match(readers, /return async \(\) => ""/);
   assert.match(readers, /return async \(\) => null/);
   assert.match(readers, /return "";/);
+
+  for (const rel of IN_READER_FILES) {
+    const source = readFileSync(join(here, "../src", rel), "utf8");
+    assert.doesNotMatch(source, /\.load\(\s*["'`]zcodejwttoken["'`]/, rel);
+    assert.doesNotMatch(source, /\.load\(\s*["'`]oauth:/, rel);
+    assert.doesNotMatch(source, /\.load\(\s*`oauth:/, rel);
+  }
+});
+
+test("P4: oauth credential mutation does not request a provisioning refresh", () => {
+  const node = readFileSync(join(here, "../src/node.ts"), "utf8");
+  assert.doesNotMatch(node, /PROVIDER_PROVISIONING_OAUTH_CREDENTIAL_KEYS/);
+  assert.doesNotMatch(node, /isProviderProvisioningAccountCredentialKey/);
+  assert.doesNotMatch(node, /onProviderProvisioningSourceChanged\?\.\(\s*"credential"\s*\)/);
+  assert.match(node, /createCredentialService\(\)/);
+  assert.match(node, /onProviderProvisioningSourceChanged\?\.\(\s*"personal-config"\s*\)/);
+  assert.match(node, /onProviderProvisioningSourceChanged\?\.\(\s*"account-settings"\s*\)/);
 });
 
 test("P4: feedback list does not read zcodejwttoken or call the feedback API", async () => {
@@ -236,6 +262,23 @@ test("P4: new provisioning sync ignores leftover oauth keys and does not erase t
 
   const envelope = await source.read("sync-1");
   assert.deepEqual(envelope.credentials, []);
+  for (const key of [
+    "oauth:active_provider",
+    "oauth:zai:access_token",
+    "oauth:zai:refresh_token",
+    "oauth:zai:user_info",
+    "oauth:bigmodel:access_token",
+    "oauth:bigmodel:refresh_token",
+    "oauth:bigmodel:user_info",
+    "zcodejwttoken",
+    "account-provider:bigmodel:api-key",
+  ]) {
+    assert.equal(
+      envelope.credentials.some((entry) => entry.key === key),
+      false,
+      key,
+    );
+  }
   assert.equal(decrypts, 0);
   assert.deepEqual(await listProviderProvisioningCredentialKeys(credentialFilePath), []);
   assert.equal(await readFile(credentialFilePath, "utf8"), rawCredentials);

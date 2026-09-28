@@ -30,6 +30,7 @@ credentials.json → ICredentialService（唯一写入者，本切片不新增�
 - Start Plan 产品 JWT 路径不可用。只返回调用方已经持有的个人 `apiKey`；没有 Key 时返回空串。
 - Coding Plan 额度重置入口直接失败，不读 JWT / OAuth access token，不发重置或授权请求。团队额度查询不再读取 `oauth:*:access_token`。
 - 新 provisioning 信封的 `credentials` 恒为空。不打开、不解密产品键。
+- 凭据 `save` / `delete` 不再因为产品 OAuth 或 `account-provider:*:api-key` 变更去调用 `onProviderProvisioningSourceChanged("credential")`。个人配置和 account settings 的既有刷新保持不变。
 - 旧信封仍能通过 schema 校验。目标应用时不 `load` / `save` / `delete` 这些产品键，因此不会把旧值擦掉。
 - 个人配置与 account settings 的既有同步路径保持不变。
 
