@@ -52,6 +52,9 @@
  * Hard (also): #152 oauthTeamPricing.ts must stay deleted; accountConnectionLossSuggestion must not
  *   revive oauthTeamPricing / getEnterprisePricingProducts / productList team fallback
  *   (KEEP prepareAccountConnectionSwitch + individual-coding-plan path; Display/entitlement KEPT).
+ * Hard (also): #158 Detail / StatusCards / CodingPlanStatusActions must not revive
+ *   loginActionVisible / loginVisible / loginButtonId (KEEP productPurchaseRemovedVisible +
+ *   productPurchaseRemoved body; loginLoading status-sync may remain).
  * Soft ledger also records SessionHost #140/#143/#147/#149 (OUT of this scripts gate) + #144/#151
  *   productList comment scrubs.
  *
@@ -705,6 +708,65 @@ function assertDeletedSurfaces() {
     }
   }
 
+  // #158: loginActionVisible rename — old prop names hard-absent.
+  // KEEP productPurchaseRemovedVisible + productPurchaseRemoved body (loginLoading may remain).
+  const productPurchaseRemovedVisibleFiles = [
+    [
+      "settings/model-provider-section/Detail.tsx",
+      "Detail.tsx",
+    ],
+    [
+      "settings/model-provider-section/StatusCards.tsx",
+      "StatusCards.tsx",
+    ],
+    [
+      "settings/model-provider-section/CodingPlanStatusActions.tsx",
+      "CodingPlanStatusActions.tsx",
+    ],
+  ];
+  const deadLoginActionVisibleSymbols = [
+    "loginActionVisible",
+    "loginVisible",
+    "loginButtonId",
+  ];
+  for (const [rel, label] of productPurchaseRemovedVisibleFiles) {
+    const renamePath = join(UI_SRC, rel);
+    if (!existsSync(renamePath)) {
+      fails.push(`${label} must exist (#158 gate)`);
+      continue;
+    }
+    const renameSrc = readFileSync(renamePath, "utf8");
+    for (const dead of deadLoginActionVisibleSymbols) {
+      if (renameSrc.includes(dead)) {
+        fails.push(
+          `${label} must not revive old login-action symbol: ${dead} (#158)`,
+        );
+      }
+    }
+    if (!renameSrc.includes("productPurchaseRemovedVisible")) {
+      fails.push(
+        `${label} must keep productPurchaseRemovedVisible (#158)`,
+      );
+    }
+  }
+  const statusActionsPath = join(
+    UI_SRC,
+    "settings/model-provider-section/CodingPlanStatusActions.tsx",
+  );
+  if (existsSync(statusActionsPath)) {
+    const statusActionsSrc = readFileSync(statusActionsPath, "utf8");
+    if (!statusActionsSrc.includes("productPurchaseRemoved")) {
+      fails.push(
+        "CodingPlanStatusActions.tsx must keep productPurchaseRemoved body (#158)",
+      );
+    }
+    if (!statusActionsSrc.includes("CodingPlanProductPurchaseRemovedNotice")) {
+      fails.push(
+        "CodingPlanStatusActions.tsx must keep CodingPlanProductPurchaseRemovedNotice (#158)",
+      );
+    }
+  }
+
   // #114: slash-help /login+/logout rewritten off Coding Plan / Z.ai OAuth acquisition.
   // KEEP MCP (and other non-login) help entries unchanged.
   const slashHelpPath = join(ROOT, "packages/shared/src/zcode-slash-command-help.ts");
@@ -821,7 +883,7 @@ function remainingUiInventory() {
   ].map(fileStatus);
 
   const note =
-    "Tip 6694a62 (#154 / after #103–#153): Dialog/Provider/Entry/EmbeddedWebview + CLI loginRequired→modelSetupRequired hard. UI locale dead product loginRequired / Coding Plan login + orphan Welcome/login.* shell + #103–#107 upgrade/purchase/usage/enterprise acquisition i18n hard-gated. login.oauth.regionTag.* absent; KEEP settings.modelProvider.regionTag.* + share-import signInRequired + manage/planCard + productPurchaseRemoved body + live personal API-key / MCP OAuth copy. #114 slash-help /login+/logout off Coding Plan/Z.ai OAuth acquisition → model-setup/API-key guidance hard-gated (KEEP MCP help). #123 useEnterpriseCodingPlanProducts.ts hard-absent; #124 productPurchaseRemovedTitle absent; #126 refreshTeamPlanProducts hard-absent (KEEP entitlement refresh); #128/#Ex1/#142 usageSources buildCodingPlanUsageSources hard-absent (KEEP CodingPlanUsageSource / personal builder / sidebar resolver); #131–#135+/#141 Settings/V4/sidebar/MPS/visibility subscribedTeamProducts stubs+wiring hard-absent; #145 teamSources/team audience hard-absent; #146/#148 codingPlanLogin noop (onCodingPlanLogin/handleCodingPlanLogin) hard-absent (KEEP codingPlanLoginPending); #150 onCodingPlanPurchaseComplete/codingPlanPurchaseToken/refreshPurchaseTokenState hard-absent (KEEP quota/OAuth refresh); #152 oauthTeamPricing.ts + account-loss getEnterprisePricingProducts/productList team fallback hard-absent (KEEP prepareAccountConnectionSwitch + individual-coding-plan); soft ledger #140/#143/#147/#149/#153 SessionHost OUT + #144/#151 productList comment scrubs. Soft inventory thinned — cleared symbol scans dropped. Inventory does not fail this gate.";
+    "Tip 6694a62 (#154 / after #103–#153): Dialog/Provider/Entry/EmbeddedWebview + CLI loginRequired→modelSetupRequired hard. UI locale dead product loginRequired / Coding Plan login + orphan Welcome/login.* shell + #103–#107 upgrade/purchase/usage/enterprise acquisition i18n hard-gated. login.oauth.regionTag.* absent; KEEP settings.modelProvider.regionTag.* + share-import signInRequired + manage/planCard + productPurchaseRemoved body + live personal API-key / MCP OAuth copy. #114 slash-help /login+/logout off Coding Plan/Z.ai OAuth acquisition → model-setup/API-key guidance hard-gated (KEEP MCP help). #123 useEnterpriseCodingPlanProducts.ts hard-absent; #124 productPurchaseRemovedTitle absent; #126 refreshTeamPlanProducts hard-absent (KEEP entitlement refresh); #128/#Ex1/#142 usageSources buildCodingPlanUsageSources hard-absent (KEEP CodingPlanUsageSource / personal builder / sidebar resolver); #131–#135+/#141 Settings/V4/sidebar/MPS/visibility subscribedTeamProducts stubs+wiring hard-absent; #145 teamSources/team audience hard-absent; #146/#148 codingPlanLogin noop (onCodingPlanLogin/handleCodingPlanLogin) hard-absent (KEEP codingPlanLoginPending); #150 onCodingPlanPurchaseComplete/codingPlanPurchaseToken/refreshPurchaseTokenState hard-absent (KEEP quota/OAuth refresh); #152 oauthTeamPricing.ts + account-loss getEnterprisePricingProducts/productList team fallback hard-absent (KEEP prepareAccountConnectionSwitch + individual-coding-plan); soft ledger #140/#143/#147/#149/#153 SessionHost OUT + #144/#151 productList comment scrubs; #158 loginActionVisible→productPurchaseRemovedVisible hard-gated (KEEP productPurchaseRemovedVisible + body). Soft inventory thinned — cleared symbol scans dropped. Inventory does not fail this gate.";
 
   return {
     note,
