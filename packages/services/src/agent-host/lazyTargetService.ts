@@ -35,6 +35,7 @@ export function createLazyTargetAgentHostService(input: {
   withWorkspaceAdmission?: WorkspaceAdmissionRunner;
   nativeOwner?: NativeWorkspaceSessionOwnerPort;
   checkAdmissionFence?: WorkspaceAdmissionFenceChecker;
+  ownerGeneration?: number;
 }): { service: IAgentHostService; dispose(): Promise<void> } {
   let target: AgentHostTargetService | undefined;
   let flight: Promise<AgentHostTargetService> | undefined;
@@ -87,6 +88,7 @@ export function createLazyTargetAgentHostService(input: {
     ...(input.worktrees ? { worktrees: input.worktrees } : {}),
     ...(input.nativeOwner ? { nativeOwner: input.nativeOwner } : {}),
     ...(input.checkAdmissionFence ? { checkAdmissionFence: input.checkAdmissionFence } : {}),
+    ...(input.ownerGeneration ? { ownerGeneration: input.ownerGeneration } : {}),
   });
   const getTarget = async (): Promise<AgentHostTargetService> => {
     if (disposed) throw new Error("agent host service disposed");
@@ -117,6 +119,7 @@ export function createLazyTargetAgentHostService(input: {
             : {}),
           ...(input.nativeOwner ? { nativeOwner: input.nativeOwner } : {}),
           ...(input.checkAdmissionFence ? { checkAdmissionFence: input.checkAdmissionFence } : {}),
+          ...(input.ownerGeneration ? { ownerGeneration: input.ownerGeneration } : {}),
         });
         const rpc = createRpcAgentHostService(instance, input.allowNewSessions);
         const unsubscribe = rpc.service.onEvent((event) => events.fire(event));

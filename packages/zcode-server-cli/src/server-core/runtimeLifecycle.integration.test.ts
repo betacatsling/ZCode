@@ -151,7 +151,7 @@ test("forked Supervisor/Core keep Host work alive across client detach and fence
     launcher: {
       launch(generation) {
         return fork(coreEntry, [String(generation)], {
-          cwd: "/home/ykzheng/Projects/Zcode",
+          cwd: fileURLToPath(new URL("../../../..", import.meta.url)),
           env: childEnv,
           execArgv: ["--import", "tsx"],
           stdio: ["ignore", "ignore", "ignore", "ipc"],
@@ -171,7 +171,7 @@ test("forked Supervisor/Core keep Host work alive across client detach and fence
       new URL("./fixtures/rootLockProbe.ts", import.meta.url),
     );
     const competingOwner = fork(rootLockProbePath, [serverRoot], {
-      cwd: "/home/ykzheng/Projects/Zcode",
+      cwd: fileURLToPath(new URL("../../../..", import.meta.url)),
       execArgv: ["--import", "tsx"],
       stdio: ["ignore", "ignore", "ignore", "ipc"],
     });

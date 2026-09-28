@@ -1389,6 +1389,8 @@ export function createLocalServices(options: {
   targetAttachment?: { dispose(): void; disposeAndWait(): Promise<void> };
   /** Stable target identity supplied by the standalone supervisor; absent disables this channel. */
   agentHostTargetId?: string;
+  /** Supervisor 的 Core generation。owner fence 用它拒绝旧 generation 的写入。 */
+  agentHostOwnerGeneration?: number;
   cuaProductMcpServerResolver?: CuaProductMcpServerResolver;
   agentRuntimeContext?: {
     getDeviceMid?: () => string | undefined;
@@ -2974,6 +2976,9 @@ export function createLocalServices(options: {
       allowNewSessions: () => process.env.ZCODE_MULTI_HARNESS_ENABLED === "1",
       worktrees: worktreeServiceForAdmission,
       nativeOwner: getNativeManagedWorkspaceSessionOwner(zcodeAgentService),
+      ...(options.agentHostOwnerGeneration
+        ? { ownerGeneration: options.agentHostOwnerGeneration }
+        : {}),
       checkAdmissionFence: async (request) => {
         if (!workspaceAdmissionController || !worktreeServiceForAdmission || !targetId) {
           throw new Error("workspace-admission-owner-unavailable");
