@@ -56,3 +56,32 @@ test("desktopMainIpcRemote drops Coding Plan keep-in-webview openExternal bypass
   assert.match(text, /PlatformChannels\.OpenExternal/);
   assert.match(text, /shell\.openExternal/);
 });
+
+const handlersPath = path.join(mainDir, "desktopCommandHandlers.ts");
+const channelsPath = path.resolve(desktopRoot, "../shared/src/channels.ts");
+const platformPath = path.resolve(desktopRoot, "../shared/src/platform.ts");
+
+test("clearCodingPlanWebviewStorage and partition are removed", () => {
+  const handlers = readFileSync(handlersPath, "utf8");
+  for (const needle of [
+    "clearCodingPlanWebviewStorage",
+    "CODING_PLAN_WEBVIEW_PARTITION",
+    "persist:zcode-coding-plan",
+  ]) {
+    assert.equal(handlers.includes(needle), false, `unexpected leftover: ${needle}`);
+  }
+
+  const platform = readFileSync(platformPath, "utf8");
+  assert.equal(platform.includes("ClearCodingPlanWebviewStorage"), false);
+
+  const channels = readFileSync(channelsPath, "utf8");
+  for (const needle of [
+    "CodingPlanWebviewChannels",
+    "CodingPlanPurchaseCompletePayload",
+    "CodingPlanWebviewLocale",
+    "CodingPlanWebviewLangChangeDetail",
+    "persist:zcode-coding-plan",
+  ]) {
+    assert.equal(channels.includes(needle), false, `unexpected leftover: ${needle}`);
+  }
+});

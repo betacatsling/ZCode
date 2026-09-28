@@ -181,6 +181,22 @@ function assertDeletedSurfaces() {
       );
     }
   }
+  const desktopHandlersPath = join(ROOT, "packages/desktop/src/main/desktopCommandHandlers.ts");
+  if (existsSync(desktopHandlersPath)) {
+    const handlersSrc = readFileSync(desktopHandlersPath, "utf8");
+    if (/clearCodingPlanWebviewStorage|CODING_PLAN_WEBVIEW_PARTITION|persist:zcode-coding-plan/.test(handlersSrc)) {
+      fails.push(
+        "desktopCommandHandlers.ts must not retain clearCodingPlanWebviewStorage / coding-plan partition",
+      );
+    }
+  }
+  const sharedPlatformPath = join(ROOT, "packages/shared/src/platform.ts");
+  if (existsSync(sharedPlatformPath)) {
+    const platformSrc = readFileSync(sharedPlatformPath, "utf8");
+    if (/ClearCodingPlanWebviewStorage/.test(platformSrc)) {
+      fails.push("DesktopCommandIds.ClearCodingPlanWebviewStorage must stay deleted");
+    }
+  }
   // Definition of useCodingPlanEntryGate must not reappear under packages/ui/src
   const entryGateHits = grepFiles(UI_SRC, /export\s+function\s+useCodingPlanEntryGate\b/, {
     extensions: [".ts", ".tsx"],
