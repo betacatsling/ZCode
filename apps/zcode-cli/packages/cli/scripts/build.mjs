@@ -196,6 +196,16 @@ export const resolveBuildAliases = ({
     rootDirectory,
     "../../packages/shared/src/zcodeEndpoint.ts",
   ),
+  // agent-host / node-repl-browser-broker 是 bootstrap 与 node-repl-host 的直连 subpath；
+  // 漏声明会被通用 "@zcode/shared" 前缀改写成 `src/index.ts/<subpath>`，CLI/Desktop agent 打包失败。
+  "@zcode/shared/agent-host": resolve(
+    rootDirectory,
+    "../../packages/shared/src/agent-host/index.ts",
+  ),
+  "@zcode/shared/node-repl-browser-broker": resolve(
+    rootDirectory,
+    "../../packages/shared/src/browser-use/nodeReplBroker.ts",
+  ),
   "@zcode/shared/node": resolve(rootDirectory, "../../packages/shared/src/node.ts"),
   "@zcode/shared": resolve(rootDirectory, "../../packages/shared/src/index.ts"),
   "@zcode/core": resolve(cliDirectory, "../core/dist/index.js"),
