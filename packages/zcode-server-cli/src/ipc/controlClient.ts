@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { controlResponseSchema, type ControlRequest } from "../contracts.js";
 import { encodeJsonLine, JsonLineDecoder } from "./framing.js";
 import { ControlRequestError } from "./controlError.js";
+import { ensurePrivateControlSocketDir, relocatedControlSocketDir } from "./controlSocketDir.js";
 
 // Omit 不对 union 分发：直接 Omit<ControlRequest, "id"> 会丢掉 confirmation/force 等
 // 变体字段，调用方无法以字面量构造合法请求。用分发式 Omit 保留每个命令的完整形状。
@@ -14,6 +15,9 @@ export async function requestControl(
   request: ControlRequestInput,
   timeoutMs = 10_000,
 ): Promise<unknown> {
+  // 不连接他人可控目录里的 socket；目录不存在时 lstat 的 ENOENT 与 connect 的语义一致。
+  const relocatedDir = relocatedControlSocketDir(endpoint);
+  if (relocatedDir) await ensurePrivateControlSocketDir(relocatedDir, { create: false });
   const id = randomUUID();
   const socket = connect(endpoint);
   const decoder = new JsonLineDecoder();

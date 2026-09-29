@@ -1,6 +1,7 @@
 import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
+import { shortControlSocketDir } from "../ipc/controlSocketDir.js";
 
 export interface ServerLayout {
   readonly dataBaseDir: string;
@@ -43,7 +44,7 @@ export function resolveServerLayout(serverRoot = getDefaultServerDataRoot()): Se
     controlEndpoint:
       process.platform === "win32"
         ? `\\\\.\\pipe\\zcode-server-${stablePathId(root)}`
-        : join(runDir, "control.sock"),
+        : resolveControlSocketPath(root, runDir),
     serviceDir: join(root, "service"),
     uninstalledFile: join(root, "uninstalled.json"),
     updateTransactionFile: join(root, "update-transaction.json"),
@@ -75,6 +76,24 @@ export async function resolveCanonicalServerLayout(
   serverRoot = getDefaultServerDataRoot(),
 ): Promise<ServerLayout> {
   return resolveServerLayout(await resolveCanonicalServerRoot(serverRoot));
+}
+
+/** macOS sockaddr_un.sun_path 含结尾 NUL 共 104 字节；超长时 listen/connect 返回 EINVAL。 */
+export const DARWIN_SOCKET_PATH_MAX = 103;
+
+export function resolveControlSocketPath(
+  serverRoot: string,
+  runDir: string,
+  platform: NodeJS.Platform = process.platform,
+  uid: number = process.getuid?.() ?? 0,
+): string {
+  const alongside = join(runDir, "control.sock");
+  if (platform !== "darwin" || Buffer.byteLength(alongside) <= DARWIN_SOCKET_PATH_MAX) {
+    return alongside;
+  }
+  // 默认临时目录（/var/folders/...）或较深的 ZCODE_DATA_BASE_DIR 下，run/control.sock 会超过
+  // sun_path。放得下时仍用 run 目录；放不下才换到按 uid 隔离的短私有目录。Linux 不进入这里。
+  return join(shortControlSocketDir(uid), `${stablePathId(serverRoot)}.sock`);
 }
 
 function inferDataBaseDir(serverRoot: string): string {

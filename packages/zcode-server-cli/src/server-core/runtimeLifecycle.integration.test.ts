@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { fork } from "node:child_process";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -124,7 +124,9 @@ function sendCommand(hostSessionId: string, commandId: string, turnId: string): 
 }
 
 test("forked Supervisor/Core keep Host work alive across client detach and fence crash recovery", async () => {
-  const temp = await mkdtemp(join(tmpdir(), "zcode-runtime-host-process-"));
+  // macOS 的 os.tmpdir() 位于 /var -> /private/var 符号链接下；mock 授权按 realpath 比较，
+  // 因此先 realpath。该长路径同时覆盖 control.sock 超过 sun_path 时的短目录回退。
+  const temp = await realpath(await mkdtemp(join(tmpdir(), "zcode-runtime-host-process-")));
   const serverRoot = join(temp, "server");
   const worktreePath = join(temp, "worktree");
   const configPath = join(temp, "provider-config.json");
