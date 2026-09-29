@@ -235,14 +235,9 @@ async function withRoot(
 // Bug 1: approval request without a preceding tool.started
 // ---------------------------------------------------------------------------
 
-const SNAPSHOT_TODO =
-  "BUG projector.ts:152-160 — interaction.requested whose toolCallId has no prior tool.started " +
-  "throws 'unmatched approval request', although SessionHost already journaled it " +
-  "(sessionHost.ts:142-146, 878-882). Every later snapshot/attach/rowsRange of the session throws.";
-
 test(
   "snapshot: an approval requested before tool.started is projected instead of poisoning the session",
-  { todo: SNAPSHOT_TODO, timeout: TEST_TIMEOUT_MS },
+  { timeout: TEST_TIMEOUT_MS },
   async () => {
     await withRoot("zcode-snapshot-approval-first-", async (root, worktree) => {
       const harness = new ScriptedHarness();
@@ -336,7 +331,7 @@ test(
 
 test(
   "projection: approval-first tool rows are adopted by the later tool.started and keep approval outcome",
-  { todo: SNAPSHOT_TODO, timeout: TEST_TIMEOUT_MS },
+  { timeout: TEST_TIMEOUT_MS },
   () => {
     const spec = makeSpec("host-projection", "/tmp/unused");
     const epoch = "epoch-projection";
