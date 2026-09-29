@@ -1,379 +1,43 @@
-# ZCode 多 Harness v0.3 实施台账
+# 多 Harness 实现导航与证据边界
 
-更新时间：2026-09-29（P6 tip 对照同步至 `3de779c`；#256/#260/#263/#265/#269/#274/#280/#283 idle-close 族 + #288/#291/#294 disconnect-then-reopen + #299/#302/#307 disconnect-then-fault-reopen；#259/#266/#267/#272/#276/#282/#285/#287/#290/#293/#295–#298/#300/#301/#303–#306 soft；矩阵至 #307；仍 ≠ live / 禁标 P6 完成）
+更新：2026-09-29。项目级进度、优先级与完成标准统一见 [总体交付计划](../PROJECT-DELIVERY-PLAN.md)，不再在本文件逐条追加 PR 编号或 tip SHA。
 
-本台账以仓库当前源码、`package.json`、测试文件和
-`ZCode_Multi_Harness_Refactor_Plan_v0.3_Orca_Hierarchy.md` 为准。它记录“代码存在、确定性测试通过、真实环境认证通过”三种不同证据，不把契约、Mock、构建产物或协议探针当作产品完成。计划规定 P4 完成后才称为首个可用版本。
+本次对照源码为整理前集成版本 `f130e1940c0d70ddc71d3fe586fc2a333b9f212e`。原长篇阶段汇编保留在 Git 标签 `archive/2026-09-29/integration-before-consolidation` 的同路径；其中“当前环境”“尚无实现”等描述属于当时记录，不能继续当作最新源码结论。
 
-## 当前证据和环境
+## 实现地图
 
-- 计划固定的源码基线是 `328c1a0c0ffaa5a4f65e8fa199af5e4c20706e5f`。wave4 集成 tip（本台账对照用）以 `cursor/wave4-harness-integration-b7a9` @ `3de779c` 为准（含 #61–#307：opt-in OpenCode/Goose SessionHost fake-transport 矩阵（#75/#80/#83/#85/#90/#110/#115/#118/#122/#125/#129/#134/#136/#140/#143/#147/#149/#153/#155/#174/#177/#182/#187/#195/#202/#211/#217/#223/#229/#236/#242/#248/#256/#260/#263/#265/#269/#274/#280/#283/#288/#291/#294/#299/#302/#307：late/disconnect/resume/cancel/permission/reopen/load-then-*/disconnect-during-session-load/load-then-permission-deny/allow/permission-during-session-load/load-then-send/disconnect-during-permission/disconnect-during-permission-then-reopen/idle-close-during-permission/idle-close-during-permission-then-reopen/idle-close-then-fault-reopen/cancel-after-idle-close/allow-after-idle-close-reopen/deny-after-idle-close-reopen/double-send-after-idle-close-reopen/cancel-after-idle-close-reopen/double-cancel-after-idle-close-reopen/allow-then-cancel-after-idle-close-reopen/deny-then-cancel-after-idle-close-reopen/allow-then-disconnect-then-reopen/cancel-then-disconnect-then-reopen/deny-then-disconnect-then-reopen/allow-then-disconnect-then-fault-reopen/cancel-then-disconnect-then-fault-reopen/deny-then-disconnect-then-fault-reopen 等；仍 ≠ live）、#69 MULTI_HARNESS、#76–#307 REMOVE/UI soft + verify pins + tip docs（…/#224–#227 tip/ledger；#225 honesty；#226 auto-family；#228 lazyAdmission；#229 SessionHost reopen；#230 setProviderFamilyDomain DROP；#231 tip docs；#232 verify ledger；#233 quota provider id DROP；#235 L1 ceiling；#236 SessionHost idle-close；#237 evidence ceiling；#238 lazyAdmission residual；#239–#241/#243/#245/#247/#249 tip/ledger/matrix docs；#242 SessionHost idle-close-then-reopen；#244 lazy target-unavailable；#246 onOpenModelUpgrade DROP soft；#248 SessionHost idle-close-then-fault-reopen；#250 quota locale 三键 DROP soft；#251–#255/#258/#262/#264/#270 verify tip ledger soft；#252 matrix docs；#254 Start Plan product JWT DROP soft；#256 SessionHost cancel-after-idle-close；#257 BigModel team-plan API key glue DROP soft；#259 AcpRpc post-close refuse soft；#260 SessionHost allow-after-idle-close-reopen；#261 resolveZaiStartPlanBalanceModelIds DROP soft；#263 SessionHost deny-after-idle-close-reopen；#265 SessionHost double-send-after-idle-close-reopen；#266 Devin honesty soft；#267 workspace-session binding-kind soft；#268/#271 UI scrub soft；#269 SessionHost cancel-after-idle-close-reopen；#272 NodeApiClient product-JWT hooks DROP soft；#273 idle-close family matrix docs；#274 SessionHost double-cancel-after-idle-close-reopen；#275/#271 UI scrub soft；#276 ZaiBusinessTokenResolver DROP soft；#278 desktop OAuth/purchase scrub soft；#279 matrix #274 docs；#280 SessionHost allow-then-cancel-after-idle-close-reopen；#281 verify tip ledger soft；#282 shared product-login/purchase residuals DROP soft；#283 SessionHost deny-then-cancel-after-idle-close-reopen；#284 matrix #280 docs；#285 web ZAI OAuth Vite inject/proxy DROP soft；#286 matrix #283 docs；#287 web orphan product OAuth env DROP soft；#288 SessionHost allow-then-disconnect-then-reopen；#289 matrix #288 docs；#290 ui product-login startup remnants DROP soft；#291 SessionHost cancel-then-disconnect-then-reopen；#292 matrix #291 docs；#293 Devin manifest comment soft；#294 SessionHost deny-then-disconnect-then-reopen；#295 matrix #294 docs；#296 Claude settlement helpers DROP soft；#297 Codex gateway exports DROP soft；#298 desktop/ui product-login tsup/i18n remnants DROP soft；#299 SessionHost allow-then-disconnect-then-fault-reopen；#300 unused native fake constants DROP soft；#301 matrix #299 docs；#302 SessionHost cancel-then-disconnect-then-fault-reopen；#303 Devin directory test title soft；#304 ui project-sidebar HarnessIcon chrome DROP soft；#305 matrix #302 docs；#306 verify tip ledger soft；#307 SessionHost deny-then-disconnect-then-fault-reopen）、#89/#94/#98/#100/#102/#106/#108/#161/#165/#169/#171/#173 P6 ledger + I1–I4/L1–L4 stubs）；历史本地 checkout `438c257…` 与脏树记录不得与 tip 或计划基线混称，也不能清理与本任务无关的改动。
-- `mise.toml` 要求 Node 24.14.0、pnpm 10.33.2。当前 shell 实测 Node 24.18.1、pnpm 10.33.2，`mise` 不在 PATH；后续认证必须使用固定工具链并在记录中注明实际版本。
-- 当前主开发 shell 是 Ubuntu 20.04.6、Linux 5.15、x86_64；本机未运行 macOS GUI。远端 Mac 已完成只读 capability probe，但源码构建、local worker 和桌面退出恢复仍未认证。
-- 本地 CLI 版本实测为 Pi 0.86.1、Claude Code 2.1.263、Codex CLI 0.154.0。仓库 Pi 依赖固定为 0.87.1，Codex 计划/探针要求 0.156.1；本地 CLI 版本差异不能算兼容认证。
-- 本机 OpenSSH 8.2p1；按用户授权对 SSH 配置中的两个非通配目标做了只读探测，两个目标均可连接并报告 macOS 27.0、arm64、Git 2.50.1。远端默认 PATH 没有 Node/pnpm，但常见安装位置可见 Node 26.8.1 和 mise 2026.9.12，pnpm 和 Homebrew 未发现；默认 cwd 不是 Git 仓库，home 下最多五层可见 22 个 Git 目录但没有名为 ZCode 的仓库。未输出 alias、地址、用户名、路径或 key，也没有上传、写文件或运行模型。两个条目可能指向同一台机器，不能据数量推断有两台独立 target。
-- 早期 hierarchy 验证日志 `/tmp/zcode-hierarchy-validation-20260927/` 记录 agent-host/UI 33/33（hierarchy 6/6）、root typecheck 通过、lint 0 errors/70 warnings、architecture 0 violations；随后当前 focused 记录为 agent-host 39 + Catalog 4 = 43 个测试通过。本轮 directory/sidebar/ConversationTransport focused suites 已通过；ProjectSidebar directory/summary/projector fixtures 当前 7/7，最终分包与门禁日志保存在 `/tmp/zcode-conversation-transport-validation-20260927/final/`。Worktree/AgentHost 相关当前实测为 64/69（另有并行 Worktree contract/migration 测试收口中）。在用户授权的隔离环境中已发生 92 次 live Pi/Provider 尝试：StepFun Linux/Mac 新版路径通过，AxonHub Linux 新版通过，AxonHub Mac 路径按拒绝结果收尾；这些结果仍需按完整 acceptance matrix 汇总，不能把尝试次数当 P3/P4 全部完成。
-- 当前已有构建产物：`packages/desktop/out/host/piWorker.js`、`packages/zcode-server-cli/dist/piWorker.js`、`packages/zcode-server-cli/dist-release/zcode-server-linux-x64/runtime/piWorker.js`、server-core/server-cli 和 bundled Node。它们的时间戳在 2026-09-24，早于本轮层级契约变更；只能证明文件曾构建，不能证明是当前 checkout 的最终包，也不能证明运行时依赖完整。
-- 没有读取或记录 Provider key、refresh token、SSH alias、真实账户数据或用户会话。当前本地标准 personal config `~/.zcode/v2/provider_config.json` 不存在；两个远端 Mac 的标准 personal config、`ZCODE_DATA_BASE_DIR` 和 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` 也未发现。仓库内置 `deepseek` 规则静态列出 `deepseek-v4-pro`、`deepseek-v4-flash`、`deepseek-v4.1-flash`、`deepseek-flash` 及若干带 `deepseek/` 前缀的变体；这些不是 personal provider。live 联调按用户“少用”约束控制，由主代理统一记录 provider/model 与用量，不在本台账写凭据或账户值。
+| 领域                           | 已存在的实现                                                                             | 尚需项目级证明                                                  | 详细契约                                                                                                 |
+| ------------------------------ | ---------------------------------------------------------------------------------------- | --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| 共享身份与路由                 | AgentHost/SessionSpec、Project/Workspace 层级、V4 投影和原生/外部分流                    | 跨版本、跨 target 与真实产品面一致                              | [CONTRACT](CONTRACT.md)、[HIERARCHY](HIERARCHY.md)、[PROJECTION](PROJECTION.md)                          |
+| Project Catalog                | profile-local Project metadata、目标 workspace 展示缓存、schema v2 持久化                | 真实离线/重连 freshness 与多窗口交互                            | [PROJECT-CATALOG](PROJECT-CATALOG.md)                                                                    |
+| Worktree                       | discover/adopt/create/revalidate/remove、generation 与 admission fence                   | 真实 SSH、目录变化、删除竞态和 UI 联动矩阵                      | [WORKTREE](WORKTREE.md)、[WORKSPACE-ADMISSION](WORKSPACE-ADMISSION.md)                                   |
+| 层级迁移                       | 持久索引来源、preview/apply、CAS、备份/rollback、保留原 owner locator                    | 用户升级数据集与真实 UI 迁移/回退验收                           | [SESSION-MIGRATION](SESSION-MIGRATION.md)                                                                |
+| 工作区会话创建                 | createWorkspaceSession、native owner/外部 manifest、幂等 receipt 和 read-only membership | 同 worktree 多会话、跨 target 历史、UI 焦点及故障回归           | [SESSION-MIGRATION](SESSION-MIGRATION.md)、[创建与历史 spec](../specs/agent-creation-harness-history.md) |
+| 外部 Host                      | SessionHost、CommandJournal/EventJournal、target 服务与能力目录                          | 生产组合、进程崩溃、连接授权、长期生命周期                      | [SERVICE](SERVICE.md)、[DIRECTORY](DIRECTORY.md)、[RUNTIME-HOST](RUNTIME-HOST.md)                        |
+| Pi                             | 真实 SDK worker、Model bridge、局部 FakeModel 和历史 live 记录                           | 当前候选的原生/Pi × Provider × local/SSH 完整矩阵               | [PI-WORKER](PI-WORKER.md)、[LIVE-CERTIFICATION](LIVE-CERTIFICATION.md)                                   |
+| Codex                          | app-server adapter、Model Gateway 与多项 FakeModel 控制/绑定测试                         | 真实 Provider/SSH、sandbox、grant 与长会话认证                  | [CODEX-HARNESS-ADAPTER](CODEX-HARNESS-ADAPTER.md)、[CODEX-APP-SERVER](CODEX-APP-SERVER.md)               |
+| Claude                         | structured adapter、Messages 路径及局部集成测试                                          | 共享 Gateway owner 接线与生产 live 认证                         | [CLAUDE-CODE](CLAUDE-CODE.md)                                                                            |
+| ACP / Devin / OpenCode / Goose | reusable ACP、可选 Devin、opt-in OpenCode/Goose 和 SessionHost fake-transport 测试       | 第二同协议 Agent 的默认生产接入、版本兼容、安装诊断和 live 运行 | [SECOND-ACP-INSTALL-DIAG](SECOND-ACP-INSTALL-DIAG.md)                                                    |
+| UI                             | ProjectSidebarMount、Harness picker/header、既有 V4 conversation provider、原生历史入口  | 可见 UI + durable owner 的完整端到端证据                        | [PROJECT-SIDEBAR](PROJECT-SIDEBAR.md)、[UI-CONVERSATION](UI-CONVERSATION.md)                             |
 
-当前目标链路和所有者如下：
+## 需要纠正的旧台账结论
 
-```text
-Project Catalog（未来：项目元数据、默认工作区、排序）
-        ↓ 引用
-Target Runtime Host（未来：RepositoryBinding、WorktreeWorkspace、准入）
-        ↓ 继承
-Agent Host Session（已有外部 Host 的命令/事件/journal 所有者）
-        ↓
-Harness Adapter（Pi 已有；Codex/Claude FakeModel experimental；Devin print-mode + 可选 ACP profile；通用长尾 ACP 未完成）
-        ↓
-现有 Provider Registry + Model executor（Pi bridge 已有代码路径，真实路由未认证）
-        ↓
-V4 Projector / UI facade（投影和 facade 已有，产品 UI 尚未挂载）
-```
+- 不再说“没有 durable Project Catalog”：当前契约和实现已有 schema v2 文件、目标引用与 freshness。
+- 不再说“没有旧会话迁移/备份/回滚”：SessionHierarchy 已有这些能力，剩下的是当前产品组合与真实升级验收。
+- 不再说“没有工作区会话创建路径”：已有公开 Host 创建、owner association 和幂等 receipt。其存在不自动证明 UI/多 target 全链路可用。
+- 不把过去某次 live 成功、失败或假模型循环结果升级为当前候选完成；保持完整运行版本和失败记录。
+- 不把移除登录的代码清理计入 ACP/P6 完成。二者共用项目交付入口，但验证对象不同。
 
-## P0：基线、工具链和当前行为
+## 当前生产边界
 
-状态：**部分完成，真实基线仍未闭环**。
+1. lazy Host 当前登记 Pi、Codex、Claude、Devin。OpenCode/Goose 的 opt-in fixture 不等于默认生产登记。
+2. Codex 构造已接收共享 TargetModelGateway；Claude 构造当前没有注入该共享对象，仍可创建 adapter-local Gateway。统一所有权是 M5 的明确工作包。
+3. `ZCODE_MULTI_HARNESS_ENABLED` 只控制新外部会话准入，不能替代 capability、认证、workspace/target 校验。见 [MULTI-HARNESS-ADMISSION](MULTI-HARNESS-ADMISSION.md)。
+4. Core loopback Host 能力签发边界仍需 M2 审查；“能连上 loopback”不能作为完整授权证明。
+5. 受支持、实验性、未知与不支持必须如实显示。测试 stub、固定 FakeModel 或命令探针不改变产品能力承诺。
 
-已有证据：
+## 验证与维护方式
 
-- [BASELINE.md](./BASELINE.md)、[CONTRACT.md](./CONTRACT.md)、[ACCEPTANCE.md](./ACCEPTANCE.md) 已记录原生链路、Host 所有者、模型层边界、隔离数据目录和失败分类。
-- [CODEX-HOST-REFERENCE.md](./CODEX-HOST-REFERENCE.md) 已记录 CodexHost 固定 commit、LGPL-3.0-only 许可和“参考设计而非复制依赖”的边界。
-- 已执行过 architecture、typecheck、lint、worker bundle 和若干确定性测试；当前完整 native GUI 生命周期、真实 SSH ZCode 执行和最终安装包仍没有证据。
-- 原生 UI→V4→CLI/runtime→Provider Registry→AiSdkModelAdapter 的现有链路仍是权威路径。新 Host 没有接管 native session、native projection 或 native command inbox。
+现有测试文件中的具体场景是用例事实来源；本文件不再复制一份排列组合清单。新增场景与其行为修改一起提交，验收结果写入候选版本的统一证据表。
 
-仍需交付：
-
-- 在固定 Node/pnpm 和独立数据目录下重做可复现的原生 create/send/tool/stop/approval/resume trace，记录实际版本和失败原因。
-- 验证至少一次真实 SSH ZCode 执行，区分 SSH 登录成功、远端命令成功和任务在 GUI/SSH 断开后继续三种证据。
-- 补齐 v0.3 的 tab→workspace→session→cwd 归属样本：主检出、linked worktree、非 Git 目录、离线 SSH、同路径不同 target。
-- 固定 Git 版本和机器可解析的 `worktree list --porcelain -z` 行为；当前 WorktreeService、持久目录和 RPC 端口已有代码与确定性测试，发现/显式接管仍需完整 UI、迁移和远端 acceptance。
-- 完成脱敏 trace fixture、来源/许可清单和基线失败清单；不要把外部协议探针或构建通过写成 live Harness 通过。
-
-P0 验收仍缺 native GUI 回归、SSH 实际任务、安装包和脱敏 trace。下一批工作应先保持这份基线可重放，不移动目录、不迁移旧会话、不接入真实第三方 Harness。
-
-## P1：共享契约、目录、Mock 和层级基础
-
-状态：**基础契约和确定性 Host 已有；P1 仍未完成**。
-
-### 已实现并有测试的部分
-
-- `packages/shared/src/agent-host/session-spec.ts`：v1 `SessionSpec`、`ExecutionTargetRef`、`ModelBindingRequest`、`BackendBinding`。v1 没有被层级切片升级，旧 Host manifest 仍可读。
-- `packages/shared/src/agent-host/commands.ts`、`events.ts`、`capabilities.ts`、`binding-plan.ts`、`metadata.ts`：命令、事件、能力报告、BindingPlan 和 additive external metadata 的 strict schema。
-- `packages/shared/src/agent-host/hierarchy.ts`：`Project`、`RepositoryBinding`、`WorktreeWorkspace`、`AgentSession`、层级引用/重复校验和纯 `ExecutionSnapshot` 派生。它只做词法 cwd 检查，不做 Git、realpath、符号链接、权限或 target 现状检查。
-- `packages/services/src/agent-host/harnessRegistry.ts`、`modelBindingPlanner.ts`、`registryCatalog.ts`：可信内置 adapter 注册、target/capability/model admission 和冻结 Registry fingerprint。
-- `IAgentHostService.getDirectory()` 与 `listSessionSummaries()` 已接入 target/RPC/lazy service；live summaries 只读 Host 内存状态，cold summaries 只读 manifests/index 并标 stale/offline/unknown，不启动 worker或扫描 transcript。native ZCode directory entry 由 Host 注入；Pi 未加载或无受控资源时保持 disabled/fallback。
-- `packages/services/src/agent-host/mockHarness.ts`：文本、工具、审批、拒绝、简单延迟/失败/序号场景的 deterministic fake。
-- `commandJournal.ts`、`eventJournal.ts`、`journalStorage.ts`：持久 accepted record、事件序号、source-event 去重、gap/fault fence 和进程锁的基础实现。
-- 当前 39 个 agent-host + 4 个 Catalog 测试包括 schema、层级引用、identity、journal、projection、router、channel scope、owner concurrency、fake Pi worker、fake model bridge 和 Catalog 原子/版本校验；本轮新增 directory/sidebar 测试已通过 9/9，ConversationTransport bridge/source/pagination services 57/57、UI transport/facade/SessionDataLayer integration 6/6，ProjectSidebar directory/summary/projector fixtures 7/7。相关分包 suite 合计 70 个已执行用例；Worktree/migration 并行 suite 另记 64/69。
-
-### P1 明确缺口
-
-这些缺口不能因为 hierarchy schema 已完成而跳过：
-
-- `packages/shared/src/agent-host/directory.ts`、`packages/services/src/agent-host/harnessDirectory.ts`、`IAgentHostService.getDirectory/listSessionSummaries` 已提供版本化 manifest、静态 light/dark asset ID、safe fallback、live/cold summary 和现有 Registry 的只读 additive port；Pi 真实品牌资源、remote manifest loading 与完整 Host asset bytes port 仍缺。
-- `packages/shared/src/agent-host/sidebar.ts`、`packages/services/src/agent-ui-projection/sidebarProjector.ts` 已提供纯 `SidebarSnapshot/Summary` projector，focused suite 9/9 通过；它尚未接入 UI、Catalog 或 sessions-index transport，也没有全套 E2E。
-- 基础 Project Catalog 已落盘于 `packages/services/src/project-catalog/`：strict v1 文件、原子写、文件锁、idempotent create/update 和 future/invalid file fail-closed；`projectCatalog.test.ts` 当前 4 个测试通过。它只保存 Project metadata 和 opaque `workspaceIds`，不拥有 RepositoryBinding/WorktreeWorkspace。
-- RepositoryBinding/WorktreeWorkspace 持久化、target-scoped discovery/adopt/revalidate、代际证据和原子写已有实现及确定性测试；跨 Catalog refs 的重试、UI 接管、迁移联动和真实 target acceptance 仍缺。
-- Mock 的场景字段包含 delay/failure/gap，但缺少计划要求的完整 slow、异常退出、重复事件、缺失序号、未来 schema、能力原因和大规模 summary fixture 审计。
-- 没有两项目、每项目至少两个工作区、同工作区三个会话（含同 Harness 两个）的 Sidebar fixture 和排序/focus fixture。当前 hierarchy fixture 证明数据模型关系，不能代替侧栏读模型。
-- 目录已有 Host manifest factory/静态 asset ID 端口和安全 fallback；生产 UI 目前只加载已登记的本地 ZCode 资源，Pi 资源来源/再分发清单和完整 Host asset bytes/URL port 仍需补齐，capability 仍由 probe/session 提供。
-- 迁移代理正在补齐 SessionHierarchy source 联合和旧 cwd/native owner 保留；未 linked 的记录只能显示待核实，不能由 UI 猜测归属。
-
-### P1 后续接入边界
-
-本轮已完成目录/摘要契约和纯 projector；下一步应把它们接到 Catalog/Host，而不是再造执行状态：
-
-1. 让内置 factory 在现有 Registry registration 旁提供受信 manifest，继续由 probe/session 提供 capabilities。
-2. 让 Catalog/Worktree Host 提供已验证 hierarchy snapshot 和 bounded summaries；Project Catalog 仍只保存 metadata/workspace refs。
-3. 将 `projectSidebarSnapshot` 接入后续 UI view facade，保持 focus/view state 在 UI store，禁止 projector 写回 owner。
-
-最小接口边界应复用现有 `HierarchySnapshot`、`StoredAgentSessionSummary`、`ExecutionTarget` 和 Harness capability reports。Catalog/WorktreeService 后续只需提供已验证的 hierarchy snapshot，不让 projector 读取 Git 或 journal 全文。
-
-## P2：SessionRouter、原生 facade、目录驱动 UI 和旧数据接缝
-
-状态：**服务通道和路由骨架已有，产品面和迁移未实现**。
-
-### 已实现
-
-- `packages/services/src/agent-host/sessionRouter.ts`：native/external 归属决策、target identity 检查、外部 admission flag、未知 Harness fail-closed。
-- `packages/shared/src/agent-host/metadata.ts` 及 `sessions-index.ts`/`snapshot.ts` additive metadata：旧 native session 缺失 metadata 时仍按 `zcode` 解释，未扩展旧 `glm` wire identity。
-- `packages/ui/src/v4/agentHostConversationFacade.ts`：关闭开关返回原 native transport；开启时按已知 session owner 路由，未知 session 不回退 native；有 deterministic facade test。
-- `IAgentHostService`、`rpcTargetService.ts`、`client/src/remoteServiceAccess.ts` 已建立独立 target-local RPC 面。Desktop local Host 和 standalone server Core 进行服务登记；generic web/replayable channel 排除该写入/历史频道，已有 scope/server-info 测试。
-- `packages/shared/src/agent-host/v4.ts`、`packages/services/src/agent-host/conversationBridge.ts`、`packages/ui/src/v4/agentHostConversationTransport.ts` 已提供 additive external create/subscribe/ACK barrier/frame/recovery/rowsRange/command seam；Host 仍拥有 snapshot、seq、journal、dispatch 和 receipts。runtime admission 独立于 delivery profile：只读订阅默认 `existing-only`，明确 attach/新建动作才传 `start-if-needed`；desktop-continuous 覆盖 online，web-remote-replayable 覆盖 recovery，且两种模式都能冷读 terminated history。bridge 现在依赖窄 source port，cold subscription 在 source attach 后保持同一 subscription 接收 live/recovery；rowsRange 从完整 Host journal 投影跨 tail window 分页。ProjectSidebar 已挂到旧 WorkspaceSidebar Project/Workspace 区域并保留 legacy fallback；真实 Electron focus/offline E2E 与 production native/external create mount 仍未认证。
-
-### 未实现/未认证
-
-- 没有完整的 `ZCodeHarnessAdapter` 产品适配层。当前外部 Pi Host 已有一条 bounded V4 bridge/transport seam，但 Router 和 facade 仍不能替代统一 HarnessAdapter 的全部控制/事件实现。
-- facade/ConversationTransport 已有生产可消费 port；ProjectSidebar native selection 复用既有 task callback，external selection 在 mapping port 未就绪时 fail-closed disabled。完整 Harness Picker/Header 共用、external create mount 和 side-by-side UI regression 仍未认证。
-- Project Catalog、WorktreeService、只读发现和显式接管已有 service ports；ProjectSidebar UI 正在接入，主检出/linked worktree、旧 session owner 保留和跨 target 映射仍依赖迁移 source 联合。
-- 没有严格 sidecar migration、future-version write rejection、旧 session/model/permission 保留和回滚演练。
-- `ZCODE_MULTI_HARNESS_ENABLED`：env 契约已锁在 `docs/agent-host/MULTI-HARNESS-ADMISSION.md` 与 `isMultiHarnessNewSessionAdmissionEnabled`（仅 `"1"` 开启；生产 `node.ts` / server CLI 共用）。lazy Host 交叉测：`multiHarnessPiCodexAdmission.test.ts`（#69）— flag off 时 Pi/Codex 不可用；exact `"1"` 时两者可 admission。完整产品 E2E（Picker/侧栏/create mount on/off）仍缺。
-
-P2 验收需要 native facade 开关 on/off、旧历史与设置保留、同工作区三会话不新增 worktree、后台不抢焦点、Picker/侧栏/Header 统一目录图标。当前只具备路由和隔离 channel 的确定性证据。
-
-## P3：Pi、现有模型层和统一 GUI
-
-状态：**Pi worker 和 fake model loop 已有；真实模型、SSH 和 GUI 验收未完成**。
-
-### 已实现
-
-- `packages/services/src/agent-adapters/pi/piHarnessAdapter.ts`：固定 Pi SDK 0.87.1 adapter，create/attach/send/cancel/resolve/terminate/subscribe，worker 进程和 sequence identity 校验。
-- `piWorker.ts`/`piProtocol.ts`：worker-local Pi agent loop、隔离 `HOME`/agent directory/session directory、Pi ModelRuntime provider、请求 correlation ID、abort、结构化事件转发。
-- `piModelStream.ts`：Pi transcript 到现有 ModelRequest 的桥；不支持图片、opaque reasoning/signature、非 auto tool choice 等能力时 fail-closed。
-- `createPiHarness.ts`、`modelBinding.ts`、`registryCatalog.ts`：生产 wiring 通过 live Registry selection/fingerprint 和 `AiSdkModelAdapter.createModel()` 创建 host-managed model；没有另造 HTTP client。
-- worker hook 在后端阻止未授权 write/edit/bash；read 可按声明 unattended；工具路径、审批、turn/interaction/epoch 和结果事件有 deterministic coverage。
-- `agent-ui-projection/projector.ts`：V4 子集投影、终端 message 替换 delta、工具/审批/usage/rows window；不会从投影触发工具。
-- `agentHostPiModelBridge.test.ts`、`agentHostPiWorker.test.ts`、`agentHostPiToolLoop.test.ts` 覆盖 fake model 文本、拒绝图片、真实 Pi SDK worker、读→写→bash→追问和拒绝审批。
-
-### 缺口和限制
-
-- 当前已记录 92 次隔离 live Pi/Provider 尝试；StepFun Linux/Mac 新版路径通过，AxonHub Linux 新版通过，AxonHub Mac 路径按拒绝结果收尾。仍需按完整 acceptance matrix、用量和 route trace 汇总，不能把尝试次数当 host-managed/P4 完成。
-- `createRegistryPiHarness` 默认构造 `AiSdkModelAdapter({})`，与 CLI bootstrap 的 `ApiProviderModelRuntime` 实例及其 execution config、status sink、request-auth 装配不同。代码路径存在，但真实路由、辅助调用、日志和认证仍需验证。
-- Pi adapter 当前只认证 `reasoningLevel=off`；images、reasoning、opaque provider state、runtime model switch、native resume 等明确 unsupported。
-- Pi `probe()` 要求 target platform 与当前 process platform 相同；SSH target 在现有实现中不能作为独立远端 worker 执行。P3 要求的 Pi 最小 SSH 和四个本地 ZCode/Pi×Provider 组合均未完成。
-- UI 没有生产挂载，不能验收 Pi/Pi/ZCode 同 worktree、模型切换不改变 Harness 图标、后台不抢焦点和共享文件风险提示。
-- 同 worktree 多写会话、一个会话停止不影响另一个、同 native/backend ID 隔离，当前没有真实多 worker/文件并发认证。
-
-P3 的真实验收必须包含两个不同 Provider、本地 macOS、Linux SSH、读→修改→测试→二轮追问、审批拒绝无副作用、实际 requested/effective route 和完整 trace。当前只完成协议与 fake-loop 子集。
-
-## P4：Runtime Host、owner fencing 和 SSH 持久化
-
-状态：**Target-local durable 基础已实现，独立生命周期和远端恢复未完成**。
-
-### 已实现的基础
-
-- `SessionHost` 在 backend create 前写入 `creating` manifest，使用 CommandJournal/EventJournal；accepted command 先持久化；不确定 send 会阻止下一次 prompt；历史读取不加载 adapter/Provider。
-- `EventJournal` 按 `(hostSessionId, runtimeEpoch, sequence)` 校验、去重 source event、拒绝 gap/foreign event；journal lock 提供同一 journal 文件的进程占用检查。
-- `AgentHostTargetService` 做 target/worktree 回调、host mount、history list/snapshot/events/query；`createRpcAgentHostService` 只暴露窄 RPC allowlist。
-- Desktop local Host 和 standalone server Core 已有 service registration；server HTTP 对 generic web 和 trusted host channel 采用不同暴露策略。
-- Pi worker bundle 入口存在于 desktop out、standalone dist 和 Linux release staging；有 bundle verification script 和无凭据初始化 smoke 的历史证据。
-
-### 未完成的 P4 硬门槛
-
-- 仓库已有通用 server supervisor、platform service manager、`cli serve --daemon`、launchd/systemd 与 runtime/lock 入口；外部 Harness 的活动计数、owner 生命周期、GUI 断开恢复和 SSH 持久化仍未接线验证，不应另造第二 daemon。
-- owner/lease/fencing 仍主要是内存 map 和按 journal 文件的锁。`AgentHostTargetService.#owners` 在异步 create mount 前存在竞态；Pi adapter 的 `#sessions` 也在异步 spawn 后写入。需要跨请求/跨进程的唯一 owner reservation、stale generation 和 crash recovery 测试。
-- Worktree Catalog 已提供 realpath/filesystem evidence、generation、discovery/adopt/revalidate；lazy AgentHost 的 `authorizeWorktree`（`authorizeLazyWorktreeAdmission`）已做 catalog 查找 + `revalidate` + `worktreeGeneration` recheck，generation / path / lifecycle 不匹配则拒绝 admission。UI 接管、跨 target 映射与真实 SSH/删除竞态仍未验收。
-- SSH upload/install/attach/resume、远端事件持续消费、GUI 完全退出、SSH 断开/重连、审批中断线和服务崩溃恢复均未实测。`IRemoteBackend.exec()` 的 stdio 连接不能当作持久化 Host。
-- 没有工作区删除期间冻结新 admission、运行/审批/未知状态预检、目录消失/重建和离线重同步流程。
-- P3 四个本地组合加四个 SSH 组合、真实 Provider、owner crash/process fault 均未认证。
-
-P4 完成前不得标为首个可用版本。下一步依赖 P1 Catalog/identity、P3 真实 Pi route，然后实现 supervisor、远端安装协议和 owner fencing。
-
-## P5：Model Gateway、Codex 和 Claude Code
-
-状态：**部分完成，仅 FakeModel / experimental。P5 未完成。** Gateway core、Responses，以及 Codex FakeModel 控制/绑定已在 tip；真实 SSH 与 live Provider 未认证。
-
-已在 tip 上，但不能计入 P5 完成：
-
-- `packages/services/src/model-gateway/` 已存在。Gateway core、route authorization、Responses ingress/egress 与兼容矩阵已落地。Codex app-server 的 FakeModel 控制/绑定已接入 Agent Host（active-turn 绑定冻结、idle rebind、短 TTL 续期、target-side turn lease、审批单赢家）。证据是 loopback FakeModel，不是 live Provider 或模型质量认证。
-- #26：SSH kind 上 Codex 使用共享 `TargetModelGateway`。`packages/services/test/modelGatewaySshAdmission.test.ts` 覆盖 FakeModel admission：`kind: "ssh"`、共享 owner 注入，以及 tunnel drop 之后同一 loopback 仍可服务。SSH 执行目标上的 Gateway 是 **remote Core loopback**；关闭 SSH tunnel **不等于** 关闭 Gateway，也不撤销 grant。
-- 兼容矩阵在 `target.kind === "ssh"` 时仍为 **experimental**（远端凭据路径未认证）。FakeModel 只证明 Codex 共享 Gateway 注入，不认证远端凭据。
-- Claude 已有 structured control 与 Messages 实验路径（pinned CLI stream-json、loopback FakeModel；见 `CLAUDE-CODE.md` 与 `packages/services/src/agent-adapters/claude/SPEC.md`）。该路径的 Gateway 仍是 **adapter-local**（未注入时 `new TargetModelGateway(...)`）。Claude **不是** 共享 `TargetModelGateway` owner；`lazyTargetService` 只把共享 owner 注入 Codex。
-- 历史隔离探针 `probeCodexAppServer.mjs` / `probeClaudeMessages.mjs` 与 Codex 0.156.1 观察仍单独保留，不改写成 0.157.1 或 live 认证。
-
-未完成（下列项保持未认证，P5 不得标完成）：
-
-- 真实 SSH / remote credentials 未认证。`packages/services/test/runtimeOwnerFence.test.ts` 的「真实 SSH 断线后 Core 仍在运行」保持 skip（当前没有可授权的真实 SSH 目标）。
-- live Provider、实际模型身份与模型质量未认证。
-- Claude → 共享 `TargetModelGateway` owner 未接线。
-- auxiliary endpoint 矩阵、可用的 `workspace-write` sandbox、生产组合与跨 target 部署未认证。
-
-P5 必须按 Harness 拆成 control/event 认证和 host-managed model ingress 认证。FakeModel 控制面成功只能标 experimental，不能标 live certified，也不能把 P5 标成完成。
-
-## P6：通用 ACP、长尾 Harness 和发布加固
-
-状态：**部分完成（脚手架 + 一个可选 Agent）；P6 未完成**。
-
-已在 tip `3de779c` 上、但不能标 P6 完成：
-
-- 可复用 ACP transport/adapter 与 session machine：`packages/services/src/agent-adapters/acp/`（`COMPATIBILITY.md` / `SPEC.md`；SPEC 已写明 print-mode `agent-adapters/devin` 与可选 ACP 同 id）。
-- 长尾示例：Devin **可选** ACP profile（`agent-adapters/acp/agents/devin.ts`，`devin acp`）；与 print-mode `devin` 同 harness id，**不得**在同一 `HarnessRegistry` 双注册（`devinPrintAcpCoexistence.test.ts` / `devin/PROTOCOL.md`）。
-- 同协议第二批档案（inventory，非生产认证）：OpenCode / Goose（`acp/agents/opencode.ts`、`goose.ts`；`COMPATIBILITY.md`）— 共用 `acp-session-machine/1`，只加档案不改公共状态机。
-- **Opt-in 注册工厂（#75，非 lazy 默认）**：`createExperimentalRegistryOpenCodeAcpHarness` / `createExperimentalRegistryGooseAcpHarness`（`createAcpRegistryHarness.ts`；调用方注入 `openTransport`）。SessionHost fake-transport（同文件 `openCodeAcpSessionHost.integration.test.ts`，OpenCode+Goose 对称）：create/send（#80）；late prompt（#83/#85）；disconnect fault fence（#90）；**resume-after-disconnect** via `session/load`（#110）；cancel-after-disconnect（#115）；double-fault reopen idempotency（#118）；mid-tool disconnect→reopen（#122）；permission deny/allow/cancel 与 disconnect/reopen 矩阵（#125/#129/#134/#136/#140/#143/#147/#149/#153）；fault-during-session-load（#155）；**load-then-cancel**（#174）；**cancel-during-session-load**（#177，abort held load）；**load-then-disconnect**（#182）；**disconnect-during-session-load**（#187，load 未 settle 时断开）；**load-then-permission-deny**（#195）；**load-then-permission-allow**（#202）；**permission-during-session-load**（#211）；**load-then-send / mid-load prompt**（#217）；**disconnect-during-permission**（#223）；**disconnect-during-permission-then-reopen**（#229）；**idle-close-during-permission**（#236，permission 未 resolve 时 peer idle-close；≠ #223 JSON-RPC fault / ≠ #229 reopen）；**idle-close-during-permission-then-reopen**（#242，#236 fence 后 reopen `session/load` 再首发 send；镜像 #229←#223）；**idle-close-then-fault-reopen**（#248，#236 fence→reopen→mid-prompt JSON-RPC fault→再 reopen `session/load` idempotent→send；≠ #223/#229/#236/#242）；**cancel-after-idle-close**（#256，#236 fence 后 cancelTurn/resolveInteraction 对死 turn 为 stale；reopen 后 mid-prompt cancel journals cancelled；≠ #248）；**allow-after-idle-close-reopen**（#260，#236 fence 后 stale allow→reopen→fresh allow 完成 send；≠ #256/#242/#136）；**deny-after-idle-close-reopen**（#263，#236 fence 后 stale deny→reopen→fresh deny journals clean；mirror #260；≠ #256/#260/#134/#195）；**double-send-after-idle-close-reopen**（#265，#236 fence→reopen `session/load`→连续两次 plain send 均成功；≠ #242/#248/#256/#260/#263）；**cancel-after-idle-close-reopen**（#269，#236 fence 后 stale cancel→reopen→fresh permission 期间 cancelTurn journals cancelled；≠ #256 mid-prompt / ≠ #260/#263/#265）；**double-cancel-after-idle-close-reopen**（#274，#236 fence→stale cancel→reopen→mid-prompt cancelTurn×2 idempotent；≠ #140/#256/#269/#260/#263/#265）；**allow-then-cancel-after-idle-close-reopen**（#280，#236 fence→stale cancel→reopen→fresh allow 后 cancelTurn journals cancelled；≠ #260/#269/#274/#263）；**deny-then-cancel-after-idle-close-reopen**（#283，#236 fence→stale cancel→reopen→fresh deny 后 cancelTurn journals cancelled；≠ #280/#263/#269/#274）；**allow-then-disconnect-then-reopen**（#288，allow-then-disconnect fence 后 reopen `session/load` 再首发 send；≠ #229 no-resolve / ≠ #242 idle-close-then-reopen / ≠ #283/#280 idle-close 族）；**cancel-then-disconnect-then-reopen**（#291，cancel-then-disconnect fence 后 reopen `session/load` 再首发 send；≠ #288 / ≠ #229 / ≠ idle-close 族）；**deny-then-disconnect-then-reopen**（#294，permission-denied-then-disconnect fence 后 reopen `session/load` 再首发 send；≠ #288/#291 / ≠ #229 / ≠ idle-close 族）；**allow-then-disconnect-then-fault-reopen**（#299，allow-then-disconnect fence 后 reopen→mid-prompt JSON-RPC fault→再 reopen `session/load` idempotent→send；≠ #288 first-send-only / ≠ #248 idle-close fence / ≠ #118 plain double-fault / ≠ #291/#294 / ≠ idle-close 族）；**cancel-then-disconnect-then-fault-reopen**（#302，cancel-then-disconnect fence 后 reopen→mid-prompt JSON-RPC fault→再 reopen `session/load` idempotent→send；≠ #291 first-send-only / ≠ #299 allow-then-disconnect fence / ≠ #248 idle-close fence / ≠ #118 plain double-fault / ≠ #294 / ≠ idle-close 族）；**deny-then-disconnect-then-fault-reopen**（#307，permission-denied-then-disconnect fence 后 reopen→mid-prompt JSON-RPC fault→再 reopen `session/load` idempotent→send；≠ #294 first-send-only / ≠ #299 allow-then-disconnect fence / ≠ #302 cancel-then-disconnect fence / ≠ #248 idle-close fence / ≠ #118 plain double-fault / ≠ idle-close 族）。`enabledIds` 可单开 goose。契约：`lazyTargetService` **不**注册上述工厂。
-
-#### SessionHost fake-transport 仍缺矩阵（≠ live；禁标 P6 完成）
-
-相对 tip 已覆盖 create/send、late prompt、disconnect/resume/cancel/permission/reopen、fault-during-session-load、**load-then-cancel**（#174）、**cancel-during-session-load**（#177）、**load-then-disconnect**（#182）、**disconnect-during-session-load**（#187）、**load-then-permission-deny**（#195）、**load-then-permission-allow**（#202）、**permission-during-session-load**（#211）、**load-then-send / mid-load prompt**（#217）、**disconnect-during-permission**（#223）、**disconnect-during-permission-then-reopen**（#229）、**idle-close-during-permission**（#236）、**idle-close-during-permission-then-reopen**（#242）、**idle-close-then-fault-reopen**（#248）、**cancel-after-idle-close**（#256）、**allow-after-idle-close-reopen**（#260）、**deny-after-idle-close-reopen**（#263）、**double-send-after-idle-close-reopen**（#265）、**cancel-after-idle-close-reopen**（#269）、**double-cancel-after-idle-close-reopen**（#274）、**allow-then-cancel-after-idle-close-reopen**（#280）、**deny-then-cancel-after-idle-close-reopen**（#283）、**allow-then-disconnect-then-reopen**（#288）、**cancel-then-disconnect-then-reopen**（#291）、**deny-then-disconnect-then-reopen**（#294）、**allow-then-disconnect-then-fault-reopen**（#299）、**cancel-then-disconnect-then-fault-reopen**（#302）、**deny-then-disconnect-then-fault-reopen**（#307）。下表含已合项与 **仍缺** 交叉项；**已合后仍 ≠ live / ≠ 生产接线 / 禁标 P6 完成**。
-
-| 项 | 状态 | 备注 |
-| --- | --- | --- |
-| **disconnect-during-session-load** | **已合 #187** | session/load 未 settle 时 transport 断开；仍 ≠ live |
-| **load-then-permission-deny** | **已合 #195** | reopen `session/load` 后再遇 permission deny；仍 ≠ live |
-| **load-then-permission-allow** | **已合 #202** | reopen `session/load` 后再遇 permission allow；仍 ≠ live |
-| **permission-during-session-load** | **已合 #211** | load 持有期间 permission 到达；OpenCode+Goose fake-transport；仍 ≠ live |
-| **load-then-send / mid-load prompt** | **已合 #217** | reopen `session/load` 持有期间 mid-load chunk replay-swallow；随后首发 send 成功（OpenCode+Goose）；仍 ≠ live |
-| **disconnect-during-permission** | **已合 #223** | permission 已 requested、Host 未 resolve/cancel 时 peer JSON-RPC fault；transport 关、turn.finished unknown、无 interaction.resolved；仍 ≠ live |
-| **disconnect-during-permission-then-reopen** | **已合 #229** | #223 fence 后 reopen `session/load` 再首发 send 成功（OpenCode+Goose）；仍 ≠ live |
-| **idle-close-during-permission** | **已合 #236** | permission 已 requested、Host 未 resolve 时 peer idle-close journal fault（OpenCode+Goose）；**≠** #223 JSON-RPC disconnect / **≠** #229 then-reopen；仍 ≠ live |
-| **idle-close-during-permission-then-reopen** | **已合 #242** | #236 fence 后 reopen `session/load` 再首发 send 成功（OpenCode+Goose）；镜像 #229←#223；仍 ≠ live |
-| **idle-close-then-fault-reopen** | **已合 #248** | #236 fence 后 reopen→mid-prompt JSON-RPC fault→再 reopen `session/load` idempotent→send（OpenCode+Goose）；**≠** #223/#229/#236/#242；仍 ≠ live |
-| **cancel-after-idle-close** | **已合 #256** | #236 fence 后 cancelTurn→stale-turn、resolveInteraction→stale-interaction；reopen 后 mid-prompt cancel journals cancelled（OpenCode+Goose）；**≠** #248；仍 ≠ live |
-| **allow-after-idle-close-reopen** | **已合 #260** | #236 fence 后 stale allow→stale-interaction；reopen 后 fresh permission allow 完成 send（OpenCode+Goose）；**≠** #256/#242/#136；仍 ≠ live |
-| **deny-after-idle-close-reopen** | **已合 #263** | #236 fence 后 stale deny→stale-interaction；reopen 后 fresh permission deny journals clean（OpenCode+Goose）；mirror #260；**≠** #256/#260/#134/#195；仍 ≠ live |
-| **double-send-after-idle-close-reopen** | **已合 #265** | #236 fence→reopen `session/load`→连续两次 plain send 均成功（OpenCode+Goose）；**≠** #242/#248/#256/#260/#263；仍 ≠ live |
-| **cancel-after-idle-close-reopen** | **已合 #269** | #236 fence 后 stale cancel→stale-turn；reopen 后 fresh permission 期间 cancelTurn journals cancelled（OpenCode+Goose）；**≠** #256 mid-prompt / ≠ #260/#263/#265；仍 ≠ live |
-| **double-cancel-after-idle-close-reopen** | **已合 #274** | #236 fence→stale cancel→reopen→mid-prompt cancelTurn×2 idempotent（OpenCode+Goose）；**≠** #140/#256/#269/#260/#263/#265；仍 ≠ live |
-| **allow-then-cancel-after-idle-close-reopen** | **已合 #280** | #236 fence→stale cancel→reopen→fresh permission allow 后 cancelTurn journals cancelled（OpenCode+Goose）；**≠** #260/#269/#274/#263；仍 ≠ live |
-| **deny-then-cancel-after-idle-close-reopen** | **已合 #283** | #236 fence→stale cancel→reopen→fresh permission deny 后 cancelTurn journals cancelled（OpenCode+Goose）；**≠** #280/#263/#269/#274；仍 ≠ live |
-| **allow-then-disconnect-then-reopen** | **已合 #288** | allow-then-disconnect fence（interaction.resolved allow + fault/unknown）后 reopen `session/load` 再首发 send（OpenCode+Goose）；**≠** #229 no-resolve / **≠** #242 idle-close-then-reopen / **≠** #283/#280 idle-close 族；仍 ≠ live |
-| **cancel-then-disconnect-then-reopen** | **已合 #291** | cancel-then-disconnect fence（turn.finished cancelled + fault/unknown）后 reopen `session/load` 再首发 send（OpenCode+Goose）；**≠** #288 allow-then-disconnect-then-reopen / **≠** #229 / **≠** idle-close 族；仍 ≠ live |
-| **deny-then-disconnect-then-reopen** | **已合 #294** | permission-denied-then-disconnect fence（interaction.resolved deny + fault/unknown）后 reopen `session/load` 再首发 send（OpenCode+Goose）；**≠** #288/#291 / **≠** #229 / **≠** idle-close 族；仍 ≠ live |
-| **allow-then-disconnect-then-fault-reopen** | **已合 #299** | allow-then-disconnect fence（interaction.resolved allow + fault/unknown）后 reopen→mid-prompt JSON-RPC fault→再 reopen `session/load` idempotent→send（OpenCode+Goose）；**≠** #288 first-send-only / **≠** #248 idle-close fence / **≠** #118 plain double-fault / **≠** #291/#294 / **≠** idle-close 族；仍 ≠ live |
-| **cancel-then-disconnect-then-fault-reopen** | **已合 #302** | cancel-then-disconnect fence（turn.finished cancelled + fault/unknown）后 reopen→mid-prompt JSON-RPC fault→再 reopen `session/load` idempotent→send（OpenCode+Goose）；**≠** #291 first-send-only / **≠** #299 allow-then-disconnect fence / **≠** #248 idle-close fence / **≠** #118 plain double-fault / **≠** #294 / **≠** idle-close 族；仍 ≠ live |
-| **deny-then-disconnect-then-fault-reopen** | **已合 #307** | permission-denied-then-disconnect fence（interaction.resolved deny + fault/unknown）后 reopen→mid-prompt JSON-RPC fault→再 reopen `session/load` idempotent→send（OpenCode+Goose）；**≠** #294 first-send-only / **≠** #299 allow-then-disconnect fence / **≠** #302 cancel-then-disconnect fence / **≠** #248 idle-close fence / **≠** #118 plain double-fault / **≠** idle-close 族；仍 ≠ live |
-| 其它 mid-load × cancel/permission/disconnect 组合 | 未穷尽 | 以 Planner 薄刀派单为准；扩矩阵 ≠ live 认证 |
-
-- lazy Host 默认 Devin 路径仍是 **print-mode `-p`**（`createExperimentalRegistryDevinHarness`），不是默认 ACP；源码契约测：`lazyDevinPrintModeDefault.contract.test.ts`（#61）。
-- Honesty：print-mode `devinCapabilitiesHonesty.test.ts`；ACP Devin `devinAcpCapabilitiesHonesty.test.ts`（#62）；ACP OpenCode/Goose `acpOpenCodeGooseHonesty.test.ts`（#65）— install/probe `supported` **不**升级 text/tools/resume；`hostManagedSupport` 保持 `unsupported` 且不打开 transport；档案不硬编码 `session/load|resume`。
-
-仍缺：能力协商/版本矩阵产品化、安装诊断与升级手册、长期压力测试、OpenCode/Goose **生产**接线与 live 认证（opt-in factory ≠ 产品默认）、把 lazy 默认切到 ACP、发布加固。历史 ACP retirement 测只保护 native 边界，不是完整 P6 验收。勿把 honesty/exclusivity/inventory/opt-in factory 当 live ACP 认证。
-
-交付依赖 P1 manifest/factory、P3/P4 已验证 model binding/target Host，以及至少一个真实可用 ACP Agent。验收必须证明第二个同协议 Agent 只增加 manifest、绑定配置和必要扩展，不修改公共会话状态机；不支持 resume 的 Agent 只能历史只读；未知扩展安全降级；协议升级回到实验状态。
-
-### P6「第二生产 ACP」缺口（scout；tip 对照 `3de779c`）
-
-inventory/honesty/opt-in factory 已有 ≠ 生产第二 Agent。相对 tip：
-
-1. **仍未进 lazy 默认**：`lazyTargetService` 只注册 Pi/Codex/Claude + print-mode Devin；OpenCode/Goose ACP 仅 **显式 opt-in** 工厂（#75），契约测禁止 lazy 注册。
-2. **无产品 create/Picker 路径**：侧栏/Harness 选择不会把 OpenCode/Goose 当可选外部 Harness 挂上。
-3. **无 install/upgrade 手册与版本矩阵**：`COMPATIBILITY.md` 有档案说明；缺固定 CLI 版本、initialize 协商矩阵、故障降级手册。
-4. **无 live 认证**：honesty + SessionHost fake-transport（#75/#80/#83/#85/#90/#110/#115/#118/#122/#125/#129/#134/#136/#140/#143/#147/#149/#153/#155/#174/#177/#182/#187/#195/#202/#211/#217/#223/#229/#236/#242/#248/#256/#260/#263/#265/#269/#274/#280/#283/#288/#291/#294/#299/#302/#307；含 resume/cancel/permission/reopen/load-then-*/disconnect-during-session-load/load-then-permission-*/permission-during-session-load/load-then-send/disconnect-during-permission/then-reopen/idle-close-during-permission/idle-close-during-permission-then-reopen/idle-close-then-fault-reopen/cancel-after-idle-close/allow-after-idle-close-reopen/deny-after-idle-close-reopen/double-send-after-idle-close-reopen/cancel-after-idle-close-reopen/double-cancel-after-idle-close-reopen/allow-then-cancel-after-idle-close-reopen/deny-then-cancel-after-idle-close-reopen/allow-then-disconnect-then-reopen/cancel-then-disconnect-then-reopen/deny-then-disconnect-then-reopen/allow-then-disconnect-then-fault-reopen/cancel-then-disconnect-then-fault-reopen/deny-then-disconnect-then-fault-reopen）≠ 真实 `opencode acp` / `goose acp` / SSH 实跑。
-5. **验收口径未满足**：产品侧「第二同协议 Agent 只加 manifest/绑定」证明仍缺；当前为档案 + honesty + opt-in + SessionHost fake-transport 矩阵；#94/#102/#106 仅为 docs stub。
-
-#### install-diag / LIVE-CERT checklist（第二 ACP；相对 tip 证据）
-
-对照 tip 已有证据（#75 opt-in、SessionHost fake-transport #75/#80/#83/#85/#90/#110/#115/#118/#122/#125/#129/#134/#136/#140/#143/#147/#149/#153/#155/#174/#177/#182/#187/#195/#202/#211/#217/#223/#229/#236/#242/#248/#256/#260/#263/#265/#269/#274/#280/#283/#288/#291/#294/#299/#302/#307（仍缺见上表）、#65 honesty、#94/#98/#100/#102/#106 I1–I4 + L1–L4 程序 stub、契约禁 lazy 注册）。下列为**仍缺**项，不是重写台账：
-
-**Install / 诊断（缺手册与可复现步骤）**
-
-| # | 项 | tip 已有 | 仍缺 |
-| --- | --- | --- | --- |
-| I1 | CLI 钉版与 PATH | 档案写 `opencode`/`goose` + `["acp"]`（`COMPATIBILITY.md`） | **草稿：** [`SECOND-ACP-INSTALL-DIAG.md`](./SECOND-ACP-INSTALL-DIAG.md)（探测命令、`diagnoseAcpInstall` 对照、失败读日志模板）。仍缺产品钉死的最低 CLI 版本号 |
-| I2 | install/probe 边界 | honesty：可执行文件存在 ≠ 升级 text/tools/resume | **草稿：** [`SECOND-ACP-INSTALL-DIAG.md`](./SECOND-ACP-INSTALL-DIAG.md) §I2（解读顺序 + 禁止推断） |
-| I3 | `initialize` 协商矩阵 | COMPATIBILITY：v1 / v2 降级、loadSession / resume → harness-managed vs unsupported | **草稿：** 同文档 I3 版本表 + 待填能力矩阵；未知/v2 → experimental 排障入口 |
-| I4 | 故障降级 | 适配器不跑 `opencode auth login` / `goose acp` 凭据提交 | **草稿：** 同文档 I4 症状→动作与升级/回滚；仍缺 live 验证 |
-
-
-##### I1–I4 + L1–L4 程序 stub（已落文档）
-
-可操作步骤见 [`SECOND-ACP-INSTALL-DIAG.md`](./SECOND-ACP-INSTALL-DIAG.md)：I1（#98）、I2–I4（#100）、**L1–L4 LIVE-CERT 程序 stub**（#102/#106；均未实跑）。实跑证据仍缺。不改 lazy 默认、不做生产接线。
-
-**LIVE-CERT（缺真实进程；fake-transport ≠ live）**
-
-| # | 项 | tip 已有 | 仍缺 |
-| --- | --- | --- | --- |
-| L1 | 真实 ACP 子进程 | SessionHost **fake** transport 矩阵（至 #307；仍 ≠ live） | **程序 stub（#102）：** [`SECOND-ACP-INSTALL-DIAG.md`](./SECOND-ACP-INSTALL-DIAG.md) §L1；**尚未**执行真实子进程 |
-| L2 | resume / 只读历史 | 档案不硬编码 load/resume；honesty 不打开 transport | **程序 stub（#106）：** 同文档 §L2；**尚未**实跑 |
-| L3 | 第二 Agent 只加档案 | inventory + 共用 `acp-session-machine/1` | **程序 stub（#106）：** 同文档 §L3；**尚未**产品路径实跑 |
-| L4 | Host 默认 | lazy **不**注册 OpenCode/Goose ACP | **程序 stub（#106）：** 同文档 §L4 强制断言；实跑时仍须保持 opt-in |
-
-下一薄刀候选（仍 Track A，需 Planner 另派）：L1–L4 **程序 stub** 已见 `SECOND-ACP-INSTALL-DIAG.md`；续 L1–L4 **实跑**（fake-transport 矩阵已厚，≠ live）——**勿**把 opt-in 改成 lazy 默认。
-
-### StatusCards / funnel × Track A 交界（只读 scout @ `3de779c`）
-
-UI/REMOVE 侧（**非 Track A 默认刀**；交界说明以免误抢）：
-
-- **已卸（契约测锁；摘）**：既有 chrome/funnel/oauth/purchase/StartPlan/api-key/CTA/usage/badge（至 #181）+enterprise products/acquisition/Welcome login orphans/regionTag 迁 key/slash-help/desktop `login.html`（#107–#116）+enterprise callers/Automations toast/orphan hook/Title i18n/refreshTeamPlanProducts/team flatMap/Settings·V4·sidebar 空 `subscribedTeamProducts`/usage-sources builder/`codingPlanLogin` noop/purchase-complete/`oauthTeamPricing`/family `teamProducts`/`loginActionVisible`→`productPurchaseRemovedVisible`/owned-entry helper（#119–#159）；verify hard-pin `loginActionVisible` 旧名（#160）；dead `teamPlanDisplayName`/`codingPlanErrorMessage`（#162）；owned-entry verify hard-pin（#163）；#164 dead-residual hard-pin；#166 login 注释清；#168 dead purchase locale；#169/#171 P6 tip docs；#170 purchase locale hard-pin；#172 plan-mode/access/pricing 死 i18n；#173/#175 tip docs/verify；#176 dead subscription DTOs；#178 `loginLoading`→`statusSyncLoading`；#179 billing/relogin locales；#181 DTO verify pin；#190 Catalog rename（CodingPlanSubscriptionProviderId→Catalog）。verify 脚本随 tip 硬缺席（#113/#117/#127/#130/#139/#154/#156/#160/#163 等）。
-- **StatusCards 现状**：升级/purchase CTA 与空 team 产品门控已卸；`productPurchaseRemoved` 正文 KEEP；可见性改名 `productPurchaseRemovedVisible`（#158）；quota/entitlement/manage·planCard KEEP。
-- **与 Track A**：Agent Host / ACP / MULTI_HARNESS 不依赖 REMOVE UI；SessionHost fake-transport 矩阵（至 #274；仍缺其它 mid-load × cancel/permission/disconnect 组合等，见上表；#218/#259 AcpRpc soft；#228/#238/#244 lazyAdmission soft；#232/#243/#245/#247/#249/#251–#255/#258/#262/#264/#270 verify ledger soft；#233 resolveQuotaBannerUpgradeProviderId DROP soft；#246 onOpenModelUpgrade DROP soft；#250 quota locale DROP soft；#254/#257/#261/#272/#276/#282/#285/#287 Start Plan / BigModel / balance / NodeApiClient JWT / ZaiBusinessTokenResolver / shared login-purchase / web ZAI OAuth Vite / web orphan product OAuth env DROP soft；#266 Devin honesty soft；#267 binding-kind soft；#268/#271/#275/#278/#290 UI/desktop scrub soft；#273/#279/#284/#286/#289/#292/#295/#301/#305 matrix docs；#296/#297/#300 services DROP；#298/#304 desktop/ui DROP；#303 Devin directory title soft；#306 verify tip ledger soft）+ #98/#100/#102/#106 install-diag/L stubs 已在 tip。
-
-### `oauth.ts` / purchase × P6 交界（只读 scout @ `3de779c`）
-
-- **`packages/shared/src/oauth.ts`**：#86 已 thin-clean 产品登录孤儿类型；仍可能有 provider ids / `UserInfo` 等供 settings 引用。#92 卸 settings preset subscription success telemetry / `oauthActions` 残留。
-- **与 P6 / Agent Host**：**无** import — ACP/opt-in Harness、MULTI_HARNESS、SessionHost 不依赖产品 OAuth 类型。清理 oauth/purchase/StartPlan 是 REMOVE 域，不是 Host 默认刀。
-- **purchase / enterprise / login noop / usage（至 #176）**：获客 UI、空 team products 形参、login noop 链、purchase-complete、oauthTeamPricing、owned-entry helper 等已卸；`productPurchaseRemoved` / Display / entitlement / manage·planCard / MCP OAuth / personal API-key KEEP。≠ Host admission。
-- **结论**：P6 台账同步勿夹带 oauth/purchase 运行时改动；两轨并行，交界仅文档互指。
-
-
-
-## §13 Project → Worktree Workspace → Agent Session
-
-状态：**P1 数据契约、Worktree/Catalog ports 和 ProjectSidebar 首批实现已存在；真实 UI/E2E 与迁移联动仍未闭环**。
-
-### 13.1 可见实体和行为
-
-- `Project`、`WorktreeWorkspace`、`AgentSession` 的共享 schema 已存在；ProjectSidebar 首批已显示 Project/Workspace/Agent 三层树、空工作区、main/detached head 和 stable session rows；Catalog 为空时保留旧 workspace/task 区域，生产 focus/offline E2E 仍未认证。
-- 现有 `tabStore.ts` 仍只是窗口 view/tab 状态；独立 Project Catalog 已存在，ProjectSidebar 不以 tabs 作为数据库。
-
-### 13.2 数据模型和身份
-
-- hierarchy schema 已覆盖 `Project.id/name/iconAssetId/defaultWorkspaceId`、`RepositoryBinding`、worktree generation/head/origin/lifecycle/verification、session workspace/harness/title/model binding。
-- `deriveExecutionSnapshot` 只从 binding/workspace/session 派生 target/path/generation/cwd；不做 realpath/Git/远端 authority。现有 `SessionSpec.hostSessionId` 与新 `AgentSession.id` 的 Host identity 一对一映射仍需在接入前明确。
-- 缺少 durable Project Catalog、binding/workspace/session store、跨进程唯一性和 future schema migration。
-
-### 13.3 发现、导入、接管、新建
-
-WorktreeService 已实现 `git worktree list --porcelain -z` discovery、main/linked/detached/bare 分类、explicit adoption、generation/evidence revalidation、幂等创建及确认式 linked-worktree 移除。移除复用 target-local 持久 fence，与 native CommandInbox 和 AgentHost create/send 共用；UI 接线、完整离线重同步、真实 SSH/macOS 矩阵仍待验收。
-
-### 13.4 同工作区多 Agent
-
-共享 schema 允许同一 Workspace 多个 session，hierarchy fixture 有两个 Pi session；没有生产 create flow、独立 native/backend/model/approval/stop owner、引用计数 worker、共享文件冲突提示或同 worktree 多写认证。
-
-### 13.5 图标、状态、侧栏和 focus
-
-- 新增 `HarnessIcon`、`SessionStatusIcon` 和 Host manifest directory 接缝；ZCode 复用既有受控静态资源，未知/Pi 未授权资源安全 fallback。Pi 真实品牌资源、许可清单和 Header/Picker 共用挂载仍待后续接线。
-- 纯 projector 已有 activity/freshness/recent outcome/unread/pending 聚合模型；轻量 sessions-index transport、UI view store 和后台订阅仍未接入。
-- `projectSidebarViewStore` 已独立持久化展开/隐藏/选择状态，树行使用 Project/Workspace/Session stable IDs；后台 summary 事件走有界刷新且不改 active selection。真实 browser/Electron focus/offline E2E 仍待执行。
-
-### 13.6 生命周期、删除和安全
-
-Worktree 服务现有 archive 元数据/fence 与确认式 remove；remove 会并发读取 native CommandInbox/live V4 phase 与完整 AgentHost activity index，unknown、running、approval、accepted queue、main、dirty/untracked、submodule、locked/stale 都 fail closed。Main TaskRealtimeBus 只按既有 session/lease owner route 请求 Host 原生只读事实，不复制 queue。拒绝不结束会话；Git 成功但 Catalog 写失败时保持 fence 并在重试时先核对 Git、不会重复 remove。hide/detach/cancel/terminate 的 UI 语义和离线 freshness 仍未全链路验收；宿主不能枚举外部终端进程，预检明确显示该边界。
-
-### 13.7 旧数据迁移
-
-没有从持久化 session/workspace 索引收集旧数据、解析 worktree/common directory、添加 project/workspace 关联、保留 cwd/model/native ID、dry-run/backup/schema map/rollback 的迁移脚本。现有 Claude history import 不等于 v0.3 层级迁移。
-
-### 13.8 交付与产品验收
-
-未完成的场景包括：主检出+两个 linked worktree、同工作区三个会话、两个同 Harness、模型换品牌图标不变、manifest icon fallback、关闭视图再打开、后台更新不抢焦点、隐藏工作区待审批、SSH freshness、同路径跨 target、branch 改名/目录重建、删除竞态、旧 cwd 子目录、共享 worktree 写入和 50 worktree/10 session summary 压测。
-
-当前 63 个 agent-host/Catalog/directory/sidebar/ConversationTransport 测试只证明纯 Host/UI/层级/Catalog/数据层契约子集，不能替代 §13 产品验收。
-
-## PR/批次依赖台账
-
-| 批次 | 计划内容                                                                      | 当前状态                                                                                              | 下一依赖/验收门槛                                              |
-| ---- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| 01   | P0 基线、隔离目录、原生 fixture、来源/许可                                    | 部分完成                                                                                              | 固定工具链下 native + SSH baseline 和 trace                    |
-| 02   | Agent/Session/Turn/Item、Project hierarchy schema、Registry、图标描述、Mock   | schema/Registry/Mock、directory/sidebar pure contracts 已完成；完整 fault/fixture 仍缺                | manifest factory、target probe、完整 fault/fixture             |
-| 02A  | Catalog、RepositoryBinding、WorktreeService、发现/接管/新建                   | Catalog/Worktree discovery/adoption ports 与确定性测试已有；UI candidate/adoption retry 进行中        | 依赖 02；迁移 source、真实 target 与 UI 回滚验证               |
-| 03   | SessionRouter、ZCode adapter、additive metadata、旧 session→workspace mapping | Router/metadata 有，adapter/migration 无                                                              | 依赖 02A；native owner 不变和 migration dry-run                |
-| 04   | UI facade、目录 Picker、capability gate、native regression                    | facade/channel 有，未挂载                                                                             | 依赖 03；UI on/off、旧数据和服务端拒绝                         |
-| 04A  | Orca 三层侧栏、summary、双图标、view/focus                                    | ProjectSidebar 首批已挂 legacy Project 区域，service summary/view store 有；真实 E2E/icon source 仍缺 | 依赖 04 + 02A；E2E/focus/offline/summary                       |
-| 05   | 现有模型执行入口、ModelBindingPlanner                                         | planner/catalog/bridge 有，runtime 配置复用和 live route 无                                           | 依赖 02；真实 requested/effective route 与辅助调用             |
-| 06   | Pi transport、model bridge、Harness adapter                                   | fake/local worker 有                                                                                  | 依赖 05；两个 Provider、本地矩阵、真实审批                     |
-| 07   | 外部 journal、V4 projector、Pi 双模式、多会话 E2E                             | journal/projector 有，UI/E2E 无                                                                       | 依赖 04A + 06；共享 worktree 多会话和 UI                       |
-| 08   | Runtime Host、SSH 生命周期、目标继承、恢复/fencing                            | target-local 基础与通用 supervisor/service manager 已有；Harness lifecycle/SSH restore 未接线         | 依赖 07；八组合、断线/GUI exit/crash                           |
-| 08A  | worktree removal admission、重建、离线重同步、archive/hide                    | Worktree 移除/fence/native+external 准入与隔离 Git/CLI 测试已实现；UI/SSH 离线重同步未验收            | 依赖 08；UI/E2E、SSH 离线恢复及删除竞态矩阵                    |
-| 09   | Gateway core + Responses + Codex                                              | 部分完成 / FakeModel only：core + Responses + Codex 控制/绑定已在 tip；#26 SSH 共享 TargetModelGateway 仅为 FakeModel admission，兼容仍 experimental | 依赖 08；live Provider、真实 SSH 凭据与生产组合仍未认证        |
-| 10   | Messages + Claude structured adapter                                          | 部分完成 / FakeModel only：structured/Messages 实验路径已有，Gateway 仍 adapter-local，不是共享 owner | 依赖 09；共享 TargetModelGateway owner 与 live Provider 未认证 |
-| 11   | 通用 ACP + 一个长尾 Agent                                                     | 部分完成 @ tip `3de779c`：opt-in SessionHost fake-transport 矩阵至 #307（仍缺其它 mid-load 组合等；≠ live；#218/#259 AcpRpc soft；#228/#238/#244 lazyAdmission soft）；#94/#98/#100/#102/#106 LIVE-CERT/I stubs（无实跑）；honesty；#69 MULTI_HARNESS；生产接线/发布加固未做 | 依赖 08 和已验证 model binding；勿把 print-mode/honesty/opt-in/fake-transport 写成 ACP 完成 |
-| 12   | 层级/并发/focus 压测、迁移回滚、版本锁定发布                                  | 未实现                                                                                                | 依赖 08A/09/10/11；50 worktree、10 session、8h、fault matrix   |
-
-建议执行顺序：
-
-```text
-P1 manifest + SidebarSummary + pure projector
-→ P1 Catalog/WorktreeService/discovery/adoption
-→ P2 ZCode adapter + migration + facade mount
-→ P2 Orca sidebar/icons/focus
-→ P3 live Pi model route + two-Provider local matrix
-→ P4 supervisor/owner fencing/SSH persistence
-→ P5 Responses/Codex + Messages/Claude
-→ P6 ACP/long-tail/release/load
-```
-
-每批必须附变更边界、未支持能力、实际命令/版本/target、失败原因、迁移影响和回滚方式。没有真实 target、隔离凭据和预算的批次只能完成确定性或 fake 验收，不能把状态提升为 live certified。
-
-## 后续真实认证所需外部输入
-
-在不读取凭据、不把 key 放入命令行或日志的前提下，完成全计划至少需要：
-
-1. **固定 macOS 本地环境**：已按用户授权探测到可连接的 macOS arm64 目标，但默认 shell 没有 pnpm、默认目录不是仓库；baseline 已准备工具链/隔离 scope，仍需验证 GUI exit、local worker、审批和本地两个 Provider 的完整 trace。
-2. **固定 Linux SSH target**：P4 计划需要可授权连接的 Linux x86_64 主机、target-local Node/runtime 与可写隔离目录；需要验证 bundled worker、服务 supervisor、upload/install、attach/resume、断线重连和远端审批。当前探测到的是 macOS 目标，不能替代该 Linux SSH 组合；只提供 SSH 登录或 `exec()` 不足以满足 P4。
-3. **两个不同 Provider 的隔离授权**：用户已要求少量 live 消费，当前已由主代理集中完成 92 次受控 Pi/Provider 尝试；StepFun 新版 Linux/Mac 路径和 AxonHub/DeepSeek Linux 新版已有证据，Mac 拒绝路径仍按拒绝结果记录。后续只补 acceptance matrix 缺口，凭据仍只由 credential store/target host 读取，不进入本台账、事件或普通日志。
-4. **Codex/Claude 固定版本输入**：Codex app-server 0.156.1、Claude Code 2.1.263 或重新锁定的替代版本及其 protocol fixture；需允许针对 fake Gateway 先做协议追踪，再由用户授权真实 Provider route。
-5. **产品验收环境**：能同时保留两个 worktree、同 worktree 多 session、可安全创建临时文件并恢复；明确是否允许 8 小时/十万合成事件压力测试和可接受资源预算。
-
-当前已有受控 live Provider/Pi route 尝试和 SSH capability probe；尚未把它们扩展成完整 GUI/SSH/owner-crash acceptance，也不把 partial route 结果写成 P3/P4 全部认证通过。凭据、真实账户和内部地址仍不进入台账。
+[ACCEPTANCE](ACCEPTANCE.md) 给出证据入口和等级；[总体交付计划](../PROJECT-DELIVERY-PLAN.md) 给出 M1–M7 的出口。只有标准构建、真实矩阵、安全负例和发布候选验收都满足时，才提升阶段状态。

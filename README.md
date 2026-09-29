@@ -11,9 +11,15 @@
   简体中文 | <a href="README.en.md">English</a>
 </p>
 
-
-
 ZCode 是 AI 编程工作台，提供桌面应用、浏览器界面和终端 Agent。本仓库包含客户端、后端服务、共享 UI，以及 Agent CLI 与运行时源码。
+
+## 项目开发与交付
+
+- [总体交付计划](docs/PROJECT-DELIVERY-PLAN.md)：当前基线、模块职责、M0–M7 里程碑与验收标准。
+- [分支与 PR 整理记录](docs/BRANCH-CONSOLIDATION-2026-09-29.md)：保留分支、归档、恢复方式及独立待合入工作。
+- [多 Harness 实现导航](docs/agent-host/IMPLEMENTATION.md) 与 [产品登录移除范围](docs/harness-refactor/REMOVE-PRODUCT-LOGIN-PLAN.md)。
+
+当前功能集成在 `cursor/wave4-harness-integration-b7a9`；#15 是该分支进入 `main` 的唯一接纳入口。主线和集成线的验收状态请以总计划及对应候选证据为准。
 
 ## 更新
 

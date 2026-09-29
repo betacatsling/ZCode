@@ -1,5 +1,7 @@
 # ZCode
 
+Development status: [project delivery plan](docs/PROJECT-DELIVERY-PLAN.md), [branch consolidation](docs/BRANCH-CONSOLIDATION-2026-09-29.md), and [implementation map](docs/agent-host/IMPLEMENTATION.md). The active integration branch is `cursor/wave4-harness-integration-b7a9`; PR #15 is its acceptance path into `main`.
+
 <div align="center">
   <img src="public/logo/icons/1024x1024.png" alt="ZCode" width="128" height="128" />
 </div>

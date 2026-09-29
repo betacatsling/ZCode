@@ -1,5 +1,7 @@
 # 多 Harness 重构暂停检查点
 
+> Historical evidence only. Current project milestones and candidate acceptance: [PROJECT-DELIVERY-PLAN](../PROJECT-DELIVERY-PLAN.md). Preserve the original run versions, failures and limits below.
+
 更新时间：2026-09-28。用户明确要求暂停工作并提交可恢复检查点。本次只记录状态和验证结果；没有继续实现、修复产品、重跑真实模型验收或启动其他重构。此检查点是明确的 WIP，完整计划尚未完成，不得据此勾选 P0–P6 或整体验收通过。
 
 ## 恢复入口
