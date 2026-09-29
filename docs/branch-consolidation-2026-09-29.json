@@ -1,0 +1,3062 @@
+{
+  "date": "2026-09-29",
+  "integrationSnapshot": "f130e1940c0d70ddc71d3fe586fc2a333b9f212e",
+  "mainSnapshot": "30e8d0a76a73d74bc8647526c04cd94b9b44cf71",
+  "snapshotTag": "archive/2026-09-29/integration-before-consolidation",
+  "branchCountBefore": 220,
+  "originalBranchesRetained": 4,
+  "branchesDeleted": 216,
+  "archiveTagCount": 112,
+  "backupBundleName": "ZCode-before-consolidation-20260929.bundle",
+  "backupBundleSha256": "04ec496d2975e1d99744da38c061887e1a3cb2357a156f2e8a787662db338d0d",
+  "prActions": [
+    {
+      "number": 1,
+      "result": "closed",
+      "head": "58d36391f58b935366095b3694685f055f1bd08f"
+    },
+    {
+      "number": 2,
+      "result": "closed",
+      "head": "b9afab6b9b3869f55ff864ad8cbdee5db84c8462"
+    },
+    {
+      "number": 3,
+      "result": "closed",
+      "head": "ddb5c8b656e4c23989e19a4817961a2ede7720fa"
+    },
+    {
+      "number": 4,
+      "result": "closed",
+      "head": "9fddad6f174e3278809d445ac65b3bc55531e46f"
+    },
+    {
+      "number": 5,
+      "result": "closed",
+      "head": "d9dfc6c6c0f8d477baaf23e866c979dcb32fd134"
+    },
+    {
+      "number": 6,
+      "result": "closed",
+      "head": "7db340142976e128bd711058490b1854bdc521a8"
+    },
+    {
+      "number": 7,
+      "result": "closed",
+      "head": "bb8296807c379d6db922939b30ef82a7f9bdef73"
+    },
+    {
+      "number": 8,
+      "result": "closed",
+      "head": "e36020796bf94d33ab0675e292e422ea940dbb48"
+    },
+    {
+      "number": 9,
+      "result": "closed",
+      "head": "a2c115cafb7f658d3fb16e9d47c366b068fa375d"
+    },
+    {
+      "number": 10,
+      "result": "closed",
+      "head": "e970c051a53e75c81a9c9f5601223571187658ec"
+    },
+    {
+      "number": 11,
+      "result": "closed",
+      "head": "5a5b785e83f662772e9853f2c9fa2af6e574e4ac"
+    },
+    {
+      "number": 12,
+      "result": "closed",
+      "head": "7e0c0365c2282d9f1e5de3c28f8e96f88e75ade8"
+    },
+    {
+      "number": 13,
+      "result": "closed",
+      "head": "90a3f23efabccfeae6ee754e4df4117d4a914d01"
+    },
+    {
+      "number": 14,
+      "result": "closed",
+      "head": "f670f0f66cbf3570bfa32ca1ec320fcbe8bc0eae"
+    },
+    {
+      "number": 19,
+      "result": "closed",
+      "head": "685f68d73de93588c5a7c29d6380977e7b215d89"
+    }
+  ],
+  "retargetedPR": {
+    "number": 15,
+    "baseBefore": "cursor/wave1-shared-contracts-8861",
+    "baseAfter": "main",
+    "draft": true
+  },
+  "retainedPRs": [16, 17],
+  "branchRecords": [
+    {
+      "name": "codex/remove-product-login-plan",
+      "sha": "685f68d73de93588c5a7c29d6380977e7b215d89",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 19,
+          "state": "OPEN"
+        }
+      ],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/codex/remove-product-login-plan",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/acp-allow-then-cancel-ex2",
+      "sha": "db64d982de9740eab56e6519d13909269c228d33",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 153,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 153,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/acp-allow-then-disconnect-ex2",
+      "sha": "98089acb0113ff10dbab63f46a81f2eb30f657f1",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 143,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 143,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/acp-cancel-then-disconnect-ex2",
+      "sha": "67d6dea1b535a9294d5cfc0c2d31f188efb3c1b6",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 147,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 147,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/acp-deny-then-cancel-ex2",
+      "sha": "82db87503a2c0bd2ec655f3369e12b0912ee8b40",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 149,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 149,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/acp-fault-during-session-load-ex2",
+      "sha": "a07870852895868c84e9a5fb4d6200e427ccb801",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 155,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 155,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/acp-sessionhost-fault-ex2",
+      "sha": "5841f3f8d5dfde46615f8385762e68e61c3b1309",
+      "protected": false,
+      "ancestorOfIntegration": true,
+      "prs": [
+        {
+          "number": 83,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-integrated",
+      "proof": "tip is an ancestor of integration snapshot",
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/claude-capabilities-honesty-e4b9",
+      "sha": "3e3e6ba10aaeac4c005391bfbbef68bffd7dd3e3",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 32,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 32,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/claude-code-adapter-d8c3",
+      "sha": "5a5b785e83f662772e9853f2c9fa2af6e574e4ac",
+      "protected": false,
+      "ancestorOfIntegration": true,
+      "prs": [
+        {
+          "number": 11,
+          "state": "OPEN"
+        }
+      ],
+      "action": "delete-integrated",
+      "proof": "tip is an ancestor of integration snapshot",
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/claude-harness-fakemodel-fixes-2a3c",
+      "sha": "fc22b1295a556bebe42b3da302837dda7ee97e9a",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 22,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 22,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/cli-product-login-removed-a85e",
+      "sha": "19c76bd6d341eeb20ca4d08a8e05c51be2353750",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 21,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 21,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/codex-harness-adapter-95ba",
+      "sha": "e970c051a53e75c81a9c9f5601223571187658ec",
+      "protected": false,
+      "ancestorOfIntegration": true,
+      "prs": [
+        {
+          "number": 10,
+          "state": "OPEN"
+        }
+      ],
+      "action": "delete-integrated",
+      "proof": "tip is an ancestor of integration snapshot",
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/codex-honesty-ex2",
+      "sha": "9a6586465cf65c3203995a18a4ce8ef0c4bc9618",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 29,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 29,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/desktop-drop-oauth-deeplink-ex3",
+      "sha": "e394011244872005300027bbe01616afcf46c700",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 40,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 40,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/devin-honest-capabilities-03e0",
+      "sha": "ed58e1e8972de84061e9455d25c4fc58ea3e65b4",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 25,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 25,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/devin-pi-host-admission-4717",
+      "sha": "83f0f2d8619d1150158002c9dac8f44a31b061e7",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 23,
+          "state": "MERGED"
+        }
+      ],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/cursor/devin-pi-host-admission-4717",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/docs-p5-gateway-ledger-26-3e59",
+      "sha": "c63a87c7345a6f5a130dbbb48f82b283cb34627f",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 34,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 34,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/docs-remove-plan-tip-e8ce0ca-ex4",
+      "sha": "a4a5dedee26f22f8de538a5debc0fa9b8899e5fe",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 188,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 188,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/docs-tip-dd31baf-ex6",
+      "sha": "e24bbe1b27cf1cec8e450f6a7a5a0f75c089c01b",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 208,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 208,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/docs-tip-f2ae927-ex6",
+      "sha": "47aea507ac9007b32a14dce0aa82f7916761a936",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 201,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 201,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/docs-tip-fix-a3a92a2-ex6",
+      "sha": "ff692d8ed55b7a0c474f4b5ae56f3ebc4eaaad60",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 213,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 213,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/gateway-ssh-admission-23fe",
+      "sha": "40263520a42682754b21c3b97cf37604f675faf2",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 26,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 26,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/i2-i4-install-diag-ex2",
+      "sha": "f817c92eac2165832d80d33bea6f1d870d964ee8",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 100,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 100,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/l1-live-probe-stub-ex2",
+      "sha": "0ce6444c5f245261b5212b66ce39d7c0ab1034ab",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 102,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 102,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/mac-live-recovery-gated-3d50",
+      "sha": "186fa5fdeb633b79bda4632713df52a03584d785",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 17,
+          "state": "OPEN"
+        }
+      ],
+      "action": "retain",
+      "result": "retained"
+    },
+    {
+      "name": "cursor/model-binding-planner-1b67",
+      "sha": "ddb5c8b656e4c23989e19a4817961a2ede7720fa",
+      "protected": false,
+      "ancestorOfIntegration": true,
+      "prs": [
+        {
+          "number": 3,
+          "state": "OPEN"
+        }
+      ],
+      "action": "delete-integrated",
+      "proof": "tip is an ancestor of integration snapshot",
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/model-gateway-core-9a54",
+      "sha": "7e0c0365c2282d9f1e5de3c28f8e96f88e75ade8",
+      "protected": false,
+      "ancestorOfIntegration": true,
+      "prs": [
+        {
+          "number": 12,
+          "state": "OPEN"
+        }
+      ],
+      "action": "delete-integrated",
+      "proof": "tip is an ancestor of integration snapshot",
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/opencode-goose-optin-ex2",
+      "sha": "86c4915619f57762d61bbd2e9c90ce9fa05f64ba",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 75,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 75,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/orca-sidebar-2230",
+      "sha": "9fddad6f174e3278809d445ac65b3bc55531e46f",
+      "protected": false,
+      "ancestorOfIntegration": true,
+      "prs": [
+        {
+          "number": 4,
+          "state": "OPEN"
+        }
+      ],
+      "action": "delete-integrated",
+      "proof": "tip is an ancestor of integration snapshot",
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/p0-harness-baseline-56aa",
+      "sha": "58d36391f58b935366095b3694685f055f1bd08f",
+      "protected": false,
+      "ancestorOfIntegration": true,
+      "prs": [
+        {
+          "number": 1,
+          "state": "OPEN"
+        }
+      ],
+      "action": "delete-integrated",
+      "proof": "tip is an ancestor of integration snapshot",
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/p4-oauth-reader-unload-ex2-73d0",
+      "sha": "c221836824922322cc03c0137bb08b535c7f897d",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 31,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 31,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/pi-harness-control-e825",
+      "sha": "e36020796bf94d33ab0675e292e422ea940dbb48",
+      "protected": false,
+      "ancestorOfIntegration": true,
+      "prs": [
+        {
+          "number": 8,
+          "state": "OPEN"
+        }
+      ],
+      "action": "delete-integrated",
+      "proof": "tip is an ancestor of integration snapshot",
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/pi-honest-capabilities-ae36",
+      "sha": "27200985e69a70cf70542c3025a05e7ac5858226",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 28,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 28,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/project-workspaces-services-20ba",
+      "sha": "d9dfc6c6c0f8d477baaf23e866c979dcb32fd134",
+      "protected": false,
+      "ancestorOfIntegration": true,
+      "prs": [
+        {
+          "number": 5,
+          "state": "OPEN"
+        }
+      ],
+      "action": "delete-integrated",
+      "proof": "tip is an ancestor of integration snapshot",
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/remove-bootstrap-auth-login-b034",
+      "sha": "acf5507de93f71f186d4366f181c992df09edf06",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 30,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 30,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/remove-product-login-p1-81db",
+      "sha": "b7b3807cfbc4c267bba90cdb5bd6184c20942aba",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 20,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 20,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/remove-product-login-p2-14a6",
+      "sha": "9aaf7fe1f8c45932cda24f6de06e7ff0ee3368cf",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 27,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 27,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/remove-toolbar-coding-plan-cta-da68",
+      "sha": "ffb3a6f70235fbf520d2a6baee8df4b67bac4c3d",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 38,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 38,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/runtime-host-ssh-persistence-ab42",
+      "sha": "f670f0f66cbf3570bfa32ca1ec320fcbe8bc0eae",
+      "protected": false,
+      "ancestorOfIntegration": true,
+      "prs": [
+        {
+          "number": 14,
+          "state": "OPEN"
+        }
+      ],
+      "action": "delete-integrated",
+      "proof": "tip is an ancestor of integration snapshot",
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/scripts-verify-absent-personal-team-subscription-ex1",
+      "sha": "49252dc91775a0eb71b36119aeba4eb55c05ca52",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 192,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 192,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/scripts-verify-absent-subscription-dtos-ex1",
+      "sha": "e63b549b76ef4180dd0184a5437840051a2143cb",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 181,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 181,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/scripts-verify-dead-residual-ex4",
+      "sha": "d3cecc98caf33dc6c1582026e320d9ae5b0ef515",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 164,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 164,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/scripts-verify-enterprise-hook-title-ex3",
+      "sha": "6ceb39f365f0b774a4dfe5ae895822da30969b12",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 127,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 127,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/scripts-verify-login-action-rename-ex4",
+      "sha": "4cffa29225e6e878fe737eb605eb6e44eed25b41",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 160,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 160,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/scripts-verify-login-loading-absent-ex3",
+      "sha": "433676f90792ba7704ef86056f601396d3d5d0ca",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 210,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 210,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/scripts-verify-oauth-team-pricing-ex3",
+      "sha": "fb16cdd1448eaa77dd54a4a608c8a736d2a68cf4",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 156,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 156,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/scripts-verify-owned-entry-ex4",
+      "sha": "c3b981b22b665af60dc30932dabc47662ffa6aff",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 163,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 163,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/scripts-verify-plan-i18n-172-ex3",
+      "sha": "aecb903085082647b9b1ee8f7600a3b25136b786",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 175,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 175,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/scripts-verify-purchase-locale-ex4",
+      "sha": "f883de28de19de52bad06fd62765dad3ce23829c",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 170,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 170,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/scripts-verify-status-pending-ex3",
+      "sha": "83f0d11cb9a5b51ef32f4456e1df94099c9ea5a0",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 207,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 207,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/scripts-verify-tip-ledger-9ad0436-ex1",
+      "sha": "67615aae6d725d50f1602f1d9fe926fe8fe7c7e1",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 185,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 185,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/scripts-verify-tip-ledger-61a647d-ex1",
+      "sha": "051527bf19a8d3085610ec2517ace14db15e142f",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 215,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 215,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/scripts-verify-tip-ledger-02111db-ex3",
+      "sha": "f83f7de39449000f6f0766dd8ef3494df2dbc2d4",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 154,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 154,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/scripts-verify-tip-ledger-da104ce-ex3",
+      "sha": "a650b11d62ce46d86fa1a1d029311a6fb69cdfb4",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 167,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 167,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/services-rename-entitlement-aliases-ex4",
+      "sha": "e14df295e9047f3f368777ed0115045c9c9f968c",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 186,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 186,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/sessionpane-quota-upgrade-removed-ex4",
+      "sha": "ec77b8a94d64708bfd2e17edc910f75ebb8f8b50",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 42,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 42,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/settings-codingplan-surface-removed-e9bd",
+      "sha": "301f8c489e8ab72f05b2904cd678e9fd9a11068b",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 36,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 36,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/shared-drop-dead-coding-plan-subscription-types-ex1",
+      "sha": "60970d69cd9c1df038a83d993f18311f8486d298",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 176,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 176,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/sidebar-footer-remove-upgrade-cta-4858",
+      "sha": "27aadfb6c3322f1d7fab73378832e095905142ec",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 39,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 39,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/test-acp-allow-then-disconnect-then-fault-reopen-ex2",
+      "sha": "b70b8821b5d40e25faa3861a1310335bade01eea",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 299,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 299,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/test-acp-cancel-during-session-load-ex2",
+      "sha": "b9295dad03dfcbc4d55c901e77c46f20963fec0a",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 177,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 177,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/test-acp-deny-then-cancel-after-idle-close-reopen-ex2",
+      "sha": "cc37acf3a68f7ad561cf1d3cfd7e8a0539cfe4d0",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 283,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 283,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/test-acp-deny-then-disconnect-then-fault-reopen-ex2",
+      "sha": "09c3d359eb1d685bfbb41bc1eacd623c409aaf90",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 307,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 307,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/test-acp-disconnect-during-session-load-ex2",
+      "sha": "5df7f04aa7007d4564de27c6646efe9e1fc10a13",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 187,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 187,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/test-acp-idle-close-during-permission-then-reopen-ex2",
+      "sha": "8ad37ccb791032f418d3d61af345837f66e2cbeb",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 242,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 242,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/test-acp-load-then-cancel-ex2",
+      "sha": "149e33d50ac4720f8d8917070bca3a7a55c630c4",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 174,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 174,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/test-acp-load-then-disconnect-ex2",
+      "sha": "cf9ae1f7becb6d16ea6bd279078d4deb9d8b2a80",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 182,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 182,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/test-acp-load-then-permission-allow-ex2",
+      "sha": "616f7464f498810a9817b6e702fd7280a8c2fdc2",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 202,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 202,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/test-acp-load-then-permission-deny-ex2",
+      "sha": "661462be8691b547ca61adb92c6e98961e094400",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 195,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 195,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/test-acp-permission-during-session-load-ex2",
+      "sha": "4ee4cf46d2ecf34613ffc0689aedc89bb46e5c36",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 211,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 211,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/ui-drop-coding-plan-login-noop-ex3",
+      "sha": "2bac2abb9c23e2388ffef4e7f58a164c3c3d38a7",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 146,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 146,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/ui-drop-coding-plan-purchase-complete-ex1",
+      "sha": "eee5a3d1814bd2d81a319c09decd28e68234264c",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 150,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 150,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/ui-drop-dead-product-login-residual2-ex1",
+      "sha": "31df1abd89c2978d1e505d4ba304a7a3f799847e",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 168,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 168,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/ui-drop-dead-product-login-residual-ex1",
+      "sha": "00da05861058df42fe8d830955007a41ad52c22a",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 162,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 162,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/ui-drop-family-selection-team-products-ex1",
+      "sha": "337dd0e3d594deb5ab51ffc7d69a3f8c34d797b2",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 157,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 157,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/ui-drop-oauth-team-pricing-dead-ex1",
+      "sha": "0cd142dccc713abf486d00504208f9a9ce7b1511",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 152,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 152,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/ui-drop-owned-entry-plans-ex1",
+      "sha": "d4ce1ade19b5babf7c0ecdda9fc4910657d926b4",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 159,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 159,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/ui-drop-plan-mode-access-pricing-i18n-ex3",
+      "sha": "d6d96ea33ad5b0e0f010a1903af64d254bd42040",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 172,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 172,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/ui-login-action-visible-rename-ex4",
+      "sha": "a68c61de012afcafdf47a165c424a643c6161605",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 158,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 158,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/ui-rename-login-pending-status-pending-ex3",
+      "sha": "70a601f5e7dc60ef26e39e5d1d537d1d84dad9ae",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 198,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 198,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/ui-rename-loginloading-ex4",
+      "sha": "01a8995a0253d8caff5e638434a37ae09b848ca2",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 178,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 178,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/ui-rename-status-meta-entitlement-ex4",
+      "sha": "49641c4d255563965803abe5b751ec7293b68a65",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 184,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 184,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/ui-root-welcome-oauth-shell-ex2",
+      "sha": "64202a857a64b11fa5c44686972035f5ae874202",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 37,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 37,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/ui-scout-dead-locale-module-ex3",
+      "sha": "2b8d10168c541b98a07321fd1d42716cf716a7d4",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 179,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 179,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/ui-scrub-coding-plan-login-dead-imports-ex3",
+      "sha": "9db790b42dd352bbe5ff75c10e14310addbbfa20",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 148,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 148,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/ui-scrub-login-comments-ex4",
+      "sha": "a64a851b98c4cc16cea189cff4e26e5c0e99f362",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 166,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 166,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/ui-scrub-stale-productlist-comments-ex3",
+      "sha": "6c32483920bcb7160e1f382789e91482c6c74e4c",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 151,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 151,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/ui-test-status-pending-rename-ex3",
+      "sha": "22c85e8ef0d00496667869a38f021eff0e6952b5",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 203,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 203,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/ui-visibility-dead-comment-ex4",
+      "sha": "97d9530f938fce8c161e7236474d7c3099dd9bc1",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 144,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 144,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/unload-product-oauth-keys-8efe",
+      "sha": "a9129d856eda5af560a3b1611273cb22c2504f52",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 35,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 35,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/v4-ui-projector-d929",
+      "sha": "bb8296807c379d6db922939b30ef82a7f9bdef73",
+      "protected": false,
+      "ancestorOfIntegration": true,
+      "prs": [
+        {
+          "number": 7,
+          "state": "OPEN"
+        }
+      ],
+      "action": "delete-integrated",
+      "proof": "tip is an ancestor of integration snapshot",
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/wave1-shared-contracts-8861",
+      "sha": "b9afab6b9b3869f55ff864ad8cbdee5db84c8462",
+      "protected": false,
+      "ancestorOfIntegration": true,
+      "prs": [
+        {
+          "number": 2,
+          "state": "OPEN"
+        }
+      ],
+      "action": "delete-integrated",
+      "proof": "tip is an ancestor of integration snapshot",
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/wave3-acp-adapter-ae51",
+      "sha": "90a3f23efabccfeae6ee754e4df4117d4a914d01",
+      "protected": false,
+      "ancestorOfIntegration": true,
+      "prs": [
+        {
+          "number": 13,
+          "state": "OPEN"
+        }
+      ],
+      "action": "delete-integrated",
+      "proof": "tip is an ancestor of integration snapshot",
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/wave4-harness-integration-b7a9",
+      "sha": "f130e1940c0d70ddc71d3fe586fc2a333b9f212e",
+      "protected": false,
+      "ancestorOfIntegration": true,
+      "prs": [
+        {
+          "number": 15,
+          "state": "OPEN"
+        }
+      ],
+      "action": "retain",
+      "result": "retained"
+    },
+    {
+      "name": "cursor/wave5-release-hardening-c3f2",
+      "sha": "db215c8e20d7c9635643b56d65364e0d03d81f54",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 16,
+          "state": "OPEN"
+        }
+      ],
+      "action": "retain",
+      "result": "retained"
+    },
+    {
+      "name": "cursor/web-p3-oauth-entry-stub-8eff",
+      "sha": "c385ff7cb2b70c023fee0ba54ae4dd62acd91a21",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 24,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 24,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/web-remove-browser-oauth-ec09",
+      "sha": "42a431edea12c786838c513fba347909cf8c1ba5",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 33,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 33,
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/workspace-safety-regression-4f1d",
+      "sha": "a2c115cafb7f658d3fb16e9d47c366b068fa375d",
+      "protected": false,
+      "ancestorOfIntegration": true,
+      "prs": [
+        {
+          "number": 9,
+          "state": "OPEN"
+        }
+      ],
+      "action": "delete-integrated",
+      "proof": "tip is an ancestor of integration snapshot",
+      "result": "deleted"
+    },
+    {
+      "name": "cursor/zcode-session-router-6d15",
+      "sha": "7db340142976e128bd711058490b1854bdc521a8",
+      "protected": false,
+      "ancestorOfIntegration": true,
+      "prs": [
+        {
+          "number": 6,
+          "state": "OPEN"
+        }
+      ],
+      "action": "delete-integrated",
+      "proof": "tip is an ancestor of integration snapshot",
+      "result": "deleted"
+    },
+    {
+      "name": "ex6/track-a-9ad0436",
+      "sha": "8510c8ee12932d4df9382cc7a9cfbabdc467d6e8",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 183,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 183,
+      "result": "deleted"
+    },
+    {
+      "name": "ex6/track-a-51dea99",
+      "sha": "ec9cdb71b0a14231249e4496a0252d8e1ed0e432",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 191,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 191,
+      "result": "deleted"
+    },
+    {
+      "name": "ex6/track-a-73ddb8c",
+      "sha": "2dad66728731ffbbaa85acb9e155f66b7a8c55fd",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 161,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 161,
+      "result": "deleted"
+    },
+    {
+      "name": "ex6/track-a-0647ae2",
+      "sha": "e10cb54a5ee5fcbdf28a5060995c8e940f708735",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 171,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 171,
+      "result": "deleted"
+    },
+    {
+      "name": "ex6/track-a-7015dcd",
+      "sha": "1afc817661bed32d8d5565f61767ed285526e88e",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 180,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 180,
+      "result": "deleted"
+    },
+    {
+      "name": "ex6/track-a-42743ff",
+      "sha": "55539126dabe4969aa32a756e56e1cbcc6023670",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 197,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 197,
+      "result": "deleted"
+    },
+    {
+      "name": "ex6/track-a-66224db",
+      "sha": "15b0054854a817d5d9ca7d2c6717215ecf97d783",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 173,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 173,
+      "result": "deleted"
+    },
+    {
+      "name": "ex6/track-a-2351513",
+      "sha": "4bc339dd0a0cff771c5dbcef9fc75eba0ef5a8e8",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 189,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 189,
+      "result": "deleted"
+    },
+    {
+      "name": "ex6/track-a-a9875c2",
+      "sha": "f2599e0a4b797b0d7bb6fc32a1889711cd902bd9",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 193,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 193,
+      "result": "deleted"
+    },
+    {
+      "name": "ex6/track-a-d9e9f45",
+      "sha": "d49b83973eaab75e96c31ae12c19320dceeae1a8",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/ex6/track-a-d9e9f45",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "ex6/track-a-d97f7a9",
+      "sha": "fe138d446fe585072eacd7e488930186bef2d992",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 169,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 169,
+      "result": "deleted"
+    },
+    {
+      "name": "ex6/track-a-f7b2c30",
+      "sha": "d31ecd32ad6de6be4503ba88ddf4e0dd532bc647",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [
+        {
+          "number": 165,
+          "state": "MERGED"
+        }
+      ],
+      "action": "delete-merged",
+      "proof": "matching PR head SHA and merge commit in integration",
+      "mergedPR": 165,
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-accepted-controls",
+      "sha": "77a482507462e3b8d488bd30148992fba1012419",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-accepted-controls",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-acp-adapter",
+      "sha": "a2bae8fd632ac21abe802794057306f3b26ff423",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-acp-adapter",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-acp-certification",
+      "sha": "b5df2768248e00fc959def88e82381ab4cc5e034",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-acp-certification",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-acp-fencing",
+      "sha": "c7f141129b01db4e3edda0b3af50f02a1503911d",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-acp-fencing",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-acp-transport",
+      "sha": "344e882999b98c84c689d8500042f32d8cd09199",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-acp-transport",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-actual-shell-mount",
+      "sha": "e46ea3047003a29cb4ff67a530d9ebc483ea4fa2",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-actual-shell-mount",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-adapters-map",
+      "sha": "1e7c0e24a692b426bf339f643dadf3c5a91ec611",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-adapters-map",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-authority-product",
+      "sha": "4baf2c17b9575ccad9242aef77b375bc23f786ca",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-authority-product",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-baseline",
+      "sha": "1e7c0e24a692b426bf339f643dadf3c5a91ec611",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-baseline",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-baseline-check",
+      "sha": "9089ce7c4805e718112c18970da0e2322e3a6607",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-baseline-check",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-baseline-prep",
+      "sha": "1e7c0e24a692b426bf339f643dadf3c5a91ec611",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-baseline-prep",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-brand-assets",
+      "sha": "eac1584a6e883b84270e01648782ba1284c220be",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-brand-assets",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-canonical-semantics",
+      "sha": "aa621c262b44efa6c9358573b82ef4e78e5c74e7",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-canonical-semantics",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-catalog",
+      "sha": "a2fb3e435f93b9339326d23b16dd912f4eef5267",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-catalog",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-catalog-recovery",
+      "sha": "c48a340d95ce5ec1fc283f879727b160b79d3538",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-catalog-recovery",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-claude-adapter",
+      "sha": "ffc956416fb8d70df17d2eb67faba80b3f102563",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-claude-adapter",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-claude-header-control",
+      "sha": "9b711a41eb4fbd2bdba7783a1b2364b41e246c8c",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-claude-header-control",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-claude-join",
+      "sha": "e43e9e19e7f89fd46cb7b57a28d1a88342c2d407",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-claude-join",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-claude-repair",
+      "sha": "82ec49c4abd1073624b06be218e9912445296a09",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-claude-repair",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-claude-transport",
+      "sha": "1a4852049ce0818f413444f61968c6642db31e36",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-claude-transport",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-clean-adapter-prereq",
+      "sha": "a08e6ca8eb491e0474f9054f808919bab34570ce",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-clean-adapter-prereq",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-cli-role-compat",
+      "sha": "a33489d765898851bad7600d247c1699e0559199",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-cli-role-compat",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-codex-adapter",
+      "sha": "727b84793f2a6a42dc379f08e589c10060189df0",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-codex-adapter",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-codex-control-proof",
+      "sha": "02a651f2847dc4b15267e95e484d4ddf9ea45426",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-codex-control-proof",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-codex-join",
+      "sha": "ff9f3f7510cf7f024f79b211ff0cd18df8b6d4f0",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-codex-join",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-codex-transport",
+      "sha": "6f0602b7d4324ffafa08724879ffa1f0ca700c5c",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-codex-transport",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-contracts",
+      "sha": "9030cb2c569f7363594587c6365dd7c12c946eed",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-contracts",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-convergence-assembly",
+      "sha": "8d5d32b3bee0242a3f68ed2b79b4796fe0bd1bb6",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-convergence-assembly",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-core-boot",
+      "sha": "6d8bc7786bc7d228f0836ff967db7bc5d213cb2e",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-core-boot",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-core-factory",
+      "sha": "d5a444166d91657a9f0482bdac33ab2bcebfe4d9",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-core-factory",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-core-ingress-authority",
+      "sha": "0c65d9436268289642f3a4a346dd76914c938ac5",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-core-ingress-authority",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-core-native-join",
+      "sha": "1684d3ab3677804cf7f42be5f4dd72f986f66d74",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-core-native-join",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-core-native-mount",
+      "sha": "77a9494ee19b0cdf7d536b84685c5f5b7929d96c",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-core-native-mount",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-create-options",
+      "sha": "6680666fbae24260e0ed9e16ffae3f9aecdc0109",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-create-options",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-desktop-attach",
+      "sha": "af8332c718a04407f8db9605ad1c2df0357c5959",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-desktop-attach",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-desktop-auth-attachments",
+      "sha": "cb3e2a0577866865e8dd96a95852aa7cf893a11b",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-desktop-auth-attachments",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-e2e-infra",
+      "sha": "03242a744dff9ec69a9bc0b269b76bdd37cb0d56",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-e2e-infra",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-facade-ui",
+      "sha": "e7ffdeac894e4aa4272c5b7799164c486023ce44",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-facade-ui",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-gateway-core",
+      "sha": "19483daaf72e9222270e524522e0dab3c86d652f",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-gateway-core",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-gateway-hardening",
+      "sha": "ee354476c3bd506a71a7d46bb76bbdb800d9d523",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-gateway-hardening",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-git-backend",
+      "sha": "446fbac850341a669bf9785eb724eaf4e8127648",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-git-backend",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-harness-assets",
+      "sha": "1d2fad0e0589c87f10765b9c073c48f664d6a9d5",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-harness-assets",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-hierarchy-actions",
+      "sha": "c0b1e187abb983430b78581c8c0bb9fb74cbd212",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-hierarchy-actions",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-host-read-model",
+      "sha": "84172fb6d8642f1c9d30ad9b58b3cf39285039b9",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-host-read-model",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-host-v2",
+      "sha": "5c87eaa8cd5fa11da588a70b0be45bece1e32c44",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-host-v2",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-integration",
+      "sha": "f4dc246601166f9a70950d2e9c8c42155b8a0a53",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-integration",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-lifetime",
+      "sha": "b1216422b508172933389cafb6fbdb16dc6e8bcf",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-lifetime",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-live-baseline",
+      "sha": "d445c024ff6d8a9fe3032e5d36e4a35b20805e99",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-live-baseline",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-live-pi-v2",
+      "sha": "e2607941ad8610dd7e31671544e6dc475cc7866f",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-live-pi-v2",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-load-comparability",
+      "sha": "393af19d7dee68886cfcbbf3ba6c8c7f0df45190",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-load-comparability",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-load-deadline-latency",
+      "sha": "b6a59983a5689f93751a1a89782abc22692a8a0c",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-load-deadline-latency",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-load-gate-repair",
+      "sha": "e31d381947ee80c5e69f9a03a2488f18c2a37cad",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-load-gate-repair",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-load-harness",
+      "sha": "9db55db7c278b1277c7494f83012b83b0ddc1994",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-load-harness",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-load-production-driver",
+      "sha": "a22ce40b620c748b1f3320808af47393e53e7424",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-load-production-driver",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-maintenance-lease",
+      "sha": "f24dac1dc7f337cf0a6166266708c6b6f77ae6ea",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-maintenance-lease",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-matrix-local",
+      "sha": "62b4449f1c137217028fdb0a84c97efd402ce3cf",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-matrix-local",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-matrix-remote",
+      "sha": "ae2c170042a8664fea1690ea8e7c7e5c6f9f57aa",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-matrix-remote",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-messages-codec",
+      "sha": "3ded8e111bab065c839885477006e037080cd6fb",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-messages-codec",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-model-runtime",
+      "sha": "7bd755ac6d6279867e671bcebffcb3340a4b4a06",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-model-runtime",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-mounted-long-history",
+      "sha": "cbfe2f4bb463450cec38e1c11d2547d681a9f133",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-mounted-long-history",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-native-admission",
+      "sha": "0ae733da264d0b68795c39b85481c969890153ef",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-native-admission",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-native-boot-seam",
+      "sha": "47a084e86ec49008a6df50fab54fd919959c9db7",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-native-boot-seam",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-native-composition",
+      "sha": "523ca5ee844fce56d3a16f48e47d89023c38c7b0",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-native-composition",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-native-create-receipt",
+      "sha": "87eb78d42517a84e2286bc41ae2e936a44f7e180",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-native-create-receipt",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-native-factory-boundaries",
+      "sha": "de067420bb898e005dc23e0111d9711c087206b3",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-native-factory-boundaries",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-native-facts",
+      "sha": "c20ff53807a28b39ae11909cf49c011f289b876e",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-native-facts",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-native-index",
+      "sha": "ed62fab4d6458c36a75d29c7b55849d03db6182d",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-native-index",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-native-live-effects",
+      "sha": "3dbb6cab1b83ccdec8099e8fb59b3bae0b12b10e",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-native-live-effects",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-native-mutation-fence",
+      "sha": "c2ba291be20c9caec449bb9b17e8418e4669610f",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-native-mutation-fence",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-native-private-final",
+      "sha": "610a30669054dd9c5dd1d698a9ba6159affff740",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-native-private-final",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-native-private-runner",
+      "sha": "8c511198728a0a330c28814d590fe06ce431f5cb",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-native-private-runner",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-native-private-safety",
+      "sha": "8d06d09ea3e2239b9ff1b87f549e610b8166b261",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-native-private-safety",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-native-shell-parity",
+      "sha": "15fe56a5df9815d5520845d17db5e72bde6b241e",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-native-shell-parity",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-paired-phone-delivery",
+      "sha": "2ecb9793c37b6d22ad99439ef8bf3db7a81347ce",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-paired-phone-delivery",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-pi-canonical",
+      "sha": "195255c3bd8aa9358b7e5f78110023263912a192",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-pi-canonical",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-pi-file-boundary",
+      "sha": "73550947696cb801963eab2404be3fb1fdb383e5",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-pi-file-boundary",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-pi-model",
+      "sha": "5c3a9499c17079df32c95aec58c283fa77c97df1",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-pi-model",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-pi-mount-final",
+      "sha": "c600e888c637b6d52127a5e9afc80f4f36b34fb1",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-pi-mount-final",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-pi-portable-mount",
+      "sha": "a192f963c3151d9c84073f8d8fee3fe43446d72c",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-pi-portable-mount",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-pi-signatures",
+      "sha": "8e98119a843d013203c2243443500b01773887f7",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-pi-signatures",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-product-shell-join",
+      "sha": "0fe2e7c3af4d68d04ed037f698ba86a95c413853",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-product-shell-join",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-projection-replay",
+      "sha": "b7f46b6963b5a2a32afeffd8eef3e6547c1b08c5",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-projection-replay",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-protocol-checkpoint-1",
+      "sha": "0a6b4dcba9703f6c47ba6a87cacd3c8c444314af",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-protocol-checkpoint-1",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-protocol-compat",
+      "sha": "cb7983e827d11c70f6814a43ff33a077049a64c5",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-protocol-compat",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-protocol-final",
+      "sha": "811e3ffa148ed9ea4a6f9d100cc806998a6eb989",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-protocol-final",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-protocol-terminal",
+      "sha": "185787f255ab989df248b636694e063c4e8a10b0",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-protocol-terminal",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-protocol-v2-closure",
+      "sha": "15e5b68245b0e329491ec349908d78ce908f1b0c",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-protocol-v2-closure",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-question-reservation",
+      "sha": "4fbc8e22c3fb0a640bb82e0023af36f4b0ced467",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-question-reservation",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-responses-codec",
+      "sha": "8eef39010692ec4115c4b9e43a5758b018583c84",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-responses-codec",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-responses-private-state",
+      "sha": "59a1c6f42ad4d2f9380db535abdb783d12d2fc32",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-responses-private-state",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-runtime-mount",
+      "sha": "8bbeed8afacff2e35664b3adf777f2feb4b545cf",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-runtime-mount",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-service-boot",
+      "sha": "22444aec07bb45d57c85e4d178506ba2828875b9",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-service-boot",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-service-composition",
+      "sha": "8086fc5cae0f92898c2bdd5d37a61e91031c4137",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-service-composition",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-shell-pane",
+      "sha": "ed6e92881763299dc056f4be3313d32c4aac81cf",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-shell-pane",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-sidebar-ui",
+      "sha": "df6218b0fb04a19b28d2b4f61633784df1f760af",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-sidebar-ui",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-ssh-package",
+      "sha": "82e593d8ddd22ce51054a5187b4e4df037e71c02",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-ssh-package",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-supervisor-generation",
+      "sha": "6f4216183e8c65e79b6aa4916b10693064c680ab",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-supervisor-generation",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-supervisor-real-process",
+      "sha": "c9fc2fa5f11348b267a5d5ec70701c96cc8b52db",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-supervisor-real-process",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-target-bridge",
+      "sha": "4529740ca244d1112062a42f36157206eeb0e5c2",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-target-bridge",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-target-receipts",
+      "sha": "7fe162b09f93d272a1a0613b5ed90ed5b3757c9b",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-target-receipts",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-ui-convergence",
+      "sha": "3bfdc0fbb2be6035da27bae9a5463df168ede506",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-ui-convergence",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-ui-map",
+      "sha": "1e7c0e24a692b426bf339f643dadf3c5a91ec611",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-ui-map",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-ui-product",
+      "sha": "cf217c5592dc2ecf0deb644e2c76b912ece558fb",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-ui-product",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-ui-session-mounted",
+      "sha": "9bf51e6af34cf99950ed85519a5e4f260ad15396",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-ui-session-mounted",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-ui-shell-mounted",
+      "sha": "e806aac39153c4607d6ba667eb8d300a14295bf2",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-ui-shell-mounted",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-worktree-recovery",
+      "sha": "0f8628dfda9e48f7dcc41ba47132cc0b0aa2d053",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-worktree-recovery",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "goal/5be7ed74-worktree-service",
+      "sha": "91f74a21273494bb1829f1357207e771e4f10673",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/goal/5be7ed74-worktree-service",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    },
+    {
+      "name": "main",
+      "sha": "30e8d0a76a73d74bc8647526c04cd94b9b44cf71",
+      "protected": false,
+      "ancestorOfIntegration": true,
+      "prs": [],
+      "action": "retain",
+      "result": "retained"
+    },
+    {
+      "name": "work/multi-harness-completion",
+      "sha": "d9deeb259d0a2b6d2cdbb5e13663c96a71751cea",
+      "protected": false,
+      "ancestorOfIntegration": false,
+      "prs": [],
+      "action": "archive-then-delete",
+      "archiveTag": "archive/2026-09-29/work/multi-harness-completion",
+      "proof": "unmerged or uncertain; preserve exact tip under remote archive tag",
+      "result": "deleted"
+    }
+  ],
+  "schemaVersion": 1,
+  "branchRecordPRStates": "pre-consolidation snapshot",
+  "validation": {
+    "typecheckExitCode": 0,
+    "lintWarningsBefore": 84,
+    "lintErrorsBefore": 4,
+    "lintWarningsAfter": 84,
+    "lintErrorsAfter": 3,
+    "changedScriptsLintErrors": 0,
+    "changedScriptsLintWarnings": 0,
+    "architectureViolations": 0,
+    "verifierParityScenarios": 9,
+    "testRunnerPass": 10,
+    "testRunnerFail": 0,
+    "testRunnerSkipped": 0,
+    "liveAcceptanceRun": false
+  }
+}
