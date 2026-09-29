@@ -9,6 +9,7 @@ import {
 import { IAgentHostService, IZCodeAgentService } from "@zcode/services";
 import { ZCODE_VERSION } from "@zcode/shared";
 import { createCoreHttpServer } from "./http.js";
+import { createHostBootstrapToken } from "./hostBootstrapAuth.js";
 import { installParentDisconnectHandler } from "./parentDisconnect.js";
 import { resolveCoreServerId } from "./serverIdentity.js";
 import { createTaskActivityTracker } from "./taskActivityTracker.js";
@@ -82,7 +83,10 @@ export async function runServerCore(
     externalActivity,
   );
   await taskActivityTracker.whenReady();
-  const http = await createCoreHttpServer(services, { serverId });
+  // 每次 Core 启动生成新的 Host bootstrap secret，只经 fork IPC 交给 Supervisor；不进入 env，
+  // 避免被 Core 派生的 Agent/工具进程继承。
+  const hostBootstrapToken = createHostBootstrapToken();
+  const http = await createCoreHttpServer(services, { serverId, hostBootstrapToken });
   const send = (message: unknown): Promise<void> => {
     if (typeof process.send !== "function" || process.connected === false) return Promise.resolve();
     return new Promise((resolve) => {
@@ -102,6 +106,7 @@ export async function runServerCore(
     port: http.port,
     version: ZCODE_VERSION,
     generation,
+    hostBootstrapToken: http.hostBootstrapToken,
   });
   let shutdownStarted = false;
   let lastRunningTaskCount = taskActivityTracker.readRunningTaskCount();

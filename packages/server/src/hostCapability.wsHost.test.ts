@@ -219,6 +219,9 @@ interface LegacyServer {
   wsUrl: string;
 }
 
+// Bootstrap credential required by POST /api/rpc-host-capability (Ex2 M2 bootstrap auth).
+const LEGACY_TEST_HOST_BOOTSTRAP_TOKEN = "legacy-ws-host-bootstrap-token-for-tests-00";
+
 async function withLegacyServer(
   options: { authToken?: string },
   run: (server: LegacyServer) => Promise<void>,
@@ -227,6 +230,7 @@ async function withLegacyServer(
     host: "127.0.0.1",
     serverId: "legacy-ws-host-ticket-test",
     workspaces: [],
+    hostBootstrapToken: LEGACY_TEST_HOST_BOOTSTRAP_TOKEN,
     ...options,
   }) as Server;
   if (!server.listening) await once(server, "listening");
@@ -252,7 +256,7 @@ async function issueTicketViaHttp(
 ): Promise<ServerRemoteHostCapability> {
   const response = await fetch(`${server.baseHttp}/api/rpc-host-capability`, {
     method: "POST",
-    headers,
+    headers: { authorization: `Bearer ${LEGACY_TEST_HOST_BOOTSTRAP_TOKEN}`, ...headers },
   });
   assert.equal(response.status, 200, "ticket issuance must succeed for the consume tests");
   return serverRemoteHostCapabilitySchema.parse(await response.json());

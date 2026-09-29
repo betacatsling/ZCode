@@ -203,6 +203,11 @@ export const hostInitLocalMessageSchema = z.object({
       runtimeArchives: z
         .record(z.string().regex(/^(darwin|linux|win32)-(arm64|x64)$/u), nonEmptyStringSchema)
         .default({}),
+      /** Per-Core private secret for POST /api/rpc-host-capability (32 bytes, base64url). */
+      hostBootstrapToken: z
+        .string()
+        .regex(/^[A-Za-z0-9_-]{43}$/u)
+        .optional(),
     })
     .strict()
     .optional(),

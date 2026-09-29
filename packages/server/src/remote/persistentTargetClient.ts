@@ -7,6 +7,12 @@ export interface PersistentTargetClientOptions {
   host: string;
   port: number;
   expectedTargetId?: string;
+  /**
+   * Private per-Core bootstrap secret from the Supervisor status (`hostBootstrapToken`), obtained
+   * over a private channel (local `serve --json` stdout or the SSH exec channel). Required by Cores
+   * that enforce bootstrap auth; older Cores ignore it.
+   */
+  hostBootstrapToken?: string;
   signal?: AbortSignal;
   onDidClose?: (event: { code: number; reason: string }) => void;
 }
@@ -71,6 +77,7 @@ function wrapWebSocket(ws: WebSocket): ISocket {
 async function requestHostCapability(
   baseUrl: URL,
   expectedTargetId: string | undefined,
+  hostBootstrapToken: string | undefined,
   signal?: AbortSignal,
 ): Promise<{ capability: string; targetId: string }> {
   const serverInfoResponse = await fetch(new URL("/api/server-info", baseUrl), { signal });
@@ -97,6 +104,7 @@ async function requestHostCapability(
   }
   const response = await fetch(new URL("/api/rpc-host-capability", baseUrl), {
     method: "POST",
+    headers: hostBootstrapToken ? { authorization: `Bearer ${hostBootstrapToken}` } : {},
     signal,
   });
   if (!response.ok)
@@ -170,6 +178,7 @@ export async function connectToPersistentTarget(
   const { capability, targetId } = await requestHostCapability(
     baseUrl,
     options.expectedTargetId,
+    options.hostBootstrapToken,
     options.signal,
   );
   const wsUrl = new URL("/ws/host", baseUrl);

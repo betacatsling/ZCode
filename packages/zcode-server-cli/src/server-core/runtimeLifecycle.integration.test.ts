@@ -16,7 +16,7 @@ import { createMockAgentHostRuntime } from "@zcode/services/agent-host/mock-runt
 import { Supervisor } from "../supervisor/supervisor.js";
 import { requestControl } from "../ipc/controlClient.js";
 import { resolveServerLayout } from "../runtime/paths.js";
-import type { UpdatePreparationResult } from "../contracts.js";
+import type { ServerStatus, UpdatePreparationResult } from "../contracts.js";
 
 interface AgentHostRpc {
   call<T>(method: string, ...args: unknown[]): Promise<T>;
@@ -42,15 +42,16 @@ async function waitFor<T>(
   throw new Error(`Timed out waiting for ${description}`);
 }
 
-async function connectAgentHost(
-  host: string,
-  port: number,
-  route = "/ws/host",
-): Promise<AgentHostRpc> {
+async function connectAgentHost(status: ServerStatus, route = "/ws/host"): Promise<AgentHostRpc> {
+  const host = status.host!;
+  const port = status.port!;
   const headers: Record<string, string> = {};
   if (route === "/ws/host") {
+    // Host ticket 只签发给持有当前 Core bootstrap secret 的调用方（Supervisor status 私有下发）。
+    assert.ok(status.hostBootstrapToken, "ready status publishes the Host bootstrap secret");
     const capabilityResponse = await fetch(`http://${host}:${port}/api/rpc-host-capability`, {
       method: "POST",
+      headers: { authorization: `Bearer ${status.hostBootstrapToken}` },
     });
     assert.equal(capabilityResponse.status, 200);
     const capability = (await capabilityResponse.json()) as { capability: string };
@@ -192,13 +193,13 @@ test("forked Supervisor/Core keep Host work alive across client detach and fence
       "a second OS process cannot acquire the Supervisor data-root lock",
     );
 
-    const untrustedRpc = await connectAgentHost(ready.host!, ready.port!, "/ws");
+    const untrustedRpc = await connectAgentHost(ready, "/ws");
     await assert.rejects(untrustedRpc.call("getAvailability"), /Unknown channel|timed out/);
     untrustedRpc.dispose();
 
     const targetId = "target-integration";
     const firstSpec = spec(targetId, worktreePath, "detach-session");
-    rpc = await connectAgentHost(ready.host!, ready.port!);
+    rpc = await connectAgentHost(ready);
     const created = await rpc.call<ConversationSnapshot>("create", firstSpec);
     assert.equal(created.agentHost?.harnessId, "mock");
     const send = sendCommand(firstSpec.hostSessionId, "send-detach", "turn-detach");
@@ -218,7 +219,7 @@ test("forked Supervisor/Core keep Host work alive across client detach and fence
     const detachedStatus = supervisor.status();
     assert.equal(detachedStatus.state, "ready", "client detach leaves Server Core running");
 
-    rpc = await connectAgentHost(detachedStatus.host!, detachedStatus.port!);
+    rpc = await connectAgentHost(detachedStatus);
     const approvalSnapshot = await waitFor(
       () => rpc!.call<ConversationSnapshot>("snapshot", firstSpec),
       (snapshot) => snapshot.pendingInteractions.length === 1,
@@ -325,8 +326,16 @@ test("forked Supervisor/Core keep Host work alive across client detach and fence
       1,
       "the Supervisor's current Core generation reports recovered activity",
     );
+    // 每代 Core 重新生成 bootstrap secret：崩溃前的旧 secret 不能从新 Core 换取 Host ticket。
+    assert.ok(restarted.hostBootstrapToken);
+    assert.notEqual(restarted.hostBootstrapToken, ready.hostBootstrapToken);
+    const staleBootstrap = await fetch(
+      `http://${restarted.host}:${restarted.port}/api/rpc-host-capability`,
+      { method: "POST", headers: { authorization: `Bearer ${ready.hostBootstrapToken}` } },
+    );
+    assert.equal(staleBootstrap.status, 401);
     rpc.dispose();
-    rpc = await connectAgentHost(restarted.host!, restarted.port!);
+    rpc = await connectAgentHost(restarted);
     const recovered = await rpc.call<ConversationSnapshot>("snapshot", uncertainSpec);
     assert.equal(recovered.pendingInteractions[0]?.interactionId, crashApprovalId);
     assert.equal(

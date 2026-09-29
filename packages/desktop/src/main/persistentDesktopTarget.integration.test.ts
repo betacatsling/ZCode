@@ -193,6 +193,7 @@ test(
         host: endpoint.host,
         port: endpoint.port,
         expectedTargetId: targetId,
+        hostBootstrapToken: endpoint.hostBootstrapToken,
       });
       try {
         const availability = await connection.services.agentHostService.getAvailability();
@@ -365,6 +366,7 @@ test(
         host: endpoint.host,
         port: endpoint.port,
         expectedTargetId: targetId,
+        hostBootstrapToken: endpoint.hostBootstrapToken,
       });
       try {
         const worktrees = firstConnection.services.worktreeService;
@@ -449,6 +451,7 @@ test(
         host: endpoint.host,
         port: endpoint.port,
         expectedTargetId: targetId,
+        hostBootstrapToken: endpoint.hostBootstrapToken,
       });
       try {
         const history = await reattached.services.zcodeAgentService.listSessions({

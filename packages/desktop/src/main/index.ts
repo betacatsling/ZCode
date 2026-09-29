@@ -1717,6 +1717,7 @@ function createWindowInstance(startupBootstrap: StartupWindowBootstrap = {}) {
         port: target.port,
         targetId: target.targetId,
         runtimeArchives: target.runtimeArchives,
+        ...(target.hostBootstrapToken ? { hostBootstrapToken: target.hostBootstrapToken } : {}),
       };
     },
     spawnHostProcess: (win, label, initMessage) =>

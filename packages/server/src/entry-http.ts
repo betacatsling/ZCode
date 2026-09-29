@@ -27,7 +27,7 @@ async function main(): Promise<void> {
     serverId,
     ...(host ? { host } : {}),
     ...(staticRoot ? { staticRoot, spaFallback: true } : {}),
-    ...(authToken ? { authToken, authRequired: true } : {}),
+    ...(authToken ? { authToken } : {}),
   });
 }
 

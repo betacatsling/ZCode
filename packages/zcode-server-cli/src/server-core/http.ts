@@ -29,10 +29,18 @@ import {
   type ServerRemoteInfo,
 } from "@zcode/shared";
 import { createHostCapabilityStore, type HostCapabilityStore } from "./hostCapability.js";
+import {
+  createHostBootstrapToken,
+  HOST_BOOTSTRAP_TOKEN_PATTERN,
+  HOST_CAPABILITY_PATH,
+  verifyHostBootstrapRequest,
+} from "./hostBootstrapAuth.js";
 
 interface CoreHttpServer {
   host: string;
   port: number;
+  /** Private per-launch secret required by POST /api/rpc-host-capability. */
+  hostBootstrapToken: string;
   close: () => Promise<void>;
 }
 
@@ -129,22 +137,29 @@ export async function createCoreHttpServer(
     port?: number;
     serverId?: string;
     hostCapabilityStore?: HostCapabilityStore;
+    /** Private bootstrap secret; generated per launch when omitted so issuance never fails open. */
+    hostBootstrapToken?: string;
   } = {},
 ): Promise<CoreHttpServer> {
   const app = new Hono();
   const { injectWebSocket, upgradeWebSocket, wss } = createNodeWebSocket({ app });
   const host = options.host ?? "127.0.0.1";
   if (!isLoopbackHost(host)) {
-    // 当前只有本机/SSH 隧道入口，Core 尚未接入 token middleware；对外监听必须 fail-closed。
+    // 当前只有本机/SSH 隧道入口；/ws 与 server-info 没有 token middleware，对外监听必须 fail-closed。
     throw new Error(
       `Non-loopback host ${host} requires authentication before the server can listen`,
     );
+  }
+  const hostBootstrapToken = options.hostBootstrapToken ?? createHostBootstrapToken();
+  if (!HOST_BOOTSTRAP_TOKEN_PATTERN.test(hostBootstrapToken)) {
+    throw new Error("Host bootstrap token must be 32 random bytes encoded as base64url");
   }
   const info: ServerRemoteInfo = {
     serverId: options.serverId ?? hostname() ?? "zcode-server",
     version: ZCODE_VERSION,
     protocolVersion: SERVER_REMOTE_PROTOCOL_VERSION,
-    authRequired: false,
+    // Host ticket 签发需要私有 bootstrap 凭据（见 docs/agent-host/HOST-CAPABILITY-BOOTSTRAP-AUTH.md）。
+    authRequired: true,
     workspaces: [],
     capabilities: {
       desktopContinuous: true,
@@ -180,7 +195,22 @@ export async function createCoreHttpServer(
       },
     })),
   );
-  app.post("/api/rpc-host-capability", (context) => context.json(capabilities.issue()));
+  app.post(HOST_CAPABILITY_PATH, (context) => {
+    // loopback 可达性（本机其他用户、SSH 隧道、DNS rebinding）不是调用者身份：签发前必须校验
+    // Supervisor 经私有通道下发的 bootstrap secret，拒绝时不得调用 issue()。
+    const verdict = verifyHostBootstrapRequest(
+      {
+        authorization: context.req.header("authorization"),
+        origin: context.req.header("origin"),
+        host: context.req.header("host"),
+      },
+      [hostBootstrapToken],
+      { requireLoopbackHost: true },
+    );
+    context.header("Cache-Control", "no-store");
+    if (!verdict.ok) return context.json({ error: verdict.error }, verdict.status);
+    return context.json(capabilities.issue());
+  });
   let resolveListening: (value: { port: number }) => void = () => undefined;
   const listening = new Promise<{ port: number }>((resolve) => {
     resolveListening = resolve;
@@ -196,6 +226,7 @@ export async function createCoreHttpServer(
   return {
     host,
     port,
+    hostBootstrapToken,
     close: async () => {
       await closeWebSocketServer(wss);
       await new Promise<void>((resolve, reject) =>
