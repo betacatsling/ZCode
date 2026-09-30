@@ -146,6 +146,11 @@ export function projectHostConversation(input: {
           seededByApproval.delete(event.toolCallId);
           seeded.toolName = event.name;
           if (event.inputText !== undefined) seeded.inputText = event.inputText;
+          // 审批卡在请求投影时复制了占位名 "unknown"；仍在等待时同步真实工具名。已裁决的审批不动。
+          const pending = seeded.approvalInteractionId
+            ? interactions.get(seeded.approvalInteractionId)
+            : undefined;
+          if (pending?.payload.kind === "permission") pending.payload.toolName = event.name;
           break;
         }
         if (tools.has(event.toolCallId)) throw new Error("duplicate tool or wrong turn");
