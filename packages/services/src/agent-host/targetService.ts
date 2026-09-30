@@ -21,7 +21,7 @@ import {
 } from "@zcode/shared/zcode-protocol-v4";
 import { HarnessRegistry } from "./harnessRegistry.js";
 import { createHostHarnessDirectory, type HarnessDirectory } from "./harnessDirectory.js";
-import { SessionHost } from "./sessionHost.js";
+import { EventStreamFailure, SessionHost } from "./sessionHost.js";
 import { createFileWorkspaceSessionReceiptStore } from "./workspaceSessionReceipts.js";
 import type { ModelCatalogPort } from "./modelBindingPlanner.js";
 import type { AgentHostActivityIndex } from "./activityIndex.js";
@@ -354,14 +354,28 @@ export class AgentHostTargetService {
     // A create/attach that already acquired its lane must finish before adapter shutdown.
     while (this.#admissionTails.size) await Promise.all(this.#admissionTails.values());
     for (const harness of this.#registry.list()) await harness.shutdown?.();
+    let failure: unknown;
     for (const host of this.#hosts.values()) {
-      await host.whenIdle();
-      await host.close();
+      // whenIdle() stops waiting once a host's event stream is broken and close() then force-closes
+      // it with EventStreamFailure; keep tearing down the other hosts and the owner fence first.
+      const idle = await host.whenIdle().then(
+        () => undefined,
+        (error: unknown) => error ?? new Error("host failed to settle"),
+      );
+      try {
+        await host.close();
+      } catch (error) {
+        if (!(error instanceof EventStreamFailure)) throw idle ?? error;
+        failure ??= error;
+        continue;
+      }
+      failure ??= idle;
     }
     this.#hosts.clear();
     this.#owners.clear();
     this.#listeners.clear();
     await this.#owner.releaseAll();
+    if (failure !== undefined) throw failure;
   }
 
   async #verify(spec: SessionSpec): Promise<string> {

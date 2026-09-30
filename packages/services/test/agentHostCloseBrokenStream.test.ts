@@ -6,6 +6,14 @@
  * 包括能结束 turn 的 cancelTurn / resolveInteraction / terminateSession，所以打开的 turn
  * 再也不会结束。
  *
+ * 约定：
+ * - 健康流 + 打开的 turn：close() 以 "active turn" 拒绝，调用方仍可 cancel / terminate（不变）。
+ * - 损坏流（有无打开的 turn 都一样）：close() 强制关闭——退订 adapter、关闭 journal（锁释放），
+ *   进行中的 send 保持 accepted，重启后是 execution-unknown、绝不重放——然后以
+ *   EventStreamFailure（code "backend-failure"，cause 为原始流错误）拒绝。
+ * - whenIdle() 在流损坏时立即以原始流错误拒绝，不再等一个结束不了的 adapter run。
+ * - AgentHostTargetService.close() 照样关闭其余 Host、释放 owner fence，最后抛出该类型错误。
+ *
  * 每个可能挂住的等待都用 settle() 限时观察，每个 test 也有 timeout，回归时快速失败而不是挂住 CI。
  */
 import assert from "node:assert/strict";
@@ -23,7 +31,7 @@ import {
   type SessionSpec,
 } from "@zcode/shared/agent-host";
 import { HarnessRegistry, type HarnessAdapter } from "../src/agent-host/harnessRegistry.js";
-import { SessionHost } from "../src/agent-host/sessionHost.js";
+import { EventStreamFailure, SessionHost } from "../src/agent-host/sessionHost.js";
 import { AgentHostTargetService } from "../src/agent-host/targetService.js";
 
 const catalog = { fingerprint: "registry-v1", validateSelection: () => ({ ok: true as const }) };
@@ -319,21 +327,14 @@ async function breakAndCapture(
 
 /** 断言 close() 以带类型的错误拒绝，且 cause 是原始事件流错误。 */
 function assertTypedCloseError(result: Settled<void>, cause: Error): void {
-  const error = rejection(result, "close()") as Error & { code?: unknown };
+  const error = rejection(result, "close()");
+  assert.ok(error instanceof EventStreamFailure, `typed close error, got ${String(error)}`);
   assert.equal(error.code, "backend-failure");
   assert.match(error.message, /event stream is no longer reliable/);
   // 保留原始错误文本，已有按原始信息匹配的调用方（例如 open() 失败路径）不受影响。
   assert.ok(error.message.includes(cause.message), error.message);
   assert.equal(error.cause, cause);
 }
-
-const REPRO_TODO =
-  "BUG sessionHost.ts whenIdle()/close(): once #eventError is set every command that could end " +
-  "the open turn is refused by dispatch(), so the adapter run tracked in #active never settles. " +
-  "SessionHost.close() refuses with 'active turn' forever, whenIdle() awaits Promise.all(#active) " +
-  "forever, and AgentHostTargetService.close() (#finishClose: whenIdle() then close()) hangs; " +
-  "with no open turn close() rethrows the raw stream error and leaks the adapter subscription, " +
-  "journal locks and owner fence.";
 
 // ---------------------------------------------------------------------------
 // Guards: behaviour that holds today and must keep holding
@@ -464,13 +465,13 @@ test(
 );
 
 // ---------------------------------------------------------------------------
-// Repro: close() with a broken event stream
+// close() with a broken event stream
 // ---------------------------------------------------------------------------
 
 for (const { kind, error: expected } of BREAKS) {
   test(
     `broken stream (${kind}), open turn: SessionHost.close() force-closes and rejects with a typed error`,
-    { todo: REPRO_TODO, timeout: TEST_TIMEOUT_MS },
+    { timeout: TEST_TIMEOUT_MS },
     async () => {
       await withRoot("zcode-close-broken-open-", async (root, worktree) => {
         const harness = new OpenTurnHarness();
@@ -513,7 +514,7 @@ for (const { kind, error: expected } of BREAKS) {
 
 test(
   "broken stream, open turn: whenIdle() stops waiting for a turn that can no longer settle",
-  { todo: REPRO_TODO, timeout: TEST_TIMEOUT_MS },
+  { timeout: TEST_TIMEOUT_MS },
   async () => {
     await withRoot("zcode-close-whenidle-", async (root, worktree) => {
       const harness = new OpenTurnHarness();
@@ -535,7 +536,7 @@ test(
 
 test(
   "broken stream, no open turn: close() still releases the host and rejects with a typed error",
-  { todo: REPRO_TODO, timeout: TEST_TIMEOUT_MS },
+  { timeout: TEST_TIMEOUT_MS },
   async () => {
     await withRoot("zcode-close-broken-idle-", async (root, worktree) => {
       const harness = new OpenTurnHarness();
@@ -579,7 +580,7 @@ test(
 for (const endTurnsOnShutdown of [false, true]) {
   test(
     `target close: broken stream with an open turn (shutdown ${endTurnsOnShutdown ? "ends" : "does not end"} the run) settles, tears down and releases the owner fence`,
-    { todo: REPRO_TODO, timeout: TEST_TIMEOUT_MS },
+    { timeout: TEST_TIMEOUT_MS },
     async () => {
       await withRoot("zcode-close-target-broken-", async (root, worktree) => {
         const harness = new OpenTurnHarness({ endTurnsOnShutdown });

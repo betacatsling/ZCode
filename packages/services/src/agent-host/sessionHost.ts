@@ -110,9 +110,24 @@ export class SessionHost {
   #recentOutcome: AgentHostSessionSummary["recentOutcome"] = "none";
   #lastActivityAt = 0;
   #eventTail: Promise<void> = Promise.resolve();
-  #eventError?: Error;
+  #eventFailure?: Error;
+  #signalEventStreamBroken!: () => void;
+  /** Settles once the event stream breaks; turn-settlement waits race it instead of hanging. */
+  readonly #eventStreamBroken = new Promise<void>((resolve) => {
+    this.#signalEventStreamBroken = resolve;
+  });
   #unsubscribe: () => void;
   #closed = false;
+
+  // 事件流损坏后 dispatch() 拒绝一切命令，包括能结束打开 turn 的 cancel/resolve/terminate；
+  // 写入错误的同时唤醒 whenIdle()，否则它会永远等一个再也结束不了的 adapter run。
+  get #eventError(): Error | undefined {
+    return this.#eventFailure;
+  }
+  set #eventError(error: Error | undefined) {
+    this.#eventFailure = error;
+    if (error) this.#signalEventStreamBroken();
+  }
 
   private constructor(options: {
     manifestPath: string;
@@ -829,20 +844,34 @@ export class SessionHost {
     if (this.#eventError) throw this.#eventError;
   }
   async whenIdle(): Promise<void> {
-    await Promise.all(this.#active);
+    // A broken stream can no longer settle an open turn (see #eventError): stop waiting and
+    // report the stream error instead of awaiting an adapter run that nothing can end.
+    await Promise.race([Promise.all(this.#active), this.#eventStreamBroken]);
     await this.whenEventsSettled();
   }
+  /**
+   * Healthy stream: refuses while a turn is active; the caller can still cancel or terminate it.
+   * Broken stream: no command can end the turn any more, so force-close (unsubscribe, close the
+   * journals; an in-flight send stays durable accepted = execution-unknown, never replayed) and
+   * reject with EventStreamFailure so the caller knows the session ended unhealthy.
+   */
   async close(): Promise<void> {
     if (this.#closed) return;
-    if (this.#active.size)
+    if (this.#active.size && !this.#eventError)
       throw new Error(
         "active turn: detach a client, cancel the turn or terminate the session before closing the host",
       );
-    await this.whenIdle();
+    try {
+      await this.whenIdle();
+    } catch (error) {
+      if (!this.#eventError) throw error;
+    }
+    const failure = this.#eventError;
     this.#closed = true;
     this.#unsubscribe();
     await this.#commands.close();
     await this.#events.close();
+    if (failure) throw new EventStreamFailure(failure);
   }
 
   async #persistActivityIndex(): Promise<void> {
@@ -865,6 +894,8 @@ export class SessionHost {
     const tracked = run.then(
       async () => {
         await this.#eventTail;
+        // Force-closed with a broken stream: the journals are closed and the send stays uncertain.
+        if (this.#closed) return;
         if (this.#eventError || this.#activeTurn === turnId) {
           this.#lastKnownStatus = "unknown";
           await this.#commands.finish(commandId, {
@@ -880,6 +911,7 @@ export class SessionHost {
       },
       async () => {
         await this.#eventTail;
+        if (this.#closed) return;
         this.#lastKnownStatus = "unknown";
         await this.#commands.finish(commandId, {
           commandId,
@@ -966,6 +998,20 @@ export class SessionHost {
     };
     await this.#commands.finish(command.commandId, receipt);
     return receipt;
+  }
+}
+
+/**
+ * close() of a host whose event stream broke: resources are released, the session ended unhealthy.
+ * `code` matches the receipt reasonCode dispatch() uses for the same condition; `cause` is the
+ * original stream error.
+ */
+export class EventStreamFailure extends Error {
+  readonly code = "backend-failure" as const;
+  constructor(cause: Error) {
+    // Same wording as dispatch()'s rejection; the cause text stays matchable for existing callers.
+    super(`event stream is no longer reliable: ${cause.message}`, { cause });
+    this.name = "EventStreamFailure";
   }
 }
 
