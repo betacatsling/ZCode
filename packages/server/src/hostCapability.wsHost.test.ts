@@ -22,9 +22,10 @@ import { createHttpServer } from "./http.js";
 // 第一部分直接测试 `/ws/host` middleware 唯一调用的 HostCapabilityStore.consume()，
 // ticket 由 store.issue() 构造，不依赖签发端点，对签发鉴权改造（Ex2）无耦合。
 //
-// 第二部分走真实 createHttpServer：该函数内部自建 store 且不支持注入，只能通过
-// `/api/rpc-host-capability` 拿 ticket。这一耦合集中在 issueTicketViaHttp()；
-// 签发端点加鉴权后只需在这一个 helper 里补凭据。
+// 第二部分走真实 createHttpServer，并总是注入 store（`hostCapabilityStore` 选项）：
+// 只需要一张 ticket 的消费用例直接 `issueTicket()` 从该 store 取，不经过签发端点；
+// 端到端签发→消费、跨实例与 lite token 这几个专门用例仍走真实 `/api/rpc-host-capability`
+// （issueTicketViaHttp()）。签发鉴权与绑定本身见 hostCapabilityBootstrapAuth / hostCapabilityBinding 测试。
 
 const T0 = 1_000_000;
 
@@ -221,6 +222,8 @@ interface LegacyServer {
   baseHttp: string;
   hostUrl: string;
   wsUrl: string;
+  /** The server's ticket store (injected or created here), for tests that just need a ticket. */
+  store: HostCapabilityStore;
 }
 
 // Bootstrap credential required by POST /api/rpc-host-capability (Ex2 M2 bootstrap auth).
@@ -230,12 +233,16 @@ async function withLegacyServer(
   options: { authToken?: string; hostCapabilityStore?: HostCapabilityStore },
   run: (server: LegacyServer) => Promise<void>,
 ): Promise<void> {
+  // 总是注入 store：只需要一张 ticket 的用例直接从 store 取，不依赖签发端点。
+  // 创建发生在调用时，因此 mock 过的 Date.now 会被 store 捕获。
+  const store = options.hostCapabilityStore ?? createHostCapabilityStore();
   const server = createHttpServer(new ServiceCollection(), 0, {
     host: "127.0.0.1",
     serverId: "legacy-ws-host-ticket-test",
     workspaces: [],
     hostBootstrapToken: LEGACY_TEST_HOST_BOOTSTRAP_TOKEN,
     ...options,
+    hostCapabilityStore: store,
   }) as Server;
   if (!server.listening) await once(server, "listening");
   const { port } = server.address() as AddressInfo;
@@ -244,6 +251,7 @@ async function withLegacyServer(
       baseHttp: `http://127.0.0.1:${port}`,
       hostUrl: `ws://127.0.0.1:${port}/ws/host`,
       wsUrl: `ws://127.0.0.1:${port}/ws`,
+      store,
     });
   } finally {
     server.closeAllConnections();
@@ -253,7 +261,12 @@ async function withLegacyServer(
   }
 }
 
-// 与签发端点（Ex2 正在为其加鉴权）的唯一耦合点。
+/** Tests about consumption take the ticket straight from the server's store. */
+function issueTicket(server: LegacyServer): ServerRemoteHostCapability {
+  return server.store.issue();
+}
+
+// 真实签发路径：只用于端到端签发→消费、跨实例与 lite token 这几个专门用例。
 async function issueTicketViaHttp(
   server: LegacyServer,
   headers: Record<string, string> = {},
@@ -286,7 +299,7 @@ test("legacy ws/host: valid ticket upgrades; replaying it is rejected with 401",
 
 test("legacy ws/host: near-miss and misplaced tickets do not burn the real one", async () => {
   await withLegacyServer({}, async (server) => {
-    const { capability } = await issueTicketViaHttp(server);
+    const { capability } = issueTicket(server);
     const { hostUrl } = server;
     await expectRejected(attemptUpgrade(hostUrl, hostHeaders(`${capability}x`)), "near miss");
     await expectRejected(
@@ -306,12 +319,12 @@ test("legacy ws/host: near-miss and misplaced tickets do not burn the real one",
 });
 
 test("legacy ws/host: expired ticket is rejected (mocked Date, store built after mock)", async (t) => {
-  // createHttpServer 内部 store 使用 `options.now ?? Date.now`，在创建时捕获 Date.now；
-  // 因此先 mock Date 再创建 server，才能在不改 src 的情况下推进 TTL。
+  // withLegacyServer 注入的 store 使用 `options.now ?? Date.now`，在创建时捕获 Date.now；
+  // 因此先 mock Date 再创建 server/store，才能推进 TTL。
   t.mock.timers.enable({ apis: ["Date"], now: T0 });
   await withLegacyServer({}, async (server) => {
-    const fresh = await issueTicketViaHttp(server);
-    const stale = await issueTicketViaHttp(server);
+    const fresh = issueTicket(server);
+    const stale = issueTicket(server);
     assert.equal(stale.expiresAt, T0 + DEFAULT_HOST_CAPABILITY_TTL_MS);
     t.mock.timers.tick(DEFAULT_HOST_CAPABILITY_TTL_MS - 1);
     await expectOpen(attemptUpgrade(server.hostUrl, hostHeaders(fresh.capability)), "inside TTL");
@@ -322,7 +335,7 @@ test("legacy ws/host: expired ticket is rejected (mocked Date, store built after
 
 test("legacy ws/host: two simultaneous upgrades with one ticket admit exactly one", async () => {
   await withLegacyServer({}, async (server) => {
-    const { capability } = await issueTicketViaHttp(server);
+    const { capability } = issueTicket(server);
     const outcomes = await Promise.all(
       Array.from({ length: 4 }, () => attemptUpgrade(server.hostUrl, hostHeaders(capability))),
     );
@@ -370,7 +383,7 @@ const WS_KEY = "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==";
 test("legacy ws/host: plain GET/POST with a valid ticket get 426 and do not burn it", async () => {
   await withLegacyServer({}, async (server) => {
     const { baseHttp, hostUrl } = server;
-    const { capability } = await issueTicketViaHttp(server);
+    const { capability } = issueTicket(server);
     for (const method of ["GET", "POST", "PUT", "DELETE"] as const) {
       const response = await fetch(`${baseHttp}/ws/host`, {
         method,
@@ -387,7 +400,7 @@ test("legacy ws/host: plain GET/POST with a valid ticket get 426 and do not burn
 test("legacy ws/host: an Upgrade header without Connection: Upgrade gets 426 and does not burn the ticket", async () => {
   await withLegacyServer({}, async (server) => {
     const { hostUrl } = server;
-    const { capability } = await issueTicketViaHttp(server);
+    const { capability } = issueTicket(server);
     // Node 只在 Connection: Upgrade 时走 'upgrade' 事件；否则这是普通请求，永远不会握手。
     const status = await rawRequest(hostUrl, [
       "GET /ws/host HTTP/1.1",
@@ -405,7 +418,7 @@ test("legacy ws/host: an Upgrade header without Connection: Upgrade gets 426 and
 test("legacy ws/host: handshakes rejected by the WebSocket layer do not burn the ticket", async () => {
   await withLegacyServer({}, async (server) => {
     const { hostUrl } = server;
-    const { capability } = await issueTicketViaHttp(server);
+    const { capability } = issueTicket(server);
     const ticket = `${ZCODE_RPC_HOST_CAPABILITY_HEADER}: ${capability}`;
     const upgrade = ["Connection: Upgrade", "Upgrade: websocket"];
     const rejected: Array<[string, readonly string[], number]> = [
@@ -451,7 +464,7 @@ test("legacy ws/host: handshakes rejected by the WebSocket layer do not burn the
 test("legacy ws/host: upgrades to the wrong path with the ticket do not burn it", async () => {
   await withLegacyServer({}, async (server) => {
     const { hostUrl } = server;
-    const { capability } = await issueTicketViaHttp(server);
+    const { capability } = issueTicket(server);
     for (const path of ["/ws/host/", "/ws/host/extra", "/WS/host", "/ws/hostx"]) {
       const outcome = await attemptUpgrade(new URL(path, hostUrl).href, hostHeaders(capability));
       if (outcome.kind === "open") await closeSocket(outcome.socket);
@@ -485,7 +498,7 @@ test("legacy ws/host: an invalid ticket is refused before any upgrade and does n
 test("legacy ws/host: after a failed handshake, concurrent upgrades with the same ticket still admit exactly one", async () => {
   await withLegacyServer({}, async (server) => {
     const { hostUrl } = server;
-    const { capability } = await issueTicketViaHttp(server);
+    const { capability } = issueTicket(server);
     assert.equal(
       await rawRequest(hostUrl, [
         "GET /ws/host HTTP/1.1",
@@ -519,7 +532,7 @@ test("legacy ws/host: after a failed handshake, concurrent upgrades with the sam
 
 test("legacy ws/host: plain /ws ignores the ticket header and does not consume it", async () => {
   await withLegacyServer({}, async (server) => {
-    const { capability } = await issueTicketViaHttp(server);
+    const { capability } = issueTicket(server);
     await expectOpen(attemptUpgrade(server.wsUrl, hostHeaders(capability)), "plain /ws");
     await expectOpen(
       attemptUpgrade(server.hostUrl, hostHeaders(capability)),
