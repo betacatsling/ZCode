@@ -202,10 +202,7 @@ const UNREADABLE_SIDECARS: readonly {
 for (const { name, corrupt, skip } of UNREADABLE_SIDECARS) {
   test(
     `an activity sidecar that is ${name} lists that session as unknown and keeps the others`,
-    {
-      skip,
-      todo: "repro: listStoredActivityIndex rethrows non-ENOENT sidecar read errors",
-    },
+    { skip },
     async () => {
       const temp = await mkdtemp(join(tmpdir(), "zcode-agent-activity-unreadable-"));
       const data = join(temp, "host-data");

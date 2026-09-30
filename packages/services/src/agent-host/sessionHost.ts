@@ -510,8 +510,14 @@ export class SessionHost {
             pendingInteractionIds: stored.pendingInteractionIds,
           };
         } catch (error: unknown) {
-          if (error instanceof Error && "code" in error && error.code === "ENOENT") return unknown;
-          throw error;
+          // One unreadable sidecar (EISDIR, EACCES, truncated JSON...) is this session's unknown,
+          // never a failed listing for every other session. A missing one is expected (pre-index).
+          if (!(error instanceof Error && "code" in error && error.code === "ENOENT"))
+            logger.warn(undefined, "activity sidecar unreadable; listing session as unknown", {
+              hostSessionId: record.spec.hostSessionId,
+              error,
+            });
+          return unknown;
         }
       }),
     );
