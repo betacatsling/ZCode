@@ -329,7 +329,8 @@ export function createLazyTargetAgentHostService(input: {
         conversationFrames.dispose();
         // Process shutdown with an active turn leaves durable accepted/unknown; no
         // fabricated completion or implicit prompt replay on the next target epoch.
-        // Codex 不拥有注入的 Gateway，所以要在 harness shutdown 之后由这里关闭。
+        // Codex 与 Claude 共用注入的同一个按目标 Gateway，二者都不拥有它（harness shutdown 不关它），
+        // 所以由这里在 target.close()（含 harness shutdown）之后关闭；目标从未 warm 时也照样关闭。
         // ssh-disconnect 不会走到 dispose。
         // Each close runs even if an earlier one rejected. target.close() first closes every
         // mounted host (AgentHostTargetService.#finishClose -> closeSessionHosts); a host close
