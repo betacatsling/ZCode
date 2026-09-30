@@ -32,6 +32,8 @@ import {
   createHostCapabilityStore,
   createHostCapabilityUpgradeGate,
   HOST_CAPABILITY_WS_PATH,
+  hostBootstrapCredentialFingerprint,
+  type HostCapabilityBinding,
   type HostCapabilityStore,
 } from "./hostCapability.js";
 import {
@@ -144,6 +146,8 @@ export async function createCoreHttpServer(
     hostCapabilityStore?: HostCapabilityStore;
     /** Private bootstrap secret; generated per launch when omitted so issuance never fails open. */
     hostBootstrapToken?: string;
+    /** Core generation; Host tickets are bound to it together with the bootstrap credential. */
+    generation?: number;
   } = {},
 ): Promise<CoreHttpServer> {
   const app = new Hono();
@@ -177,7 +181,15 @@ export async function createCoreHttpServer(
   // 使用与 packages/server 兼容的 TTL 一次性 store，使有效期和消费语义与返回信息一致。
   const capabilities = options.hostCapabilityStore ?? createHostCapabilityStore();
   // ticket 只在 ws 接受握手（verifyClient，紧挨 101）时消费；普通请求、握手失败或路由不符都不会烧掉它。
-  const hostUpgradeGate = createHostCapabilityUpgradeGate(capabilities);
+  // ticket 绑定签发它的 bootstrap 凭据指纹与 Core generation；只接受当前绑定，轮换/换代前的 ticket 401。
+  const hostCapabilityBinding: HostCapabilityBinding = {
+    credentialFingerprint: hostBootstrapCredentialFingerprint(hostBootstrapToken),
+    ...(options.generation === undefined ? {} : { generation: options.generation }),
+  };
+  const acceptedHostCapabilityBindings = [hostCapabilityBinding];
+  const hostUpgradeGate = createHostCapabilityUpgradeGate(capabilities, {
+    acceptedBindings: () => acceptedHostCapabilityBindings,
+  });
   hostUpgradeGate.attach(wss);
   app.get("/api/server-info", (context) => context.json(info));
   app.get(
@@ -225,7 +237,8 @@ export async function createCoreHttpServer(
     );
     context.header("Cache-Control", "no-store");
     if (!verdict.ok) return context.json({ error: verdict.error }, verdict.status);
-    return context.json(capabilities.issue());
+    // 唯一的 Bearer 凭据就是 hostBootstrapToken，通过校验即说明出示的正是它。
+    return context.json(hostUpgradeGate.issue(hostCapabilityBinding));
   });
   let resolveListening: (value: { port: number }) => void = () => undefined;
   const listening = new Promise<{ port: number }>((resolve) => {

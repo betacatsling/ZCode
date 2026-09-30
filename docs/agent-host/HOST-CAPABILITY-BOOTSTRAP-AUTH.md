@@ -3,7 +3,9 @@
 Status: implemented for issuance, including the old-Supervisor + new-Core skew
 fallback ("Version-skew fallback"). Tickets are consumed only when the
 `/ws/host` upgrade is accepted, and both servers share one store ("Ticket
-consume-on-upgrade"). Ticket binding is deferred (see "Deferred").
+consume-on-upgrade"). Tickets are bound to the bootstrap credential that
+authorised them and to the Core generation ("Ticket binding to the bootstrap
+credential").
 
 Requirement: `docs/PROJECT-DELIVERY-PLAN.md` §4 M2 risks and the §5 security row
 ("reject unauthorised Host/Web access"). Before this change, both HTTP servers
@@ -17,7 +19,8 @@ issued a trusted Host ticket to any caller that could reach them:
   when `authToken` was configured, and then the browser cookie or `?token=`
   lite token was enough.
 
-A ticket (`{capability, expiresAt}`, 30 s TTL, single use; one shared store in
+A ticket (`{capability, expiresAt}`, 30 s TTL, single use, bound to the
+issuing credential; one shared store in
 `packages/shared/src/node/hostCapabilityStore.ts`, see "Ticket
 consume-on-upgrade") upgrades `/ws/host` to `desktop-continuous` /
 `trusted-host-relay`. That role gets
@@ -130,9 +133,10 @@ when the request first arrives. Both servers wire the same gate
 
 1. **HTTP middleware on `/ws/host` (`admit`, never consumes).** It runs for
    every method, in the order below:
-   - Missing, unknown or expired ticket → **401**. The check is
-     `store.peek()`, which is non-consuming. It purges expired entries, so an
-     expired ticket stays dead even if the clock later rewinds.
+   - Missing, unknown or expired ticket, or one whose binding is not current
+     ("Ticket binding") → **401**. The check is `store.peek()`, which is
+     non-consuming. It purges expired entries, so an expired ticket stays dead
+     even if the clock later rewinds.
    - Not a WebSocket upgrade → **426** with `Upgrade: websocket`. A
      WebSocket upgrade here means `Upgrade: websocket` plus a
      `Connection: upgrade` token, which is exactly what makes Node route the
@@ -145,8 +149,9 @@ when the request first arrives. Both servers wire the same gate
    `Sec-WebSocket-Key`, `Sec-WebSocket-Version`, and subprotocol and extension
    headers. It runs synchronously, right before `101 Switching Protocols` is
    written. Only here is `store.consume()` called, which deletes the ticket
-   whatever the result. If it returns `false` (replayed, expired, or already
-   won by a concurrent upgrade), `ws` answers **401** and never sends 101.
+   whatever the result. If it returns `false` (replayed, expired, binding no
+   longer current, or already won by a concurrent upgrade), `ws` answers
+   **401** and never sends 101.
    Requests without a remembered ticket pass through (the plain `/ws` route).
    A defensive check rejects an unremembered request whose path is exactly
    `/ws/host`.
@@ -170,7 +175,71 @@ Resulting semantics, identical on both servers:
 `HostCapabilityStore.peek` is optional for injected stores, so the legacy
 `hostCapabilityStore` option keeps accepting `{issue, consume}`. Without
 `peek`, an invalid ticket is refused at the consume point (401) instead of in
-the middleware.
+the middleware. How such stores interact with binding is described under
+"Ticket binding".
+
+### Ticket binding to the bootstrap credential
+
+A ticket is only valid on a server that still holds the credential it was
+issued under.
+
+- **What is recorded.** On a successful `POST /api/rpc-host-capability`, the
+  server issues through `gate.issue(binding)`, where binding is
+  `{credentialFingerprint, generation?}`:
+  - `credentialFingerprint = hostBootstrapCredentialFingerprint(credential)`,
+    which is base64url `sha256("zcode/host-bootstrap-credential/v1\0" ‖
+credential)`. It is one-way, so the ticket record never holds the secret,
+    and deterministic, so a rotated credential has a different fingerprint.
+    The credential is the one actually presented: Server Core has exactly one
+    (`hostBootstrapToken`). The legacy server fingerprints the presented
+    Bearer, which after verification equals `hostBootstrapToken` or
+    `authToken`.
+  - `generation`: the Supervisor-assigned Core generation. `runServerCore`
+    passes it as `createCoreHttpServer({ generation })`. The legacy server has
+    no generations and omits it.
+- **Where it is stored.** In the ticket record of the shared store
+  (`packages/shared/src/node/hostCapabilityStore.ts`), next to `expiresAt`, in
+  process memory only.
+- **What is accepted.** The gate reads the server's current bindings
+  (`acceptedBindings()`) at every check, and a ticket's binding must equal
+  one of them exactly (fingerprint and generation):
+  - Server Core: `[{fingerprint(hostBootstrapToken), generation}]`.
+  - Legacy server: one entry per configured credential (`hostBootstrapToken`,
+    `authToken`). With neither configured nothing can be issued over HTTP, so
+    no binding is enforced.
+- **Where it is checked.** In both places from "Ticket consume-on-upgrade",
+  with the same policy:
+  - `admit` → `store.peek(capability, accepted)`. A mismatch is 401 and the
+    ticket is **not** consumed, so a ticket carried to the wrong server stays
+    usable at its issuer until it expires.
+  - `verifyClient` → `store.consume(capability, accepted)`. The ticket is
+    deleted whatever the outcome, and a mismatch there (for example if the
+    policy changed between `admit` and the handshake) is 401 before 101.
+- **Rotation behaviour.** A ticket issued under a credential that is no longer
+  current, or by another Core generation, is rejected with 401. That includes
+  one issued by a previous generation that reused the same secret, and on the
+  legacy server one obtained with an `authToken` that has since been
+  replaced. Today each server holds its credentials for its whole lifetime,
+  and stores live in process memory, so this matters when a store is shared
+  (the `hostCapabilityStore` option) or if credentials ever rotate in-process.
+  `acceptedBindings` is re-read on every check, so in-process rotation would
+  take effect without a restart.
+- **Unbound tickets.** `store.issue()` without a binding is only reachable
+  in-process, by code that holds the store object. The HTTP endpoint always
+  binds. A binding-aware store keeps such tickets unbound and accepts them,
+  which is what the existing store-level tests rely on. Every ticket obtained
+  with a bootstrap credential is bound.
+- **Injected stores without binding support.** A store is binding-aware when
+  it sets `bindsCredential: true` (`createHostCapabilityStore` does). An older
+  `{issue, consume[, peek]}` store cannot record a binding, and its tickets
+  would be indistinguishable from tickets issued under another credential
+  sharing the same store. The gate therefore wraps it **fail-closed**. It keeps
+  the binding of every ticket it issued itself (reclaimed at `expiresAt`, while
+  TTL and single use stay with the inner store). While a binding policy is
+  configured, a ticket the gate has no matching record for is rejected with
+  401 in `admit`, without touching the inner store, so nothing is burned. Its
+  own tickets keep working exactly as before. With no policy (legacy server
+  without credentials) the wrapper is transparent.
 
 **Shared location.** `packages/shared/src/node/hostCapabilityStore.ts`,
 exported from the Node-only subpath `@zcode/shared/node`. Both
@@ -200,7 +269,11 @@ importing it. Services was avoided because other teams are actively changing it.
   `Origin` check still applies.
 - New `hostCapabilityStore` option, mirroring Server Core, so tests can inject
   a store. Without it, each server still creates a fresh TTL store. The
-  consume-on-upgrade gate applies to injected stores too.
+  consume-on-upgrade gate and ticket binding apply to injected stores too.
+- Tickets are bound to the fingerprint of the credential presented at issue.
+  Replacing `authToken` (restarting with another value) invalidates tickets
+  obtained with the old one, while tickets obtained with a still-configured
+  `hostBootstrapToken` stay valid.
 - `authRequired` no longer reads the mismatched `ZCODE_SERVER_TOKEN` env var
   (`entry-http.ts` uses `ZCODE_SERVER_AUTH_TOKEN`).
 
@@ -270,31 +343,18 @@ first post-M2 update, was not taken. Code:
 
 ## Deferred (tracked, not fixed here)
 
-- **Ticket binding to the bootstrap credential.** At issue, record the
-  credential's fingerprint and the generation. Verify both at the `/ws/host`
-  consume. Reject tickets issued before a credential rotation. Owned by Ex2 as
-  the next slice after the shared store. Today a ticket is only
-  `{capability, expiresAt}`: whoever holds it within 30 s becomes a trusted
-  Host, whatever the client, scope or generation. This cut requires the private
-  secret to _obtain_ a ticket, but does not bind the ticket itself. The consume
-  point is now the single shared `verifyClient` gate, so binding lands in one
-  place. Binding options:
-  1. _Bind to the bootstrap credential._ `issue()` stores
-     `sha256(bootstrap secret)` and the generation. The `/ws/host` upgrade must
-     present the same Bearer secret alongside the ticket, and a mismatch is
-     rejected. A leaked ticket alone is then useless. This is the planned next
-     slice.
-  2. _Proof of possession._ The client sends `sha256(nonce)` at issuance and
-     the nonce at upgrade. This binds the ticket to the one requesting process
-     without sending the secret twice.
-  3. _Bind to runtime generation._ Stamp the Core generation and reject on
-     mismatch. Today the stores are process memory, so a restart already
-     invalidates tickets. This matters only if the stores become shared or
-     persistent.
-  4. _Bind to scope._ The ticket names the target ID and the intended role or
+- **Stronger ticket binding.** Tickets are now bound to the issuing credential
+  and generation ("Ticket binding"). Whoever holds a ticket within 30 s on the
+  server that issued it still becomes a trusted Host. Remaining options:
+  1. _Proof of possession._ The client sends `sha256(nonce)` at issuance and
+     the nonce (or the Bearer secret) at upgrade, so a leaked ticket alone is
+     useless. The client currently never sends the secret to `/ws/host`
+     (asserted in `persistentTargetClient.test.ts`), so this needs a client
+     change.
+  2. _Bind to scope._ The ticket names the target ID and the intended role or
      workspace scope, and `/ws/host` grants only that scope. This needs a
      service-level scoped channel API.
-  5. _Bind to connection origin_ (peer address). Weak: every caller, including
+  3. _Bind to connection origin_ (peer address). Weak: every caller, including
      SSH forwards, appears as loopback.
 - **Duplicated bootstrap verification.** The ticket store is shared now
   ("Ticket consume-on-upgrade"), but `hostBootstrapAuth.ts` still exists in
@@ -334,6 +394,21 @@ first post-M2 update, was not taken. Code:
     variant goes through the `hostCapabilityStore` option);
   - after a failed handshake, 4 concurrent upgrades with the ticket admit
     exactly one, and the other three get 401.
+- `hostCapabilityBinding.test.ts` in both `packages/server/src` and
+  `packages/zcode-server-cli/src/server-core`: two servers share one injected
+  store to model rotation.
+  - A ticket issued under one secret gets 401 on the other server, including
+    for a plain `GET` (401, not 426), and afterwards still opens once at its
+    issuer.
+  - Server Core: a previous generation's ticket is rejected even when the
+    secret is reused.
+  - Legacy server: a ticket obtained with a replaced `authToken` is rejected,
+    while one obtained with the surviving `hostBootstrapToken` works.
+  - The recorded binding is a deterministic fingerprint of the presented
+    credential (plus the generation on Core), and never contains the secret.
+  - A binding-unaware injected store keeps working at its issuer and fails
+    closed elsewhere and for tickets the server did not issue.
+  - Control: unbound in-process tickets stay usable.
 - `packages/server/src/remote/persistentTargetClient.test.ts`: the secret is
   sent only to the capability endpoint; a missing secret surfaces the 401.
 - `runtimeLifecycle.integration.test.ts`: the real Supervisor/Core path uses the

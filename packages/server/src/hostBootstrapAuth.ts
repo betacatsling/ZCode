@@ -27,6 +27,13 @@ export function hostBootstrapTokenMatches(expected: string, presented: string): 
   return timingSafeEqual(digest(expected), digest(presented));
 }
 
+/** The credential carried by `Authorization: Bearer <credential>`, if well-formed. */
+export function presentedHostBootstrapCredential(
+  authorization: string | undefined,
+): string | undefined {
+  return authorization ? BEARER_PATTERN.exec(authorization)?.[1] : undefined;
+}
+
 export function isLoopbackAuthority(authority: string | undefined): boolean {
   if (!authority) return false;
   const match = /^(\[::1\]|127\.0\.0\.1|localhost)(?::(\d{1,5}))?$/iu.exec(authority.trim());
@@ -75,9 +82,7 @@ export function verifyHostBootstrapRequest(
     };
   }
   const expected = expectedTokens.filter((token) => token.length > 0);
-  const presented = request.authorization
-    ? BEARER_PATTERN.exec(request.authorization)?.[1]
-    : undefined;
+  const presented = presentedHostBootstrapCredential(request.authorization);
   if (expected.length === 0) {
     return {
       ok: false,
