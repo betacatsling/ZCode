@@ -4,7 +4,11 @@ import type { BackendBinding, BindingPlan, SessionSpec } from "@zcode/shared/age
 import type { TargetModelGateway } from "@zcode/services/model-gateway";
 import type { PreparedHostBinding } from "../../agent-host/harnessRegistry.js";
 import { ClaudeApprovalHookServer } from "./claudeApprovalHookServer.js";
-import { guardClaudeModel, validateClaudeModel } from "./claudeBindingGuards.js";
+import {
+  assertClaudeGrantMatchesBinding,
+  guardClaudeModel,
+  validateClaudeModel,
+} from "./claudeBindingGuards.js";
 import { readClaudeCliVersion, resolveClaudeExecutable } from "./claudeExecutable.js";
 import {
   createClaudeArguments,
@@ -96,6 +100,12 @@ export async function startClaudeSession(
       maxOutputTokensPerRequest: maxOutputTokens,
     },
   });
+  try {
+    assertClaudeGrantMatchesBinding(grant, spec, plan, CLAUDE_PUBLIC_MODEL_ID);
+  } catch (error) {
+    gateway.revoke(grant.id);
+    throw error;
+  }
   const nativeSessionId = priorBinding?.backendSessionId ?? randomUUID();
   const binding = priorBinding ?? {
     hostSessionId: spec.hostSessionId,
