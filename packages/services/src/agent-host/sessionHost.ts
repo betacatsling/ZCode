@@ -45,6 +45,8 @@ import type { AgentHostActivityIndexEntry } from "./activityIndex.js";
 import { staleModelBindingError } from "./modelBindingErrors.js";
 
 const logger = createServiceLogger("agent-host-session");
+const ACTIVE_TURN_MESSAGE =
+  "active turn: detach a client, cancel the turn or terminate the session before closing the host";
 
 const manifestSchema = z.strictObject({
   schemaVersion: z.literal(1),
@@ -107,6 +109,8 @@ export class SessionHost {
   readonly #interactions = new Map<string, string>();
   readonly #unsettledTurns = new Set<string>();
   readonly #preparedTurns = new Map<string, PreparedHostBinding>();
+  /** Sends reserved by admission whose run has not started (or been refused) yet; see close(). */
+  readonly #startingSends = new Set<string>();
   #activeTurn?: string;
   #lastKnownStatus: AgentHostSessionSummary["lastKnownStatus"] = "idle";
   #recentOutcome: AgentHostSessionSummary["recentOutcome"] = "none";
@@ -667,6 +671,7 @@ export class SessionHost {
               // 的冻结 binding 才能先落 busy、再 accepted，避免无副作用失败变成 uncertain。
               this.#activeTurn = command.turnId;
               this.#unsettledTurns.add(command.turnId);
+              this.#startingSends.add(command.commandId);
               this.#lastKnownStatus = "starting";
               try {
                 await this.#persistActivityWhileOpen();
@@ -721,6 +726,9 @@ export class SessionHost {
     if (command.type === "send") {
       const prepared = this.#preparedTurns.get(command.commandId);
       this.#preparedTurns.delete(command.commandId);
+      // Synchronous with the #closed check above and with #track: close() sees it as starting
+      // or active, never neither.
+      this.#startingSends.delete(command.commandId);
       if (!prepared)
         return this.#reject(command, "backend-failure", "accepted send lost its prepared binding");
       try {
@@ -903,28 +911,33 @@ export class SessionHost {
     await this.whenEventsSettled();
   }
   /**
-   * Healthy stream: refuses while a turn is active; the caller can still cancel or terminate it.
+   * Healthy stream: refuses while a turn is active or a reserved send has yet to start its run;
+   * the caller can still cancel or terminate it.
    * Broken stream: no command can end the turn any more, so force-close (unsubscribe, close the
    * journals; an in-flight send stays durable accepted = execution-unknown, never replayed) and
    * reject with EventStreamFailure so the caller knows the session ended unhealthy.
    */
   async close(): Promise<void> {
     if (this.#closed) return;
-    if (this.#active.size && !this.#eventError)
-      throw new Error(
-        "active turn: detach a client, cancel the turn or terminate the session before closing the host",
-      );
+    if (this.#active.size && !this.#eventError) throw new Error(ACTIVE_TURN_MESSAGE);
     try {
       await this.whenIdle();
     } catch (error) {
       if (!this.#eventError) throw error;
     }
     const failure = this.#eventError;
+    // Re-checked synchronously with setting #closed: while close() waited, a send accepted before
+    // #closed may have started its run (dispatch checks #closed, then starts), or be reserved and
+    // about to start. Closing the journals under it would leave it execution-unknown.
+    if (!failure && (this.#active.size > 0 || this.#startingSends.size > 0))
+      throw new Error(ACTIVE_TURN_MESSAGE);
     this.#closed = true;
     this.#unsubscribe();
     // Events delivered before unsubscribe may still be journaling (bounded local I/O): let their
     // journal and sidecar writes land now, never after close() settles.
     await this.#eventTail;
+    // A stream break during that wait comes after `failure` was captured: deliberately no
+    // force-close write and no EventStreamFailure; the sidecar keeps its last good state.
     // A turn settlement or send-reservation release that started before #closed may still be
     // writing; let it land before the journals close (and before a force-close sidecar write).
     await Promise.all(this.#settlements);
@@ -1085,6 +1098,7 @@ export class SessionHost {
    * resurrects the sidecar after close() settled (force-close persisted its own "unknown").
    */
   async #releaseSendReservation(command: Extract<AgentCommand, { type: "send" }>): Promise<void> {
+    this.#startingSends.delete(command.commandId);
     this.#unsettledTurns.delete(command.turnId);
     if (this.#activeTurn === command.turnId) this.#activeTurn = undefined;
     if (this.#lastKnownStatus === "starting") this.#lastKnownStatus = "idle";
