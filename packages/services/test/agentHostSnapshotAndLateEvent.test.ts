@@ -432,18 +432,9 @@ test(
 // Bug 2: late event from an older runtime epoch
 // ---------------------------------------------------------------------------
 
-const LATE_EVENT_TODO =
-  "BUG sessionHost.ts:138-150 — EventJournal.appendWithStatus rejects an older-epoch event with " +
-  "'foreign event identity' (eventJournal.ts:77-81); the subscriber's catch stores it in " +
-  "#eventError, which dispatch()/whenEventsSettled()/close() rethrow forever (sessionHost.ts:545, 798). " +
-  "NOT FIXED: agentHostAuthNegative.test.ts:618-636 (M2, #316) pins this fail-closed latch as policy. " +
-  "Proposed fix once that policy is revisited: in the adapter subscriber drop events whose " +
-  "hostSessionId matches but runtimeEpoch !== binding.runtimeEpoch before they reach the journal " +
-  "(foreign hostSessionId still fails closed), and update that M2 assertion.";
-
 test(
   "late event: an older runtime epoch's late event is dropped and the current session keeps working",
-  { todo: LATE_EVENT_TODO, timeout: TEST_TIMEOUT_MS },
+  { timeout: TEST_TIMEOUT_MS },
   async () => {
     await withRoot("zcode-late-event-", async (root, worktree) => {
       const harness = new ScriptedHarness();
@@ -459,7 +450,7 @@ test(
         const idle = await within(service.snapshot(spec), "snapshot after late event");
         assert.equal(idle.seq, 0);
         assert.deepEqual(await within(service.eventsSince(spec, 0), "eventsSince"), []);
-        assert.deepEqual(delivered, []);
+        assert.equal(delivered.length, 0);
 
         assert.equal(
           (await within(service.dispatch(spec, send("host-late", "1")), "send")).status,

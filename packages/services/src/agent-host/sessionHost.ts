@@ -40,7 +40,10 @@ import {
   type ModelCatalogSnapshotPort,
 } from "./modelBindingPlanner.js";
 import { projectHostConversation } from "../agent-ui-projection/projector.js";
+import { createServiceLogger } from "../logger/serviceLogger.js";
 import type { AgentHostActivityIndexEntry } from "./activityIndex.js";
+
+const logger = createServiceLogger("agent-host-session");
 
 const manifestSchema = z.strictObject({
   schemaVersion: z.literal(1),
@@ -136,6 +139,21 @@ export class SessionHost {
     this.#events = options.events;
     for (const event of this.#events.since(0)) this.#applyEventState(event);
     this.#unsubscribe = options.adapter.subscribe(options.spec.hostSessionId, (source) => {
+      // 旧 runtimeEpoch 后端的迟到事件不属于当前代际：journal 本来就不会收它，这里记录后丢弃，
+      // 而不是让 appendWithStatus 抛错并把 #eventError 永久锁死当前会话。别的会话的事件仍失败关闭。
+      if (
+        source.hostSessionId === this.spec.hostSessionId &&
+        source.runtimeEpoch !== this.binding.runtimeEpoch
+      ) {
+        logger.warn(undefined, "dropped late event from an older runtime epoch", {
+          hostSessionId: source.hostSessionId,
+          eventRuntimeEpoch: source.runtimeEpoch,
+          currentRuntimeEpoch: this.binding.runtimeEpoch,
+          kind: source.kind,
+          sequence: source.sequence,
+        });
+        return;
+      }
       this.#eventTail = this.#eventTail
         .then(async () => {
           if (this.#eventError) return;

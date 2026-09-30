@@ -82,7 +82,7 @@ class RecordingHarness implements HarnessAdapter {
       runtimeEpoch: `epoch-${++this.#epochCounter}`,
     };
     this.#bindings.set(spec.hostSessionId, binding);
-    this.#sequences.set(spec.hostSessionId, 0);
+    this.#sequences.set(`${spec.hostSessionId}\u0000${binding.runtimeEpoch}`, 0);
     return binding;
   }
   async attach(spec: SessionSpec, binding: BackendBinding): Promise<void> {
@@ -144,8 +144,10 @@ class RecordingHarness implements HarnessAdapter {
     payload: Record<string, unknown> & { kind: AgentEvent["kind"] },
     runtimeEpoch = this.epochOf(hostSessionId),
   ): void {
-    const sequence = (this.#sequences.get(hostSessionId) ?? 0) + 1;
-    this.#sequences.set(hostSessionId, sequence);
+    // 序号按 (hostSessionId, runtimeEpoch) 独立计数，与真实后端一致：旧代迟到事件不占用当前代的序号。
+    const key = `${hostSessionId}\u0000${runtimeEpoch}`;
+    const sequence = (this.#sequences.get(key) ?? 0) + 1;
+    this.#sequences.set(key, sequence);
     const event = agentEventSchema.parse({
       hostSessionId,
       runtimeEpoch,
@@ -615,7 +617,7 @@ test("M2 generation: commands carrying a stale runtimeEpoch cannot cancel or res
   });
 });
 
-test("M2 generation: late events from an older runtime epoch are not journaled or delivered to the new epoch", async () => {
+test("M2 generation: late events from an older runtime epoch are dropped (not journaled or delivered) and the session keeps working", async () => {
   await withRoot("zcode-m2-gen-late-events-", async (root, worktree) => {
     const harness = new RecordingHarness();
     const service = makeService(root, harness);
@@ -624,18 +626,79 @@ test("M2 generation: late events from an older runtime epoch are not journaled o
     const unsubscribe = service.subscribe(({ event }) => delivered.push(event));
     try {
       await service.create(spec);
+      const epoch = harness.epochOf("host-late");
       harness.emit("host-late", { kind: "session.status", state: "running" }, "epoch-old");
-      await assert.rejects(service.snapshot(spec), /foreign event identity/);
+      assert.equal((await service.snapshot(spec)).seq, 0);
+      const [entry] = (await service.listActivityIndex()).sessions;
+      assert.equal(entry?.sequence, 0);
+      assert.equal(entry?.state, "idle");
       assert.deepEqual(delivered, []);
       assert.deepEqual(await service.eventsSince(spec, 0).catch(() => []), []);
-      // 失败关闭：同一 host 不再接受新命令，而不是在不可靠的事件流上继续执行。
+      assert.equal((await service.dispatch(spec, send("host-late", "1"))).status, "accepted");
+      await waitFor(() => harness.calls.send.length === 1, "send to reach the harness");
+      assert.deepEqual(harness.calls.send, ["send-1"]);
+      // send 命令本身没有 runtimeEpoch 字段（commands.ts），当前代际体现在这次调用产生的事件上。
+      const running = await service.snapshot(spec);
+      assert.equal(running.pendingInteractions.length, 1);
+      const journaled = await service.eventsSince(spec, 0);
+      assert.deepEqual(
+        journaled.map((event) => [event.kind, event.runtimeEpoch]),
+        [
+          ["turn.started", epoch],
+          ["tool.started", epoch],
+          ["interaction.requested", epoch],
+        ],
+      );
+      const cancel = await service.dispatch(spec, {
+        type: "cancelTurn",
+        commandId: "cancel-current",
+        hostSessionId: "host-late",
+        runtimeEpoch: epoch,
+        turnId: "turn-1",
+      });
+      assert.equal(cancel.status, "completed");
+      await service.waitForIdle(spec);
+      const settled = await service.eventsSince(spec, 0);
+      assert.ok(settled.every((event) => event.runtimeEpoch === epoch));
+      assert.deepEqual(delivered, settled);
+    } finally {
+      unsubscribe();
+      await service.close().catch(() => undefined);
+    }
+  });
+
+  // 别的 hostSessionId 的事件说明 adapter 路由坏了：仍失败关闭（全新 harness/会话，不影响上面的断言）。
+  await withRoot("zcode-m2-gen-foreign-session-", async (root, worktree) => {
+    let listener: ((event: AgentEvent) => void) | undefined;
+    const harness = new (class extends RecordingHarness {
+      override subscribe(hostSessionId: string, next: (event: AgentEvent) => void): () => void {
+        listener = next;
+        return super.subscribe(hostSessionId, next);
+      }
+    })();
+    const service = makeService(root, harness);
+    const spec = makeSpec("host-guard", worktree);
+    try {
+      await service.create(spec);
+      assert.ok(listener);
+      listener(
+        agentEventSchema.parse({
+          hostSessionId: "host-someone-else",
+          runtimeEpoch: harness.epochOf("host-guard"),
+          sequence: 1,
+          eventId: "foreign-1",
+          at: 1,
+          kind: "session.status",
+          state: "running",
+        }),
+      );
+      await assert.rejects(service.snapshot(spec), /foreign event identity/);
       await assert.rejects(
-        service.dispatch(spec, send("host-late", "1")),
+        service.dispatch(spec, send("host-guard", "1")),
         /foreign event identity/,
       );
       assert.deepEqual(harness.calls.send, []);
     } finally {
-      unsubscribe();
       await service.close().catch(() => undefined);
     }
   });
