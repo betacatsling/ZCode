@@ -29,6 +29,12 @@ export const CLAUDE_PUBLIC_MODEL_ID = "claude-sonnet-4-6";
 const CLAUDE_TOOL_ALLOWLIST = ["Bash", "Edit", "Read", "Write", "Glob", "Grep"] as const;
 const CLAUDE_MAX_OUTPUT_TOKENS = 32_000;
 
+export type ClaudeProcessLaunchOptions = ConstructorParameters<typeof ClaudeStreamProcess>[0];
+/** Test seam shaped like Codex `launchAppServer`; unset keeps executable discovery and spawn. */
+export type ClaudeProcessLauncher = (
+  options: ClaudeProcessLaunchOptions,
+) => Promise<ClaudeStreamProcess>;
+
 /** Adapter state read by the startup path; built once by ClaudeHarnessAdapter. */
 export interface ClaudeSessionStartupContext {
   readonly version: string;
@@ -40,6 +46,7 @@ export interface ClaudeSessionStartupContext {
   readonly eventSink: ClaudeRuntimeEventSink;
   readonly registry: ClaudeSessionRegistry;
   readonly onProcess: ((hostSessionId: string, process: ClaudeStreamProcess) => void) | undefined;
+  readonly launchProcess: ClaudeProcessLauncher | undefined;
   readonly isShuttingDown: () => boolean;
   readonly validatePlan: (spec: SessionSpec, plan: BindingPlan) => void;
 }
@@ -55,9 +62,12 @@ export async function startClaudeSession(
   if (prepared && prepared.plan !== plan)
     throw new Error("Claude startup received another prepared plan");
   ctx.validatePlan(spec, plan);
-  const executablePath = await resolveClaudeExecutable(ctx.executablePath);
-  const version = await readClaudeCliVersion(executablePath);
-  if (version !== ctx.version) throw new Error("Claude Code CLI version does not match 2.1.263");
+  // An injected launcher owns the process, so there is no executable to discover or version-check.
+  const executablePath = ctx.launchProcess
+    ? (ctx.executablePath ?? "claude")
+    : await resolveClaudeExecutable(ctx.executablePath);
+  if (!ctx.launchProcess && (await readClaudeCliVersion(executablePath)) !== ctx.version)
+    throw new Error("Claude Code CLI version does not match 2.1.263");
   const model = prepared?.model ?? (await ctx.modelFactory(spec, plan));
   validateClaudeModel(plan, model);
   if (!ctx.isSelectionAuthorized(plan))
@@ -117,7 +127,7 @@ export async function startClaudeSession(
       effort,
       maxOutputTokens,
     });
-    process = new ClaudeStreamProcess({
+    const launch: ClaudeProcessLaunchOptions = {
       executablePath,
       args: createClaudeArguments({
         executablePath,
@@ -136,7 +146,8 @@ export async function startClaudeSession(
         if (runtime) failClaudeRuntime(runtime, error);
         else earlyFailure = error;
       },
-    });
+    };
+    process = ctx.launchProcess ? await ctx.launchProcess(launch) : new ClaudeStreamProcess(launch);
     runtime = ctx.eventSink.createRuntime({
       spec,
       plan,

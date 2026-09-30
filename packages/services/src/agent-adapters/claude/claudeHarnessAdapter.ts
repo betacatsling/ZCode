@@ -33,6 +33,7 @@ import {
 import {
   replaceClaudeIdleBinding,
   startClaudeSession,
+  type ClaudeProcessLauncher,
   type ClaudeSessionStartupContext,
 } from "./claudeSessionStartup.js";
 
@@ -51,6 +52,8 @@ export interface ClaudeHarnessAdapterOptions {
   readonly now?: () => number;
   readonly turnLeaseRenewIntervalMs?: number;
   readonly onProcess?: (hostSessionId: string, process: ClaudeStreamProcess) => void;
+  /** Replaces executable discovery, version check and spawn (tests); unset = pinned CLI. */
+  readonly launchProcess?: ClaudeProcessLauncher;
 }
 
 /** Explicit 2.1.263 structured-stream adapter; SessionHost retains admission and journal ownership. */
@@ -99,6 +102,7 @@ export class ClaudeHarnessAdapter implements HarnessAdapter {
       eventSink: this.#eventSink,
       registry: this.#registry,
       onProcess: this.#onProcess,
+      launchProcess: options.launchProcess,
       isShuttingDown: () => this.#shuttingDown,
       validatePlan: (spec, plan) =>
         validateClaudePlan(
