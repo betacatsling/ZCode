@@ -79,6 +79,12 @@ test("cancelling before any tool finishes the turn as cancelled and aborts the p
   assert.deepEqual(process!.calls, ["abort"]);
   assert.deepEqual(h.grants.revoked, h.grants.created);
   assert.equal(await process!.gatewayStatus(), 401);
+  assert.equal(await process!.preToolUse("toolu_late", "Read", { file_path: "x" }), "deny");
+  assert.match(
+    eventsOf(h.events, "session.error").at(-1)?.message ?? "",
+    /\(failed\)$/,
+    "cancel marks the runtime failed even when the turn itself ends as cancelled",
+  );
 
   // The interrupted runtime is failed, so the next turn resumes on a new process.
   const next = await startTurn(h, "turn-next");
@@ -155,5 +161,10 @@ test("cancelling after an approved tool settles the turn as execution-unknown", 
     await process.preToolUse("toolu_cancel_2", "Bash", { command: "echo again" }),
     "deny",
     "a late tool request from the interrupted process is denied",
+  );
+  assert.match(
+    eventsOf(h.events, "session.error").at(-1)?.message ?? "",
+    /\(failed\)$/,
+    "denied because cancel marked the runtime failed",
   );
 });
