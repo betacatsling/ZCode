@@ -68,24 +68,29 @@ export async function prepareClaudeSessionProfile(input: {
     "",
   ].join("\n");
   await writeManagedFile(helperPath, helper, 0o700, PROFILE_MARKER);
-  await writeManagedFile(settingsPath, JSON.stringify({
-    apiKeyHelper: helperPath,
-    env: { ZCODE_MANAGED_PROFILE: PROFILE_MARKER },
-    enabledPlugins: {},
-    sandbox: {
-      enabled: false,
-      allowUnsandboxedCommands: true,
-      failIfUnavailable: false,
-    },
-    hooks: {
-      PreToolUse: [
-        {
-          matcher: "",
-          hooks: [{ type: "http", url: input.hookUrl, timeout: 600 }],
-        },
-      ],
-    },
-  }), 0o600, PROFILE_MARKER);
+  await writeManagedFile(
+    settingsPath,
+    JSON.stringify({
+      apiKeyHelper: helperPath,
+      env: { ZCODE_MANAGED_PROFILE: PROFILE_MARKER },
+      enabledPlugins: {},
+      sandbox: {
+        enabled: false,
+        allowUnsandboxedCommands: true,
+        failIfUnavailable: false,
+      },
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: "",
+            hooks: [{ type: "http", url: input.hookUrl, timeout: 600 }],
+          },
+        ],
+      },
+    }),
+    0o600,
+    PROFILE_MARKER,
+  );
   await writeClaudeSessionCapability(capabilityPath, input.gatewayToken);
   return {
     root: profileRoot,
@@ -104,7 +109,8 @@ export async function prepareClaudeSessionProfile(input: {
 }
 
 export async function writeClaudeSessionCapability(path: string, token: string): Promise<void> {
-  if (!/^[A-Za-z0-9_-]{40,64}$/.test(token)) throw new Error("Claude session capability is invalid");
+  if (!/^[A-Za-z0-9_-]{40,64}$/.test(token))
+    throw new Error("Claude session capability is invalid");
   const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
   const handle = await open(temporary, "wx", 0o600);
   try {
@@ -212,7 +218,8 @@ async function writeManagedFile(
 ): Promise<void> {
   try {
     const current = await readFile(path, "utf8");
-    if (!current.includes(marker)) throw new Error("refusing to overwrite an unmanaged Claude profile file");
+    if (!current.includes(marker))
+      throw new Error("refusing to overwrite an unmanaged Claude profile file");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }

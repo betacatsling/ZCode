@@ -8,7 +8,10 @@ import { ClaudeCodeAdapterError } from "./claudeCodeErrors.js";
 import { AcpMarkingTransport, FakeClaudeCodeTransport } from "./claudeCodeFakeTransport.js";
 import { ClaudeCodeHarnessAdapter } from "./claudeCodeHarnessAdapter.js";
 import type { ClaudeCodeNativeEvent } from "./claudeCodeNative.js";
-import { createFilesystemClaudeCodeProfileSink, type ClaudeCodeProfileSink } from "./claudeCodeProfile.js";
+import {
+  createFilesystemClaudeCodeProfileSink,
+  type ClaudeCodeProfileSink,
+} from "./claudeCodeProfile.js";
 import { CLAUDE_CODE_ADAPTER_VERSION } from "./claudeCodeVersion.js";
 
 const SECRET = "TEST_ONLY_SECRET_VALUE";
@@ -47,7 +50,11 @@ function spec(hostSessionId: string): SessionSpec {
   };
 }
 
-function waitFor(adapter: ClaudeCodeHarnessAdapter, hostSessionId: string, kind: AgentEvent["kind"]) {
+function waitFor(
+  adapter: ClaudeCodeHarnessAdapter,
+  hostSessionId: string,
+  kind: AgentEvent["kind"],
+) {
   return new Promise<AgentEvent>((resolve) => {
     const unsubscribe = adapter.subscribe(hostSessionId, (event) => {
       if (event.kind === kind) {
@@ -160,7 +167,10 @@ test("fake transport control plane isolates sessions in one workspace", async ()
   assert.notEqual(bindingA.backendSessionId, "session-a");
   assert.equal(sink.writes.length, 2);
   assert.notEqual(sink.writes[0]?.path, sink.writes[1]?.path);
-  assert.equal(sink.writes.every((write) => write.path.startsWith("/managed/claude-code/")), true);
+  assert.equal(
+    sink.writes.every((write) => write.path.startsWith("/managed/claude-code/")),
+    true,
+  );
   assert.equal(JSON.stringify(sink.writes).includes(SECRET), false);
   assert.equal(calls.inspect, 0);
 
@@ -197,7 +207,10 @@ test("fake transport control plane isolates sessions in one workspace", async ()
   assert.equal(eventsA.filter((event) => event.kind === "text.delta").length, 2);
   const finished = eventsA.find((event) => event.kind === "message.finished");
   assert.equal(finished && "text" in finished ? finished.text : "", "abc");
-  assert.equal(eventsA.some((event) => event.kind === "tool.finished"), false);
+  assert.equal(
+    eventsA.some((event) => event.kind === "tool.finished"),
+    false,
+  );
   const terminal = eventsA.at(-1);
   assert.equal(terminal?.kind, "turn.finished");
   if (terminal?.kind === "turn.finished") assert.equal(terminal.outcome, "cancelled");
@@ -216,7 +229,10 @@ test("fake transport control plane isolates sessions in one workspace", async ()
   await turnB;
   const eventsB = adapter.readControlSnapshot("session-b");
   assert.equal(JSON.stringify(eventsB).includes(SECRET), false);
-  assert.equal(eventsB.some((event) => event.kind === "text.delta" && event.text === "seen [redacted]"), true);
+  assert.equal(
+    eventsB.some((event) => event.kind === "text.delta" && event.text === "seen [redacted]"),
+    true,
+  );
   assert.equal(calls.inspect, 0);
   assert.equal(transport.promptCount, 2);
 
@@ -289,7 +305,10 @@ test("stale epoch and sequence gaps stay on the targeted turn", async () => {
     text: "gap",
   });
   const events = adapter.readControlSnapshot("session-gap");
-  assert.equal(events.some((event) => event.kind === "text.delta" && event.text === "invented"), false);
+  assert.equal(
+    events.some((event) => event.kind === "text.delta" && event.text === "invented"),
+    false,
+  );
   assert.equal(
     events.some((event) => event.kind === "session.error" && event.code === "execution-unknown"),
     true,
@@ -359,7 +378,10 @@ test("cancel closes a pending approval and a late decision is rejected", async (
   });
   await turn;
   const events = adapter.readControlSnapshot("session-cancel");
-  assert.equal(events.some((event) => event.kind === "tool.finished"), false);
+  assert.equal(
+    events.some((event) => event.kind === "tool.finished"),
+    false,
+  );
   const resolved = events.find((event) => event.kind === "interaction.resolved");
   assert.equal(resolved?.kind === "interaction.resolved" ? resolved.decision : "", "deny");
   await assert.rejects(
@@ -396,8 +418,14 @@ test("ACP transport delivers control events without credentials", async () => {
     text: "hello",
   });
   const events = adapter.readControlSnapshot("session-acp");
-  assert.equal(events.some((event) => event.kind === "text.delta"), true);
-  assert.equal(events.some((event) => event.kind === "usage.reported"), true);
+  assert.equal(
+    events.some((event) => event.kind === "text.delta"),
+    true,
+  );
+  assert.equal(
+    events.some((event) => event.kind === "usage.reported"),
+    true,
+  );
   const capabilities = await adapter.capabilities(target());
   assert.equal(capabilities.images.support, "unsupported");
   assert.equal(capabilities.modelSwitch.support, "unsupported");
@@ -440,8 +468,11 @@ test("profile writes stay out of the user Claude login directory", async () => {
   );
   assert.equal(marker.includes(SECRET), false);
   assert.equal(marker.includes("isolatesGlobalClaudeLogin"), true);
-  const mode = (await stat(join(managedRoot, "profiles", profiles[0] ?? "", "config", "zcode-claude-code-profile.json")))
-    .mode;
+  const mode = (
+    await stat(
+      join(managedRoot, "profiles", profiles[0] ?? "", "config", "zcode-claude-code-profile.json"),
+    )
+  ).mode;
   assert.equal(mode & 0o777, 0o600);
   await adapter.terminate("session-fs");
   assert.deepEqual(await readdir(globalClaude), []);

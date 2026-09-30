@@ -109,10 +109,7 @@ export function listDisposingHostProcesses(): ElectronUtilityProcess[] {
   return Array.from(disposingHostProcesses);
 }
 
-export function loadWindow(
-  win: BrowserWindow,
-  bootstrap?: WindowBootstrapOptions,
-): Promise<void> {
+export function loadWindow(win: BrowserWindow, bootstrap?: WindowBootstrapOptions): Promise<void> {
   const query = Object.fromEntries(
     Object.entries({
       restoreSession:

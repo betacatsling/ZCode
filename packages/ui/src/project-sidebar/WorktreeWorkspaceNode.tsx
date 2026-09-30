@@ -66,7 +66,11 @@ export function WorktreeWorkspaceNode({
           onClick={() => onToggle(workspace.id)}
           className="min-h-9 min-w-0 flex-1 flex-wrap justify-start gap-x-2 gap-y-0.5 px-1 text-left md:min-h-8"
         >
-          {expanded ? <ChevronDownIcon className="size-3.5" /> : <ChevronRightIcon className="size-3.5" />}
+          {expanded ? (
+            <ChevronDownIcon className="size-3.5" />
+          ) : (
+            <ChevronRightIcon className="size-3.5" />
+          )}
           <span className="min-w-0 truncate text-ui-sm text-foreground">{workspace.title}</span>
           {workspace.isMainWorktree ? (
             <span data-main-badge="true" className="shrink-0 text-ui-xs text-foreground-subtle">
@@ -95,9 +99,15 @@ export function WorktreeWorkspaceNode({
       </div>
       <div className="flex flex-wrap items-center gap-2 pl-5 text-ui-xs text-foreground-subtle">
         <span>{copy.agents(summary.agentCount)}</span>
-        {summary.pendingCount > 0 ? <span data-pending-label="true">{copy.pending(summary.pendingCount)}</span> : null}
-        {summary.runningCount > 0 ? <span data-running-label="true">{copy.running(summary.runningCount)}</span> : null}
-        {chrome.query.trim() ? <span data-match-label="true">{copy.match(listed.matched, listed.total)}</span> : null}
+        {summary.pendingCount > 0 ? (
+          <span data-pending-label="true">{copy.pending(summary.pendingCount)}</span>
+        ) : null}
+        {summary.runningCount > 0 ? (
+          <span data-running-label="true">{copy.running(summary.runningCount)}</span>
+        ) : null}
+        {chrome.query.trim() ? (
+          <span data-match-label="true">{copy.match(listed.matched, listed.total)}</span>
+        ) : null}
         <Button
           type="button"
           variant="ghost"

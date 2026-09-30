@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Model, ModelRequest, ModelStreamEvent } from "@zcode/contracts";
-import { decodeMessagesRequest, parsePinnedAnthropicBetaHeader } from "../src/model-gateway/domain/messagesDecoder.js";
+import {
+  decodeMessagesRequest,
+  parsePinnedAnthropicBetaHeader,
+} from "../src/model-gateway/domain/messagesDecoder.js";
 import { MessagesStreamEncoder } from "../src/model-gateway/domain/messagesStreamEncoder.js";
 import { ModelGatewayProtocolError } from "../src/model-gateway/domain/errors.js";
 import { createModelGateway } from "../src/model-gateway/index.js";
@@ -96,7 +99,10 @@ test("Messages decoder preserves system, ordered tool batches and paired tool re
   assert.equal(request.messages[0]?.role, "user");
   assert.equal(request.messages[1]?.role, "assistant");
   assert.equal(request.messages[1]?.content, "checking");
-  assert.deepEqual(request.messages[1]?.toolCalls?.map((call) => call.id), ["toolu-a", "toolu-b"]);
+  assert.deepEqual(
+    request.messages[1]?.toolCalls?.map((call) => call.id),
+    ["toolu-a", "toolu-b"],
+  );
   assert.equal(request.messages[2]?.role, "tool");
   assert.equal(request.messages[2]?.toolCallId, "toolu-a");
   assert.equal(request.messages[3]?.toolCallId, "toolu-b");
@@ -111,7 +117,8 @@ test("Messages decoder fails closed for unrepresentable or unsupported request s
   const reject = (body: Record<string, unknown>, error: string) =>
     assert.throws(
       () => decodeMessagesRequest(body, expectedModel, model, supportedBetas),
-      (cause: unknown) => cause instanceof ModelGatewayProtocolError && cause.message.includes(error),
+      (cause: unknown) =>
+        cause instanceof ModelGatewayProtocolError && cause.message.includes(error),
     );
 
   assert.equal(parsePinnedAnthropicBetaHeader(`${betas},unknown-beta`), undefined);
@@ -119,7 +126,11 @@ test("Messages decoder fails closed for unrepresentable or unsupported request s
   reject(requestBody({ thinking: { type: "adaptive" } }), "thinking");
   reject(requestBody({ top_p: 1 }), "top_p");
   // Claude Code sends temperature; decoder accepts and ignores it.
-  assert.equal(decodeMessagesRequest(requestBody({ temperature: 1 }), expectedModel, model, supportedBetas).model, expectedModel);
+  assert.equal(
+    decodeMessagesRequest(requestBody({ temperature: 1 }), expectedModel, model, supportedBetas)
+      .model,
+    expectedModel,
+  );
   reject(
     requestBody({ messages: [{ role: "developer", content: "must not flatten" }] }),
     "developer",
@@ -129,7 +140,11 @@ test("Messages decoder fails closed for unrepresentable or unsupported request s
     "type is not supported",
   );
   reject(
-    requestBody({ messages: [{ role: "user", content: [{ type: "tool_result", tool_use_id: "orphan", content: "x" }] }] }),
+    requestBody({
+      messages: [
+        { role: "user", content: [{ type: "tool_result", tool_use_id: "orphan", content: "x" }] },
+      ],
+    }),
     "unmatched tool_use",
   );
   reject(
@@ -171,13 +186,13 @@ test("Messages encoder emits complete Anthropic blocks and replacement usage sna
     }),
   );
   assert.equal(output[0]?.type, "message_start");
-  assert.deepEqual(
-    (output[0]?.message as { usage: unknown }).usage,
-    { input_tokens: 5, output_tokens: 0 },
-  );
+  assert.deepEqual((output[0]?.message as { usage: unknown }).usage, {
+    input_tokens: 5,
+    output_tokens: 0,
+  });
   assert.equal(output.filter((event) => event.type === "content_block_start").length, 3);
   assert.equal(output.at(-2)?.type, "message_delta");
-  assert.deepEqual((output.at(-2)?.usage as Record<string, unknown>), {
+  assert.deepEqual(output.at(-2)?.usage as Record<string, unknown>, {
     input_tokens: 7,
     output_tokens: 9,
   });
@@ -282,8 +297,11 @@ test("Messages HTTP route binds x-api-key to its protocol, model, budget and abo
     "anthropic-beta": betas,
     "anthropic-dangerous-direct-browser-access": "true",
   };
-  const post = (body: unknown, overrideHeaders: Record<string, string> = headers, signal?: AbortSignal) =>
-    fetch(url, { method: "POST", headers: overrideHeaders, body: JSON.stringify(body), signal });
+  const post = (
+    body: unknown,
+    overrideHeaders: Record<string, string> = headers,
+    signal?: AbortSignal,
+  ) => fetch(url, { method: "POST", headers: overrideHeaders, body: JSON.stringify(body), signal });
 
   const hello = await fetch(`${baseUrl}/api/hello`, { method: "HEAD" });
   assert.equal(hello.status, 200);
@@ -359,5 +377,7 @@ async function readSseEvents(response: Response): Promise<Record<string, unknown
   return text
     .split("\n\n")
     .filter(Boolean)
-    .map((record) => JSON.parse(record.slice(record.indexOf("data: ") + 6)) as Record<string, unknown>);
+    .map(
+      (record) => JSON.parse(record.slice(record.indexOf("data: ") + 6)) as Record<string, unknown>,
+    );
 }

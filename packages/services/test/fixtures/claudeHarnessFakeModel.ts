@@ -133,7 +133,13 @@ export function createClaudeHarnessFakeModel(input: {
       yield finish("stop", request.messages.length);
     },
   };
-  return { model, trace, get abortCount() { return abortCount; } };
+  return {
+    model,
+    trace,
+    get abortCount() {
+      return abortCount;
+    },
+  };
 }
 
 function writeInput(path: string, value: string): Record<string, unknown> {

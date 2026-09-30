@@ -21,13 +21,17 @@ test("coding plan login recovery and upgrade dialog modules are removed", () => 
 
   assert.equal(
     existsSync(
-      fileURLToPath(new URL("model-provider-section/codingPlanProductPresentation.ts", settingsRoot)),
+      fileURLToPath(
+        new URL("model-provider-section/codingPlanProductPresentation.ts", settingsRoot),
+      ),
     ),
     false,
   );
 
   assert.equal(
-    existsSync(fileURLToPath(new URL("model-provider-section/codingPlanPricingCards.ts", settingsRoot))),
+    existsSync(
+      fileURLToPath(new URL("model-provider-section/codingPlanPricingCards.ts", settingsRoot)),
+    ),
     false,
   );
 });
@@ -37,10 +41,7 @@ test("CodingPlanEmbeddedWebviewDialog and helpers are removed", () => {
     new URL("../src/settings/CodingPlanEmbeddedWebviewDialog.tsx", import.meta.url),
   );
   const embeddedHelpersPath = fileURLToPath(
-    new URL(
-      "../src/settings/model-provider-section/codingPlanEmbeddedWebview.ts",
-      import.meta.url,
-    ),
+    new URL("../src/settings/model-provider-section/codingPlanEmbeddedWebview.ts", import.meta.url),
   );
   assert.equal(existsSync(embeddedDialogPath), false);
   assert.equal(existsSync(embeddedHelpersPath), false);
@@ -54,10 +55,7 @@ test("codingPlanPurchaseAuth module is removed", () => {
 });
 
 test("Detail no longer renders Coding Plan purchase choice banners", () => {
-  const detail = readFileSync(
-    new URL("model-provider-section/Detail.tsx", settingsRoot),
-    "utf8",
-  );
+  const detail = readFileSync(new URL("model-provider-section/Detail.tsx", settingsRoot), "utf8");
   assert.equal(detail.includes("CodingPlanPurchaseChoiceBanners"), false);
   assert.equal(detail.includes("purchaseChoiceBannersVisible"), false);
   assert.equal(detail.includes("PurchaseChoiceBannerPrice"), false);
@@ -85,11 +83,15 @@ test("StartPlan acquisition preview and personal product list hooks are removed"
     false,
   );
   assert.equal(
-    existsSync(fileURLToPath(new URL("model-provider-section/useStartPlanPreview.ts", settingsRoot))),
+    existsSync(
+      fileURLToPath(new URL("model-provider-section/useStartPlanPreview.ts", settingsRoot)),
+    ),
     false,
   );
   assert.equal(
-    existsSync(fileURLToPath(new URL("model-provider-section/useCodingPlanProducts.ts", settingsRoot))),
+    existsSync(
+      fileURLToPath(new URL("model-provider-section/useCodingPlanProducts.ts", settingsRoot)),
+    ),
     false,
   );
   assert.equal(
@@ -107,15 +109,14 @@ test("StartPlan acquisition preview and personal product list hooks are removed"
   assert.equal(statusCards.includes("useStartPlanPreview"), false);
   assert.equal(statusCards.includes("startPlanPreviewVisible"), false);
 
-  const detail = readFileSync(
-    new URL("model-provider-section/Detail.tsx", settingsRoot),
-    "utf8",
-  );
+  const detail = readFileSync(new URL("model-provider-section/Detail.tsx", settingsRoot), "utf8");
   assert.equal(detail.includes("startPlanPreviewVisible"), false);
 
   assert.equal(
     existsSync(
-      fileURLToPath(new URL("model-provider-section/codingPlanProductPresentation.ts", settingsRoot)),
+      fileURLToPath(
+        new URL("model-provider-section/codingPlanProductPresentation.ts", settingsRoot),
+      ),
     ),
     false,
   );
@@ -132,7 +133,9 @@ test("StartPlan acquisition preview and personal product list hooks are removed"
 
   assert.equal(
     existsSync(
-      fileURLToPath(new URL("model-provider-section/useEnterpriseCodingPlanProducts.ts", settingsRoot)),
+      fileURLToPath(
+        new URL("model-provider-section/useEnterpriseCodingPlanProducts.ts", settingsRoot),
+      ),
     ),
     false,
   );
@@ -145,10 +148,7 @@ test("StatusCards and Detail drop dead upgradePlansVisible acquisition gate", ()
   );
   assert.equal(statusCards.includes("upgradePlansVisible"), false);
 
-  const detail = readFileSync(
-    new URL("model-provider-section/Detail.tsx", settingsRoot),
-    "utf8",
-  );
+  const detail = readFileSync(new URL("model-provider-section/Detail.tsx", settingsRoot), "utf8");
   assert.equal(detail.includes("upgradePlansVisible"), false);
   assert.equal(detail.includes("setUpgradePlansVisibleProviderId"), false);
 });
@@ -335,7 +335,10 @@ test("Settings/V4/sidebar/MPS drop subscribedTeamProducts stubs and call sites",
   assert.match(en, /"settings\.modelProvider\.codingPlan\.manage"/);
   assert.match(en, /"settings\.modelProvider\.codingPlan\.productPurchaseRemoved"/);
   assert.match(en, /"settings\.modelProvider\.planCard\.codingPlan"/);
-  assert.equal(en.includes('"settings.modelProvider.codingPlan.productPurchaseRemovedTitle"'), false);
+  assert.equal(
+    en.includes('"settings.modelProvider.codingPlan.productPurchaseRemovedTitle"'),
+    false,
+  );
 
   const display = readFileSync(
     new URL("model-provider-section/enterpriseCodingPlanProducts.ts", settingsRoot),
@@ -349,4 +352,3 @@ test("Settings/V4/sidebar/MPS drop subscribedTeamProducts stubs and call sites",
   );
   assert.match(entitlements, /useCodingPlanEntitlements/);
 });
-

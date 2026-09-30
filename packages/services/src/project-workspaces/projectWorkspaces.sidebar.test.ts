@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildSidebarIndex, type SidebarIndexInput } from "./sidebarIndexService.js";
-import type { AgentSessionRecord, Project, RepositoryBinding, WorktreeWorkspace } from "./planTypes.js";
+import type {
+  AgentSessionRecord,
+  Project,
+  RepositoryBinding,
+  WorktreeWorkspace,
+} from "./planTypes.js";
 
 function workspace(id: string, title: string): WorktreeWorkspace {
   return {
@@ -61,7 +66,13 @@ test("侧栏同时保留待审批和运行计数，折叠与搜索不减少总�
     input({
       activities: [
         { sessionId: "s1", activity: "waiting", pendingApproval: true, connection: "live" },
-        { sessionId: "s2", activity: "running", connection: "offline", unread: true, lastTurn: "succeeded" },
+        {
+          sessionId: "s2",
+          activity: "running",
+          connection: "offline",
+          unread: true,
+          lastTurn: "succeeded",
+        },
         { sessionId: "s3", activity: "running", connection: "live" },
         { sessionId: "s4", activity: "idle", connection: "live" },
       ],
@@ -96,13 +107,23 @@ test("隐藏工作区的待审批仍进入项目 attention，扫描失败不把�
   );
   assert.deepEqual(hidden.projects[0]?.attentionWorkspaceIds, ["linked"]);
   assert.equal(hidden.discoveredNotAdopted, null);
-  assert.equal(hidden.projects[0]?.workspaces.find((item) => item.id === "linked")?.targetFreshness, "offline");
-  assert.notEqual(hidden.projects[0]?.workspaces.find((item) => item.id === "linked")?.primary, "idle");
+  assert.equal(
+    hidden.projects[0]?.workspaces.find((item) => item.id === "linked")?.targetFreshness,
+    "offline",
+  );
+  assert.notEqual(
+    hidden.projects[0]?.workspaces.find((item) => item.id === "linked")?.primary,
+    "idle",
+  );
 });
 
 test("内部子会话和已归档会话不计入 N agents，50 个候选不需要历史正文", () => {
-  const workspaces = Array.from({ length: 50 }, (_, index) => workspace(`wt-${index}`, `工作区${index}`));
-  const sessions = Array.from({ length: 10 }, (_, index) => session(`agent-${index}`, "wt-0", `会话${index}`));
+  const workspaces = Array.from({ length: 50 }, (_, index) =>
+    workspace(`wt-${index}`, `工作区${index}`),
+  );
+  const sessions = Array.from({ length: 10 }, (_, index) =>
+    session(`agent-${index}`, "wt-0", `会话${index}`),
+  );
   const index = buildSidebarIndex(
     input({
       workspaces,

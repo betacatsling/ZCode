@@ -1,5 +1,9 @@
 import type { AcpAgentProfile } from "./acpProfile.js";
-import { createAcpHarness, type AcpHarnessAdapter, type AcpHarnessOptions } from "./acpHarnessAdapter.js";
+import {
+  createAcpHarness,
+  type AcpHarnessAdapter,
+  type AcpHarnessOptions,
+} from "./acpHarnessAdapter.js";
 import { gooseAcpProfile } from "./agents/goose.js";
 import { openCodeAcpProfile } from "./agents/opencode.js";
 

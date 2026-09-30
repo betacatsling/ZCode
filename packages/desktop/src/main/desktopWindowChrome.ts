@@ -303,7 +303,6 @@ function attachEmbeddedBrowserWindowOpenHandler(options: {
     });
     return { action: "deny" };
   });
-
 }
 
 function buildTextContextMenuTemplate(

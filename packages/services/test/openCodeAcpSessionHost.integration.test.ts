@@ -134,7 +134,12 @@ class FakePeer {
     { resolve: (value: unknown) => void; reject: (error: Error) => void }
   >();
 
-  constructor(transport: AcpTransport, sessionId: string, agentName: string, options: FakePeerOptions = {}) {
+  constructor(
+    transport: AcpTransport,
+    sessionId: string,
+    agentName: string,
+    options: FakePeerOptions = {},
+  ) {
     this.#transport = transport;
     this.#sessionId = sessionId;
     this.#agentName = agentName;
@@ -824,7 +829,11 @@ test("opt-in OpenCode ACP factory registers only when caller enables the id", ()
     true,
   );
 
-  const enabledGoose = loadExplicitHarnessPlugins(new HarnessRegistry(), plugins, new Set(["goose"]));
+  const enabledGoose = loadExplicitHarnessPlugins(
+    new HarnessRegistry(),
+    plugins,
+    new Set(["goose"]),
+  );
   assert.deepEqual(enabledGoose.loaded, ["goose"]);
   assert.equal(
     enabledGoose.skipped.some((s) => s.id === "opencode" && s.reason === "disabled"),
@@ -1133,9 +1142,9 @@ async function assertSessionHostTransportDisconnect(input: {
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-disconnect-`));
   const worktree = join(root, "worktree");
@@ -1237,8 +1246,7 @@ test("SessionHost + opt-in Goose ACP: transport disconnect mid-prompt journals f
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
 
@@ -1247,9 +1255,9 @@ async function assertSessionHostResumeAfterDisconnect(input: {
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-rad-`));
   const worktree = join(root, "worktree");
@@ -1322,12 +1330,7 @@ async function assertSessionHostResumeAfterDisconnect(input: {
   const registryReopen = new HarnessRegistry();
   registryReopen.register(
     input.createHarness(() =>
-      openFakeTransport(
-        input.agentName,
-        backendSessionId,
-        { loadSession: true },
-        peersAfter,
-      ),
+      openFakeTransport(input.agentName, backendSessionId, { loadSession: true }, peersAfter),
     ),
   );
 
@@ -1364,14 +1367,14 @@ async function assertSessionHostResumeAfterDisconnect(input: {
     after.some((event) => event.kind === "message.finished" && event.text === "after resume"),
   );
   assert.ok(
-    after.some(
-      (event) => event.kind === "turn.finished" && event.turnId === "turn-rad-resume",
-    ),
+    after.some((event) => event.kind === "turn.finished" && event.turnId === "turn-rad-resume"),
   );
 
   await resumed.close();
   const persisted = await SessionHost.eventsSinceHistory(journalRoot, spec, 0);
-  assert.ok(persisted.some((event) => event.kind === "message.finished" && event.text === "after resume"));
+  assert.ok(
+    persisted.some((event) => event.kind === "message.finished" && event.text === "after resume"),
+  );
 }
 
 test("SessionHost + opt-in OpenCode ACP: resume-after-disconnect via session/load then send", async (t) => {
@@ -1391,8 +1394,7 @@ test("SessionHost + opt-in Goose ACP: resume-after-disconnect via session/load t
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
 
@@ -1401,9 +1403,9 @@ async function assertSessionHostCancelAfterDisconnect(input: {
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-cad-`));
   const worktree = join(root, "worktree");
@@ -1515,16 +1517,16 @@ async function assertSessionHostCancelAfterDisconnect(input: {
   // Wait until the peer has emitted the pre-cancel partial (turn is live).
   const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {
-    const partial = resumed.eventsSince(0).some(
-      (event) => event.kind === "text.delta" && event.text === "partial before cancel",
-    );
+    const partial = resumed
+      .eventsSince(0)
+      .some((event) => event.kind === "text.delta" && event.text === "partial before cancel");
     if (partial) break;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.ok(
-    resumed.eventsSince(0).some(
-      (event) => event.kind === "text.delta" && event.text === "partial before cancel",
-    ),
+    resumed
+      .eventsSince(0)
+      .some((event) => event.kind === "text.delta" && event.text === "partial before cancel"),
     "expected partial before cancel",
   );
 
@@ -1542,9 +1544,9 @@ async function assertSessionHostCancelAfterDisconnect(input: {
     peersAfter.some((peer) => peer.methods.includes("session/cancel")),
     "cancel must reach the ACP peer after resume",
   );
-  const finished = resumed.eventsSince(0).find(
-    (event) => event.kind === "turn.finished" && event.turnId === "turn-cad-live",
-  );
+  const finished = resumed
+    .eventsSince(0)
+    .find((event) => event.kind === "turn.finished" && event.turnId === "turn-cad-live");
   assert.ok(finished && finished.kind === "turn.finished");
   assert.equal(finished.outcome, "cancelled");
 
@@ -1577,8 +1579,7 @@ test("SessionHost + opt-in Goose ACP: cancel-after-disconnect (stale then mid-pr
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
 
@@ -1587,9 +1588,9 @@ async function assertSessionHostDoubleFaultReopen(input: {
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-dfr-`));
   const worktree = join(root, "worktree");
@@ -1621,9 +1622,7 @@ async function assertSessionHostDoubleFaultReopen(input: {
     validateSelection: () => ({ ok: true as const }),
   };
 
-  async function createHostWithDisconnect(
-    peers: FakePeer[],
-  ): Promise<SessionHost> {
+  async function createHostWithDisconnect(peers: FakePeer[]): Promise<SessionHost> {
     const registry = new HarnessRegistry();
     registry.register(
       input.createHarness(() =>
@@ -1644,10 +1643,7 @@ async function assertSessionHostDoubleFaultReopen(input: {
     });
   }
 
-  async function openHostWith(
-    options: FakePeerOptions,
-    peers: FakePeer[],
-  ): Promise<SessionHost> {
+  async function openHostWith(options: FakePeerOptions, peers: FakePeer[]): Promise<SessionHost> {
     const registry = new HarnessRegistry();
     registry.register(
       input.createHarness(() =>
@@ -1738,9 +1734,7 @@ async function assertSessionHostDoubleFaultReopen(input: {
     ),
   );
   assert.ok(
-    finalEvents.some(
-      (event) => event.kind === "turn.finished" && event.turnId === "turn-dfr-ok",
-    ),
+    finalEvents.some((event) => event.kind === "turn.finished" && event.turnId === "turn-dfr-ok"),
   );
 
   await host3.close();
@@ -1773,8 +1767,7 @@ test("SessionHost + opt-in Goose ACP: double-fault reopen idempotency then send 
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
 
@@ -1783,9 +1776,9 @@ async function assertSessionHostMidToolDisconnectResume(input: {
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-mtd-`));
   const worktree = join(root, "worktree");
@@ -1910,9 +1903,7 @@ async function assertSessionHostMidToolDisconnectResume(input: {
     ),
   );
   assert.ok(
-    after.some(
-      (event) => event.kind === "turn.finished" && event.turnId === "turn-mtd-resume",
-    ),
+    after.some((event) => event.kind === "turn.finished" && event.turnId === "turn-mtd-resume"),
   );
 
   await resumed.close();
@@ -1943,8 +1934,7 @@ test("SessionHost + opt-in Goose ACP: mid-tool-call disconnect then reopen resum
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
 
@@ -1953,9 +1943,9 @@ async function assertSessionHostPermissionDeniedThenDisconnect(input: {
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-pdd-`));
   const worktree = join(root, "worktree");
@@ -2040,9 +2030,7 @@ async function assertSessionHostPermissionDeniedThenDisconnect(input: {
   const events = host.eventsSince(0);
   assert.ok(events.some((event) => event.kind === "tool.started"));
   assert.ok(
-    events.some(
-      (event) => event.kind === "interaction.resolved" && event.decision === "deny",
-    ),
+    events.some((event) => event.kind === "interaction.resolved" && event.decision === "deny"),
   );
   const error = events.find((event) => event.kind === "session.error");
   assert.ok(error && error.kind === "session.error");
@@ -2054,9 +2042,7 @@ async function assertSessionHostPermissionDeniedThenDisconnect(input: {
   await host.close();
   const persisted = await SessionHost.eventsSinceHistory(journalRoot, spec, 0);
   assert.ok(
-    persisted.some(
-      (event) => event.kind === "interaction.resolved" && event.decision === "deny",
-    ),
+    persisted.some((event) => event.kind === "interaction.resolved" && event.decision === "deny"),
   );
   assert.ok(persisted.some((event) => event.kind === "session.error"));
 }
@@ -2078,8 +2064,7 @@ test("SessionHost + opt-in Goose ACP: permission-denied-then-disconnect journals
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
 
@@ -2088,9 +2073,9 @@ async function assertSessionHostCancelDuringPermission(input: {
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-cdp-`));
   const worktree = join(root, "worktree");
@@ -2213,8 +2198,7 @@ test("SessionHost + opt-in Goose ACP: cancel-during-permission journals cancelle
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
 
@@ -2223,9 +2207,9 @@ async function assertSessionHostDisconnectDuringPermission(input: {
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-ddp-`));
   const worktree = join(root, "worktree");
@@ -2373,8 +2357,7 @@ test("SessionHost + opt-in Goose ACP: disconnect-during-permission journals faul
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
 
@@ -2383,9 +2366,9 @@ async function assertSessionHostDisconnectDuringPermissionThenReopen(input: {
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-ddp-ro-`));
   const worktree = join(root, "worktree");
@@ -2540,14 +2523,10 @@ async function assertSessionHostDisconnectDuringPermissionThenReopen(input: {
   const after = resumed.eventsSince(0);
   assert.ok(after.some((event) => event.kind === "session.error"));
   assert.ok(
-    after.some(
-      (event) => event.kind === "message.finished" && event.text === "after ddp reopen",
-    ),
+    after.some((event) => event.kind === "message.finished" && event.text === "after ddp reopen"),
   );
   assert.ok(
-    after.some(
-      (event) => event.kind === "turn.finished" && event.turnId === "turn-ddp-ro-resume",
-    ),
+    after.some((event) => event.kind === "turn.finished" && event.turnId === "turn-ddp-ro-resume"),
   );
 
   await resumed.close();
@@ -2590,8 +2569,7 @@ test("SessionHost + opt-in Goose ACP: disconnect-during-permission then reopen f
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
 
@@ -2743,9 +2721,9 @@ async function assertSessionHostIdleCloseDuringPermissionThenReopen(input: {
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-idcp-ro-`));
   const worktree = join(root, "worktree");
@@ -2902,14 +2880,10 @@ async function assertSessionHostIdleCloseDuringPermissionThenReopen(input: {
   const after = resumed.eventsSince(0);
   assert.ok(after.some((event) => event.kind === "session.error"));
   assert.ok(
-    after.some(
-      (event) => event.kind === "message.finished" && event.text === "after idcp reopen",
-    ),
+    after.some((event) => event.kind === "message.finished" && event.text === "after idcp reopen"),
   );
   assert.ok(
-    after.some(
-      (event) => event.kind === "turn.finished" && event.turnId === "turn-idcp-ro-resume",
-    ),
+    after.some((event) => event.kind === "turn.finished" && event.turnId === "turn-idcp-ro-resume"),
   );
 
   await resumed.close();
@@ -2952,8 +2926,7 @@ test("SessionHost + opt-in Goose ACP: idle-close-during-permission then reopen f
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
 
@@ -2962,9 +2935,9 @@ async function assertSessionHostIdleCloseThenFaultReopen(input: {
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-icfr-`));
   const worktree = join(root, "worktree");
@@ -3073,11 +3046,7 @@ async function assertSessionHostIdleCloseThenFaultReopen(input: {
   // Round 2: reopen (session/load) → JSON-RPC mid-prompt fault (≠ second idle-close;
   // duplicate tool-ddp across two idle-close eras fails projector on open).
   const peers2: FakePeer[] = [];
-  const host2 = await openHostWith(
-    { loadSession: true, disconnectOnPrompt: true },
-    peers2,
-    "open",
-  );
+  const host2 = await openHostWith({ loadSession: true, disconnectOnPrompt: true }, peers2, "open");
   assert.ok(
     peers2.some((peer) => peer.methods.includes("session/load")),
     "first reopen must session/load",
@@ -3130,14 +3099,11 @@ async function assertSessionHostIdleCloseThenFaultReopen(input: {
   const finalEvents = host3.eventsSince(0);
   assert.ok(
     finalEvents.some(
-      (event) =>
-        event.kind === "message.finished" && event.text === "after idle-close then fault",
+      (event) => event.kind === "message.finished" && event.text === "after idle-close then fault",
     ),
   );
   assert.ok(
-    finalEvents.some(
-      (event) => event.kind === "turn.finished" && event.turnId === "turn-icfr-ok",
-    ),
+    finalEvents.some((event) => event.kind === "turn.finished" && event.turnId === "turn-icfr-ok"),
   );
 
   await host3.close();
@@ -3160,8 +3126,7 @@ async function assertSessionHostIdleCloseThenFaultReopen(input: {
   );
   assert.ok(
     persisted.some(
-      (event) =>
-        event.kind === "message.finished" && event.text === "after idle-close then fault",
+      (event) => event.kind === "message.finished" && event.text === "after idle-close then fault",
     ),
   );
 }
@@ -3183,8 +3148,7 @@ test("SessionHost + opt-in Goose ACP: idle-close-then-fault reopen idempotency t
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
 
@@ -3193,9 +3157,9 @@ async function assertSessionHostCancelAfterIdleClose(input: {
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-caic-`));
   const worktree = join(root, "worktree");
@@ -3362,16 +3326,16 @@ async function assertSessionHostCancelAfterIdleClose(input: {
 
   const liveDeadline = Date.now() + 5_000;
   while (Date.now() < liveDeadline) {
-    const partial = resumed.eventsSince(0).some(
-      (event) => event.kind === "text.delta" && event.text === "partial before cancel",
-    );
+    const partial = resumed
+      .eventsSince(0)
+      .some((event) => event.kind === "text.delta" && event.text === "partial before cancel");
     if (partial) break;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.ok(
-    resumed.eventsSince(0).some(
-      (event) => event.kind === "text.delta" && event.text === "partial before cancel",
-    ),
+    resumed
+      .eventsSince(0)
+      .some((event) => event.kind === "text.delta" && event.text === "partial before cancel"),
     "expected partial before cancel",
   );
 
@@ -3389,9 +3353,9 @@ async function assertSessionHostCancelAfterIdleClose(input: {
     peersAfter.some((peer) => peer.methods.includes("session/cancel")),
     "cancel must reach the ACP peer after idle-close resume",
   );
-  const liveFinished = resumed.eventsSince(0).find(
-    (event) => event.kind === "turn.finished" && event.turnId === "turn-caic-live",
-  );
+  const liveFinished = resumed
+    .eventsSince(0)
+    .find((event) => event.kind === "turn.finished" && event.turnId === "turn-caic-live");
   assert.ok(liveFinished && liveFinished.kind === "turn.finished");
   assert.equal(liveFinished.outcome, "cancelled");
 
@@ -3436,8 +3400,7 @@ test("SessionHost + opt-in Goose ACP: cancel-after-idle-close (stale then mid-pr
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
 
@@ -3446,9 +3409,9 @@ async function assertSessionHostAllowAfterIdleCloseReopen(input: {
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-aaicr-`));
   const worktree = join(root, "worktree");
@@ -3606,10 +3569,11 @@ async function assertSessionHostAllowAfterIdleCloseReopen(input: {
   const liveDeadline = Date.now() + 5_000;
   let liveInteractionId: string | undefined;
   while (Date.now() < liveDeadline) {
-    const requested = resumed.eventsSince(0).find(
-      (event) =>
-        event.kind === "interaction.requested" && event.turnId === "turn-aaicr-live",
-    );
+    const requested = resumed
+      .eventsSince(0)
+      .find(
+        (event) => event.kind === "interaction.requested" && event.turnId === "turn-aaicr-live",
+      );
     if (requested && requested.kind === "interaction.requested") {
       liveInteractionId = requested.interactionId;
       break;
@@ -3663,11 +3627,7 @@ async function assertSessionHostAllowAfterIdleCloseReopen(input: {
   );
   assert.ok(
     persisted.every(
-      (event) =>
-        !(
-          event.kind === "interaction.resolved" &&
-          event.turnId === "turn-aaicr-idle"
-        ),
+      (event) => !(event.kind === "interaction.resolved" && event.turnId === "turn-aaicr-idle"),
     ),
     "fault-era journal must not contain interaction.resolved for the idle-close turn",
   );
@@ -3704,8 +3664,7 @@ test("SessionHost + opt-in Goose ACP: allow-after-idle-close-reopen succeeds sen
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
 
@@ -3714,9 +3673,9 @@ async function assertSessionHostDenyAfterIdleCloseReopen(input: {
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-daicr-`));
   const worktree = join(root, "worktree");
@@ -3862,8 +3821,9 @@ async function assertSessionHostDenyAfterIdleCloseReopen(input: {
     "resume must not session/new",
   );
 
-  const errorCountBefore = resumed.eventsSince(0).filter((event) => event.kind === "session.error")
-    .length;
+  const errorCountBefore = resumed
+    .eventsSince(0)
+    .filter((event) => event.kind === "session.error").length;
 
   const sendReceipt = await resumed.dispatch({
     type: "send",
@@ -3877,10 +3837,11 @@ async function assertSessionHostDenyAfterIdleCloseReopen(input: {
   const liveDeadline = Date.now() + 5_000;
   let liveInteractionId: string | undefined;
   while (Date.now() < liveDeadline) {
-    const requested = resumed.eventsSince(0).find(
-      (event) =>
-        event.kind === "interaction.requested" && event.turnId === "turn-daicr-live",
-    );
+    const requested = resumed
+      .eventsSince(0)
+      .find(
+        (event) => event.kind === "interaction.requested" && event.turnId === "turn-daicr-live",
+      );
     if (requested && requested.kind === "interaction.requested") {
       liveInteractionId = requested.interactionId;
       break;
@@ -3912,8 +3873,7 @@ async function assertSessionHostDenyAfterIdleCloseReopen(input: {
   );
   assert.ok(
     after.some(
-      (event) =>
-        event.kind === "message.finished" && event.text === "deny after idle-close reopen",
+      (event) => event.kind === "message.finished" && event.text === "deny after idle-close reopen",
     ),
   );
   const liveFinished = after.find(
@@ -3939,11 +3899,7 @@ async function assertSessionHostDenyAfterIdleCloseReopen(input: {
   );
   assert.ok(
     persisted.every(
-      (event) =>
-        !(
-          event.kind === "interaction.resolved" &&
-          event.turnId === "turn-daicr-idle"
-        ),
+      (event) => !(event.kind === "interaction.resolved" && event.turnId === "turn-daicr-idle"),
     ),
     "fault-era journal must not contain interaction.resolved for the idle-close turn",
   );
@@ -3957,8 +3913,7 @@ async function assertSessionHostDenyAfterIdleCloseReopen(input: {
   );
   assert.ok(
     persisted.some(
-      (event) =>
-        event.kind === "message.finished" && event.text === "deny after idle-close reopen",
+      (event) => event.kind === "message.finished" && event.text === "deny after idle-close reopen",
     ),
   );
   assert.equal(
@@ -3985,8 +3940,7 @@ test("SessionHost + opt-in Goose ACP: deny-after-idle-close-reopen journals clea
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
 
@@ -3995,9 +3949,9 @@ async function assertSessionHostDoubleSendAfterIdleCloseReopen(input: {
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-dsaicr-`));
   const worktree = join(root, "worktree");
@@ -4139,8 +4093,9 @@ async function assertSessionHostDoubleSendAfterIdleCloseReopen(input: {
     "resume must not session/new",
   );
 
-  const errorCountBefore = resumed.eventsSince(0).filter((event) => event.kind === "session.error")
-    .length;
+  const errorCountBefore = resumed
+    .eventsSince(0)
+    .filter((event) => event.kind === "session.error").length;
 
   const firstReceipt = await resumed.dispatch({
     type: "send",
@@ -4268,8 +4223,7 @@ test("SessionHost + opt-in Goose ACP: double-send-after-idle-close-reopen both s
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
 
@@ -4278,9 +4232,9 @@ async function assertSessionHostCancelAfterIdleCloseReopen(input: {
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-caicr-`));
   const worktree = join(root, "worktree");
@@ -4437,20 +4391,22 @@ async function assertSessionHostCancelAfterIdleCloseReopen(input: {
   const liveDeadline = Date.now() + 5_000;
   while (Date.now() < liveDeadline) {
     if (
-      resumed.eventsSince(0).some(
-        (event) =>
-          event.kind === "interaction.requested" && event.turnId === "turn-caicr-live",
-      )
+      resumed
+        .eventsSince(0)
+        .some(
+          (event) => event.kind === "interaction.requested" && event.turnId === "turn-caicr-live",
+        )
     ) {
       break;
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.ok(
-    resumed.eventsSince(0).some(
-      (event) =>
-        event.kind === "interaction.requested" && event.turnId === "turn-caicr-live",
-    ),
+    resumed
+      .eventsSince(0)
+      .some(
+        (event) => event.kind === "interaction.requested" && event.turnId === "turn-caicr-live",
+      ),
     "expected fresh interaction.requested after idle-close reopen",
   );
 
@@ -4472,11 +4428,7 @@ async function assertSessionHostCancelAfterIdleCloseReopen(input: {
   assert.ok(after.some((event) => event.kind === "tool.started"));
   assert.ok(
     after.every(
-      (event) =>
-        !(
-          event.kind === "interaction.resolved" &&
-          event.turnId === "turn-caicr-live"
-        ),
+      (event) => !(event.kind === "interaction.resolved" && event.turnId === "turn-caicr-live"),
     ),
     "cancel during permission must not journal interaction.resolved for the live turn",
   );
@@ -4498,11 +4450,7 @@ async function assertSessionHostCancelAfterIdleCloseReopen(input: {
   );
   assert.ok(
     persisted.every(
-      (event) =>
-        !(
-          event.kind === "interaction.resolved" &&
-          event.turnId === "turn-caicr-idle"
-        ),
+      (event) => !(event.kind === "interaction.resolved" && event.turnId === "turn-caicr-idle"),
     ),
     "fault-era journal must not contain interaction.resolved for the idle-close turn",
   );
@@ -4533,8 +4481,7 @@ test("SessionHost + opt-in Goose ACP: cancel-after-idle-close-reopen journals ca
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
 
@@ -4543,9 +4490,9 @@ async function assertSessionHostDoubleCancelAfterIdleCloseReopen(input: {
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-dcaicr-`));
   const worktree = join(root, "worktree");
@@ -4702,18 +4649,18 @@ async function assertSessionHostDoubleCancelAfterIdleCloseReopen(input: {
   const liveDeadline = Date.now() + 5_000;
   while (Date.now() < liveDeadline) {
     if (
-      resumed.eventsSince(0).some(
-        (event) => event.kind === "text.delta" && event.text === "partial before cancel",
-      )
+      resumed
+        .eventsSince(0)
+        .some((event) => event.kind === "text.delta" && event.text === "partial before cancel")
     ) {
       break;
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.ok(
-    resumed.eventsSince(0).some(
-      (event) => event.kind === "text.delta" && event.text === "partial before cancel",
-    ),
+    resumed
+      .eventsSince(0)
+      .some((event) => event.kind === "text.delta" && event.text === "partial before cancel"),
     "expected partial before cancel after idle-close reopen",
   );
 
@@ -4768,11 +4715,7 @@ async function assertSessionHostDoubleCancelAfterIdleCloseReopen(input: {
   );
   assert.ok(
     persisted.every(
-      (event) =>
-        !(
-          event.kind === "interaction.resolved" &&
-          event.turnId === "turn-dcaicr-idle"
-        ),
+      (event) => !(event.kind === "interaction.resolved" && event.turnId === "turn-dcaicr-idle"),
     ),
     "fault-era journal must not contain interaction.resolved for the idle-close turn",
   );
@@ -4801,8 +4744,7 @@ test("SessionHost + opt-in Goose ACP: double-cancel-after-idle-close-reopen is i
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
 
@@ -4811,9 +4753,9 @@ async function assertSessionHostAllowThenCancelAfterIdleCloseReopen(input: {
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-atcaicr-`));
   const worktree = join(root, "worktree");
@@ -5085,8 +5027,7 @@ test("SessionHost + opt-in Goose ACP: allow-then-cancel-after-idle-close-reopen 
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
 
@@ -5095,9 +5036,9 @@ async function assertSessionHostDenyThenCancelAfterIdleCloseReopen(input: {
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-dtcaicr-`));
   const worktree = join(root, "worktree");
@@ -5369,8 +5310,7 @@ test("SessionHost + opt-in Goose ACP: deny-then-cancel-after-idle-close-reopen j
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
 
@@ -5379,9 +5319,9 @@ async function assertSessionHostPermissionResolveAfterReopen(input: {
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-prr-`));
   const worktree = join(root, "worktree");
@@ -5498,10 +5438,9 @@ async function assertSessionHostPermissionResolveAfterReopen(input: {
   const deadline = Date.now() + 5_000;
   let interactionId: string | undefined;
   while (Date.now() < deadline) {
-    const requested = resumed.eventsSince(0).find(
-      (event) =>
-        event.kind === "interaction.requested" && event.turnId === "turn-prr-live",
-    );
+    const requested = resumed
+      .eventsSince(0)
+      .find((event) => event.kind === "interaction.requested" && event.turnId === "turn-prr-live");
     if (requested && requested.kind === "interaction.requested") {
       interactionId = requested.interactionId;
       break;
@@ -5532,14 +5471,10 @@ async function assertSessionHostPermissionResolveAfterReopen(input: {
     ),
   );
   assert.ok(
-    after.some(
-      (event) => event.kind === "message.finished" && event.text === "deny after reopen",
-    ),
+    after.some((event) => event.kind === "message.finished" && event.text === "deny after reopen"),
   );
   assert.ok(
-    after.some(
-      (event) => event.kind === "turn.finished" && event.turnId === "turn-prr-live",
-    ),
+    after.some((event) => event.kind === "turn.finished" && event.turnId === "turn-prr-live"),
   );
 
   await resumed.close();
@@ -5577,8 +5512,7 @@ test("SessionHost + opt-in Goose ACP: permission-resolve-after-reopen deny is cl
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
 
@@ -5587,9 +5521,9 @@ async function assertSessionHostAllowAfterReopen(input: {
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-aar-`));
   const worktree = join(root, "worktree");
@@ -5706,10 +5640,9 @@ async function assertSessionHostAllowAfterReopen(input: {
   const deadline = Date.now() + 5_000;
   let interactionId: string | undefined;
   while (Date.now() < deadline) {
-    const requested = resumed.eventsSince(0).find(
-      (event) =>
-        event.kind === "interaction.requested" && event.turnId === "turn-aar-live",
-    );
+    const requested = resumed
+      .eventsSince(0)
+      .find((event) => event.kind === "interaction.requested" && event.turnId === "turn-aar-live");
     if (requested && requested.kind === "interaction.requested") {
       interactionId = requested.interactionId;
       break;
@@ -5740,14 +5673,10 @@ async function assertSessionHostAllowAfterReopen(input: {
     ),
   );
   assert.ok(
-    after.some(
-      (event) => event.kind === "message.finished" && event.text === "allow after reopen",
-    ),
+    after.some((event) => event.kind === "message.finished" && event.text === "allow after reopen"),
   );
   assert.ok(
-    after.some(
-      (event) => event.kind === "turn.finished" && event.turnId === "turn-aar-live",
-    ),
+    after.some((event) => event.kind === "turn.finished" && event.turnId === "turn-aar-live"),
   );
 
   await resumed.close();
@@ -5785,8 +5714,7 @@ test("SessionHost + opt-in Goose ACP: allow-after-reopen succeeds send (symmetri
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
 
@@ -5795,9 +5723,9 @@ async function assertSessionHostDoubleCancel(input: {
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-dc-`));
   const worktree = join(root, "worktree");
@@ -5833,12 +5761,7 @@ async function assertSessionHostDoubleCancel(input: {
   const registry = new HarnessRegistry();
   registry.register(
     input.createHarness(() =>
-      openFakeTransport(
-        input.agentName,
-        backendSessionId,
-        { holdUntilCancel: true },
-        peers,
-      ),
+      openFakeTransport(input.agentName, backendSessionId, { holdUntilCancel: true }, peers),
     ),
   );
 
@@ -5862,18 +5785,18 @@ async function assertSessionHostDoubleCancel(input: {
   const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {
     if (
-      host.eventsSince(0).some(
-        (event) => event.kind === "text.delta" && event.text === "partial before cancel",
-      )
+      host
+        .eventsSince(0)
+        .some((event) => event.kind === "text.delta" && event.text === "partial before cancel")
     ) {
       break;
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.ok(
-    host.eventsSince(0).some(
-      (event) => event.kind === "text.delta" && event.text === "partial before cancel",
-    ),
+    host
+      .eventsSince(0)
+      .some((event) => event.kind === "text.delta" && event.text === "partial before cancel"),
     "expected partial before cancel",
   );
 
@@ -5943,8 +5866,7 @@ test("SessionHost + opt-in Goose ACP: double-cancel is idempotent (symmetric)", 
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
 
@@ -5953,9 +5875,9 @@ async function assertSessionHostAllowThenDisconnect(input: {
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-atd-`));
   const worktree = join(root, "worktree");
@@ -6040,9 +5962,7 @@ async function assertSessionHostAllowThenDisconnect(input: {
   const events = host.eventsSince(0);
   assert.ok(events.some((event) => event.kind === "tool.started"));
   assert.ok(
-    events.some(
-      (event) => event.kind === "interaction.resolved" && event.decision === "allow",
-    ),
+    events.some((event) => event.kind === "interaction.resolved" && event.decision === "allow"),
   );
   const error = events.find((event) => event.kind === "session.error");
   assert.ok(error && error.kind === "session.error");
@@ -6054,9 +5974,7 @@ async function assertSessionHostAllowThenDisconnect(input: {
   await host.close();
   const persisted = await SessionHost.eventsSinceHistory(journalRoot, spec, 0);
   assert.ok(
-    persisted.some(
-      (event) => event.kind === "interaction.resolved" && event.decision === "allow",
-    ),
+    persisted.some((event) => event.kind === "interaction.resolved" && event.decision === "allow"),
   );
   assert.ok(persisted.some((event) => event.kind === "session.error"));
 }
@@ -6078,8 +5996,7 @@ test("SessionHost + opt-in Goose ACP: allow-then-disconnect journals allow + fau
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
 
@@ -6088,9 +6005,9 @@ async function assertSessionHostAllowThenDisconnectThenReopen(input: {
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-atd-ro-`));
   const worktree = join(root, "worktree");
@@ -6233,22 +6150,16 @@ async function assertSessionHostAllowThenDisconnectThenReopen(input: {
   const after = resumed.eventsSince(0);
   assert.ok(after.some((event) => event.kind === "session.error"));
   assert.ok(
-    after.some(
-      (event) => event.kind === "message.finished" && event.text === "after atd reopen",
-    ),
+    after.some((event) => event.kind === "message.finished" && event.text === "after atd reopen"),
   );
   assert.ok(
-    after.some(
-      (event) => event.kind === "turn.finished" && event.turnId === "turn-atd-ro-resume",
-    ),
+    after.some((event) => event.kind === "turn.finished" && event.turnId === "turn-atd-ro-resume"),
   );
 
   await resumed.close();
   const persisted = await SessionHost.eventsSinceHistory(journalRoot, spec, 0);
   assert.ok(
-    persisted.some(
-      (event) => event.kind === "interaction.resolved" && event.decision === "allow",
-    ),
+    persisted.some((event) => event.kind === "interaction.resolved" && event.decision === "allow"),
     "fault-era journal must keep interaction.resolved allow",
   );
   assert.ok(
@@ -6284,8 +6195,7 @@ test("SessionHost + opt-in Goose ACP: allow-then-disconnect then reopen first se
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
 
@@ -6294,9 +6204,9 @@ async function assertSessionHostCancelThenDisconnect(input: {
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-ctd-`));
   const worktree = join(root, "worktree");
@@ -6360,20 +6270,23 @@ async function assertSessionHostCancelThenDisconnect(input: {
   const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {
     if (
-      host.eventsSince(0).some(
-        (event) =>
-          event.kind === "text.delta" && event.text === "partial before cancel-disconnect",
-      )
+      host
+        .eventsSince(0)
+        .some(
+          (event) =>
+            event.kind === "text.delta" && event.text === "partial before cancel-disconnect",
+        )
     ) {
       break;
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.ok(
-    host.eventsSince(0).some(
-      (event) =>
-        event.kind === "text.delta" && event.text === "partial before cancel-disconnect",
-    ),
+    host
+      .eventsSince(0)
+      .some(
+        (event) => event.kind === "text.delta" && event.text === "partial before cancel-disconnect",
+      ),
     "expected partial before cancel-disconnect",
   );
 
@@ -6433,8 +6346,7 @@ test("SessionHost + opt-in Goose ACP: cancel-then-disconnect journals cancel + f
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
 
@@ -6443,9 +6355,9 @@ async function assertSessionHostCancelThenDisconnectThenReopen(input: {
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-ctd-ro-`));
   const worktree = join(root, "worktree");
@@ -6512,20 +6424,23 @@ async function assertSessionHostCancelThenDisconnectThenReopen(input: {
   const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {
     if (
-      host.eventsSince(0).some(
-        (event) =>
-          event.kind === "text.delta" && event.text === "partial before cancel-disconnect",
-      )
+      host
+        .eventsSince(0)
+        .some(
+          (event) =>
+            event.kind === "text.delta" && event.text === "partial before cancel-disconnect",
+        )
     ) {
       break;
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.ok(
-    host.eventsSince(0).some(
-      (event) =>
-        event.kind === "text.delta" && event.text === "partial before cancel-disconnect",
-    ),
+    host
+      .eventsSince(0)
+      .some(
+        (event) => event.kind === "text.delta" && event.text === "partial before cancel-disconnect",
+      ),
     "expected partial before cancel-disconnect",
   );
 
@@ -6596,14 +6511,10 @@ async function assertSessionHostCancelThenDisconnectThenReopen(input: {
   const after = resumed.eventsSince(0);
   assert.ok(after.some((event) => event.kind === "session.error"));
   assert.ok(
-    after.some(
-      (event) => event.kind === "message.finished" && event.text === "after ctd reopen",
-    ),
+    after.some((event) => event.kind === "message.finished" && event.text === "after ctd reopen"),
   );
   assert.ok(
-    after.some(
-      (event) => event.kind === "turn.finished" && event.turnId === "turn-ctd-ro-resume",
-    ),
+    after.some((event) => event.kind === "turn.finished" && event.turnId === "turn-ctd-ro-resume"),
   );
 
   await resumed.close();
@@ -6642,8 +6553,7 @@ test("SessionHost + opt-in Goose ACP: cancel-then-disconnect then reopen first s
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
 
@@ -6652,9 +6562,9 @@ async function assertSessionHostDenyThenDisconnectThenReopen(input: {
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-dtd-ro-`));
   const worktree = join(root, "worktree");
@@ -6743,9 +6653,7 @@ async function assertSessionHostDenyThenDisconnectThenReopen(input: {
   const faultEvents = host.eventsSince(0);
   assert.ok(faultEvents.some((event) => event.kind === "tool.started"));
   assert.ok(
-    faultEvents.some(
-      (event) => event.kind === "interaction.resolved" && event.decision === "deny",
-    ),
+    faultEvents.some((event) => event.kind === "interaction.resolved" && event.decision === "deny"),
   );
   const error = faultEvents.find((event) => event.kind === "session.error");
   assert.ok(error && error.kind === "session.error");
@@ -6797,22 +6705,16 @@ async function assertSessionHostDenyThenDisconnectThenReopen(input: {
   const after = resumed.eventsSince(0);
   assert.ok(after.some((event) => event.kind === "session.error"));
   assert.ok(
-    after.some(
-      (event) => event.kind === "message.finished" && event.text === "after dtd reopen",
-    ),
+    after.some((event) => event.kind === "message.finished" && event.text === "after dtd reopen"),
   );
   assert.ok(
-    after.some(
-      (event) => event.kind === "turn.finished" && event.turnId === "turn-dtd-ro-resume",
-    ),
+    after.some((event) => event.kind === "turn.finished" && event.turnId === "turn-dtd-ro-resume"),
   );
 
   await resumed.close();
   const persisted = await SessionHost.eventsSinceHistory(journalRoot, spec, 0);
   assert.ok(
-    persisted.some(
-      (event) => event.kind === "interaction.resolved" && event.decision === "deny",
-    ),
+    persisted.some((event) => event.kind === "interaction.resolved" && event.decision === "deny"),
     "fault-era journal must keep interaction.resolved deny",
   );
   assert.ok(
@@ -6848,8 +6750,7 @@ test("SessionHost + opt-in Goose ACP: deny-then-disconnect then reopen first sen
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
 
@@ -6858,9 +6759,9 @@ async function assertSessionHostAllowThenDisconnectThenFaultReopen(input: {
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-atdfr-`));
   const worktree = join(root, "worktree");
@@ -6982,11 +6883,7 @@ async function assertSessionHostAllowThenDisconnectThenFaultReopen(input: {
   // Round 2: reopen (session/load) → JSON-RPC mid-prompt fault (mirror #248 round 2;
   // ≠ #288 which stops at healthy first send after reopen).
   const peers2: FakePeer[] = [];
-  const host2 = await openHostWith(
-    { loadSession: true, disconnectOnPrompt: true },
-    peers2,
-    "open",
-  );
+  const host2 = await openHostWith({ loadSession: true, disconnectOnPrompt: true }, peers2, "open");
   assert.ok(
     peers2.some((peer) => peer.methods.includes("session/load")),
     "first reopen must session/load",
@@ -7045,9 +6942,7 @@ async function assertSessionHostAllowThenDisconnectThenFaultReopen(input: {
     ),
   );
   assert.ok(
-    finalEvents.some(
-      (event) => event.kind === "turn.finished" && event.turnId === "turn-atdfr-ok",
-    ),
+    finalEvents.some((event) => event.kind === "turn.finished" && event.turnId === "turn-atdfr-ok"),
   );
 
   await host3.close();
@@ -7057,9 +6952,7 @@ async function assertSessionHostAllowThenDisconnectThenFaultReopen(input: {
     "journal must keep allow-then-disconnect + mid-prompt fault fences",
   );
   assert.ok(
-    persisted.some(
-      (event) => event.kind === "interaction.resolved" && event.decision === "allow",
-    ),
+    persisted.some((event) => event.kind === "interaction.resolved" && event.decision === "allow"),
     "fault-era journal must keep interaction.resolved allow",
   );
   assert.ok(
@@ -7096,20 +6989,18 @@ test("SessionHost + opt-in Goose ACP: allow-then-disconnect-then-fault reopen id
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
-
 
 async function assertSessionHostCancelThenDisconnectThenFaultReopen(input: {
   t: { after: (fn: () => void | Promise<void>) => void };
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-ctdfr-`));
   const worktree = join(root, "worktree");
@@ -7190,20 +7081,23 @@ async function assertSessionHostCancelThenDisconnectThenFaultReopen(input: {
   const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {
     if (
-      host1.eventsSince(0).some(
-        (event) =>
-          event.kind === "text.delta" && event.text === "partial before cancel-disconnect",
-      )
+      host1
+        .eventsSince(0)
+        .some(
+          (event) =>
+            event.kind === "text.delta" && event.text === "partial before cancel-disconnect",
+        )
     ) {
       break;
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.ok(
-    host1.eventsSince(0).some(
-      (event) =>
-        event.kind === "text.delta" && event.text === "partial before cancel-disconnect",
-    ),
+    host1
+      .eventsSince(0)
+      .some(
+        (event) => event.kind === "text.delta" && event.text === "partial before cancel-disconnect",
+      ),
     "expected partial before cancel-disconnect",
   );
 
@@ -7237,11 +7131,7 @@ async function assertSessionHostCancelThenDisconnectThenFaultReopen(input: {
   // Round 2: reopen (session/load) → JSON-RPC mid-prompt fault (mirror #299/#248 round 2;
   // ≠ #291 which stops at healthy first send after reopen).
   const peers2: FakePeer[] = [];
-  const host2 = await openHostWith(
-    { loadSession: true, disconnectOnPrompt: true },
-    peers2,
-    "open",
-  );
+  const host2 = await openHostWith({ loadSession: true, disconnectOnPrompt: true }, peers2, "open");
   assert.ok(
     peers2.some((peer) => peer.methods.includes("session/load")),
     "first reopen must session/load",
@@ -7300,9 +7190,7 @@ async function assertSessionHostCancelThenDisconnectThenFaultReopen(input: {
     ),
   );
   assert.ok(
-    finalEvents.some(
-      (event) => event.kind === "turn.finished" && event.turnId === "turn-ctdfr-ok",
-    ),
+    finalEvents.some((event) => event.kind === "turn.finished" && event.turnId === "turn-ctdfr-ok"),
   );
 
   await host3.close();
@@ -7346,20 +7234,18 @@ test("SessionHost + opt-in Goose ACP: cancel-then-disconnect-then-fault reopen i
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
-
 
 async function assertSessionHostDenyThenDisconnectThenFaultReopen(input: {
   t: { after: (fn: () => void | Promise<void>) => void };
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-dtdfr-`));
   const worktree = join(root, "worktree");
@@ -7464,9 +7350,7 @@ async function assertSessionHostDenyThenDisconnectThenFaultReopen(input: {
   const denyEvents = host1.eventsSince(0);
   assert.ok(denyEvents.some((event) => event.kind === "tool.started"));
   assert.ok(
-    denyEvents.some(
-      (event) => event.kind === "interaction.resolved" && event.decision === "deny",
-    ),
+    denyEvents.some((event) => event.kind === "interaction.resolved" && event.decision === "deny"),
   );
   const denyError = denyEvents.find((event) => event.kind === "session.error");
   assert.ok(denyError && denyError.kind === "session.error");
@@ -7481,11 +7365,7 @@ async function assertSessionHostDenyThenDisconnectThenFaultReopen(input: {
   // Round 2: reopen (session/load) → JSON-RPC mid-prompt fault (mirror #299/#302/#248 round 2;
   // ≠ #294 which stops at healthy first send after reopen).
   const peers2: FakePeer[] = [];
-  const host2 = await openHostWith(
-    { loadSession: true, disconnectOnPrompt: true },
-    peers2,
-    "open",
-  );
+  const host2 = await openHostWith({ loadSession: true, disconnectOnPrompt: true }, peers2, "open");
   assert.ok(
     peers2.some((peer) => peer.methods.includes("session/load")),
     "first reopen must session/load",
@@ -7539,14 +7419,11 @@ async function assertSessionHostDenyThenDisconnectThenFaultReopen(input: {
   assert.ok(
     finalEvents.some(
       (event) =>
-        event.kind === "message.finished" &&
-        event.text === "after deny-then-disconnect then fault",
+        event.kind === "message.finished" && event.text === "after deny-then-disconnect then fault",
     ),
   );
   assert.ok(
-    finalEvents.some(
-      (event) => event.kind === "turn.finished" && event.turnId === "turn-dtdfr-ok",
-    ),
+    finalEvents.some((event) => event.kind === "turn.finished" && event.turnId === "turn-dtdfr-ok"),
   );
 
   await host3.close();
@@ -7556,9 +7433,7 @@ async function assertSessionHostDenyThenDisconnectThenFaultReopen(input: {
     "journal must keep deny-then-disconnect + mid-prompt fault fences",
   );
   assert.ok(
-    persisted.some(
-      (event) => event.kind === "interaction.resolved" && event.decision === "deny",
-    ),
+    persisted.some((event) => event.kind === "interaction.resolved" && event.decision === "deny"),
     "fault-era journal must keep interaction.resolved deny",
   );
   assert.ok(
@@ -7572,8 +7447,7 @@ async function assertSessionHostDenyThenDisconnectThenFaultReopen(input: {
   assert.ok(
     persisted.some(
       (event) =>
-        event.kind === "message.finished" &&
-        event.text === "after deny-then-disconnect then fault",
+        event.kind === "message.finished" && event.text === "after deny-then-disconnect then fault",
     ),
   );
 }
@@ -7595,20 +7469,18 @@ test("SessionHost + opt-in Goose ACP: deny-then-disconnect-then-fault reopen ide
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
-
 
 async function assertSessionHostDenyThenCancel(input: {
   t: { after: (fn: () => void | Promise<void>) => void };
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-dtc-`));
   const worktree = join(root, "worktree");
@@ -7710,9 +7582,7 @@ async function assertSessionHostDenyThenCancel(input: {
   const events = host.eventsSince(0);
   assert.ok(events.some((event) => event.kind === "tool.started"));
   assert.ok(
-    events.some(
-      (event) => event.kind === "interaction.resolved" && event.decision === "deny",
-    ),
+    events.some((event) => event.kind === "interaction.resolved" && event.decision === "deny"),
   );
   const finished = events.find(
     (event) => event.kind === "turn.finished" && event.turnId === "turn-dtc",
@@ -7724,9 +7594,7 @@ async function assertSessionHostDenyThenCancel(input: {
   await host.close();
   const persisted = await SessionHost.eventsSinceHistory(journalRoot, spec, 0);
   assert.ok(
-    persisted.some(
-      (event) => event.kind === "interaction.resolved" && event.decision === "deny",
-    ),
+    persisted.some((event) => event.kind === "interaction.resolved" && event.decision === "deny"),
   );
   assert.ok(
     persisted.some(
@@ -7756,8 +7624,7 @@ test("SessionHost + opt-in Goose ACP: deny-then-cancel journals clean (symmetric
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
 
@@ -7766,9 +7633,9 @@ async function assertSessionHostAllowThenCancel(input: {
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-atc-`));
   const worktree = join(root, "worktree");
@@ -7870,9 +7737,7 @@ async function assertSessionHostAllowThenCancel(input: {
   const events = host.eventsSince(0);
   assert.ok(events.some((event) => event.kind === "tool.started"));
   assert.ok(
-    events.some(
-      (event) => event.kind === "interaction.resolved" && event.decision === "allow",
-    ),
+    events.some((event) => event.kind === "interaction.resolved" && event.decision === "allow"),
   );
   const finished = events.find(
     (event) => event.kind === "turn.finished" && event.turnId === "turn-atc",
@@ -7884,9 +7749,7 @@ async function assertSessionHostAllowThenCancel(input: {
   await host.close();
   const persisted = await SessionHost.eventsSinceHistory(journalRoot, spec, 0);
   assert.ok(
-    persisted.some(
-      (event) => event.kind === "interaction.resolved" && event.decision === "allow",
-    ),
+    persisted.some((event) => event.kind === "interaction.resolved" && event.decision === "allow"),
   );
   assert.ok(
     persisted.some(
@@ -7916,8 +7779,7 @@ test("SessionHost + opt-in Goose ACP: allow-then-cancel journals clean (symmetri
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
 
@@ -7926,9 +7788,9 @@ async function assertSessionHostFaultDuringSessionLoad(input: {
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-fdsl-`));
   const worktree = join(root, "worktree");
@@ -8014,8 +7876,7 @@ async function assertSessionHostFaultDuringSessionLoad(input: {
         catalog,
         registry: registryReopen,
       }),
-    (error: unknown) =>
-      error instanceof Error && /ACP transport closed/.test(error.message),
+    (error: unknown) => error instanceof Error && /ACP transport closed/.test(error.message),
   );
 
   assert.ok(
@@ -8049,20 +7910,18 @@ test("SessionHost + opt-in Goose ACP: fault-during-session-load fails open clean
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
-
 
 async function assertSessionHostLoadThenCancel(input: {
   t: { after: (fn: () => void | Promise<void>) => void };
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-ltc-`));
   const worktree = join(root, "worktree");
@@ -8130,12 +7989,7 @@ async function assertSessionHostLoadThenCancel(input: {
   const registryReopen = new HarnessRegistry();
   registryReopen.register(
     input.createHarness(() =>
-      openFakeTransport(
-        input.agentName,
-        backendSessionId,
-        { loadSession: true },
-        peersAfter,
-      ),
+      openFakeTransport(input.agentName, backendSessionId, { loadSession: true }, peersAfter),
     ),
   );
 
@@ -8156,8 +8010,9 @@ async function assertSessionHostLoadThenCancel(input: {
     "successful load must not fall back to session/new",
   );
 
-  const errorCountBefore = resumed.eventsSince(0).filter((event) => event.kind === "session.error")
-    .length;
+  const errorCountBefore = resumed
+    .eventsSince(0)
+    .filter((event) => event.kind === "session.error").length;
 
   // Cancel before any new send: no in-flight turn after successful load → stale.
   const staleCancel = await resumed.dispatch({
@@ -8189,9 +8044,9 @@ async function assertSessionHostLoadThenCancel(input: {
   });
   assert.equal(sendReceipt.status, "accepted");
   await resumed.whenIdle();
-  const finished = resumed.eventsSince(0).find(
-    (event) => event.kind === "turn.finished" && event.turnId === "turn-ltc-live",
-  );
+  const finished = resumed
+    .eventsSince(0)
+    .find((event) => event.kind === "turn.finished" && event.turnId === "turn-ltc-live");
   assert.ok(finished && finished.kind === "turn.finished");
   assert.equal(finished.outcome, "success");
 
@@ -8230,11 +8085,9 @@ test("SessionHost + opt-in Goose ACP: load-then-cancel is stale before first sen
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
-
 
 async function waitForCondition(
   predicate: () => boolean,
@@ -8253,9 +8106,9 @@ async function assertSessionHostCancelDuringSessionLoad(input: {
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-cdsl-`));
   const worktree = join(root, "worktree");
@@ -8363,8 +8216,7 @@ async function assertSessionHostCancelDuringSessionLoad(input: {
 
   await assert.rejects(
     () => openPromise,
-    (error: unknown) =>
-      error instanceof Error && /ACP transport closed/.test(error.message),
+    (error: unknown) => error instanceof Error && /ACP transport closed/.test(error.message),
   );
 
   assert.ok(
@@ -8398,20 +8250,18 @@ test("SessionHost + opt-in Goose ACP: cancel-during-session-load aborts held ope
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
-
 
 async function assertSessionHostLoadThenDisconnect(input: {
   t: { after: (fn: () => void | Promise<void>) => void };
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-ltd-`));
   const worktree = join(root, "worktree");
@@ -8479,12 +8329,7 @@ async function assertSessionHostLoadThenDisconnect(input: {
   const registryReopen = new HarnessRegistry();
   registryReopen.register(
     input.createHarness(() =>
-      openFakeTransport(
-        input.agentName,
-        backendSessionId,
-        { loadSession: true },
-        peersAfter,
-      ),
+      openFakeTransport(input.agentName, backendSessionId, { loadSession: true }, peersAfter),
     ),
   );
 
@@ -8505,8 +8350,9 @@ async function assertSessionHostLoadThenDisconnect(input: {
     "successful load must not fall back to session/new",
   );
 
-  const errorCountBefore = resumed.eventsSince(0).filter((event) => event.kind === "session.error")
-    .length;
+  const errorCountBefore = resumed
+    .eventsSince(0)
+    .filter((event) => event.kind === "session.error").length;
 
   // Peer disconnect before any new send: no active turn after successful load.
   // Host ignores idle peer close until the next RPC (honest fake-transport semantics).
@@ -8570,12 +8416,7 @@ async function assertSessionHostLoadThenDisconnect(input: {
   const registryRecover = new HarnessRegistry();
   registryRecover.register(
     input.createHarness(() =>
-      openFakeTransport(
-        input.agentName,
-        backendSessionId,
-        { loadSession: true },
-        peersRecover,
-      ),
+      openFakeTransport(input.agentName, backendSessionId, { loadSession: true }, peersRecover),
     ),
   );
   const recovered = await SessionHost.open({
@@ -8598,9 +8439,9 @@ async function assertSessionHostLoadThenDisconnect(input: {
   });
   assert.equal(recoverReceipt.status, "accepted");
   await recovered.whenIdle();
-  const recoverFinished = recovered.eventsSince(0).find(
-    (event) => event.kind === "turn.finished" && event.turnId === "turn-ltd-recover",
-  );
+  const recoverFinished = recovered
+    .eventsSince(0)
+    .find((event) => event.kind === "turn.finished" && event.turnId === "turn-ltd-recover");
   assert.ok(recoverFinished && recoverFinished.kind === "turn.finished");
   assert.equal(recoverFinished.outcome, "success");
   await recovered.close();
@@ -8623,20 +8464,18 @@ test("SessionHost + opt-in Goose ACP: load-then-disconnect faults on next send (
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
-
 
 async function assertSessionHostDisconnectDuringSessionLoad(input: {
   t: { after: (fn: () => void | Promise<void>) => void };
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-ddsl-`));
   const worktree = join(root, "worktree");
@@ -8741,8 +8580,7 @@ async function assertSessionHostDisconnectDuringSessionLoad(input: {
 
   await assert.rejects(
     () => openPromise,
-    (error: unknown) =>
-      error instanceof Error && /ACP transport closed/.test(error.message),
+    (error: unknown) => error instanceof Error && /ACP transport closed/.test(error.message),
   );
 
   assert.ok(
@@ -8776,8 +8614,7 @@ test("SessionHost + opt-in Goose ACP: disconnect-during-session-load rejects hel
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
 
@@ -8786,9 +8623,9 @@ async function assertSessionHostPermissionDuringSessionLoad(input: {
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-pdsl-`));
   const worktree = join(root, "worktree");
@@ -8904,13 +8741,15 @@ async function assertSessionHostPermissionDuringSessionLoad(input: {
 
   await resumed.whenIdle();
   assert.ok(
-    resumed.eventsSince(0).every(
-      (event) =>
-        !(
-          event.kind === "interaction.requested" &&
-          event.interactionId === "acp-permission:tool-perm-during-load"
-        ),
-    ),
+    resumed
+      .eventsSince(0)
+      .every(
+        (event) =>
+          !(
+            event.kind === "interaction.requested" &&
+            event.interactionId === "acp-permission:tool-perm-during-load"
+          ),
+      ),
     "mid-load permission must not journal interaction.requested",
   );
 
@@ -8924,9 +8763,9 @@ async function assertSessionHostPermissionDuringSessionLoad(input: {
   });
   assert.equal(sendReceipt.status, "accepted");
   await resumed.whenIdle();
-  const finished = resumed.eventsSince(0).find(
-    (event) => event.kind === "turn.finished" && event.turnId === "turn-pdsl-send",
-  );
+  const finished = resumed
+    .eventsSince(0)
+    .find((event) => event.kind === "turn.finished" && event.turnId === "turn-pdsl-send");
   assert.ok(finished && finished.kind === "turn.finished");
   assert.equal(finished.outcome, "success");
   await resumed.close();
@@ -8949,8 +8788,7 @@ test("SessionHost + opt-in Goose ACP: permission-during-session-load rejects sta
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
 
@@ -8961,9 +8799,9 @@ async function assertSessionHostLoadThenSendMidLoadPrompt(input: {
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-ltsm-`));
   const worktree = join(root, "worktree");
@@ -9074,9 +8912,9 @@ async function assertSessionHostLoadThenSendMidLoadPrompt(input: {
   await resumed.whenIdle();
   await resumed.whenEventsSettled();
 
-  const replayEvent = resumed.eventsSince(0).find(
-    (event) => event.kind === "extension.event" && event.namespace === "acp.replay",
-  );
+  const replayEvent = resumed
+    .eventsSince(0)
+    .find((event) => event.kind === "extension.event" && event.namespace === "acp.replay");
   assert.ok(
     replayEvent && replayEvent.kind === "extension.event",
     "mid-load chunks must journal extension.event namespace acp.replay",
@@ -9087,21 +8925,27 @@ async function assertSessionHostLoadThenSendMidLoadPrompt(input: {
     "acp.replay payload must be an object",
   );
   const payload = replayPayload as { replayedUpdates?: unknown; applied?: unknown };
-  assert.equal(payload.applied, false, "acp.replay must report applied:false (swallowed, not journal body)");
+  assert.equal(
+    payload.applied,
+    false,
+    "acp.replay must report applied:false (swallowed, not journal body)",
+  );
   assert.ok(
     typeof payload.replayedUpdates === "number" && payload.replayedUpdates >= 1,
     `expected replayedUpdates >= 1, got ${String(payload.replayedUpdates)}`,
   );
 
   assert.ok(
-    resumed.eventsSince(0).every(
-      (event) =>
-        !(
-          event.kind === "message.finished" &&
-          typeof event.text === "string" &&
-          event.text.includes(MID_LOAD_REPLAY_CHUNK)
-        ),
-    ),
+    resumed
+      .eventsSince(0)
+      .every(
+        (event) =>
+          !(
+            event.kind === "message.finished" &&
+            typeof event.text === "string" &&
+            event.text.includes(MID_LOAD_REPLAY_CHUNK)
+          ),
+      ),
     "mid-load replay chunk must not become message.finished",
   );
 
@@ -9119,9 +8963,9 @@ async function assertSessionHostLoadThenSendMidLoadPrompt(input: {
   });
   assert.equal(sendReceipt.status, "accepted");
   await resumed.whenIdle();
-  const finished = resumed.eventsSince(0).find(
-    (event) => event.kind === "turn.finished" && event.turnId === "turn-lts-send",
-  );
+  const finished = resumed
+    .eventsSince(0)
+    .find((event) => event.kind === "turn.finished" && event.turnId === "turn-lts-send");
   assert.ok(finished && finished.kind === "turn.finished");
   assert.equal(finished.outcome, "success");
 
@@ -9140,11 +8984,7 @@ async function assertSessionHostLoadThenSendMidLoadPrompt(input: {
     "persisted history must not contain mid-load replay as message.finished",
   );
   assert.ok(
-    persisted.some(
-      (event) =>
-        event.kind === "extension.event" &&
-        event.namespace === "acp.replay",
-    ),
+    persisted.some((event) => event.kind === "extension.event" && event.namespace === "acp.replay"),
     "persisted history must keep acp.replay extension.event",
   );
 }
@@ -9166,8 +9006,7 @@ test("SessionHost + opt-in Goose ACP: load-then-send / mid-load prompt swallows 
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
 
@@ -9176,9 +9015,9 @@ async function assertSessionHostLoadThenPermissionDeny(input: {
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-ltpd-`));
   const worktree = join(root, "worktree");
@@ -9277,8 +9116,9 @@ async function assertSessionHostLoadThenPermissionDeny(input: {
     "successful load must not fall back to session/new",
   );
 
-  const errorCountBefore = resumed.eventsSince(0).filter((event) => event.kind === "session.error")
-    .length;
+  const errorCountBefore = resumed
+    .eventsSince(0)
+    .filter((event) => event.kind === "session.error").length;
 
   const sendReceipt = await resumed.dispatch({
     type: "send",
@@ -9292,10 +9132,9 @@ async function assertSessionHostLoadThenPermissionDeny(input: {
   const deadline = Date.now() + 5_000;
   let interactionId: string | undefined;
   while (Date.now() < deadline) {
-    const requested = resumed.eventsSince(0).find(
-      (event) =>
-        event.kind === "interaction.requested" && event.turnId === "turn-ltpd-live",
-    );
+    const requested = resumed
+      .eventsSince(0)
+      .find((event) => event.kind === "interaction.requested" && event.turnId === "turn-ltpd-live");
     if (requested && requested.kind === "interaction.requested") {
       interactionId = requested.interactionId;
       break;
@@ -9386,8 +9225,7 @@ test("SessionHost + opt-in Goose ACP: load-then-permission-deny journals clean a
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });
 
@@ -9396,9 +9234,9 @@ async function assertSessionHostLoadThenPermissionAllow(input: {
   label: string;
   harnessId: "opencode" | "goose";
   agentName: string;
-  createHarness: (openTransport: () => AcpTransport) => ReturnType<
-    typeof createExperimentalRegistryOpenCodeAcpHarness
-  >;
+  createHarness: (
+    openTransport: () => AcpTransport,
+  ) => ReturnType<typeof createExperimentalRegistryOpenCodeAcpHarness>;
 }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `zcode-${input.label}-acp-ltpa-`));
   const worktree = join(root, "worktree");
@@ -9497,8 +9335,9 @@ async function assertSessionHostLoadThenPermissionAllow(input: {
     "successful load must not fall back to session/new",
   );
 
-  const errorCountBefore = resumed.eventsSince(0).filter((event) => event.kind === "session.error")
-    .length;
+  const errorCountBefore = resumed
+    .eventsSince(0)
+    .filter((event) => event.kind === "session.error").length;
 
   const sendReceipt = await resumed.dispatch({
     type: "send",
@@ -9512,10 +9351,9 @@ async function assertSessionHostLoadThenPermissionAllow(input: {
   const deadline = Date.now() + 5_000;
   let interactionId: string | undefined;
   while (Date.now() < deadline) {
-    const requested = resumed.eventsSince(0).find(
-      (event) =>
-        event.kind === "interaction.requested" && event.turnId === "turn-ltpa-live",
-    );
+    const requested = resumed
+      .eventsSince(0)
+      .find((event) => event.kind === "interaction.requested" && event.turnId === "turn-ltpa-live");
     if (requested && requested.kind === "interaction.requested") {
       interactionId = requested.interactionId;
       break;
@@ -9606,7 +9444,6 @@ test("SessionHost + opt-in Goose ACP: load-then-permission-allow journals clean 
     label: "goose",
     harnessId: "goose",
     agentName: "Goose",
-    createHarness: (openTransport) =>
-      createExperimentalRegistryGooseAcpHarness({ openTransport }),
+    createHarness: (openTransport) => createExperimentalRegistryGooseAcpHarness({ openTransport }),
   });
 });

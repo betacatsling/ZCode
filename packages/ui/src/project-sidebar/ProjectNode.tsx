@@ -38,7 +38,11 @@ export function ProjectNode({
     : null;
   const showAttention = summary.pendingCount > 0 || summary.errorCount > 0;
   return (
-    <section data-project-id={project.id} data-agent-count={summary.agentCount} className="space-y-1">
+    <section
+      data-project-id={project.id}
+      data-agent-count={summary.agentCount}
+      className="space-y-1"
+    >
       <div className="flex items-center gap-1">
         <Button
           type="button"
@@ -47,15 +51,26 @@ export function ProjectNode({
           onClick={() => onToggle(project.id)}
           className="min-h-9 min-w-0 flex-1 justify-start gap-2 px-1 text-left md:min-h-8"
         >
-          {expanded ? <ChevronDownIcon className="size-3.5" /> : <ChevronRightIcon className="size-3.5" />}
+          {expanded ? (
+            <ChevronDownIcon className="size-3.5" />
+          ) : (
+            <ChevronRightIcon className="size-3.5" />
+          )}
           {iconSource ? (
-            <img src={iconSource} alt="" aria-hidden="true" className="size-4 shrink-0 object-contain" />
+            <img
+              src={iconSource}
+              alt=""
+              aria-hidden="true"
+              className="size-4 shrink-0 object-contain"
+            />
           ) : (
             <span className="inline-flex size-4 shrink-0 items-center justify-center rounded-md bg-accent text-ui-xs text-foreground-subtle">
               {projectInitials(project.name)}
             </span>
           )}
-          <span className="min-w-0 flex-1 truncate text-ui-base text-foreground">{project.name}</span>
+          <span className="min-w-0 flex-1 truncate text-ui-base text-foreground">
+            {project.name}
+          </span>
           <span className="shrink-0 text-ui-xs text-foreground-subtlest">{summary.agentCount}</span>
         </Button>
         <Button

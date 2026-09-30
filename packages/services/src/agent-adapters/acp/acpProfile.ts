@@ -1,4 +1,8 @@
-import type { CapabilityReport, HarnessPluginManifest, HarnessManifest } from "@zcode/shared/agent-host";
+import type {
+  CapabilityReport,
+  HarnessPluginManifest,
+  HarnessManifest,
+} from "@zcode/shared/agent-host";
 import { harnessManifestSchema, harnessPluginManifestSchema } from "@zcode/shared/agent-host";
 import type { AcpNegotiation } from "./acpProtocol.js";
 import { ACP_ADAPTER_VERSION } from "./acpProtocol.js";
@@ -49,7 +53,10 @@ export function diagnoseAcpInstall(input: {
   versionText?: string;
 }): CapabilityReport {
   if (!input.executableFound) {
-    return { support: "unsupported", reason: `${input.profile.install.executableName} was not found` };
+    return {
+      support: "unsupported",
+      reason: `${input.profile.install.executableName} was not found`,
+    };
   }
   return {
     support: "supported",
@@ -73,7 +80,9 @@ export function buildAcpCompatibilityReport(input: {
     executableName: input.profile.install.executableName,
     install: input.install,
     stability: input.negotiation?.stability ?? "unknown",
-    ...(input.negotiation?.stabilityReason ? { stabilityReason: input.negotiation.stabilityReason } : {}),
+    ...(input.negotiation?.stabilityReason
+      ? { stabilityReason: input.negotiation.stabilityReason }
+      : {}),
     authMethodIds: input.negotiation?.authMethods.map((method) => method.methodId) ?? [],
     resume: capabilities.resumeExecution,
     viewHistory: capabilities.viewHistory ?? {

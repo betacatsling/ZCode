@@ -51,9 +51,11 @@ export function planClaudeCodeProfile(input: {
   assertIsolatedClaudeCodePath(input.managedRoot, input.userHome);
   const hash = createHash("sha256")
     .update(
-      [input.spec.execution.targetId, claudeCodeWorkspaceKey(input.spec), input.spec.hostSessionId].join(
-        "\0",
-      ),
+      [
+        input.spec.execution.targetId,
+        claudeCodeWorkspaceKey(input.spec),
+        input.spec.hostSessionId,
+      ].join("\0"),
     )
     .digest("hex");
   const configDir = resolve(input.managedRoot, "profiles", hash, "config");
@@ -63,7 +65,10 @@ export function planClaudeCodeProfile(input: {
   assertIsolatedClaudeCodePath(homeDir, input.userHome);
   assertIsolatedClaudeCodePath(markerPath, input.userHome);
   const delegated = input.env?.CLAUDE_CONFIG_DIR;
-  if (delegated && [configDir, homeDir, markerPath].some((path) => resolve(path) === resolve(delegated))) {
+  if (
+    delegated &&
+    [configDir, homeDir, markerPath].some((path) => resolve(path) === resolve(delegated))
+  ) {
     throw new ClaudeCodeAdapterError("unsupported", "Refusing to reuse CLAUDE_CONFIG_DIR");
   }
   const marker = JSON.stringify({
@@ -85,7 +90,10 @@ export function createFilesystemClaudeCodeProfileSink(input: {
   const guard = (candidate: string) => {
     assertIsolatedClaudeCodePath(candidate, input.userHome);
     if (!isInsidePath(input.managedRoot, candidate)) {
-      throw new ClaudeCodeAdapterError("unsupported", "Claude Code profile escaped the managed root");
+      throw new ClaudeCodeAdapterError(
+        "unsupported",
+        "Claude Code profile escaped the managed root",
+      );
     }
   };
   return {

@@ -4,25 +4,25 @@ Sources: [Devin CLI Quickstart](https://docs.devin.ai/cli), [Essential Commands]
 
 ## Landed behavior (what works today)
 
-| Piece                          | Status | Evidence                                                                                                                    |
-| ------------------------------ | ------ | --------------------------------------------------------------------------------------------------------------------------- |
-| Host directory / lazy register | Done   | `id: "devin"`, `adapterVersion: "0.1.0"`; `createExperimentalRegistryDevinHarness` in `lazyTargetService`                   |
-| CLI probe                      | Done   | Isolated `--version`; missing CLI → `unsupported` with readable reason                                                      |
-| SessionHost create + one send  | Done   | harness-managed admission; print-mode turn events in Host journal                                                           |
-| Tests                          | Done   | `devinHarnessAdmission.test.ts`, `devinCapabilitiesHonesty.test.ts`, `devinSessionHost.integration.test.ts` (fake CLI argv) |
+| Piece                          | Status | Evidence                                                                                                                             |
+| ------------------------------ | ------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Host directory / lazy register | Done   | `id: "devin"`, `adapterVersion: "0.1.0"`; `createExperimentalRegistryDevinHarness` in `lazyTargetService`                            |
+| CLI probe                      | Done   | Isolated `--version`; missing CLI → `unsupported` with readable reason                                                               |
+| SessionHost create + one send  | Done   | harness-managed admission; print-mode turn events in Host journal                                                                    |
+| Tests                          | Done   | `devinHarnessAdmission.test.ts`, `devinCapabilitiesHonesty.test.ts`, `devinSessionHost.integration.test.ts` (fake CLI argv)          |
 | Optional ACP profile           | Done   | `packages/services/src/agent-adapters/acp/agents/devin.ts` (`args: ["acp"]`); covered by `acpHarness.test.ts` + coexistence contract |
 
 **Default Host session path is still `-p` only** (lazy `createDevinHarness`). Each print-mode `send` spawns a short-lived process and exits. Editors that opt into ACP use `createAcpHarness({ profile: devinAcpProfile })` instead — same harness id `devin`, so the two adapters must not both register on one `HarnessRegistry`.
 
 ## What Devin CLI exposes vs what Host uses
 
-| Surface             | Command                                       | Host use                                                          |
-| ------------------- | --------------------------------------------- | ----------------------------------------------------------------- |
-| Interactive REPL    | `devin` / `devin -- <prompt>`                 | Not used (TTY UI).                                                |
-| Print / single-turn | `devin -p [PROMPT]` or `devin -p -- <prompt>` | **Only wired session path.** Stdout = assistant text.             |
-| Resume              | `-c` / `-r <id>`                              | **Not wired** — no native session id stored on `BackendBinding`.  |
+| Surface             | Command                                       | Host use                                                                                                             |
+| ------------------- | --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Interactive REPL    | `devin` / `devin -- <prompt>`                 | Not used (TTY UI).                                                                                                   |
+| Print / single-turn | `devin -p [PROMPT]` or `devin -p -- <prompt>` | **Only wired session path.** Stdout = assistant text.                                                                |
+| Resume              | `-c` / `-r <id>`                              | **Not wired** — no native session id stored on `BackendBinding`.                                                     |
 | ACP server          | `devin acp`                                   | **Optional ACP profile** — `devinAcpProfile` / `createAcpHarness` (stdio JSON-RPC). Host lazy path still print-mode. |
-| Auth / models       | `devin auth …`                                | Harness-managed; Host does **not** inject Provider Registry keys. |
+| Auth / models       | `devin auth …`                                | Harness-managed; Host does **not** inject Provider Registry keys.                                                    |
 
 Non-interactive `-p` cannot show the workspace trust prompt → Host always passes `--respect-workspace-trust false`.
 

@@ -28,8 +28,12 @@ export function CompatibilityStatus({
       className="space-y-1 rounded-md bg-surface px-2 py-2 text-ui-sm text-foreground"
     >
       <p>{copy.requested(requestedLabel)}</p>
-      {effectiveLabel ? <p className="text-foreground-subtle">{copy.effective(effectiveLabel)}</p> : null}
-      <p className={executable ? "text-foreground-subtle" : "text-warning"}>{copy.support[report.support]}</p>
+      {effectiveLabel ? (
+        <p className="text-foreground-subtle">{copy.effective(effectiveLabel)}</p>
+      ) : null}
+      <p className={executable ? "text-foreground-subtle" : "text-warning"}>
+        {copy.support[report.support]}
+      </p>
       {report.reason ? <p className="text-ui-xs text-foreground-subtle">{report.reason}</p> : null}
       {mismatch ? <p className="text-ui-xs text-warning">{copy.mismatch}</p> : null}
     </div>

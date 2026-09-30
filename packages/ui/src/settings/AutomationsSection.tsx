@@ -1300,15 +1300,7 @@ export function AutomationsSection({
       }
       return result.ok;
     },
-    [
-      intl,
-      offPeakCreate,
-      offPeakCreateGrey,
-      offPeakTaskService,
-      offPeakUpdate,
-      platform,
-      view,
-    ],
+    [intl, offPeakCreate, offPeakCreateGrey, offPeakTaskService, offPeakUpdate, platform, view],
   );
 
   if (!workspacePath) {

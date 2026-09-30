@@ -48,7 +48,8 @@ export function createConversationPublisher(input: {
       return deliver(events, base);
     },
     push(events) {
-      const base = deliveredSeq >= 0 ? { logEpoch: input.runtimeEpoch, seq: deliveredSeq } : undefined;
+      const base =
+        deliveredSeq >= 0 ? { logEpoch: input.runtimeEpoch, seq: deliveredSeq } : undefined;
       return deliver(events, base);
     },
   };

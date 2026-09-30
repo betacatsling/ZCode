@@ -38,9 +38,8 @@ test(
 );
 
 test("Codex probe and hostManagedSupport return readable reasons when CLI is missing", async () => {
-  const { createExperimentalRegistryCodexHarness } = await import(
-    "../src/agent-adapters/codex/createCodexHarness.js"
-  );
+  const { createExperimentalRegistryCodexHarness } =
+    await import("../src/agent-adapters/codex/createCodexHarness.js");
   const { HarnessRegistry } = await import("../src/agent-host/harnessRegistry.js");
   const missing = join("/tmp", `zcode-codex-missing-${Date.now()}`, "no-such-codex");
   const harness = createExperimentalRegistryCodexHarness({

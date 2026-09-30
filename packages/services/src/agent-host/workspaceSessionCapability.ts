@@ -21,7 +21,10 @@ export function createWorkspaceSessionCapabilityReader(input: {
   return async (raw) => {
     const request = workspaceSessionBindingCapabilityRequestSchema.parse(raw);
     let credentialAttention: AgentModelFailure | undefined;
-    const report = (support: "supported" | "unsupported" | "experimental" | "unknown", reason?: string) =>
+    const report = (
+      support: "supported" | "unsupported" | "experimental" | "unknown",
+      reason?: string,
+    ) =>
       workspaceSessionBindingCapabilityResultSchema.parse({
         targetId: input.target.id,
         report: capabilityReportSchema.parse({ support, ...(reason ? { reason } : {}) }),
@@ -74,7 +77,8 @@ export function createWorkspaceSessionCapabilityReader(input: {
 
       const catalog: ModelCatalogSnapshotPort = input.catalog.capture?.() ?? input.catalog;
       const selection = request.modelBinding.selection;
-      if (!catalog.validateSelection(selection).ok) return report("unsupported", "model-unavailable");
+      if (!catalog.validateSelection(selection).ok)
+        return report("unsupported", "model-unavailable");
       // Same auto-clearing check as turn admission; informational only, open/create stay allowed.
       credentialAttention = catalog.credentialAttention?.(selection)?.failure;
       const support = await harness.hostManagedSupport(input.target, selection);

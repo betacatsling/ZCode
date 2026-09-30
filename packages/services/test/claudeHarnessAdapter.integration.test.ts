@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { access, chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import {
+  access,
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -11,8 +21,14 @@ import { TargetModelGateway } from "../src/model-gateway/index.js";
 import { HarnessRegistry } from "../src/agent-host/harnessRegistry.js";
 import { SessionHost } from "../src/agent-host/sessionHost.js";
 import { createExperimentalRegistryClaudeHarness } from "../src/agent-adapters/claude/createClaudeHarness.js";
-import { claudeSessionProfileRoot, createClaudeChildEnvironment } from "../src/agent-adapters/claude/claudeProfile.js";
-import { PINNED_CLAUDE_CLI_VERSION, resolveClaudeExecutable } from "../src/agent-adapters/claude/claudeExecutable.js";
+import {
+  claudeSessionProfileRoot,
+  createClaudeChildEnvironment,
+} from "../src/agent-adapters/claude/claudeProfile.js";
+import {
+  PINNED_CLAUDE_CLI_VERSION,
+  resolveClaudeExecutable,
+} from "../src/agent-adapters/claude/claudeExecutable.js";
 import { CLAUDE_PUBLIC_MODEL_ID } from "../src/agent-adapters/claude/claudeHarnessAdapter.js";
 import type { ClaudeStreamProcess } from "../src/agent-adapters/claude/claudeStreamProcess.js";
 import {
@@ -93,7 +109,14 @@ test(
     };
     const specA = sessionSpec("claude-session-a", workspaceA);
     const specB = sessionSpec("claude-session-b", workspaceB);
-    let adapter = createAdapter(adapterRoot, tracedExecutable, targetGateway, processes, stderr, root);
+    let adapter = createAdapter(
+      adapterRoot,
+      tracedExecutable,
+      targetGateway,
+      processes,
+      stderr,
+      root,
+    );
     adapters.add(adapter);
     registry.register(adapter);
     let hostA!: SessionHost;
@@ -124,12 +147,24 @@ test(
     const profileA = claudeSessionProfileRoot(adapterRoot, specA);
     const profileB = claudeSessionProfileRoot(adapterRoot, specB);
     assert.notEqual(profileA, profileB);
-    const capabilityA = await readFile(join(profileA, "claude-config", "gateway-session-capability"), "utf8");
-    const capabilityB = await readFile(join(profileB, "claude-config", "gateway-session-capability"), "utf8");
+    const capabilityA = await readFile(
+      join(profileA, "claude-config", "gateway-session-capability"),
+      "utf8",
+    );
+    const capabilityB = await readFile(
+      join(profileB, "claude-config", "gateway-session-capability"),
+      "utf8",
+    );
     assert.notEqual(capabilityA, capabilityB, "each Host session has its own Gateway capability");
-    assert.equal((await stat(join(profileA, "claude-config", "gateway-session-capability"))).mode & 0o777, 0o600);
+    assert.equal(
+      (await stat(join(profileA, "claude-config", "gateway-session-capability"))).mode & 0o777,
+      0o600,
+    );
     const settingsA = await readFile(join(profileA, "claude-config", "settings.json"), "utf8");
-    const helperA = await readFile(join(profileA, "claude-config", "zcode-api-key-helper.mjs"), "utf8");
+    const helperA = await readFile(
+      join(profileA, "claude-config", "zcode-api-key-helper.mjs"),
+      "utf8",
+    );
     assert.equal(settingsA.includes(capabilityA), false);
     assert.equal(helperA.includes(capabilityA), false);
     const childEnvironment = createClaudeChildEnvironment({
@@ -155,8 +190,12 @@ test(
     try {
       await sendAndWait(hostA, "turn-a-text", "HELLO_TEXT");
     } catch (error) {
-      t.diagnostic(`redacted Claude stderr: ${JSON.stringify(stderr.get(specA.hostSessionId) ?? "")}`);
-      t.diagnostic(`FakeModel user prompts: ${JSON.stringify(fakeV1.trace.map((entry) => entry.userText).map((text) => text.slice(-80)))}`);
+      t.diagnostic(
+        `redacted Claude stderr: ${JSON.stringify(stderr.get(specA.hostSessionId) ?? "")}`,
+      );
+      t.diagnostic(
+        `FakeModel user prompts: ${JSON.stringify(fakeV1.trace.map((entry) => entry.userText).map((text) => text.slice(-80)))}`,
+      );
       throw error;
     }
     await sendAndWait(hostB, "turn-b-text", "SESSION_B_TEXT");
@@ -176,14 +215,29 @@ test(
       allowRequest,
       new Promise<never>((_, reject) =>
         setTimeout(() => {
-          const turnEvents = hostA.eventsSince(0).filter((e) => "turnId" in e && e.turnId === allowTurn).map((e) => {
-            const extra = e.kind === "turn.finished" && "outcome" in e ? `=${e.outcome}` : e.kind === "session.error" && "message" in e ? `:${String(e.message).slice(0,120)}` : "";
-            return `${e.kind}${extra}`;
-          });
-          const errors = hostA.eventsSince(0).filter((e) => e.kind === "session.error").map((e) => ("message" in e ? String(e.message).slice(0, 200) : e.kind));
+          const turnEvents = hostA
+            .eventsSince(0)
+            .filter((e) => "turnId" in e && e.turnId === allowTurn)
+            .map((e) => {
+              const extra =
+                e.kind === "turn.finished" && "outcome" in e
+                  ? `=${e.outcome}`
+                  : e.kind === "session.error" && "message" in e
+                    ? `:${String(e.message).slice(0, 120)}`
+                    : "";
+              return `${e.kind}${extra}`;
+            });
+          const errors = hostA
+            .eventsSince(0)
+            .filter((e) => e.kind === "session.error")
+            .map((e) => ("message" in e ? String(e.message).slice(0, 200) : e.kind));
           const prompts = fakeV1.trace.map((e) => e.userText.slice(-40));
           const lastTool = fakeV1.trace.at(-1);
-          reject(new Error(`allow interaction timeout; events=${JSON.stringify(turnEvents)} errors=${JSON.stringify(errors)} prompts=${JSON.stringify(prompts)} stderr=${JSON.stringify((stderr.get(specA.hostSessionId) ?? "").slice(-500))}`));
+          reject(
+            new Error(
+              `allow interaction timeout; events=${JSON.stringify(turnEvents)} errors=${JSON.stringify(errors)} prompts=${JSON.stringify(prompts)} stderr=${JSON.stringify((stderr.get(specA.hostSessionId) ?? "").slice(-500))}`,
+            ),
+          );
         }, 45_000),
       ),
     ]);
@@ -194,16 +248,22 @@ test(
     try {
       assert.equal(await readFile(paths.allowedWrite, "utf8"), "allowed");
     } catch (error) {
-      const toolEvents = hostA.eventsSince(0).filter((e) => e.kind.startsWith("tool.") || e.kind === "interaction.resolved" || e.kind === "session.error");
-      t.diagnostic(`allow-write miss: ${JSON.stringify(toolEvents.map((e) => ({ kind: e.kind, ...( "outcome" in e ? { outcome: e.outcome } : {}), ...( "message" in e ? { message: String(e.message).slice(0, 160) } : {}), ...( "outputText" in e ? { outputText: String(e.outputText).slice(0, 160) } : {}) })))}`);
+      const toolEvents = hostA
+        .eventsSince(0)
+        .filter(
+          (e) =>
+            e.kind.startsWith("tool.") ||
+            e.kind === "interaction.resolved" ||
+            e.kind === "session.error",
+        );
+      t.diagnostic(
+        `allow-write miss: ${JSON.stringify(toolEvents.map((e) => ({ kind: e.kind, ...("outcome" in e ? { outcome: e.outcome } : {}), ...("message" in e ? { message: String(e.message).slice(0, 160) } : {}), ...("outputText" in e ? { outputText: String(e.outputText).slice(0, 160) } : {}) })))}`,
+      );
       throw error;
     }
-    const duplicateAllow = await hostA.dispatch(resolveInteractionCommand(
-      hostA,
-      allowInteraction,
-      "allow",
-      "resolve-allow-duplicate",
-    ));
+    const duplicateAllow = await hostA.dispatch(
+      resolveInteractionCommand(hostA, allowInteraction, "allow", "resolve-allow-duplicate"),
+    );
     assert.equal(duplicateAllow.status, "rejected", "late duplicate answers cannot win twice");
 
     const denyTurn = "turn-deny-fixed-write";
@@ -234,9 +294,14 @@ test(
     await hostA.whenIdle();
     await assertMissing(paths.deniedWrite);
     assert.ok(
-      hostA.eventsSince(0).some(
-        (event) => event.kind === "tool.finished" && event.turnId === denyTurn && event.outcome === "error",
-      ),
+      hostA
+        .eventsSince(0)
+        .some(
+          (event) =>
+            event.kind === "tool.finished" &&
+            event.turnId === denyTurn &&
+            event.outcome === "error",
+        ),
     );
 
     // Claude PreToolUse is typically serial: the second hook does not fire until the
@@ -292,17 +357,30 @@ test(
     await longLease.started.promise;
     catalogRevision = 2;
     await new Promise((resolve) => setTimeout(resolve, 600));
-    assert.equal(fakeV2.trace.some((entry) => entry.userText.includes("LONG_LEASE_BINDING")), false);
+    assert.equal(
+      fakeV2.trace.some((entry) => entry.userText.includes("LONG_LEASE_BINDING")),
+      false,
+    );
     longLease.release.resolve();
     await longFinished;
     await hostA.whenIdle();
     assert.equal(hostA.queryBindingFact(`send-${longTurn}`)?.catalogFingerprint, "catalog-v1");
     assert.equal(hostA.binding.backendSessionId, routeBinding);
-    assert.equal(fakeV1.trace.some((entry) => entry.userText.includes("LONG_LEASE_BINDING")), true);
+    assert.equal(
+      fakeV1.trace.some((entry) => entry.userText.includes("LONG_LEASE_BINDING")),
+      true,
+    );
 
     await sendAndWait(hostA, "turn-next-binding", "NEXT_BINDING_V2");
-    assert.equal(hostA.binding.backendSessionId, routeBinding, "idle model rebind preserves the opaque Claude session ID");
-    assert.equal(hostA.queryBindingFact("send-turn-next-binding")?.catalogFingerprint, "catalog-v2");
+    assert.equal(
+      hostA.binding.backendSessionId,
+      routeBinding,
+      "idle model rebind preserves the opaque Claude session ID",
+    );
+    assert.equal(
+      hostA.queryBindingFact("send-turn-next-binding")?.catalogFingerprint,
+      "catalog-v2",
+    );
     // Claude may wrap Host text in content blocks / reminders; match the FakeModel-extracted userText.
     if (!fakeV2.trace.some((entry) => entry.userText.includes("NEXT_BINDING_V2"))) {
       t.diagnostic(
@@ -330,9 +408,14 @@ test(
     await hostA.whenIdle();
     await controls.abortObserved.promise;
     assert.ok(
-      hostA.eventsSince(0).some(
-        (event) => event.kind === "turn.finished" && event.turnId === cancelTurn && event.outcome === "cancelled",
-      ),
+      hostA
+        .eventsSince(0)
+        .some(
+          (event) =>
+            event.kind === "turn.finished" &&
+            event.turnId === cancelTurn &&
+            event.outcome === "cancelled",
+        ),
     );
 
     // Resume while the session is still healthy. Host permanently fences `send`
@@ -350,10 +433,20 @@ test(
     adapter = createAdapter(adapterRoot, tracedExecutable, targetGateway, processes, stderr, root);
     adapters.add(adapter);
     resumedRegistry.register(adapter);
-    hostA = await SessionHost.open({ root: journalRoot, spec: specA, target, catalog, registry: resumedRegistry });
+    hostA = await SessionHost.open({
+      root: journalRoot,
+      spec: specA,
+      target,
+      catalog,
+      registry: resumedRegistry,
+    });
     hosts.add(hostA);
     assert.equal(hostA.binding.backendSessionId, nativeSessionId);
-    assert.equal(fakeV2.trace.length, requestsBeforeResume, "resume attaches native history without resending Host input");
+    assert.equal(
+      fakeV2.trace.length,
+      requestsBeforeResume,
+      "resume attaches native history without resending Host input",
+    );
     await sendAndWait(hostA, "turn-after-resume", "AFTER_RESUME_NO_REPLAY");
     assert.equal(hostA.binding.backendSessionId, nativeSessionId);
     assert.ok(lastAssistant(hostA, "fake-v2:AFTER_RESUME_NO_REPLAY"));
@@ -385,14 +478,24 @@ test(
     await verifyLoopbackEgress(traceBase);
     await writeFile(
       join(logRoot, `claude-2.1.263-host-integration-${randomUUID()}.json`),
-      JSON.stringify({
-        cliVersion: PINNED_CLAUDE_CLI_VERSION,
-        route: "POST /v1/messages?beta=true",
-        auxiliaryRoutes: ["HEAD /api/hello"],
-        control: ["PreToolUse allow", "PreToolUse deny", "cancel", "unknown exit", "resume without replay"],
-        models: "loopback FakeModel only",
-        egress: "Claude process connect() calls restricted to loopback by trace assertion",
-      }, null, 2),
+      JSON.stringify(
+        {
+          cliVersion: PINNED_CLAUDE_CLI_VERSION,
+          route: "POST /v1/messages?beta=true",
+          auxiliaryRoutes: ["HEAD /api/hello"],
+          control: [
+            "PreToolUse allow",
+            "PreToolUse deny",
+            "cancel",
+            "unknown exit",
+            "resume without replay",
+          ],
+          models: "loopback FakeModel only",
+          egress: "Claude process connect() calls restricted to loopback by trace assertion",
+        },
+        null,
+        2,
+      ),
     );
   },
 );
@@ -413,7 +516,11 @@ function createAdapter(
     turnLeaseRenewIntervalMs: 35,
     fakeModelCompatibilityEvidence: (selection) =>
       selection.providerId === PROVIDER_ID && selection.modelId === MODEL_ID
-        ? { providerId: PROVIDER_ID, modelId: MODEL_ID, fixtureId: "claude-harness-fake-model-2.1.263" }
+        ? {
+            providerId: PROVIDER_ID,
+            modelId: MODEL_ID,
+            fixtureId: "claude-harness-fake-model-2.1.263",
+          }
         : undefined,
     onProcess: (hostSessionId, child) => {
       processes.set(hostSessionId, child);
@@ -436,10 +543,7 @@ function fakeProviderRegistry(): ProviderRegistryService {
   } as unknown as ProviderRegistryService;
 }
 
-function createCatalog(
-  revision: () => 1 | 2,
-  models: Record<1 | 2, ClaudeHarnessFakeModel>,
-) {
+function createCatalog(revision: () => 1 | 2, models: Record<1 | 2, ClaudeHarnessFakeModel>) {
   return {
     get fingerprint() {
       return `catalog-v${revision()}`;
@@ -504,7 +608,9 @@ async function resolveInteraction(
   decision: "allow" | "deny",
   commandId: string,
 ): Promise<void> {
-  const receipt = await host.dispatch(resolveInteractionCommand(host, interaction, decision, commandId));
+  const receipt = await host.dispatch(
+    resolveInteractionCommand(host, interaction, decision, commandId),
+  );
   assert.equal(receipt.status, "completed", JSON.stringify(receipt));
   await host.whenEventsSettled();
 }
@@ -537,7 +643,6 @@ function waitForInteraction(
   );
 }
 
-
 function waitForTurn(
   host: SessionHost,
   turnId: string,
@@ -563,16 +668,23 @@ function waitForEvent<T extends AgentEvent>(
 }
 
 function lastAssistant(host: SessionHost, text: string): boolean {
-  return host.eventsSince(0).some(
-    (event) => event.kind === "message.finished" && event.role === "assistant" && event.text === text,
-  );
+  return host
+    .eventsSince(0)
+    .some(
+      (event) =>
+        event.kind === "message.finished" && event.role === "assistant" && event.text === text,
+    );
 }
 
 async function assertMissing(path: string): Promise<void> {
   await assert.rejects(() => readFile(path), { code: "ENOENT" });
 }
 
-async function createStraceWrapper(root: string, executable: string, traceBase: string): Promise<string> {
+async function createStraceWrapper(
+  root: string,
+  executable: string,
+  traceBase: string,
+): Promise<string> {
   const wrapperPath = join(root, "claude-strace-wrapper.sh");
   const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
   const contents = `#!/bin/sh\nexec /usr/bin/strace -ff -qq -e trace=connect -o ${quote(traceBase)} ${quote(executable)} "$@"\n`;
@@ -591,12 +703,18 @@ async function verifyLoopbackEgress(traceBase: string): Promise<void> {
   const ipv4 = [...text.matchAll(/sa_family=AF_INET[^}]*sin_addr=inet_addr\("([^"]+)"\)/g)].map(
     (match) => match[1]!,
   );
-  const ipv6 = [...text.matchAll(/sa_family=AF_INET6[^}]*sin6_addr=inet_pton\(AF_INET6, "([^"]+)"\)/g)].map(
-    (match) => match[1]!,
-  );
+  const ipv6 = [
+    ...text.matchAll(/sa_family=AF_INET6[^}]*sin6_addr=inet_pton\(AF_INET6, "([^"]+)"\)/g),
+  ].map((match) => match[1]!);
   assert.ok(ipv4.length > 0, "the pinned runtime must connect to the loopback Gateway");
-  assert.ok(ipv4.every((address) => address.startsWith("127.")), JSON.stringify(ipv4));
-  assert.ok(ipv6.every((address) => address === "::1"), JSON.stringify(ipv6));
+  assert.ok(
+    ipv4.every((address) => address.startsWith("127.")),
+    JSON.stringify(ipv4),
+  );
+  assert.ok(
+    ipv6.every((address) => address === "::1"),
+    JSON.stringify(ipv6),
+  );
 }
 
 function messageText(content: unknown): string {

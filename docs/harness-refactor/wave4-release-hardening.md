@@ -4,12 +4,12 @@
 
 ## 版本锁定
 
-| 组件 | 锁定值 | 位置 |
-| --- | --- | --- |
-| Model Gateway | `0.3.0` | `MODEL_GATEWAY_VERSION` |
-| Codex adapter / 假 CLI 探针 | `0.157.1`（探针输出 `codex-cli 0.157.1`） | `CodexHarnessAdapter.version`、`PINNED_CODEX_CLI_VERSION` |
-| Pi SDK 包与 Pi adapter | `0.87.1` | `@earendil-works/pi-ai`、`@earendil-works/pi-coding-agent`、`PiHarnessAdapter.version` |
-| Claude Code adapter | `0.1.0` | `CLAUDE_CODE_ADAPTER_VERSION` |
+| 组件                        | 锁定值                                    | 位置                                                                                   |
+| --------------------------- | ----------------------------------------- | -------------------------------------------------------------------------------------- |
+| Model Gateway               | `0.3.0`                                   | `MODEL_GATEWAY_VERSION`                                                                |
+| Codex adapter / 假 CLI 探针 | `0.157.1`（探针输出 `codex-cli 0.157.1`） | `CodexHarnessAdapter.version`、`PINNED_CODEX_CLI_VERSION`                              |
+| Pi SDK 包与 Pi adapter      | `0.87.1`                                  | `@earendil-works/pi-ai`、`@earendil-works/pi-coding-agent`、`PiHarnessAdapter.version` |
+| Claude Code adapter         | `0.1.0`                                   | `CLAUDE_CODE_ADAPTER_VERSION`                                                          |
 
 升级这些版本时要同时改探针、adapter `version` 和对应测试里的 `adapterVersion`。只改其中一处会在规划阶段被拒绝。
 
