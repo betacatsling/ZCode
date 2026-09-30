@@ -1,9 +1,29 @@
 import type { Model } from "@zcode/contracts";
 import type { ModelSelection } from "@zcode/shared/model-selection";
-import type { BindingPlan, SessionSpec } from "@zcode/shared/agent-host";
+import type { AgentErrorCode, BindingPlan, SessionSpec } from "@zcode/shared/agent-host";
 import type { ClaudeFakeModelCompatibilityEvidence } from "./claudeCapabilities.js";
 
 // Binding checks for ClaudeHarnessAdapter (moved verbatim from the adapter class).
+
+const PLAN_EVIDENCE_REFUSAL =
+  "Claude session requires exact pinned FakeModel Messages compatibility evidence";
+
+/**
+ * A Claude plan or Gateway grant does not match the session's captured binding. Not a catalog
+ * reconfigure (ModelBindingReconfigureRequiredError): the selection still exists, so the UI must
+ * not prompt for a Provider. `code` matches the receipt reasonCode vocabulary.
+ */
+export class ClaudeBindingMismatchError extends Error {
+  readonly code: Extract<AgentErrorCode, "invalid-binding"> = "invalid-binding";
+
+  constructor(
+    readonly mismatch: "plan-evidence" | "grant",
+    message: string,
+  ) {
+    super(message);
+    this.name = "ClaudeBindingMismatchError";
+  }
+}
 
 /** Adapter state read by validateClaudePlan; evaluated at call time by the adapter. */
 export interface ClaudePlanValidationInput {
@@ -24,9 +44,10 @@ export function validateClaudePlan(
 ): void {
   const selection = plan.effective;
   if (!selection) throw new Error("Claude Model binding is missing its effective selection");
+  // Shutdown is adapter state, not a binding mismatch: same message, untyped.
+  if (input.shuttingDown) throw new Error(PLAN_EVIDENCE_REFUSAL);
   const evidence = input.fakeEvidence?.(selection);
   if (
-    input.shuttingDown ||
     spec.harness.id !== input.adapterId ||
     spec.harness.adapterVersion !== input.adapterVersion ||
     plan.hostSessionId !== spec.hostSessionId ||
@@ -42,11 +63,11 @@ export function validateClaudePlan(
     evidence.providerId !== selection.providerId ||
     evidence.modelId !== selection.modelId ||
     plan.support.constraints?.compatibilityEvidence !== "fake-model-fixture" ||
-    plan.support.constraints.fixtureId !== evidence.fixtureId
+    plan.support.constraints.fixtureId !== evidence.fixtureId ||
+    plan.support.constraints.fixtureProviderId !== selection.providerId ||
+    plan.support.constraints.fixtureModelId !== selection.modelId
   ) {
-    throw new Error(
-      "Claude session requires exact pinned FakeModel Messages compatibility evidence",
-    );
+    throw new ClaudeBindingMismatchError("plan-evidence", PLAN_EVIDENCE_REFUSAL);
   }
 }
 
