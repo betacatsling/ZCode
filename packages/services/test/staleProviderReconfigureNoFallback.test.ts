@@ -229,6 +229,22 @@ function send(target: AgentHostTargetService, spec: SessionSpec, turn: string, t
   });
 }
 
+/** Typed attach/create refusal: same invalid-binding code as the send receipt, never a bare Error. */
+function assertReconfigureRequired(providerId: string, modelId: string) {
+  return (error: unknown) => {
+    assert.ok(error instanceof Error);
+    const typed = error as Error & Record<string, unknown>;
+    assert.equal(typed.name, "ModelBindingReconfigureRequiredError");
+    assert.equal(typed.code, "invalid-binding");
+    assert.equal(typed.reason, "provider-not-found");
+    assert.equal(typed.action, "reconfigure-provider");
+    assert.equal(typed.providerId, providerId);
+    assert.equal(typed.modelId, modelId);
+    assert.equal(typed.message, "provider-not-found");
+    return true;
+  };
+}
+
 test(
   "removed Provider: new turn, reattach and new session require reconfiguration; no fallback",
   { timeout: 60_000 },
@@ -272,13 +288,19 @@ test(
       // Resume/continue after restart: attach refuses to replan onto anything else.
       await target.close();
       target = env.makeTarget();
-      await assert.rejects(target.attach(spec), /^Error: provider-not-found$/);
+      await assert.rejects(
+        target.attach(spec),
+        assertReconfigureRequired(env.staleId, "stale-model"),
+      );
       // Creating a session with the same stale binding is refused and leaves no manifest.
       const staleCreate = env.specFor("new-session-with-stale-binding", {
         providerId: env.staleId,
         modelId: "stale-model",
       });
-      await assert.rejects(target.create(staleCreate), /^Error: provider-not-found$/);
+      await assert.rejects(
+        target.create(staleCreate),
+        assertReconfigureRequired(env.staleId, "stale-model"),
+      );
       assert.deepEqual(
         await target.getWorkspaceSessionCapability({
           harnessId: "pi",
@@ -379,11 +401,32 @@ test(
         ),
         true,
       );
+      // Typed, key-free reconfigure signal on the session stream (not a generic pi-model-* code).
+      const expectedFailure = {
+        reason: "auth_failed",
+        action: "reconfigure-provider",
+        providerId: env.staleId,
+        modelId: "stale-model",
+        statusCode: 401,
+        retryable: false,
+      };
+      const typedErrors = afterExpiry.filter(
+        (event): event is Extract<AgentEvent, { kind: "session.error" }> =>
+          event.kind === "session.error",
+      );
+      assert.equal(typedErrors.length, 1);
+      assert.equal(typedErrors[0]?.code, "provider-reconfigure-required");
+      assert.deepEqual(
+        (typedErrors[0] as Record<string, unknown> | undefined)?.failure,
+        expectedFailure,
+      );
+      assert.equal(typedErrors[0]?.message.includes(env.staleId), true);
+      assert.equal(typedErrors[0]?.message.includes("401"), true);
+      assert.equal(JSON.stringify(afterExpiry).includes("stale-key"), false);
+      assert.equal(JSON.stringify(afterExpiry).includes("127.0.0.1"), false);
       assert.equal(
-        afterExpiry.some(
-          (event) => event.kind === "session.error" && event.code.startsWith("pi-model-"),
-        ),
-        true,
+        (await target.snapshot(spec)).control.lastError?.code,
+        "provider-reconfigure-required",
       );
       const failures = env.statuses.filter(
         (event): event is Extract<ModelNetworkStatusEvent, { type: "model_request_failed" }> =>
@@ -403,7 +446,15 @@ test(
       await target.attach(spec);
       assert.equal((await send(target, spec, "turn-3", "resume after expiry")).status, "accepted");
       await target.waitForIdle(spec);
-      assert.deepEqual(assistantTexts(await target.eventsSince(spec, 0), "turn-3"), []);
+      const afterResume = await target.eventsSince(spec, 0);
+      assert.deepEqual(assistantTexts(afterResume, "turn-3"), []);
+      const resumeErrors = afterResume.filter((event) => event.kind === "session.error");
+      assert.equal(resumeErrors.length, 2);
+      assert.deepEqual(
+        (resumeErrors[1] as Record<string, unknown> | undefined)?.failure,
+        expectedFailure,
+      );
+      assert.equal(JSON.stringify(afterResume).includes("stale-key"), false);
       assert.deepEqual(fakes.requests, [
         { route: "stale", authorization: "Bearer stale-key-v1" },
         { route: "stale", authorization: "Bearer stale-key-v1" },
@@ -476,8 +527,4 @@ test(
       await rm(root, { recursive: true, force: true });
     }
   },
-);
-
-test.todo(
-  "expired key (401) on an agent-host session surfaces a typed reconfigure-required session status (not only pi-model-executor-stream)",
 );
