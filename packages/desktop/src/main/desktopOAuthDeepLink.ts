@@ -3,10 +3,7 @@ import { statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { app, BrowserWindow, dialog } from "electron";
 import type { WebContents } from "electron";
-import {
-  type Locale,
-  PlatformChannels,
-} from "@zcode/shared";
+import { type Locale, PlatformChannels } from "@zcode/shared";
 import {
   extractWorkspaceOpenPath,
   extractShareImportCode,

@@ -16,10 +16,7 @@ import {
   type TelemetryEventPayload,
 } from "@zcode/shared";
 import { dispatchTaskNotification } from "./desktopNotifications.js";
-import {
-  clearOAuthRoutesForWindow,
-  deliverPendingDeepLink,
-} from "./desktopOAuthDeepLink.js";
+import { clearOAuthRoutesForWindow, deliverPendingDeepLink } from "./desktopOAuthDeepLink.js";
 import {
   dispatchFinalArmsCustomEvent,
   enableSharedFinalArmsCustomEventE2EController,
