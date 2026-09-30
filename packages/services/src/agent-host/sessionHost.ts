@@ -715,8 +715,14 @@ export class SessionHost {
       catalog,
     });
     if (plan.support.support !== "supported") {
+      // 会话自身绑定的 Provider/模型已不在目录中（被删除等）：需要用户重新配置，
+      // 不能与 busy / 未认证 harness 共用 unsupported，也绝不换成其他模型。
+      const selection =
+        this.spec.modelBinding.kind === "host-managed"
+          ? this.spec.modelBinding.selection
+          : undefined;
       throw new BindingPreparationFailure(
-        "unsupported",
+        selection && !catalog.validateSelection(selection).ok ? "invalid-binding" : "unsupported",
         plan.support.reason ?? "model binding is not supported for this turn",
       );
     }
