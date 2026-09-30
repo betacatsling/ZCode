@@ -1,5 +1,5 @@
 import { Output, jsonSchema } from "ai";
-import type { ModelToolChoice } from "@zcode/contracts";
+import type { Logger, ModelToolChoice } from "@zcode/contracts";
 import type { EnvRecord } from "./model-execution.js";
 import { toAiSdkMessages } from "./transform.js";
 import { toAiSdkTools } from "./tool-transform.js";
@@ -10,6 +10,7 @@ import type {
   ResolvedAiSdkModel,
 } from "./runner-runtime.js";
 import { createModelRequestAttributionHeaders, type ModelStatusContext } from "./runner-status.js";
+import { createRedactedStreamErrorLogger } from "./runner-stream-error-log.js";
 
 type ExperimentalIncludeWithResponseBody = {
   requestBody?: boolean;
@@ -103,6 +104,7 @@ export function createStreamTextOptions(input: {
   anthropicMetadataUserId?: string;
   env?: EnvRecord;
   includeModelIO: boolean;
+  logger?: Logger;
   request: AiSdkModelTextRequest;
   resolved: ResolvedAiSdkModel;
   statusContext: ModelStatusContext;
@@ -153,6 +155,8 @@ export function createStreamTextOptions(input: {
     includeRawChunks: input.request.preserveProviderStreamBoundaries ? true : undefined,
     // zcode-plan 的业务码可能只在流式响应尾部 body 里，需保留 responseBody 供错误分类读取。
     experimental_include: createStreamExperimentalInclude(input),
+    // The SDK default console.errors the raw provider error, response body included.
+    onError: createRedactedStreamErrorLogger(input.statusContext, input.logger),
   }) as AiSdkStreamTextOptions;
 }
 
