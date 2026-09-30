@@ -1,0 +1,118 @@
+# Gated real-CLI integration for the Claude harness plus a repeat run of the M3 gap 6
+# offline/idle network test. Linux only: the integration test wraps Claude Code in
+# `strace -e trace=connect` and asserts every connect() goes to loopback.
+# No API key or Claude account is used; the model is the loopback FakeModel fixture.
+name: Claude harness integration
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 19 * * *" # 03:17 Asia/Shanghai
+  pull_request:
+    paths:
+      - ".github/workflows/claude-harness-integration.yml"
+      - "packages/services/src/agent-adapters/claude/**"
+      - "packages/services/src/model-gateway/**"
+      - "packages/services/src/agent-host/**"
+      - "packages/services/test/claudeHarnessAdapter.integration.test.ts"
+      - "packages/services/test/fixtures/claudeHarnessFakeModel.ts"
+      - "packages/services/test/m3Gap6OfflineStartupIdleNetwork.test.ts"
+      - "packages/services/test/fixtures/offlineNetworkGuard.ts"
+      - "packages/provider-node/src/**"
+      - "packages/services/src/session/offPeak*.ts"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: claude-harness-integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  claude-integration:
+    name: Claude Code (pinned) integration + gap 6 repeat
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4 # version comes from package.json "packageManager"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.14.0"
+          cache: pnpm
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build CLI workspace deps (@zcode/contracts, @zcode/adapters)
+        run: pnpm build:cli-deps
+
+      - name: Install strace
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends strace
+          test -x /usr/bin/strace
+
+      - name: Install pinned Claude Code CLI
+        run: |
+          set -euo pipefail
+          # Single source of truth for the pin: PINNED_CLAUDE_CLI_VERSION in claudeExecutable.ts.
+          version="$(sed -nE 's/^export const PINNED_CLAUDE_CLI_VERSION = "([0-9]+\.[0-9]+\.[0-9]+)";$/\1/p' \
+            packages/services/src/agent-adapters/claude/claudeExecutable.ts)"
+          if [ -z "$version" ]; then
+            echo "::error::could not read PINNED_CLAUDE_CLI_VERSION from claudeExecutable.ts"
+            exit 1
+          fi
+          echo "Pinned Claude Code CLI: $version"
+          prefix="$RUNNER_TEMP/claude-cli"
+          npm install --prefix "$prefix" --no-save --no-audit --no-fund \
+            "@anthropic-ai/claude-code@${version}"
+          executable="$prefix/node_modules/.bin/claude"
+          reported="$(HOME="$(mktemp -d)" "$executable" --version)"
+          echo "$reported"
+          case "$reported" in
+            "$version "*|"$version") ;;
+            *) echo "::error::installed CLI reports '$reported', expected $version"; exit 1 ;;
+          esac
+          echo "ZCODE_CLAUDE_EXECUTABLE=$executable" >> "$GITHUB_ENV"
+
+      - name: Claude harness integration (real CLI, loopback FakeModel)
+        working-directory: packages/services
+        env:
+          ZCODE_CLAUDE_ADAPTER_TEST: "1"
+        run: |
+          set -o pipefail
+          node --import tsx --test test/claudeHarnessAdapter.integration.test.ts \
+            2>&1 | tee "$RUNNER_TEMP/claude-integration.log"
+          # The test skips itself when strace or the gate is missing; a skip must not pass CI.
+          grep -Eq '^ℹ pass 1$' "$RUNNER_TEMP/claude-integration.log"
+          grep -Eq '^ℹ skipped 0$' "$RUNNER_TEMP/claude-integration.log"
+
+      - name: Repeat M3 gap 6 offline/idle network test (10 runs, stop on first failure)
+        working-directory: packages/services
+        run: |
+          set -u
+          mkdir -p "$RUNNER_TEMP/gap6"
+          for i in $(seq 1 10); do
+            log="$RUNNER_TEMP/gap6/run-$i.log"
+            if ! node --import tsx --test test/m3Gap6OfflineStartupIdleNetwork.test.ts > "$log" 2>&1; then
+              echo "::error::m3Gap6OfflineStartupIdleNetwork failed on run $i of 10"
+              cat "$log"
+              exit 1
+            fi
+            echo "run $i: $(grep -E '^ℹ (pass|fail) ' "$log" | tr '\n' ' ')"
+          done
+
+      # The integration test removes its own strace traces in t.after and keeps one JSON summary
+      # under /tmp/zcode-gpt6-claude-messages; nothing here depends on trace files. Only that
+      # summary is uploaded (failing gap 6 logs are printed in the step output above).
+      - name: Upload Claude integration JSON summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: claude-harness-integration-summary
+          path: /tmp/zcode-gpt6-claude-messages/claude-*-host-integration-*.json
+          if-no-files-found: ignore
+          retention-days: 14
