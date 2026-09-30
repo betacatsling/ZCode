@@ -19,17 +19,12 @@ function walkFiles(dir: string, acc: string[] = []): string[] {
 }
 
 test("CodingPlanEmbeddedWebviewDialog.tsx is removed", () => {
-  assert.equal(
-    existsSync(path.join(settingsRoot, "CodingPlanEmbeddedWebviewDialog.tsx")),
-    false,
-  );
+  assert.equal(existsSync(path.join(settingsRoot, "CodingPlanEmbeddedWebviewDialog.tsx")), false);
 });
 
 test("codingPlanEmbeddedWebview.ts helpers are removed", () => {
   assert.equal(
-    existsSync(
-      path.join(settingsRoot, "model-provider-section/codingPlanEmbeddedWebview.ts"),
-    ),
+    existsSync(path.join(settingsRoot, "model-provider-section/codingPlanEmbeddedWebview.ts")),
     false,
   );
 });
@@ -38,8 +33,7 @@ test("no remaining imports of CodingPlanEmbeddedWebviewDialog or codingPlanEmbed
   const hits = walkFiles(srcRoot).filter((file) => {
     const text = readFileSync(file, "utf8");
     return (
-      text.includes("CodingPlanEmbeddedWebviewDialog") ||
-      text.includes("codingPlanEmbeddedWebview")
+      text.includes("CodingPlanEmbeddedWebviewDialog") || text.includes("codingPlanEmbeddedWebview")
     );
   });
   assert.deepEqual(hits, []);

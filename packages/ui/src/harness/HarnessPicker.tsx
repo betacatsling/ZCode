@@ -51,7 +51,8 @@ export function HarnessPicker({
               />
             ) : null}
             <span className="truncate">
-              {selected?.manifest.name ?? intl.formatMessage({ id: "projectSidebar.chooseHarness" })}
+              {selected?.manifest.name ??
+                intl.formatMessage({ id: "projectSidebar.chooseHarness" })}
             </span>
           </span>
           <ChevronDownIcon aria-hidden="true" className="size-4 shrink-0" />

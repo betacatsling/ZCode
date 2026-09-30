@@ -127,8 +127,7 @@ export function createOrcaSidebarViewStore(
     setWorkspaceDraft: (workspaceDraft) => set({ workspaceDraft }),
     openDiscovered: (discoveredProjectId) => set({ discoveredProjectId }),
     closeDiscovered: () => set({ discoveredProjectId: null }),
-    openAgentDraft: (agentWorkspaceId) =>
-      set({ agentWorkspaceId, agentDraft: EMPTY_AGENT_DRAFT }),
+    openAgentDraft: (agentWorkspaceId) => set({ agentWorkspaceId, agentDraft: EMPTY_AGENT_DRAFT }),
     closeAgentDraft: () => set({ agentWorkspaceId: null, agentDraft: EMPTY_AGENT_DRAFT }),
     setAgentDraft: (agentDraft) => set({ agentDraft }),
   }));

@@ -9,7 +9,10 @@ import type { TargetServiceSource } from "./targetRefresh.js";
 import { projectSidebarSessionViewKey } from "./viewKeys.js";
 
 export type ProjectSidebarHistoryRoute =
-  | { readonly status: "native"; readonly action: Extract<ProjectSidebarSessionAction, { ownerKind: "native-v4" }> }
+  | {
+      readonly status: "native";
+      readonly action: Extract<ProjectSidebarSessionAction, { ownerKind: "native-v4" }>;
+    }
   | {
       readonly status: "agent-host";
       readonly selection: {
@@ -30,7 +33,9 @@ function workspaceKey(identity: string | undefined, path: string): string {
 function matchingOwnerFact(
   owner: WorkspaceSessionOwnerLocator,
   record: SessionHierarchyRecord,
-  association: NonNullable<SessionHierarchyRecord["ownerAssociation"]> | NonNullable<SessionHierarchyRecord["ownerHistoryAssociation"]>,
+  association:
+    | NonNullable<SessionHierarchyRecord["ownerAssociation"]>
+    | NonNullable<SessionHierarchyRecord["ownerHistoryAssociation"]>,
   targetId: string,
 ): boolean {
   return (
@@ -51,7 +56,10 @@ export async function createProjectSidebarWorkspaceAgent(params: {
   target: ProjectSidebarTargetOption;
   workspaceId: string;
   worktreeGeneration: string;
-  request: Pick<WorkspaceSessionCreateRequest, "requestId" | "harnessId" | "modelBinding" | "title">;
+  request: Pick<
+    WorkspaceSessionCreateRequest,
+    "requestId" | "harnessId" | "modelBinding" | "title"
+  >;
   source: TargetServiceSource;
   isCurrentSource(source: TargetServiceSource): boolean;
   currentFreshness(targetId: string): "live" | "stale" | "offline" | "unknown" | undefined;
@@ -116,10 +124,7 @@ export async function createProjectSidebarWorkspaceAgent(params: {
     modelBinding: request.modelBinding,
   });
   ensureCurrent();
-  if (
-    capability.targetId !== target.targetId ||
-    capability.report.support !== "supported"
-  ) {
+  if (capability.targetId !== target.targetId || capability.report.support !== "supported") {
     throw new Error("project-sidebar-workspace-session-capability-unavailable");
   }
 
@@ -193,10 +198,7 @@ export async function createProjectSidebarWorkspaceAgent(params: {
   ) {
     throw new Error("project-sidebar-created-owner-path-mismatch");
   }
-  if (
-    action.ownerKind === "native-v4" &&
-    action.nativeSessionId !== created.locator.sessionId
-  ) {
+  if (action.ownerKind === "native-v4" && action.nativeSessionId !== created.locator.sessionId) {
     throw new Error("project-sidebar-created-owner-id-mismatch");
   }
   if (
@@ -204,8 +206,7 @@ export async function createProjectSidebarWorkspaceAgent(params: {
     (!action.ownerLocator ||
       action.ownerLocator.hierarchySessionId !== hierarchyRecord.hierarchySessionId ||
       action.ownerLocator.sessionSpec.hostSessionId !== created.locator.sessionId ||
-      action.ownerLocator.sessionSpec.execution.worktreeGeneration !==
-        params.worktreeGeneration)
+      action.ownerLocator.sessionSpec.execution.worktreeGeneration !== params.worktreeGeneration)
   ) {
     throw new Error("project-sidebar-created-owner-locator-unavailable");
   }

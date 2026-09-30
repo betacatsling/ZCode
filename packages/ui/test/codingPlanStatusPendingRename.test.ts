@@ -26,10 +26,7 @@ test("codingPlanStatusPanelViewState uses statusPending and drops loginPending",
 test("Detail wires statusPending (not loginPending) into resolveCodingPlanStatusPanelViewState", () => {
   assert.equal(detail.includes("loginPending"), false);
   assert.equal(detail.includes("statusPending"), true);
-  assert.match(
-    detail,
-    /resolveCodingPlanStatusPanelViewState\(\{[\s\S]*?statusPending\s*:/,
-  );
+  assert.match(detail, /resolveCodingPlanStatusPanelViewState\(\{[\s\S]*?statusPending\s*:/);
 });
 
 test("Detail uses codingPlanStatusGatePending; keeps productPurchaseRemoved and entitlement", () => {

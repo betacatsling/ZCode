@@ -43,8 +43,7 @@ export function HarnessIcon({
     return cached && assetId ? { assetId, source: cached } : null;
   });
   const source = assetId
-    ? (harnessIconCache.get(assetId) ??
-      (loaded?.assetId === assetId ? loaded.source : undefined))
+    ? (harnessIconCache.get(assetId) ?? (loaded?.assetId === assetId ? loaded.source : undefined))
     : undefined;
 
   useEffect(() => {

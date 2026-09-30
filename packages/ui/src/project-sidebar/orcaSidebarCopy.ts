@@ -138,7 +138,8 @@ export function orcaSidebarCopy(locale: string): OrcaSidebarCopy {
     cancel: "Cancel",
     createWorkspace: "Add workspace",
     createAgent: "Create Agent",
-    sharedHint: "Agents in this workspace share file changes. New Agent does not create a worktree.",
+    sharedHint:
+      "Agents in this workspace share file changes. New Agent does not create a worktree.",
     target: "Target",
     workspaceName: "Workspace name",
     baseRef: "Base ref",

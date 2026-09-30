@@ -41,9 +41,13 @@ export function DiscoveredWorktreesDialog({
             <span className="min-w-0 flex-1 truncate font-mono text-ui-xs text-foreground-subtle">
               {candidate.path}
             </span>
-            <span className="shrink-0 text-ui-xs text-foreground-subtlest">{candidate.headLabel}</span>
+            <span className="shrink-0 text-ui-xs text-foreground-subtlest">
+              {candidate.headLabel}
+            </span>
             {candidate.isMainWorktree ? (
-              <span className="shrink-0 text-ui-xs text-foreground-subtle">{copy.mainCheckout}</span>
+              <span className="shrink-0 text-ui-xs text-foreground-subtle">
+                {copy.mainCheckout}
+              </span>
             ) : null}
             <Button
               type="button"

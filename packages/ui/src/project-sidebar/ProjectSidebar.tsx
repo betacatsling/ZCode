@@ -58,7 +58,10 @@ export function ProjectSidebar({
   onSelectSession: (workspace: SidebarWorkspaceNode, row: SidebarSessionRow) => void;
   onSelectExternalSession?: (workspace: SidebarWorkspaceNode, row: SidebarSessionRow) => void;
   onCreateAgent: ProjectSidebarAgentCreateHandler;
-  onOpenHistoryRecord: (targetId: string, record: import("@zcode/shared/agent-host").SessionHierarchyRecord) => Promise<boolean>;
+  onOpenHistoryRecord: (
+    targetId: string,
+    record: import("@zcode/shared/agent-host").SessionHierarchyRecord,
+  ) => Promise<boolean>;
   onAddProject: (
     target: ProjectSidebarTargetOption,
     name: string,

@@ -154,110 +154,110 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-max min-w-50" forceMount>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>
-                <Globe className="size-4" />
-                {intl.formatMessage({ id: "settings.locale" })}
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent className="w-48">
-                <DropdownMenuRadioGroup value={localeMenuValue} onValueChange={onLocaleChange}>
-                  <DropdownMenuRadioItem value="system">
-                    {intl.formatMessage({
-                      id: "sidebar.settings.systemDefault",
-                    })}
-                  </DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="en-US">
-                    {intl.formatMessage({
-                      id: "sidebar.settings.locale.en-US",
-                    })}
-                  </DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="zh-CN">
-                    {intl.formatMessage({
-                      id: "sidebar.settings.locale.zh-CN",
-                    })}
-                  </DropdownMenuRadioItem>
-                </DropdownMenuRadioGroup>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>
-                <Palette className="size-4" />
-                {intl.formatMessage({ id: "settings.themeMode" })}
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent className="w-48">
-                <DropdownMenuRadioGroup value={theme} onValueChange={onThemeChange}>
-                  <DropdownMenuRadioItem value="system">
-                    {intl.formatMessage({
-                      id: "sidebar.settings.systemDefault",
-                    })}
-                  </DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="zai-dark">
-                    {intl.formatMessage({
-                      id: "sidebar.settings.theme.zai-dark",
-                    })}
-                  </DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="zai-light">
-                    {intl.formatMessage({
-                      id: "sidebar.settings.theme.zai-light",
-                    })}
-                  </DropdownMenuRadioItem>
-                </DropdownMenuRadioGroup>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>
-                <PencilRuler className="size-4" />
-                {intl.formatMessage({ id: "settings.interfaceMode" })}
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent className="w-48">
-                <DropdownMenuRadioGroup
-                  value={interfaceMode}
-                  onValueChange={(value) => setInterfaceMode(normalizeInterfaceMode(value))}
-                >
-                  <DropdownMenuRadioItem value="coding">
-                    {intl.formatMessage({ id: "settings.interfaceMode.coding" })}
-                  </DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="office">
-                    {intl.formatMessage({ id: "settings.interfaceMode.office" })}
-                  </DropdownMenuRadioItem>
-                </DropdownMenuRadioGroup>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            {/* 偏好菜单保留语言、主题、界面模式和桌面缩放。登录、退出和套餐购买已从这里移除。 */}
-            {isDesktop ? (
               <DropdownMenuSub>
                 <DropdownMenuSubTrigger>
-                  <ZoomIn className="size-4" />
-                  {intl.formatMessage({ id: "sidebar.settings.interfaceZoom" })}
+                  <Globe className="size-4" />
+                  {intl.formatMessage({ id: "settings.locale" })}
                 </DropdownMenuSubTrigger>
-                <DropdownMenuSubContent className="w-50">
-                  <DropdownMenuItem
-                    disabled={!canZoomIn}
-                    onSelect={() => runDesktopZoomCommand(DesktopCommandIds.ZoomIn)}
-                  >
-                    <ZoomIn className="size-4" />
-                    {intl.formatMessage({ id: "titleBar.menu.view.zoomIn" })}
-                    <DropdownMenuShortcut>{zoomInShortcutLabel}</DropdownMenuShortcut>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    disabled={!canZoomOut}
-                    onSelect={() => runDesktopZoomCommand(DesktopCommandIds.ZoomOut)}
-                  >
-                    <ZoomOut className="size-4" />
-                    {intl.formatMessage({ id: "titleBar.menu.view.zoomOut" })}
-                    <DropdownMenuShortcut>{zoomOutShortcutLabel}</DropdownMenuShortcut>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    disabled={!canResetDesktopZoom}
-                    onSelect={() => runDesktopZoomCommand(DesktopCommandIds.ResetZoom)}
-                  >
-                    <Maximize className="size-4" />
-                    {intl.formatMessage({ id: "titleBar.menu.view.actualSize" })}
-                    <DropdownMenuShortcut>{resetZoomShortcutLabel}</DropdownMenuShortcut>
-                  </DropdownMenuItem>
+                <DropdownMenuSubContent className="w-48">
+                  <DropdownMenuRadioGroup value={localeMenuValue} onValueChange={onLocaleChange}>
+                    <DropdownMenuRadioItem value="system">
+                      {intl.formatMessage({
+                        id: "sidebar.settings.systemDefault",
+                      })}
+                    </DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem value="en-US">
+                      {intl.formatMessage({
+                        id: "sidebar.settings.locale.en-US",
+                      })}
+                    </DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem value="zh-CN">
+                      {intl.formatMessage({
+                        id: "sidebar.settings.locale.zh-CN",
+                      })}
+                    </DropdownMenuRadioItem>
+                  </DropdownMenuRadioGroup>
                 </DropdownMenuSubContent>
               </DropdownMenuSub>
-            ) : null}
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger>
+                  <Palette className="size-4" />
+                  {intl.formatMessage({ id: "settings.themeMode" })}
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent className="w-48">
+                  <DropdownMenuRadioGroup value={theme} onValueChange={onThemeChange}>
+                    <DropdownMenuRadioItem value="system">
+                      {intl.formatMessage({
+                        id: "sidebar.settings.systemDefault",
+                      })}
+                    </DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem value="zai-dark">
+                      {intl.formatMessage({
+                        id: "sidebar.settings.theme.zai-dark",
+                      })}
+                    </DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem value="zai-light">
+                      {intl.formatMessage({
+                        id: "sidebar.settings.theme.zai-light",
+                      })}
+                    </DropdownMenuRadioItem>
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger>
+                  <PencilRuler className="size-4" />
+                  {intl.formatMessage({ id: "settings.interfaceMode" })}
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent className="w-48">
+                  <DropdownMenuRadioGroup
+                    value={interfaceMode}
+                    onValueChange={(value) => setInterfaceMode(normalizeInterfaceMode(value))}
+                  >
+                    <DropdownMenuRadioItem value="coding">
+                      {intl.formatMessage({ id: "settings.interfaceMode.coding" })}
+                    </DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem value="office">
+                      {intl.formatMessage({ id: "settings.interfaceMode.office" })}
+                    </DropdownMenuRadioItem>
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+              {/* 偏好菜单保留语言、主题、界面模式和桌面缩放。登录、退出和套餐购买已从这里移除。 */}
+              {isDesktop ? (
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>
+                    <ZoomIn className="size-4" />
+                    {intl.formatMessage({ id: "sidebar.settings.interfaceZoom" })}
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent className="w-50">
+                    <DropdownMenuItem
+                      disabled={!canZoomIn}
+                      onSelect={() => runDesktopZoomCommand(DesktopCommandIds.ZoomIn)}
+                    >
+                      <ZoomIn className="size-4" />
+                      {intl.formatMessage({ id: "titleBar.menu.view.zoomIn" })}
+                      <DropdownMenuShortcut>{zoomInShortcutLabel}</DropdownMenuShortcut>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      disabled={!canZoomOut}
+                      onSelect={() => runDesktopZoomCommand(DesktopCommandIds.ZoomOut)}
+                    >
+                      <ZoomOut className="size-4" />
+                      {intl.formatMessage({ id: "titleBar.menu.view.zoomOut" })}
+                      <DropdownMenuShortcut>{zoomOutShortcutLabel}</DropdownMenuShortcut>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      disabled={!canResetDesktopZoom}
+                      onSelect={() => runDesktopZoomCommand(DesktopCommandIds.ResetZoom)}
+                    >
+                      <Maximize className="size-4" />
+                      {intl.formatMessage({ id: "titleBar.menu.view.actualSize" })}
+                      <DropdownMenuShortcut>{resetZoomShortcutLabel}</DropdownMenuShortcut>
+                    </DropdownMenuItem>
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+              ) : null}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
