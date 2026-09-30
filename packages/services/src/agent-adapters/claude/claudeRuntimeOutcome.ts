@@ -75,7 +75,8 @@ export function markClaudeTurnUnknown(
     turn.started = true;
     runtime.emit("turn.started", { turnId: turn.hostTurnId });
   }
-  runtime.emit("session.error", { code: "execution-unknown", message });
+  // The session.error schema caps message at 1024; an unbounded detail would throw before turn.finished.
+  runtime.emit("session.error", { code: "execution-unknown", message: message.slice(0, 1024) });
   runtime.emit("turn.finished", { turnId: turn.hostTurnId, outcome: "unknown" });
   denyPendingClaudeApprovals(runtime);
   runtime.activeTurn = undefined;
