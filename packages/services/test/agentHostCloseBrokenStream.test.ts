@@ -16,6 +16,8 @@
  * - 强制关闭把 activity sidecar 改写为 "unknown"（best-effort，写失败仍抛 EventStreamFailure），
  *   卸载后的会话不会一直显示损坏前存下的 "idle"。健康 close 不写 sidecar。
  * - sidecar 原子写（临时文件 + rename）失败时删掉自己的临时文件，调用方仍收到原始写/rename 错误。
+ * - adapter run 在强制关闭之后才结束：什么都不写、不抛。关闭时正在写 turn 结算（命令 journal +
+ *   sidecar）的，close() 等它写完再关 journal；close() 落定之后不再有任何写入。
  *
  * 每个可能挂住的等待都用 settle() 限时观察，每个 test 也有 timeout，回归时快速失败而不是挂住 CI。
  */
@@ -957,10 +959,7 @@ test(
 
 test(
   "broken stream: a turn settlement in flight when close() force-closes lands before close() settles, never after",
-  {
-    timeout: TEST_TIMEOUT_MS,
-    todo: "repro: close() does not wait for a turn settlement already writing the journal/sidecar",
-  },
+  { timeout: TEST_TIMEOUT_MS },
   async () => {
     await withRoot("zcode-close-late-settlement-", async (root, worktree) => {
       await collectingUnhandledRejections(async (unhandled) => {

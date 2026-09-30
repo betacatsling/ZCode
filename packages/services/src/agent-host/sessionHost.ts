@@ -102,6 +102,8 @@ export class SessionHost {
   readonly #events: EventJournal;
   readonly #listeners = new Set<(event: AgentEvent) => void>();
   readonly #active = new Set<Promise<void>>();
+  /** Turn-settlement writes in flight (see #settleTurn); never rejects. */
+  readonly #settlements = new Set<Promise<void>>();
   readonly #interactions = new Map<string, string>();
   readonly #unsettledTurns = new Set<string>();
   readonly #preparedTurns = new Map<string, PreparedHostBinding>();
@@ -888,6 +890,8 @@ export class SessionHost {
     const failure = this.#eventError;
     this.#closed = true;
     this.#unsubscribe();
+    // A run that settled before #closed may still be writing; let it land before the journals close.
+    await Promise.all(this.#settlements);
     if (failure) await this.#persistForceClosedActivity(failure);
     await this.#commands.close();
     await this.#events.close();
@@ -942,40 +946,50 @@ export class SessionHost {
 
   #track(commandId: string, turnId: string, run: Promise<void>): void {
     const tracked = run.then(
-      async () => {
-        await this.#eventTail;
-        // Force-closed with a broken stream: the journals are closed and the send stays uncertain.
-        if (this.#closed) return;
-        if (this.#eventError || this.#activeTurn === turnId) {
-          this.#lastKnownStatus = "unknown";
-          await this.#commands.finish(commandId, {
-            commandId,
-            status: "execution-unknown",
-            reasonCode: "execution-unknown",
-          });
-        } else {
-          await this.#commands.finish(commandId, { commandId, status: "completed" });
-          this.#unsettledTurns.delete(turnId);
-        }
-        await this.#persistActivityIndex();
-      },
-      async () => {
-        await this.#eventTail;
-        if (this.#closed) return;
-        this.#lastKnownStatus = "unknown";
-        await this.#commands.finish(commandId, {
-          commandId,
-          status: "execution-unknown",
-          reasonCode: "execution-unknown",
-        });
-        await this.#persistActivityIndex();
-      },
+      () => this.#settleTurn(commandId, turnId, "returned"),
+      () => this.#settleTurn(commandId, turnId, "threw"),
     );
     this.#active.add(tracked);
     void tracked.then(
       () => this.#active.delete(tracked),
       () => this.#active.delete(tracked),
     );
+  }
+  /**
+   * Journal + sidecar writes for a settled adapter run. close() waits for any that are in flight
+   * (bounded local I/O, unlike the run itself), so none lands on closed journals or after close()
+   * settles; one that starts after close() is a no-op. Errors still reach whenIdle() via #active.
+   */
+  #settleTurn(commandId: string, turnId: string, run: "returned" | "threw"): Promise<void> {
+    const settlement = this.#writeTurnSettlement(commandId, turnId, run);
+    const settled = settlement.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.#settlements.add(settled);
+    void settled.then(() => this.#settlements.delete(settled));
+    return settlement;
+  }
+  async #writeTurnSettlement(
+    commandId: string,
+    turnId: string,
+    run: "returned" | "threw",
+  ): Promise<void> {
+    await this.#eventTail;
+    // Force-closed with a broken stream: the journals are closed and the send stays uncertain.
+    if (this.#closed) return;
+    if (run === "threw" || this.#eventError || this.#activeTurn === turnId) {
+      this.#lastKnownStatus = "unknown";
+      await this.#commands.finish(commandId, {
+        commandId,
+        status: "execution-unknown",
+        reasonCode: "execution-unknown",
+      });
+    } else {
+      await this.#commands.finish(commandId, { commandId, status: "completed" });
+      this.#unsettledTurns.delete(turnId);
+    }
+    await this.#persistActivityIndex();
   }
   #isCurrentTurn(command: { runtimeEpoch: string; turnId: string }): boolean {
     return (
