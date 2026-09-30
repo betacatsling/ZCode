@@ -1,4 +1,9 @@
-import type { AgentSessionRecord, Project, RepositoryBinding, WorktreeWorkspace } from "./planTypes.js";
+import type {
+  AgentSessionRecord,
+  Project,
+  RepositoryBinding,
+  WorktreeWorkspace,
+} from "./planTypes.js";
 
 export interface SessionActivityInput {
   sessionId: string;
@@ -71,7 +76,8 @@ const CONNECTION_RANK: Record<ConnectionFreshness, number> = {
 };
 
 function hintFor(activity: SessionActivityInput | undefined): SidebarHint {
-  if (activity?.pendingApproval || activity?.problem || activity?.activity === "waiting") return "attention";
+  if (activity?.pendingApproval || activity?.problem || activity?.activity === "waiting")
+    return "attention";
   if (activity?.unconfirmedError || activity?.lastTurn === "failed") return "error";
   if (
     activity?.activity === "starting" ||
@@ -84,7 +90,10 @@ function hintFor(activity: SessionActivityInput | undefined): SidebarHint {
   return "idle";
 }
 
-function worseConnection(current: ConnectionFreshness, next: ConnectionFreshness): ConnectionFreshness {
+function worseConnection(
+  current: ConnectionFreshness,
+  next: ConnectionFreshness,
+): ConnectionFreshness {
   return CONNECTION_RANK[next] > CONNECTION_RANK[current] ? next : current;
 }
 
@@ -104,7 +113,9 @@ export function buildSidebarIndex(input: SidebarIndexInput): SidebarIndex {
   const archived = new Set(input.archivedSessionIds);
   const removed = new Set(input.removedProjectIds);
   const collapsed = new Set(input.collapsedWorkspaceIds ?? []);
-  const activityById = new Map((input.activities ?? []).map((activity) => [activity.sessionId, activity]));
+  const activityById = new Map(
+    (input.activities ?? []).map((activity) => [activity.sessionId, activity]),
+  );
   const query = input.query?.trim().toLowerCase();
   const projects = input.projects
     .filter((project) => !removed.has(project.id))
@@ -114,7 +125,9 @@ export function buildSidebarIndex(input: SidebarIndexInput): SidebarIndex {
         .map((workspace) => {
           const binding = input.bindings.find((item) => item.id === workspace.repositoryBindingId);
           const sessions = input.sessions.filter((session) => session.workspaceId === workspace.id);
-          const visible = sessions.filter((session) => countedSession(session, archived, activityById.get(session.id)));
+          const visible = sessions.filter((session) =>
+            countedSession(session, archived, activityById.get(session.id)),
+          );
           const matched = query
             ? visible.filter((session) => session.title.toLowerCase().includes(query))
             : visible;
@@ -131,7 +144,10 @@ export function buildSidebarIndex(input: SidebarIndexInput): SidebarIndex {
             const activity = activityById.get(session.id);
             counts[hintFor(activity)] += 1;
             if (activity?.connection) {
-              sessionConnection = worseConnection(sawConnection ? sessionConnection : "live", activity.connection);
+              sessionConnection = worseConnection(
+                sawConnection ? sessionConnection : "live",
+                activity.connection,
+              );
               sawConnection = true;
             }
           }

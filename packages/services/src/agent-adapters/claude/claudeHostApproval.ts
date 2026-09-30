@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { AgentCommand } from "@zcode/shared/agent-host";
 import type { ClaudePreToolUseInput, ClaudeHookDecision } from "./claudeApprovalHookServer.js";
-import { createClaudeDecision, type ClaudePendingApproval, type ClaudeSessionRuntime } from "./claudeRuntime.js";
+import {
+  createClaudeDecision,
+  type ClaudePendingApproval,
+  type ClaudeSessionRuntime,
+} from "./claudeRuntime.js";
 import { upsertToolCall } from "./claudeRuntimeEvents.js";
 
 export async function requestClaudeApproval(
@@ -22,7 +26,9 @@ export async function requestClaudeApproval(
   if (runtime.failed) return deny("failed");
   if (!turn) return deny("no-active-turn");
   if (input.session_id !== runtime.binding.backendSessionId) {
-    return deny(`session-mismatch hook=${input.session_id} bind=${runtime.binding.backendSessionId}`);
+    return deny(
+      `session-mismatch hook=${input.session_id} bind=${runtime.binding.backendSessionId}`,
+    );
   }
   if (turn.requestedToolIds.has(input.tool_use_id)) return deny(`repeat-tool ${input.tool_use_id}`);
 
@@ -42,7 +48,11 @@ export async function requestClaudeApproval(
       `subset toolKeys=${JSON.stringify(isRecord(tool.input) ? Object.keys(tool.input) : tool.input)} hookKeys=${JSON.stringify(isRecord(input.tool_input) ? Object.keys(input.tool_input) : input.tool_input)}`,
     );
   }
-  if (tool.name === "Bash" && isRecord(input.tool_input) && input.tool_input.dangerouslyDisableSandbox === true) {
+  if (
+    tool.name === "Bash" &&
+    isRecord(input.tool_input) &&
+    input.tool_input.dangerouslyDisableSandbox === true
+  ) {
     return deny("dangerouslyDisableSandbox");
   }
 
@@ -128,7 +138,8 @@ function sameJsonSubset(toolName: string, expected: unknown, actual: unknown): b
   const right = actual as Record<string, unknown>;
   if (
     !Object.entries(left).every(
-      ([key, value]) => Object.hasOwn(right, key) && canonicalJson(value) === canonicalJson(right[key]),
+      ([key, value]) =>
+        Object.hasOwn(right, key) && canonicalJson(value) === canonicalJson(right[key]),
     )
   ) {
     return false;
@@ -137,7 +148,10 @@ function sameJsonSubset(toolName: string, expected: unknown, actual: unknown): b
     if (Object.hasOwn(left, key)) return true;
     if (toolName !== "Bash") return false;
     if (key === "description") return typeof value === "string" && value.length <= 16_000;
-    if (key === "timeout") return typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= 300_000;
+    if (key === "timeout")
+      return (
+        typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= 300_000
+      );
     if (key === "run_in_background" || key === "dangerouslyDisableSandbox") return value === false;
     return false;
   });

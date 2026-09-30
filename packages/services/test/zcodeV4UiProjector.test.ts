@@ -42,7 +42,11 @@ const spec: CompatibleSessionSpec = {
   },
 };
 
-function event(sequence: number, kind: AgentEvent["kind"], rest: Record<string, unknown>): AgentEvent {
+function event(
+  sequence: number,
+  kind: AgentEvent["kind"],
+  rest: Record<string, unknown>,
+): AgentEvent {
   return {
     hostSessionId: spec.hostSessionId,
     runtimeEpoch: epoch,
@@ -138,10 +142,7 @@ test("deltas stay contiguous and terminal text replaces streamed text once", () 
   assert.equal(continued.frame.fromSeq, opened.frame.toSeq);
   assert.equal(continued.frame.toSeq, 4);
   assert.equal(continued.frame.payload.kind, "deltas");
-  const applied = applyProjectedConversationFrame(
-    opened.frame.payload.snapshot,
-    continued.frame,
-  );
+  const applied = applyProjectedConversationFrame(opened.frame.payload.snapshot, continued.frame);
   const head = projectHostConversation({ spec, runtimeEpoch: epoch, events });
   assert.deepEqual(applied, head);
   const row = applied.rows.window.find((item) => item.kind === "assistantText");
@@ -329,7 +330,10 @@ test("plan, subagent, file path, error text and inert extensions stay visible", 
   assert.match(write.output?.text ?? "", /src\/a\.ts/);
   assert.match(write.output?.text ?? "", /src\/b\.ts/);
   assert.match(write.output?.text ?? "", /wrote/);
-  assert.equal(write.output?.display && "filePath" in write.output.display && write.output.display.filePath, "src/b.ts");
+  assert.equal(
+    write.output?.display && "filePath" in write.output.display && write.output.display.filePath,
+    "src/b.ts",
+  );
   const read = snapshot.rows.window.find(
     (row) => row.kind === "toolCall" && row.toolCallId === "tool-2",
   );
@@ -492,7 +496,10 @@ test("a gapped session log does not drop the index row", () => {
       {
         spec,
         runtimeEpoch: epoch,
-        events: [event(1, "turn.started", { turnId: "turn-1" }), event(3, "turn.finished", { turnId: "turn-1", outcome: "success" })],
+        events: [
+          event(1, "turn.started", { turnId: "turn-1" }),
+          event(3, "turn.finished", { turnId: "turn-1", outcome: "success" }),
+        ],
       },
     ],
   });
@@ -515,7 +522,10 @@ test("advanced commands are rejected intact and supported commands keep their fi
     envelope: {
       ...envelopeBase,
       type: "sendText",
-      payload: { text: "hello", attachments: [{ ref: "a", fileName: "a.png", mime: "image/png", bytes: 4 }] },
+      payload: {
+        text: "hello",
+        attachments: [{ ref: "a", fileName: "a.png", mime: "image/png", bytes: 4 }],
+      },
     },
   });
   assert.equal(rejected.kind, "rejected");
@@ -530,7 +540,12 @@ test("advanced commands are rejected intact and supported commands keep their fi
     runtimeEpoch: epoch,
     revision: 4,
     nextTurnId: "turn-9",
-    envelope: { ...envelopeBase, commandId: "cmd-send", type: "sendText", payload: { text: "hello" } },
+    envelope: {
+      ...envelopeBase,
+      commandId: "cmd-send",
+      type: "sendText",
+      payload: { text: "hello" },
+    },
   });
   assert.equal(sent.kind, "command");
   if (sent.kind !== "command") return;
@@ -599,7 +614,13 @@ test("advanced commands are rejected intact and supported commands keep their fi
   assert.equal(approval.command.turnId, "turn-1");
   assert.equal(approval.command.answer, "no");
 
-  for (const type of ["forkAssistant", "compact", "pauseGoal", "switchModelConfig", "sendQueuedNow"] as const) {
+  for (const type of [
+    "forkAssistant",
+    "compact",
+    "pauseGoal",
+    "switchModelConfig",
+    "sendQueuedNow",
+  ] as const) {
     const payload =
       type === "forkAssistant"
         ? { target: { rowId: 1, entityId: "row-1" } }

@@ -48,7 +48,8 @@ test("ACP Devin registered first still blocks print-mode Devin", () => {
   );
   assert.equal(registry.require("devin").id, "devin");
   assert.throws(
-    () => registry.register(createExperimentalRegistryDevinHarness({ root: "/tmp/zcode-devin-print" })),
+    () =>
+      registry.register(createExperimentalRegistryDevinHarness({ root: "/tmp/zcode-devin-print" })),
     /duplicate or invalid harness: devin/,
   );
 });

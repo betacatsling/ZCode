@@ -17,7 +17,10 @@ const viewHistory: CapabilityReport = {
 
 export function acpProbeReport(negotiation: AcpNegotiation): CapabilityReport {
   if (negotiation.stability !== "stable") {
-    return { support: "experimental", reason: negotiation.stabilityReason ?? "ACP protocol is experimental" };
+    return {
+      support: "experimental",
+      reason: negotiation.stabilityReason ?? "ACP protocol is experimental",
+    };
   }
   if (negotiation.authMethods.length > 0) {
     return {
@@ -28,7 +31,9 @@ export function acpProbeReport(negotiation: AcpNegotiation): CapabilityReport {
   return supported;
 }
 
-export function acpHarnessCapabilities(negotiation: AcpNegotiation | undefined): HarnessCapabilities {
+export function acpHarnessCapabilities(
+  negotiation: AcpNegotiation | undefined,
+): HarnessCapabilities {
   const session = sessionReport(negotiation);
   return {
     text: session,
@@ -47,25 +52,39 @@ export function acpHarnessCapabilities(negotiation: AcpNegotiation | undefined):
 }
 
 function sessionReport(negotiation: AcpNegotiation | undefined): CapabilityReport {
-  if (!negotiation) return { support: "unknown", reason: "ACP session capabilities have not been negotiated" };
+  if (!negotiation)
+    return { support: "unknown", reason: "ACP session capabilities have not been negotiated" };
   if (negotiation.stability !== "stable") {
-    return { support: "experimental", reason: negotiation.stabilityReason ?? "ACP protocol is experimental" };
+    return {
+      support: "experimental",
+      reason: negotiation.stabilityReason ?? "ACP protocol is experimental",
+    };
   }
   return supported;
 }
 
 function resumeReport(negotiation: AcpNegotiation | undefined): CapabilityReport {
-  if (!negotiation) return { support: "unknown", reason: "ACP session resume has not been negotiated" };
+  if (!negotiation)
+    return { support: "unknown", reason: "ACP session resume has not been negotiated" };
   if (negotiation.stability !== "stable") {
-    return { support: "experimental", reason: negotiation.stabilityReason ?? "ACP protocol is experimental" };
+    return {
+      support: "experimental",
+      reason: negotiation.stabilityReason ?? "ACP protocol is experimental",
+    };
   }
   if (negotiation.loadSession) {
     return { support: "supported", constraints: { method: "session/load", replaysHistory: true } };
   }
   if (negotiation.resumeSession) {
-    return { support: "supported", constraints: { method: "session/resume", replaysHistory: false } };
+    return {
+      support: "supported",
+      constraints: { method: "session/resume", replaysHistory: false },
+    };
   }
-  return { support: "unsupported", reason: "Agent did not negotiate session/load or session/resume" };
+  return {
+    support: "unsupported",
+    reason: "Agent did not negotiate session/load or session/resume",
+  };
 }
 
 function imageReport(negotiation: AcpNegotiation | undefined): CapabilityReport {

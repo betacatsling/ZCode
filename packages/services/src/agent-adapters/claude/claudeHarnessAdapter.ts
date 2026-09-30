@@ -13,24 +13,32 @@ import {
 import { TargetModelGateway } from "@zcode/services/model-gateway";
 import type { HarnessAdapter, PreparedHostBinding } from "../../agent-host/harnessRegistry.js";
 import { ClaudeApprovalHookServer } from "./claudeApprovalHookServer.js";
-import { claudeHarnessCapabilities, claudeHostManagedSupport, type ClaudeFakeModelCompatibilityEvidence } from "./claudeCapabilities.js";
+import {
+  claudeHarnessCapabilities,
+  claudeHostManagedSupport,
+  type ClaudeFakeModelCompatibilityEvidence,
+} from "./claudeCapabilities.js";
 import {
   PINNED_CLAUDE_CLI_VERSION,
   probeClaudeTarget,
   readClaudeCliVersion,
   resolveClaudeExecutable,
 } from "./claudeExecutable.js";
-import { createClaudeArguments, createClaudeChildEnvironment, prepareClaudeSessionProfile, writeClaudeSessionCapability } from "./claudeProfile.js";
-import { denyPendingClaudeApprovals, requestClaudeApproval, resolveClaudeApproval } from "./claudeHostApproval.js";
+import {
+  createClaudeArguments,
+  createClaudeChildEnvironment,
+  prepareClaudeSessionProfile,
+  writeClaudeSessionCapability,
+} from "./claudeProfile.js";
+import {
+  denyPendingClaudeApprovals,
+  requestClaudeApproval,
+  resolveClaudeApproval,
+} from "./claudeHostApproval.js";
 import { translateClaudeStructuredMessage } from "./claudeRuntimeEvents.js";
 import { ClaudeSessionRegistry } from "./claudeSessionRegistry.js";
-import {
-  ClaudeRuntimeEventSink,
-} from "./claudeRuntimeEventSink.js";
-import {
-  type ClaudeActiveTurn,
-  type ClaudeSessionRuntime,
-} from "./claudeRuntime.js";
+import { ClaudeRuntimeEventSink } from "./claudeRuntimeEventSink.js";
+import { type ClaudeActiveTurn, type ClaudeSessionRuntime } from "./claudeRuntime.js";
 import { ClaudeStreamProcess, type ClaudeStructuredMessage } from "./claudeStreamProcess.js";
 import { ClaudeTurnLifecycle } from "./claudeTurnLifecycle.js";
 
@@ -64,7 +72,9 @@ export class ClaudeHarnessAdapter implements HarnessAdapter {
   readonly #modelFactory: ClaudeHarnessAdapterOptions["modelFactory"];
   readonly #isMessagesSelection: ClaudeHarnessAdapterOptions["isMessagesSelection"];
   readonly #fakeEvidence: ClaudeHarnessAdapterOptions["fakeModelCompatibilityEvidence"];
-  readonly #isSelectionAuthorized: NonNullable<ClaudeHarnessAdapterOptions["isSelectionAuthorized"]>;
+  readonly #isSelectionAuthorized: NonNullable<
+    ClaudeHarnessAdapterOptions["isSelectionAuthorized"]
+  >;
   readonly #now: () => number;
   readonly #onProcess?: ClaudeHarnessAdapterOptions["onProcess"];
   readonly #targetGateway: TargetModelGateway;
@@ -225,8 +235,17 @@ export class ClaudeHarnessAdapter implements HarnessAdapter {
     runtime.failed = new Error("Claude turn was interrupted by its Host owner");
     runtime.gateway.revoke(runtime.grant.id);
     if (safeCancellation)
-      this.#finishTurn(runtime, turn, { subtype: "success", is_error: false, zcodeOutcome: "cancelled" });
-    else this.#markUnknown(runtime, turn, "Claude was stopped after an approved tool may have started.");
+      this.#finishTurn(runtime, turn, {
+        subtype: "success",
+        is_error: false,
+        zcodeOutcome: "cancelled",
+      });
+    else
+      this.#markUnknown(
+        runtime,
+        turn,
+        "Claude was stopped after an approved tool may have started.",
+      );
     await runtime.process.abort();
   }
 
@@ -271,14 +290,16 @@ export class ClaudeHarnessAdapter implements HarnessAdapter {
     sequence: number,
     prepared?: PreparedHostBinding,
   ): Promise<ClaudeSessionRuntime> {
-    if (prepared && prepared.plan !== plan) throw new Error("Claude startup received another prepared plan");
+    if (prepared && prepared.plan !== plan)
+      throw new Error("Claude startup received another prepared plan");
     this.#validatePlan(spec, plan);
     const executablePath = await resolveClaudeExecutable(this.#executablePath);
     const version = await readClaudeCliVersion(executablePath);
     if (version !== this.version) throw new Error("Claude Code CLI version does not match 2.1.263");
     const model = prepared?.model ?? (await this.#modelFactory(spec, plan));
     this.#validateModel(plan, model);
-    if (!this.#isSelectionAuthorized(plan)) throw new Error("Claude Model selection is no longer authorized");
+    if (!this.#isSelectionAuthorized(plan))
+      throw new Error("Claude Model selection is no longer authorized");
     const guardedModel = guardClaudeModel(model, plan, this.#isSelectionAuthorized);
     const gateway = this.#targetGateway.get(plan.targetId);
     await gateway.start();
@@ -428,13 +449,18 @@ export class ClaudeHarnessAdapter implements HarnessAdapter {
     );
   }
 
-  #finishTurn(runtime: ClaudeSessionRuntime, turn: ClaudeActiveTurn, result: Record<string, unknown>): void {
+  #finishTurn(
+    runtime: ClaudeSessionRuntime,
+    turn: ClaudeActiveTurn,
+    result: Record<string, unknown>,
+  ): void {
     if (runtime.activeTurn !== turn) return;
-    const outcome = result.zcodeOutcome === "cancelled"
-      ? "cancelled"
-      : result.is_error === true || result.subtype !== "success"
-        ? "failed"
-        : "success";
+    const outcome =
+      result.zcodeOutcome === "cancelled"
+        ? "cancelled"
+        : result.is_error === true || result.subtype !== "success"
+          ? "failed"
+          : "success";
     const failed = outcome === "failed";
     if (!turn.started) {
       turn.started = true;
@@ -481,7 +507,9 @@ export class ClaudeHarnessAdapter implements HarnessAdapter {
     runtime.emit("turn.finished", { turnId: turn.hostTurnId, outcome: "unknown" });
     denyPendingClaudeApprovals(runtime);
     runtime.activeTurn = undefined;
-    runtime.failed = new Error("Claude accepted input may have executed; inspect history before recovery");
+    runtime.failed = new Error(
+      "Claude accepted input may have executed; inspect history before recovery",
+    );
     runtime.toolCalls.clear();
     runtime.toolBlocks.clear();
     turn.completion.reject(runtime.failed);
@@ -511,7 +539,11 @@ export class ClaudeHarnessAdapter implements HarnessAdapter {
     if (runtime.stopping) return;
     runtime.stopping = true;
     if (runtime.activeTurn)
-      this.#markUnknown(runtime, runtime.activeTurn, "Claude session stopped before its turn outcome was known.");
+      this.#markUnknown(
+        runtime,
+        runtime.activeTurn,
+        "Claude session stopped before its turn outcome was known.",
+      );
     denyPendingClaudeApprovals(runtime);
     if (runtime.turnLeaseTimer) clearInterval(runtime.turnLeaseTimer);
     runtime.gateway.revoke(runtime.grant.id);
@@ -555,7 +587,9 @@ export class ClaudeHarnessAdapter implements HarnessAdapter {
       plan.support.constraints?.compatibilityEvidence !== "fake-model-fixture" ||
       plan.support.constraints.fixtureId !== evidence.fixtureId
     ) {
-      throw new Error("Claude session requires exact pinned FakeModel Messages compatibility evidence");
+      throw new Error(
+        "Claude session requires exact pinned FakeModel Messages compatibility evidence",
+      );
     }
   }
 
@@ -614,7 +648,5 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 function safeTokenCount(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
-    ? value
-    : undefined;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }

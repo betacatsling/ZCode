@@ -42,80 +42,88 @@ function parseStatus(stdout: string): { dirty: boolean; untracked: boolean } {
 
 export function createRemovalCommands(deps: ProjectWorkspaceDeps) {
   async function previewRemoval(workspaceId: string): Promise<RemovalPreview> {
-      const snapshot = await deps.store.read();
-      const workspace = snapshot.workspaces.find((item) => item.id === workspaceId);
-      const binding = snapshot.bindings.find((item) => item.id === workspace?.repositoryBindingId);
-      if (!workspace || !binding) throw new ProjectWorkspaceError("unknown-workspace");
-      if (binding.executionTargetId !== deps.executionTargetId) {
-        throw new ProjectWorkspaceError("foreign-target");
-      }
-      const blockers: string[] = [];
-      if (workspace.isMainWorktree) blockers.push("main-worktree");
-      const report = await discoverRepository(deps, workspace.worktreePath);
-      if (report.kind === "scan-failed" || report.kind === "upgrade-required") {
-        blockers.push(report.kind);
-      }
-      const listed =
-        report.kind === "git" || report.kind === "bare"
-          ? report.candidates.find((candidate) => candidate.worktreePath === workspace.worktreePath)
-          : undefined;
-      if (report.kind === "git" || report.kind === "bare") {
-        if (!listed) blockers.push("not-listed");
-      }
-      const [status, submodule, activity] = await Promise.all([
-        deps.git.run([
-          "--git-dir",
-          binding.gitCommonDir,
-          "--work-tree",
-          workspace.worktreePath,
-          "status",
-          "--porcelain=v1",
-          "-z",
-        ]),
-        deps.git.run([
-          "--git-dir",
-          binding.gitCommonDir,
-          "--work-tree",
-          workspace.worktreePath,
-          "submodule",
-          "status",
-          "--recursive",
-        ]),
-        deps.activity.inspect(workspaceId),
-      ]);
-      if (status.exitCode !== 0) blockers.push("status-unknown");
-      const risks = status.exitCode === 0 ? parseStatus(status.stdout) : { dirty: false, untracked: false };
-      if (activity === "unknown") blockers.push("activity-unknown");
-      if (activity === "busy") blockers.push("activity-busy");
-      if (activity === "approval") blockers.push("activity-approval");
-      return {
-        workspaceId,
-        generation: workspace.worktreeGeneration,
-        isMainWorktree: workspace.isMainWorktree,
-        risks: {
-          ...risks,
-          submodule: submodule.exitCode !== 0 || submodule.stdout.trim().length > 0,
-          locked: listed?.locked === true,
-          externalWritersUnproven: true,
-        },
-        blockers,
-        spaceChecked: false,
-      };
+    const snapshot = await deps.store.read();
+    const workspace = snapshot.workspaces.find((item) => item.id === workspaceId);
+    const binding = snapshot.bindings.find((item) => item.id === workspace?.repositoryBindingId);
+    if (!workspace || !binding) throw new ProjectWorkspaceError("unknown-workspace");
+    if (binding.executionTargetId !== deps.executionTargetId) {
+      throw new ProjectWorkspaceError("foreign-target");
+    }
+    const blockers: string[] = [];
+    if (workspace.isMainWorktree) blockers.push("main-worktree");
+    const report = await discoverRepository(deps, workspace.worktreePath);
+    if (report.kind === "scan-failed" || report.kind === "upgrade-required") {
+      blockers.push(report.kind);
+    }
+    const listed =
+      report.kind === "git" || report.kind === "bare"
+        ? report.candidates.find((candidate) => candidate.worktreePath === workspace.worktreePath)
+        : undefined;
+    if (report.kind === "git" || report.kind === "bare") {
+      if (!listed) blockers.push("not-listed");
+    }
+    const [status, submodule, activity] = await Promise.all([
+      deps.git.run([
+        "--git-dir",
+        binding.gitCommonDir,
+        "--work-tree",
+        workspace.worktreePath,
+        "status",
+        "--porcelain=v1",
+        "-z",
+      ]),
+      deps.git.run([
+        "--git-dir",
+        binding.gitCommonDir,
+        "--work-tree",
+        workspace.worktreePath,
+        "submodule",
+        "status",
+        "--recursive",
+      ]),
+      deps.activity.inspect(workspaceId),
+    ]);
+    if (status.exitCode !== 0) blockers.push("status-unknown");
+    const risks =
+      status.exitCode === 0 ? parseStatus(status.stdout) : { dirty: false, untracked: false };
+    if (activity === "unknown") blockers.push("activity-unknown");
+    if (activity === "busy") blockers.push("activity-busy");
+    if (activity === "approval") blockers.push("activity-approval");
+    return {
+      workspaceId,
+      generation: workspace.worktreeGeneration,
+      isMainWorktree: workspace.isMainWorktree,
+      risks: {
+        ...risks,
+        submodule: submodule.exitCode !== 0 || submodule.stdout.trim().length > 0,
+        locked: listed?.locked === true,
+        externalWritersUnproven: true,
+      },
+      blockers,
+      spaceChecked: false,
+    };
   }
 
   return {
     previewRemoval,
-    async removeLinkedWorktree(input: RemoveLinkedWorktreeInput): Promise<
+    async removeLinkedWorktree(
+      input: RemoveLinkedWorktreeInput,
+    ): Promise<
       | { status: "removed"; workspace: WorktreeWorkspace }
       | { status: "rejected"; reasons: string[]; stoppedSessionIds: readonly string[] }
     > {
       const preview = await previewRemoval(input.workspaceId);
       const reasons = [...preview.blockers];
       if (preview.generation !== input.expectedGeneration) reasons.push("stale-generation");
-      const hard = reasons.filter((reason) => reason !== "activity-busy" && reason !== "activity-approval");
+      const hard = reasons.filter(
+        (reason) => reason !== "activity-busy" && reason !== "activity-approval",
+      );
       const needsStop = reasons.includes("activity-busy") || reasons.includes("activity-approval");
       if (hard.length > 0 || (needsStop && !input.stopConfirmed)) {
-        logger.warn(undefined, "worktree-removal-rejected", { workspaceId: input.workspaceId, reasons });
+        logger.warn(undefined, "worktree-removal-rejected", {
+          workspaceId: input.workspaceId,
+          reasons,
+        });
         return { status: "rejected", reasons, stoppedSessionIds: [] };
       }
       if (!input.acknowledgeRisks || !input.acknowledgeExternalWriters) {
@@ -162,7 +170,9 @@ export function createRemovalCommands(deps: ProjectWorkspaceDeps) {
         }
         const snapshot = await deps.store.read();
         const workspace = snapshot.workspaces.find((item) => item.id === input.workspaceId);
-        const binding = snapshot.bindings.find((item) => item.id === workspace?.repositoryBindingId);
+        const binding = snapshot.bindings.find(
+          (item) => item.id === workspace?.repositoryBindingId,
+        );
         if (!workspace || !binding) throw new ProjectWorkspaceError("unknown-workspace");
         const removed = await deps.git.run([
           "-c",

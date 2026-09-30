@@ -1,5 +1,8 @@
 import { homedir } from "node:os";
-import { ClaudeCodeHarnessAdapter, type ClaudeCodeHarnessOptions } from "./claudeCodeHarnessAdapter.js";
+import {
+  ClaudeCodeHarnessAdapter,
+  type ClaudeCodeHarnessOptions,
+} from "./claudeCodeHarnessAdapter.js";
 import { FakeClaudeCodeTransport, type ClaudeCodeTransport } from "./claudeCodeFakeTransport.js";
 import { createMockClaudeCodeModelBindingPort } from "./claudeCodeModelReport.js";
 import { createFilesystemClaudeCodeProfileSink } from "./claudeCodeProfile.js";
@@ -14,7 +17,9 @@ export interface CreateClaudeCodeHarnessOptions extends Omit<
 }
 
 /** Opt-in factory. The default app composition does not register this adapter. */
-export function createClaudeCodeHarness(options: CreateClaudeCodeHarnessOptions): ClaudeCodeHarnessAdapter {
+export function createClaudeCodeHarness(
+  options: CreateClaudeCodeHarnessOptions,
+): ClaudeCodeHarnessAdapter {
   const userHome = options.userHome ?? homedir();
   const transport = options.transport ?? new FakeClaudeCodeTransport({ userHome });
   const profileSink =

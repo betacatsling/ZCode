@@ -37,9 +37,10 @@ export interface MigrationBackupWriter {
 export interface CatalogStore {
   read(): Promise<import("./snapshot.js").CatalogSnapshot>;
   update<T>(
-    mutator: (
-      current: import("./snapshot.js").CatalogSnapshot,
-    ) => { snapshot: import("./snapshot.js").CatalogSnapshot; result: T },
+    mutator: (current: import("./snapshot.js").CatalogSnapshot) => {
+      snapshot: import("./snapshot.js").CatalogSnapshot;
+      result: T;
+    },
   ): Promise<T>;
 }
 
