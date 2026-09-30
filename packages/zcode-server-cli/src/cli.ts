@@ -419,8 +419,16 @@ async function runControl(
     }
   }
   if (json) stdout(io, result);
-  else stdout(io, result ?? "ok");
+  else stdout(io, redactHostBootstrapToken(result) ?? "ok");
   return 0;
+}
+
+/** Human-readable output must not echo the Host bootstrap secret into terminals or logs. */
+function redactHostBootstrapToken(result: unknown): unknown {
+  if (typeof result !== "object" || result === null || !("hostBootstrapToken" in result)) {
+    return result;
+  }
+  return { ...result, hostBootstrapToken: "[redacted]" };
 }
 
 function isControlEndpointUnavailable(error: unknown): boolean {

@@ -41,7 +41,8 @@ import {
   type ServerRemoteWorkspaceInfo,
 } from "@zcode/shared";
 import { connectRemote, createRemoteBackend, type RemoteConnection } from "./remote/index.js";
-import { createHostCapabilityStore } from "./hostCapability.js";
+import { createHostCapabilityStore, type HostCapabilityStore } from "./hostCapability.js";
+import { HOST_CAPABILITY_PATH, verifyHostBootstrapRequest } from "./hostBootstrapAuth.js";
 
 function wrapWebSocket(ws: WebSocket): ISocket {
   const onData = new Emitter<VSBuffer>();
@@ -141,8 +142,14 @@ interface HttpServerOptions {
   serverId?: string;
   name?: string;
   host?: string;
-  authRequired?: boolean;
   authToken?: string;
+  /**
+   * Dedicated private secret for POST /api/rpc-host-capability. When omitted, `authToken` (if
+   * configured) doubles as the bootstrap credential; with neither, ticket issuance is disabled.
+   */
+  hostBootstrapToken?: string;
+  /** Inject the one-time ticket store (tests); defaults to a fresh TTL store per server. */
+  hostCapabilityStore?: HostCapabilityStore;
   spaFallback?: boolean;
   staticRoot?: string;
   workspaces?: ServerRemoteWorkspaceInfo[];
@@ -180,7 +187,9 @@ function createServerInfo(options: HttpServerOptions): ServerRemoteInfo {
       : {}),
     version: ZCODE_VERSION,
     protocolVersion: SERVER_REMOTE_PROTOCOL_VERSION,
-    authRequired: options.authRequired ?? Boolean(readTrimmedEnv("ZCODE_SERVER_TOKEN")),
+    // Host ticket 签发始终需要带外 bootstrap 凭据（未配置时直接 401），因此如实报告 true；
+    // 仅在配置 authToken 时 /ws 与其他 /api 才受 token middleware 保护。
+    authRequired: true,
     workspaces: resolveServerWorkspaces(options),
     capabilities: {
       desktopContinuous: true,
@@ -246,6 +255,14 @@ function isTokenProtectedPath(pathname: string): boolean {
   return pathname === "/ws" || pathname.startsWith("/ws/") || pathname.startsWith("/api/");
 }
 
+function isLoopbackBindHost(host: string | undefined): boolean {
+  const normalized = host
+    ?.trim()
+    .toLowerCase()
+    .replace(/^\[|\]$/gu, "");
+  return normalized === "127.0.0.1" || normalized === "::1" || normalized === "localhost";
+}
+
 function isStaticFallbackAllowed(pathname: string): boolean {
   return !isTokenProtectedPath(pathname);
 }
@@ -308,12 +325,20 @@ export function createHttpServer(
 ) {
   const app = new Hono();
   const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
-  const hostCapabilities = createHostCapabilityStore();
+  const hostCapabilities = options.hostCapabilityStore ?? createHostCapabilityStore();
 
   const authToken = options.authToken?.trim();
+  const hostBootstrapCredentials = [options.hostBootstrapToken?.trim(), authToken].filter(
+    (token): token is string => Boolean(token),
+  );
   if (authToken) {
     app.use("*", async (c, next) => {
       const pathname = new URL(c.req.url).pathname;
+      if (pathname === HOST_CAPABILITY_PATH) {
+        // Host ticket 签发有独立且更严格的 Bearer 校验（不接受 cookie/query token），此处不重复拦截。
+        await next();
+        return;
+      }
       const validToken = hasValidLiteToken(c, authToken);
       if (!isTokenProtectedPath(pathname) || validToken) {
         await next();
@@ -324,7 +349,22 @@ export function createHttpServer(
   }
 
   app.get("/api/server-info", (c) => c.json(createServerInfo(options)));
-  app.post("/api/rpc-host-capability", (c) => c.json(hostCapabilities.issue()));
+  app.post(HOST_CAPABILITY_PATH, (c) => {
+    // 只认 Authorization: Bearer；浏览器 cookie/query token 不能换取 trusted-host ticket。
+    // 监听回环地址时额外拒绝非回环 Host 头（DNS rebinding）。拒绝时不得调用 issue()。
+    const verdict = verifyHostBootstrapRequest(
+      {
+        authorization: c.req.header("authorization"),
+        origin: c.req.header("origin"),
+        host: c.req.header("host"),
+      },
+      hostBootstrapCredentials,
+      { requireLoopbackHost: isLoopbackBindHost(options.host) },
+    );
+    c.header("Cache-Control", "no-store");
+    if (!verdict.ok) return c.json({ error: verdict.error }, verdict.status);
+    return c.json(hostCapabilities.issue());
+  });
 
   // 普通 `/ws` 永远是 terminal-client；浏览器/任意客户端设置旧 mode header
   // 都不能再把自己提升为 trusted host。

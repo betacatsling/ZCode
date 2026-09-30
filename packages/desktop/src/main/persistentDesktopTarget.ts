@@ -17,6 +17,8 @@ export interface DesktopPersistentTargetEndpoint {
   port: number;
   targetId: string;
   runtimeArchives: Record<string, string>;
+  /** Private per-Core secret for Host ticket issuance; Main→Host IPC only, never renderer input. */
+  hostBootstrapToken?: string;
 }
 
 export interface DesktopPersistentTargetReady extends DesktopPersistentTargetEndpoint {
@@ -245,6 +247,7 @@ async function runServerCli(options: {
     targetId: options.targetId,
     generation: status.generation,
     sourceHash: "",
+    ...(status.hostBootstrapToken ? { hostBootstrapToken: status.hostBootstrapToken } : {}),
   };
 }
 

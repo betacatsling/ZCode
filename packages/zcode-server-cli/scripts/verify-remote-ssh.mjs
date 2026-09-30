@@ -239,7 +239,23 @@ async function main() {
     unauthorized.status === 401,
     `/ws/host without ticket must be 401, got ${unauthorized.status}`,
   );
-  const ticketResponse = await fetch(`${baseUrl}/api/rpc-host-capability`, { method: "POST" });
+  // Host ticket 签发需要 Supervisor 经 SSH exec 私有通道下发的 bootstrap secret。
+  const unauthenticatedTicket = await fetch(`${baseUrl}/api/rpc-host-capability`, {
+    method: "POST",
+  });
+  assert(
+    unauthenticatedTicket.status === 401,
+    `/api/rpc-host-capability without bootstrap credential must be 401, got ${unauthenticatedTicket.status}`,
+  );
+  assert(
+    typeof daemonStatus.hostBootstrapToken === "string",
+    "serve --json must publish hostBootstrapToken",
+  );
+  const ticketResponse = await fetch(`${baseUrl}/api/rpc-host-capability`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${daemonStatus.hostBootstrapToken}` },
+  });
+  assert(ticketResponse.ok, `authenticated ticket request status ${ticketResponse.status}`);
   const ticket = await ticketResponse.json();
   assert(
     typeof ticket.capability === "string" && ticket.capability.length > 0,

@@ -26,6 +26,13 @@ export const crashBudgetSchema = z.object({
   exhausted: z.boolean(),
 });
 
+/**
+ * Per-Core-launch private secret for POST /api/rpc-host-capability (32 bytes, base64url).
+ * Only travels over the Core→Supervisor fork IPC, the 0700 control socket, the 0600 status.json
+ * snapshot and `serve --json` stdout; see docs/agent-host/HOST-CAPABILITY-BOOTSTRAP-AUTH.md.
+ */
+export const hostBootstrapTokenSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/u);
+
 export const serverStatusSchema = z
   .object({
     protocolVersion: z.literal(SERVER_CLI_PROTOCOL_VERSION).default(SERVER_CLI_PROTOCOL_VERSION),
@@ -41,6 +48,8 @@ export const serverStatusSchema = z
     runningTaskCount: z.number().int().nonnegative(),
     crashBudget: crashBudgetSchema,
     updatedAt: z.number().int().nonnegative(),
+    /** Present only while a Core that supports bootstrap auth is ready; older Cores omit it. */
+    hostBootstrapToken: hostBootstrapTokenSchema.optional(),
   })
   .strict();
 
@@ -118,6 +127,7 @@ export const coreMessageSchema = z.discriminatedUnion("type", [
     port: z.number().int().positive(),
     version: z.string().min(1),
     generation: z.number().int().nonnegative(),
+    hostBootstrapToken: hostBootstrapTokenSchema.optional(),
   }),
   z.object({
     type: z.literal("heartbeat"),

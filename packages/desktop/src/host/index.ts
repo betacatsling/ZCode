@@ -2840,6 +2840,7 @@ parentPort.on("message", async (e: Electron.MessageEvent) => {
             host: msg.persistentTarget.host,
             port: msg.persistentTarget.port,
             expectedTargetId,
+            hostBootstrapToken: msg.persistentTarget.hostBootstrapToken,
           });
         }
         // 旧 Team 补组织必须与网络代理读取共用同一个 Setting 实例及写队列。

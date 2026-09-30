@@ -342,6 +342,7 @@ interface RemotePersistentTargetStatus {
   port: number | null;
   generation: number;
   runningTaskCount: number;
+  hostBootstrapToken?: unknown; // private secret, delivered over the SSH exec channel
 }
 
 async function runRemoteCommand(
@@ -512,6 +513,9 @@ async function connectPersistentSSH(
     connection = await connectToPersistentTarget({
       host: forward.host,
       port: forward.port,
+      ...(typeof status.hostBootstrapToken === "string" && {
+        hostBootstrapToken: status.hostBootstrapToken,
+      }),
       signal: options?.signal,
       onDidClose: () => reportRemoteClose(BACKEND_DISCONNECT_EXIT_CODE),
     });
