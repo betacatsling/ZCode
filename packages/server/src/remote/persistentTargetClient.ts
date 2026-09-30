@@ -186,15 +186,19 @@ export async function connectToPersistentTarget(
   const ws = new WebSocket(wsUrl, {
     headers: { [ZCODE_RPC_HOST_CAPABILITY_HEADER]: capability },
   });
-  try {
-    await waitForOpen(ws, options.signal);
-  } catch (error) {
-    ws.terminate();
-    throw error;
-  }
+  // Listen before `open`: the Core sends the RPC Initialize frame from its open handler, often in
+  // the same TCP read as the 101. ws emits it right after `open`, before an awaiting caller resumes.
   const socket = wrapWebSocket(ws);
   const protocol = new SocketProtocol(socket);
   const client = new ChannelClient(protocol);
+  try {
+    await waitForOpen(ws, options.signal);
+  } catch (error) {
+    client.dispose();
+    protocol.dispose();
+    ws.terminate();
+    throw error;
+  }
   const services = new RemoteServiceAccess(client);
   let disposed = false;
   const closed = new Promise<void>((resolve) => {
