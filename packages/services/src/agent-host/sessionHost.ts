@@ -42,6 +42,7 @@ import {
 import { projectHostConversation } from "../agent-ui-projection/projector.js";
 import { createServiceLogger } from "../logger/serviceLogger.js";
 import type { AgentHostActivityIndexEntry } from "./activityIndex.js";
+import { staleModelBindingError } from "./modelBindingErrors.js";
 
 const logger = createServiceLogger("agent-host-session");
 
@@ -200,7 +201,10 @@ export class SessionHost {
       catalog,
     });
     if (plan.support.support !== "supported")
-      throw new Error(plan.support.reason ?? "unsupported model binding");
+      throw (
+        staleModelBindingError(spec, catalog) ??
+        new Error(plan.support.reason ?? "unsupported model binding")
+      );
     const prepared = await prepareHostBinding(spec, adapter, catalog, plan, options.catalog);
     assertCatalogCurrent(catalog);
     const path = manifestPath(options.root, spec);
@@ -272,7 +276,10 @@ export class SessionHost {
       catalog,
     });
     if (plan.support.support !== "supported")
-      throw new Error(plan.support.reason ?? "unsupported model binding");
+      throw (
+        staleModelBindingError(spec, catalog) ??
+        new Error(plan.support.reason ?? "unsupported model binding")
+      );
     const prepared = await prepareHostBinding(spec, adapter, catalog, plan, options.catalog);
     assertCatalogCurrent(catalog);
     const host = await SessionHost.#mount(

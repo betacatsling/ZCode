@@ -12,6 +12,20 @@ const turnEvent = { ...eventBase, turnId: z.string().min(1) };
 const messageEvent = { ...turnEvent, messageId: z.string().min(1) };
 const toolEvent = { ...turnEvent, toolCallId: z.string().min(1), name: z.string().min(1) };
 
+/**
+ * Key-free classification of a model failure the user must fix by reconfiguring the Provider
+ * (for example an expired key: 401 / auth_failed). Optional on session.error; older writers omit it.
+ */
+export const agentModelFailureSchema = z.strictObject({
+  reason: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/),
+  action: z.literal("reconfigure-provider"),
+  providerId: z.string().min(1).max(256),
+  modelId: z.string().min(1).max(256).optional(),
+  statusCode: z.number().int().min(100).max(599).optional(),
+  retryable: z.boolean(),
+});
+export type AgentModelFailure = z.infer<typeof agentModelFailureSchema>;
+
 /** Canonical host events; extension events remain inert data, never executable UI code. */
 export const agentEventSchema = z.discriminatedUnion("kind", [
   z.strictObject({ ...turnEvent, kind: z.literal("turn.started") }),
@@ -81,6 +95,7 @@ export const agentEventSchema = z.discriminatedUnion("kind", [
     kind: z.literal("session.error"),
     code: z.string().min(1),
     message: z.string().max(1024),
+    failure: agentModelFailureSchema.optional(),
   }),
   z.strictObject({
     ...eventBase,
