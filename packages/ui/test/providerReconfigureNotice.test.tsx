@@ -16,6 +16,7 @@ import {
   ProviderReconfigureNotice,
   PROVIDER_RECONFIGURE_NOTICE_TESTID,
 } from "../src/v4/ProviderReconfigureNotice.js";
+import { toProviderReconfigureFailure } from "../../services/src/agent-host/modelFailureClassification.js";
 
 const SECRET_KEY = "sk-live-never-render-me";
 const SECRET_URL = "https://gateway.internal.example/v1";
@@ -128,6 +129,134 @@ test("capability credentialAttention yields a hint for exactly the attention's P
     null,
   );
   assert.equal(resolveProviderReconfigureNotice({ sessionId: null }), null);
+});
+
+function typedFailure(statusCode: number) {
+  const failure = toProviderReconfigureFailure({
+    reason: "auth_failed",
+    providerId: "provider-rejected",
+    modelId: "model-rejected",
+    statusCode,
+    retryable: false,
+  });
+  assert.ok(failure);
+  return failure;
+}
+
+test("a typed ack failure names its own Provider, even when it differs from the session config", () => {
+  for (const statusCode of [401, 403]) {
+    const failure = typedFailure(statusCode);
+    const receipt = providerReconfigureReceiptFromAck(
+      {
+        commandId: "c-typed",
+        status: "rejected",
+        reasonCode: PROVIDER_RECONFIGURE_REQUIRED,
+        failure,
+      },
+      "s-1",
+    );
+    assert.deepEqual(receipt, { sessionId: "s-1", commandId: "c-typed", failure });
+    assert.deepEqual(
+      resolveProviderReconfigureNotice({
+        sessionId: "s-1",
+        phase: "idle",
+        receipt,
+        sessionProviderId: "provider-one",
+        sessionModelId: "model-one",
+      }),
+      {
+        source: "command-receipt",
+        providerId: "provider-rejected",
+        modelId: "model-rejected",
+        key: "command-receipt:s-1:c-typed",
+      },
+    );
+  }
+});
+
+test("a typed session.error failure (401 and non-retryable 403) names its own Provider", () => {
+  for (const statusCode of [401, 403]) {
+    const lastError = {
+      code: PROVIDER_RECONFIGURE_REQUIRED,
+      message: `Provider credential rejected (${SECRET_KEY} @ ${SECRET_URL})`,
+      at: statusCode,
+      failure: typedFailure(statusCode),
+    };
+    const notice = resolveProviderReconfigureNotice({
+      sessionId: "s-1",
+      phase: "error",
+      lastError,
+      sessionProviderId: "provider-one",
+      sessionModelId: "model-one",
+    });
+    assert.deepEqual(notice, {
+      source: "session-error",
+      providerId: "provider-rejected",
+      modelId: "model-rejected",
+      key: `session-error:s-1:${statusCode}`,
+    });
+    assert.doesNotMatch(JSON.stringify(notice), /sk-|https?:\/\//);
+    // Still only while the session is in error, and never for harness-managed sessions.
+    assert.equal(
+      resolveProviderReconfigureNotice({
+        sessionId: "s-1",
+        phase: "running",
+        lastError,
+        sessionProviderId: "provider-one",
+      }),
+      null,
+    );
+    assert.equal(
+      resolveProviderReconfigureNotice({
+        sessionId: "s-1",
+        phase: "error",
+        lastError,
+        sessionProviderId: "",
+      }),
+      null,
+    );
+  }
+});
+
+test("without a typed failure (older hosts) the notice falls back to the session config Provider", () => {
+  const receipt = providerReconfigureReceiptFromAck(
+    { commandId: "c-old", status: "rejected", reasonCode: PROVIDER_RECONFIGURE_REQUIRED },
+    "s-1",
+  );
+  assert.equal(receipt && Object.hasOwn(receipt, "failure"), false);
+  const input = {
+    sessionId: "s-1",
+    sessionProviderId: "provider-one",
+    sessionModelId: "model-one",
+  };
+  assert.deepEqual(resolveProviderReconfigureNotice({ ...input, phase: "idle", receipt }), {
+    source: "command-receipt",
+    providerId: "provider-one",
+    modelId: "model-one",
+    key: "command-receipt:s-1:c-old",
+  });
+  assert.deepEqual(
+    resolveProviderReconfigureNotice({
+      ...input,
+      phase: "error",
+      lastError: { code: PROVIDER_RECONFIGURE_REQUIRED, at: 7 },
+    }),
+    {
+      source: "session-error",
+      providerId: "provider-one",
+      modelId: "model-one",
+      key: "session-error:s-1:7",
+    },
+  );
+  // An untyped, non-reconfigure error never yields a hint.
+  assert.equal(
+    resolveProviderReconfigureNotice({
+      ...input,
+      phase: "error",
+      lastError: { code: "pi-model-executor-stream", at: 8 },
+    }),
+    null,
+  );
 });
 
 test("opening settings deep-links the model Provider section to that Provider", () => {

@@ -18,23 +18,39 @@ export interface ProviderReconfigureNoticeModel {
   key: string;
 }
 
-/** A rejected command receipt remembered by the pane (ids only). */
+/** A rejected command receipt remembered by the pane (ids and the key-free typed cause only). */
 export interface ProviderReconfigureReceipt {
   sessionId: string;
   commandId: string;
+  /** Typed cause from the V4 ack; older hosts omit it. */
+  failure?: AgentModelFailure;
 }
 
 /**
- * Pick the rejected send receipt that asks for a Provider reconfigure. V4 CommandAck keeps the
- * reasonCode but not the typed failure, so the Provider comes from the session's own config.
+ * Pick the rejected send receipt that asks for a Provider reconfigure. Newer hosts attach the
+ * typed failure to the V4 CommandAck; older ones only send the reasonCode.
  */
 export function providerReconfigureReceiptFromAck(
-  ack: { commandId: string; status: string; reasonCode?: string },
+  ack: { commandId: string; status: string; reasonCode?: string; failure?: AgentModelFailure },
   sessionId: string | null,
 ): ProviderReconfigureReceipt | null {
   if (!sessionId || ack.status !== "rejected" || ack.reasonCode !== PROVIDER_RECONFIGURE_REQUIRED)
     return null;
-  return { sessionId, commandId: ack.commandId };
+  return { sessionId, commandId: ack.commandId, ...(ack.failure ? { failure: ack.failure } : {}) };
+}
+
+/** Provider/model the hint names: the typed failure's own Provider, else the session config. */
+function noticeTarget(
+  failure: AgentModelFailure | undefined,
+  sessionProviderId: string,
+  sessionModelId: string | undefined,
+): { providerId: string; modelId?: string } {
+  if (failure?.action === "reconfigure-provider" && failure.providerId.trim())
+    return {
+      providerId: failure.providerId,
+      ...(failure.modelId ? { modelId: failure.modelId } : {}),
+    };
+  return { providerId: sessionProviderId, ...(sessionModelId ? { modelId: sessionModelId } : {}) };
 }
 
 /**
@@ -42,13 +58,14 @@ export function providerReconfigureReceiptFromAck(
  * - capability `credentialAttention` (typed, names the Provider itself);
  * - a rejected command receipt for this session;
  * - the projected session.error (`control.lastError`) while the session is still in error.
- * Receipt and session.error name the session's host-managed Provider (`config.provider`);
- * harness-managed sessions project an empty provider and never get a hint.
+ * Receipt and session.error name the typed failure's Provider when the host sent one (any
+ * status code, e.g. non-retryable 403 too), else the session's host-managed `config.provider`.
+ * Harness-managed sessions project an empty provider and never get a hint.
  */
 export function resolveProviderReconfigureNotice(input: {
   sessionId: string | null;
   phase?: string | null;
-  lastError?: { code: string; at?: number } | null;
+  lastError?: { code: string; at?: number; failure?: AgentModelFailure } | null;
   receipt?: ProviderReconfigureReceipt | null;
   sessionProviderId?: string | null;
   sessionModelId?: string | null;
@@ -63,15 +80,13 @@ export function resolveProviderReconfigureNotice(input: {
       key: `capability:${attention.providerId}:${attention.modelId ?? ""}`,
     };
   }
-  const providerId = input.sessionProviderId?.trim();
-  if (!input.sessionId || !providerId) return null;
-  const modelId = input.sessionModelId?.trim();
-  const model = modelId ? { modelId } : {};
+  const sessionProviderId = input.sessionProviderId?.trim();
+  if (!input.sessionId || !sessionProviderId) return null;
+  const sessionModelId = input.sessionModelId?.trim();
   if (input.receipt && input.receipt.sessionId === input.sessionId) {
     return {
       source: "command-receipt",
-      providerId,
-      ...model,
+      ...noticeTarget(input.receipt.failure, sessionProviderId, sessionModelId),
       key: `command-receipt:${input.sessionId}:${input.receipt.commandId}`,
     };
   }
@@ -79,8 +94,7 @@ export function resolveProviderReconfigureNotice(input: {
   if (input.lastError?.code === PROVIDER_RECONFIGURE_REQUIRED && input.phase === "error") {
     return {
       source: "session-error",
-      providerId,
-      ...model,
+      ...noticeTarget(input.lastError.failure, sessionProviderId, sessionModelId),
       key: `session-error:${input.sessionId}:${input.lastError.at ?? 0}`,
     };
   }
