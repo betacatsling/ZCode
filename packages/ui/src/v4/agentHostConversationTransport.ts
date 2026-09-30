@@ -87,6 +87,8 @@ async function toCommandAck(
     ...(receipt.reasonCode ? { reasonCode: receipt.reasonCode } : {}),
     ...(receipt.message ? { message: receipt.message } : {}),
     revisionAtDecision: snapshot.revision,
+    // Key-free typed cause (provider-reconfigure-required); absent for older hosts.
+    ...(receipt.failure ? { failure: receipt.failure } : {}),
   };
 }
 
