@@ -76,6 +76,32 @@ test("validateClaudePlan types the existing evidence refusals as invalid-binding
   );
 });
 
+const MISSING_EFFECTIVE = "Claude Model binding is missing its effective selection";
+
+function missingEffective(error: unknown): boolean {
+  assert.ok(error instanceof ClaudeBindingMismatchError, String(error));
+  assert.equal(error.message, MISSING_EFFECTIVE);
+  assert.equal(error.code, "invalid-binding");
+  assert.equal(error.mismatch, "missing-effective");
+  return true;
+}
+
+function withoutEffective(plan: BindingPlan): BindingPlan {
+  const { effective: _effective, ...rest } = plan;
+  return rest;
+}
+
+test("validateClaudePlan types a missing effective selection as invalid-binding", () => {
+  const spec = claudeUnitSpec();
+  const plan = withoutEffective(claudeUnitPlan(spec));
+  assert.throws(() => validateClaudePlan(input, spec, plan), missingEffective);
+  // Checked before shutdown, so it stays typed while the adapter shuts down.
+  assert.throws(
+    () => validateClaudePlan({ ...input, shuttingDown: true }, spec, plan),
+    missingEffective,
+  );
+});
+
 test("validateClaudePlan keeps the shutdown refusal an untyped Error with the same message", () => {
   const spec = claudeUnitSpec();
   const plan = claudeUnitPlan(spec);
@@ -102,4 +128,13 @@ test("create refuses a fixture-mismatched plan before any grant, server or launc
   assert.equal(await listeningServers(), servers);
   await h.adapter.create(h.spec, h.plan);
   assert.equal(h.grants.created.length, 1, "the matching plan still starts");
+});
+
+test("create refuses a plan without an effective selection, typed, before any grant or launch", async (t) => {
+  const h = await claudeAdapterHarness(t);
+  const servers = await listeningServers();
+  await assert.rejects(h.adapter.create(h.spec, withoutEffective(h.plan)), missingEffective);
+  assert.deepEqual(h.grants.created, []);
+  assert.equal(h.launches.length, 0);
+  assert.equal(await listeningServers(), servers);
 });

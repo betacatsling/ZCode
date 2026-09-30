@@ -1,18 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { BindingPlan } from "@zcode/shared/agent-host";
-import {
-  ClaudeBindingMismatchError,
-  validateClaudeModel,
-  validateClaudePlan,
-} from "../src/agent-adapters/claude/claudeBindingGuards.js";
+import { validateClaudeModel } from "../src/agent-adapters/claude/claudeBindingGuards.js";
 import { translateClaudeStructuredMessage } from "../src/agent-adapters/claude/claudeRuntimeEvents.js";
 import type { ClaudeStructuredMessage } from "../src/agent-adapters/claude/claudeStreamProcess.js";
 import {
   CLAUDE_UNIT,
   claudeUnitPlan,
   claudeUnitRuntime,
-  claudeUnitSpec,
   claudeUnitTurn,
   fakeClaudeModel,
 } from "./fixtures/claudeUnitFixtures.js";
@@ -31,6 +26,8 @@ import {
 //   after startClaudeSession resolves, reserveStart refuses a session that is already
 //   registered, and remove() only deletes the entry it is handed. Not observable from outside,
 //   so there is no test for it.
+// - The "missing effective selection" plan refusal (claudeBindingGuards.ts:47) is now a typed
+//   ClaudeBindingMismatchError("missing-effective"); see claudePlanFixtureBinding.test.ts.
 
 test("documented: validateClaudeModel refuses a missing or unknown effort before startup's own check", () => {
   const plan = claudeUnitPlan();
@@ -52,38 +49,6 @@ test("documented: validateClaudeModel refuses a missing or unknown effort before
     /or effort/,
   );
   assert.doesNotThrow(() => validateClaudeModel(plan, fakeClaudeModel()));
-});
-
-test("documented: a missing effective selection is a plain Error, not the typed binding mismatch", () => {
-  const input = {
-    adapterId: CLAUDE_UNIT.adapterId,
-    adapterVersion: CLAUDE_UNIT.adapterVersion,
-    hostManagedRoute: CLAUDE_UNIT.route,
-    shuttingDown: false,
-    fakeEvidence: () => ({
-      providerId: CLAUDE_UNIT.providerId,
-      modelId: CLAUDE_UNIT.modelId,
-      fixtureId: CLAUDE_UNIT.fixtureId,
-    }),
-    isMessagesSelection: () => true,
-  };
-  const spec = claudeUnitSpec();
-  const plan = claudeUnitPlan(spec);
-  assert.doesNotThrow(() => validateClaudePlan(input, spec, plan));
-
-  const { effective: _effective, ...withoutEffective } = plan;
-  // claudeBindingGuards.ts:47: no `code`, so a receipt cannot report it as invalid-binding.
-  const missing = captureError(() => validateClaudePlan(input, spec, withoutEffective));
-  assert.equal(missing.message, "Claude Model binding is missing its effective selection");
-  assert.equal(missing instanceof ClaudeBindingMismatchError, false);
-  assert.equal((missing as { code?: string }).code, undefined);
-
-  // The other plan refusals are typed (claudeBindingGuards.ts:71).
-  const wrongRoute = captureError(() =>
-    validateClaudePlan(input, spec, { ...plan, route: "native" as BindingPlan["route"] }),
-  );
-  assert.ok(wrongRoute instanceof ClaudeBindingMismatchError);
-  assert.equal(wrongRoute.code, "invalid-binding");
 });
 
 test("documented: runtime.initialized is write-only; output before system init is translated", () => {
@@ -114,12 +79,3 @@ test("documented: runtime.initialized is write-only; output before system init i
   assert.equal(runtime.initialized, true);
   assert.equal(events.length, 2, "init changes nothing observable");
 });
-
-function captureError(action: () => void): Error {
-  try {
-    action();
-  } catch (error) {
-    return error as Error;
-  }
-  throw new Error("expected the action to throw");
-}

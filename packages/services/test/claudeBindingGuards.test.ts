@@ -3,6 +3,7 @@ import test from "node:test";
 import type { BindingPlan, SessionSpec } from "@zcode/shared/agent-host";
 import type { ModelSelection } from "@zcode/shared/model-selection";
 import {
+  ClaudeBindingMismatchError,
   guardClaudeModel,
   validateClaudeModel,
   validateClaudePlan,
@@ -204,7 +205,10 @@ test("validateClaudePlan refuses a plan without an effective selection before ev
   });
   assert.throws(
     () => validateClaudePlan(input, spec, plan),
-    /Claude Model binding is missing its effective selection/,
+    (error: unknown) =>
+      error instanceof ClaudeBindingMismatchError &&
+      error.code === "invalid-binding" &&
+      /Claude Model binding is missing its effective selection/.test(error.message),
   );
   assert.equal(lookedUp, false);
 });
