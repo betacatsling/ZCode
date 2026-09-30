@@ -24,6 +24,7 @@ export class FakeClaudeProcess {
   readonly sent: string[] = [];
   readonly calls: string[] = [];
   isRunning = true;
+  #token?: string;
 
   constructor(
     readonly options: FakeClaudeLaunchOptions,
@@ -117,12 +118,17 @@ export class FakeClaudeProcess {
     }
   }
 
+  /** Reads the helper token this launch was given (a rebind rewrites the shared profile file). */
+  async captureToken(): Promise<string> {
+    const path = join(this.options.env.CLAUDE_CONFIG_DIR!, "gateway-session-capability");
+    this.#token = (await readFile(path, "utf8")).trim();
+    return this.#token;
+  }
+
   /** Calls the Gateway Messages route with the helper token: 400 (empty body) while granted, 401 once revoked. */
   async gatewayStatus(): Promise<number | "unreachable"> {
     const env = this.options.env;
-    const token = (
-      await readFile(join(env.CLAUDE_CONFIG_DIR!, "gateway-session-capability"), "utf8")
-    ).trim();
+    const token = this.#token ?? (await this.captureToken());
     try {
       const response = await fetch(`${env.ANTHROPIC_BASE_URL}/v1/messages`, {
         method: "POST",
@@ -148,6 +154,7 @@ export function fakeClaudeLauncher(behavior: FakeClaudeProcessBehavior = {}) {
   const launchProcess = async (options: FakeClaudeLaunchOptions): Promise<ClaudeStreamProcess> => {
     const process = new FakeClaudeProcess(options, behavior);
     launches.push(process);
+    await process.captureToken();
     await behavior.onLaunch?.(process);
     return process as unknown as ClaudeStreamProcess;
   };
