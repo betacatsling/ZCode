@@ -15,6 +15,8 @@ export interface FakeClaudeProcessBehavior {
   readonly onLaunch?: (process: FakeClaudeProcess) => void | Promise<void>;
   /** Runs after a structured user message is accepted. */
   readonly onSend?: (process: FakeClaudeProcess, text: string) => void | Promise<void>;
+  /** Runs when the adapter aborts the process (cancel), before it is marked stopped. */
+  readonly onAbort?: (process: FakeClaudeProcess) => void;
 }
 
 let nextPid = 71_000;
@@ -54,6 +56,7 @@ export class FakeClaudeProcess {
 
   async abort(): Promise<void> {
     this.calls.push("abort");
+    this.behavior.onAbort?.(this);
     this.isRunning = false;
   }
 
