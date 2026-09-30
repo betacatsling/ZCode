@@ -159,10 +159,7 @@ async function withTemp(prefix: string, run: (temp: string) => Promise<void>): P
 
 test(
   "create() whose first activity sidecar write fails rejects with that error, releases the host and leaves an attachable running session",
-  {
-    timeout: TEST_TIMEOUT_MS,
-    todo: "repro: the mounted host leaks (journal owner locks, adapter subscription) when the first sidecar write fails",
-  },
+  { timeout: TEST_TIMEOUT_MS },
   async () => {
     await withTemp("zcode-create-sidecar-fail-", async (temp) => {
       const root = join(temp, "host");

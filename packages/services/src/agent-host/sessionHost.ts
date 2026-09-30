@@ -265,7 +265,20 @@ export class SessionHost {
       adapter,
       options.title,
     );
-    await host.#persistActivityIndex();
+    try {
+      await host.#persistActivityIndex();
+    } catch (error) {
+      // The backend is confirmed and the manifest says "running": this is a real, attachable
+      // session, so keep it (a missing sidecar lists as unknown) but release the host nobody will
+      // own, or its journal locks and adapter subscription outlive the failed create.
+      await host.close().catch((closeError: unknown) => {
+        logger.warn(undefined, "failed create: mounted host not released cleanly", {
+          hostSessionId: spec.hostSessionId,
+          error: closeError,
+        });
+      });
+      throw error;
+    }
     return host;
   }
 
