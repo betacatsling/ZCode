@@ -4,10 +4,10 @@
 
 `ZCODE_MULTI_HARNESS_ENABLED`
 
-| Value | Effect |
-| ----- | ------ |
-| exactly `1` | Allow **new** external Harness session admission (Pi / Codex / Claude Code / Devin) through lazy Agent Host when other gates pass |
-| unset, `0`, `true`, or any other string | Fail closed: no new external admission |
+| Value                                   | Effect                                                                                                                            |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| exactly `1`                             | Allow **new** external Harness session admission (Pi / Codex / Claude Code / Devin) through lazy Agent Host when other gates pass |
+| unset, `0`, `true`, or any other string | Fail closed: no new external admission                                                                                            |
 
 Owner of the boolean read: `isMultiHarnessNewSessionAdmissionEnabled` in `packages/shared/src/agent-host/multiHarnessAdmission.ts`. Production wiring (`packages/services/src/node.ts`, server CLI) must call that helper; do not re-implement loose truthiness.
 
