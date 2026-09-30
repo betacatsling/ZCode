@@ -135,6 +135,7 @@ test(
       for (const current of adapters) await current.shutdown();
       await targetGateway.close();
       await rm(root, { recursive: true, force: true });
+      assert.deepEqual(await straceTraceFiles(traceBase), [], "strace traces must not accumulate");
     });
 
     hostA = await SessionHost.create({ root: journalRoot, spec: specA, target, catalog, registry });
@@ -693,12 +694,18 @@ async function createStraceWrapper(
   return wrapperPath;
 }
 
-async function verifyLoopbackEgress(traceBase: string): Promise<void> {
+async function straceTraceFiles(traceBase: string): Promise<string[]> {
   const directory = join(traceBase, "..");
   const prefix = traceBase.slice(traceBase.lastIndexOf("/") + 1);
-  const files = (await readdir(directory)).filter((file) => file.startsWith(prefix));
+  return (await readdir(directory))
+    .filter((file) => file.startsWith(`${prefix}.`))
+    .map((file) => join(directory, file));
+}
+
+async function verifyLoopbackEgress(traceBase: string): Promise<void> {
+  const files = await straceTraceFiles(traceBase);
   assert.ok(files.length > 0, "strace must capture Claude Code connect() calls");
-  const traces = await Promise.all(files.map((file) => readFile(join(directory, file), "utf8")));
+  const traces = await Promise.all(files.map((file) => readFile(file, "utf8")));
   const text = traces.join("\n");
   const ipv4 = [...text.matchAll(/sa_family=AF_INET[^}]*sin_addr=inet_addr\("([^"]+)"\)/g)].map(
     (match) => match[1]!,
