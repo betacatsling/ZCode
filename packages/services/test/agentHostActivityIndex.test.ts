@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, readdir, rm, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, readdir, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import type { AgentCommand, ExecutionTarget, SessionSpec } from "@zcode/shared/agent-host";
 import { HarnessRegistry } from "../src/agent-host/harnessRegistry.js";
 import { MockHarness } from "../src/agent-host/mockHarness.js";
+import { SessionHost } from "../src/agent-host/sessionHost.js";
 import { AgentHostTargetService } from "../src/agent-host/targetService.js";
 
 const catalog = { fingerprint: "index-test", validateSelection: () => ({ ok: true as const }) };
@@ -165,3 +166,130 @@ test("target activity index is complete, bounded, and history survives a removed
     await rm(temp, { recursive: true, force: true });
   }
 });
+
+/** The activity sidecar under root that belongs to hostSessionId. */
+async function sidecarOf(root: string, hostSessionId: string): Promise<string> {
+  for (const name of await readdir(root)) {
+    if (!name.endsWith(".activity.json")) continue;
+    const path = join(root, name);
+    const stored = JSON.parse(await readFile(path, "utf8")) as { spec: SessionSpec };
+    if (stored.spec.hostSessionId === hostSessionId) return path;
+  }
+  throw new Error(`no activity sidecar for ${hostSessionId}`);
+}
+
+const UNREADABLE_SIDECARS: readonly {
+  name: string;
+  corrupt: (path: string) => Promise<void>;
+  skip?: boolean;
+}[] = [
+  {
+    // stat() still succeeds (and is small), readFile() fails with EISDIR.
+    name: "a directory (EISDIR)",
+    corrupt: async (path) => {
+      await rm(path);
+      await mkdir(path);
+    },
+  },
+  {
+    name: "a file without read permission (EACCES)",
+    corrupt: async (path) => chmod(path, 0o000),
+    // root reads through mode bits, so the read would not fail.
+    skip: process.getuid?.() === 0,
+  },
+];
+
+for (const { name, corrupt, skip } of UNREADABLE_SIDECARS) {
+  test(
+    `an activity sidecar that is ${name} lists that session as unknown and keeps the others`,
+    {
+      skip,
+      todo: "repro: listStoredActivityIndex rethrows non-ENOENT sidecar read errors",
+    },
+    async () => {
+      const temp = await mkdtemp(join(tmpdir(), "zcode-agent-activity-unreadable-"));
+      const data = join(temp, "host-data");
+      const firstWorktree = join(temp, "worktree-one");
+      const secondWorktree = join(temp, "worktree-two");
+      await mkdir(firstWorktree);
+      await mkdir(secondWorktree);
+      const firstSpec = session("session-one", firstWorktree, "workspace-one");
+      const secondSpec = session("session-two", secondWorktree, "workspace-two");
+      const registry = new HarnessRegistry();
+      registry.register(new MockHarness());
+      const service = new AgentHostTargetService({
+        root: data,
+        target: target(),
+        catalog,
+        registry,
+        authorizeWorktree: async () => true,
+      });
+      let history: AgentHostTargetService | undefined;
+      let corruptedPath: string | undefined;
+      try {
+        await service.create(firstSpec);
+        await service.create(secondSpec);
+        await service.close();
+        corruptedPath = await sidecarOf(data, "session-one");
+        await corrupt(corruptedPath);
+
+        const expected = [
+          [
+            "session-one",
+            {
+              runtimeEpoch: null,
+              sequence: 0,
+              state: "unknown",
+              activeTurnId: null,
+              pendingInteractionIds: [],
+            },
+          ],
+          ["session-two", "idle"],
+        ];
+        const stored = await SessionHost.listStoredActivityIndex(data, "target-a");
+        assert.deepEqual(
+          stored
+            .map((entry): [string, unknown] => [
+              entry.spec.hostSessionId,
+              entry.spec.hostSessionId === "session-one"
+                ? {
+                    runtimeEpoch: entry.runtimeEpoch,
+                    sequence: entry.sequence,
+                    state: entry.state,
+                    activeTurnId: entry.activeTurnId,
+                    pendingInteractionIds: entry.pendingInteractionIds,
+                  }
+                : entry.state,
+            ])
+            .sort((a, b) => a[0].localeCompare(b[0])),
+          expected,
+        );
+
+        // The unmounted target listing (next owner, sidebar) stays complete as well.
+        history = new AgentHostTargetService({
+          root: data,
+          target: target(),
+          catalog,
+          registry: new HarnessRegistry(),
+          authorizeWorktree: async () => false,
+        });
+        const index = await history.listActivityIndex();
+        assert.equal(index.complete, true);
+        assert.deepEqual(
+          index.sessions
+            .map((entry) => [entry.spec.hostSessionId, entry.state])
+            .sort((a, b) => a[0]!.localeCompare(b[0]!)),
+          [
+            ["session-one", "unknown"],
+            ["session-two", "idle"],
+          ],
+        );
+      } finally {
+        await service.close().catch(() => undefined);
+        await history?.close().catch(() => undefined);
+        if (corruptedPath) await chmod(corruptedPath, 0o700).catch(() => undefined);
+        await rm(temp, { recursive: true, force: true });
+      }
+    },
+  );
+}
