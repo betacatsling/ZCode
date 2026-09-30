@@ -48,9 +48,7 @@ function appearanceForAssetId(assetId: string): "light" | "dark" {
  * Exact allowlist lookup for UI-local SVG fallbacks. IDs are never interpreted
  * as paths, URLs, or dynamic imports.
  */
-export function readProjectSidebarHarnessStaticAsset(
-  assetId: string,
-): StaticHarnessAsset | null {
+export function readProjectSidebarHarnessStaticAsset(assetId: string): StaticHarnessAsset | null {
   const parsedId = staticAssetIdSchema.safeParse(assetId);
   if (!parsedId.success) return null;
   const fallback = LOCAL_INITIALS_FALLBACKS[parsedId.data];

@@ -17,7 +17,12 @@ export function HarnessSelector({
   onChange: (harnessId: string) => void;
 }) {
   return (
-    <div role="listbox" aria-label={label} className="flex flex-col gap-0.5" data-harness-selector="true">
+    <div
+      role="listbox"
+      aria-label={label}
+      className="flex flex-col gap-0.5"
+      data-harness-selector="true"
+    >
       {directory.map((entry) => {
         const selected = entry.harnessId === value;
         return (

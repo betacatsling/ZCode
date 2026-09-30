@@ -3,16 +3,19 @@ import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ZCodeIntlProvider } from "../src/i18n/IntlProvider.js";
-import {
-  acceptHarnessAssetSource,
-  HarnessIcon,
-} from "../src/agent-host/HarnessIcon.js";
+import { acceptHarnessAssetSource, HarnessIcon } from "../src/agent-host/HarnessIcon.js";
 import { HarnessSelector } from "../src/agent-host/HarnessSelector.js";
 import { ModelBindingSelector } from "../src/agent-host/ModelBindingSelector.js";
 import { CompatibilityStatus } from "../src/agent-host/CompatibilityStatus.js";
 import { admitsExecution, isUnverifiedCapability } from "../src/agent-host/SessionCapabilities.js";
-import { OrcaProjectSidebar, type OrcaSidebarHandlers } from "../src/project-sidebar/OrcaProjectSidebar.js";
-import { formatSidebarRelativeTime, orcaSidebarCopy } from "../src/project-sidebar/orcaSidebarCopy.js";
+import {
+  OrcaProjectSidebar,
+  type OrcaSidebarHandlers,
+} from "../src/project-sidebar/OrcaProjectSidebar.js";
+import {
+  formatSidebarRelativeTime,
+  orcaSidebarCopy,
+} from "../src/project-sidebar/orcaSidebarCopy.js";
 import {
   orcaDiscoveredCandidates,
   orcaHarnessAssets,
@@ -109,7 +112,10 @@ test("fixture has two projects, two workspaces each, and three sessions with two
   const harnessIds = feature?.sessions.map((row) => row.session.harnessId);
   assert.deepEqual(harnessIds, ["pi", "pi", "codex"]);
   assert.equal(feature?.workspace.isMainWorktree, false);
-  assert.equal(feature?.workspace.head.kind === "branch" ? feature.workspace.head.ref : "", "feature/sidebar");
+  assert.equal(
+    feature?.workspace.head.kind === "branch" ? feature.workspace.head.ref : "",
+    "feature/sidebar",
+  );
 });
 
 test("session rows use the directory icon, status, title, and relative time", () => {

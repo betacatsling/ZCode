@@ -33,7 +33,9 @@ test("settings model-provider Detail does not use CodingPlan entryGate", () => {
   assert.equal(detail.includes("CodingPlanEntryButton"), false);
   assert.equal(detail.includes("entryGate"), false);
   assert.equal(
-    existsSync(fileURLToPath(new URL("../src/settings/CodingPlanEntryButton.tsx", import.meta.url))),
+    existsSync(
+      fileURLToPath(new URL("../src/settings/CodingPlanEntryButton.tsx", import.meta.url)),
+    ),
     false,
   );
 });

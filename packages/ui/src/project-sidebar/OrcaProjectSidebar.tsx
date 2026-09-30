@@ -2,12 +2,20 @@ import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { Button } from "@/components/ui/button.js";
 import type { ModelBindingOption } from "@/agent-host/ModelBindingSelector.js";
 import type { CapabilityReport } from "@/agent-host/SessionCapabilities.js";
-import { DiscoveredWorktreesDialog, type DiscoveredWorktreeCandidate } from "./DiscoveredWorktreesDialog.js";
+import {
+  DiscoveredWorktreesDialog,
+  type DiscoveredWorktreeCandidate,
+} from "./DiscoveredWorktreesDialog.js";
 import type { OrcaSidebarChrome } from "./orcaSidebarChrome.js";
 import { orcaSidebarCopy } from "./orcaSidebarCopy.js";
 import { ProjectNode } from "./ProjectNode.js";
 import type { SidebarSnapshot } from "./planTypes.js";
-import { orderByIds, type AgentCreationDraft, type OrcaSidebarViewData, type WorkspaceCreationDraft } from "./sidebarViewStore.js";
+import {
+  orderByIds,
+  type AgentCreationDraft,
+  type OrcaSidebarViewData,
+  type WorkspaceCreationDraft,
+} from "./sidebarViewStore.js";
 import { WorkspaceCreationDialog } from "./WorkspaceCreationDialog.js";
 import { WorktreeWorkspaceNode } from "./WorktreeWorkspaceNode.js";
 
@@ -72,7 +80,11 @@ export function OrcaProjectSidebar({
     assets,
     query,
   };
-  const projects = orderByIds(snapshot.projects.map((node) => ({ ...node, id: node.project.id })), view.projectOrder, view.pinnedProjectIds);
+  const projects = orderByIds(
+    snapshot.projects.map((node) => ({ ...node, id: node.project.id })),
+    view.projectOrder,
+    view.pinnedProjectIds,
+  );
   return (
     <nav
       data-orca-sidebar="true"
@@ -101,7 +113,9 @@ export function OrcaProjectSidebar({
               <WorkspaceCreationDialog
                 open={view.workspaceDialogProjectId === node.project.id}
                 projectName={node.project.name}
-                targetLabel={node.workspaces[0]?.targetLabel ?? node.repositoryBinding.executionTargetId}
+                targetLabel={
+                  node.workspaces[0]?.targetLabel ?? node.repositoryBinding.executionTargetId
+                }
                 draft={view.workspaceDraft}
                 copy={copy}
                 onDraftChange={handlers.onWorkspaceDraftChange}

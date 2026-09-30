@@ -4,10 +4,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseProviderConfig } from "@zcode/provider";
-import {
-  isProviderStartupSyncPending,
-  shouldBlockRootRender,
-} from "../src/lib/rootStartupGate.js";
+import { isProviderStartupSyncPending, shouldBlockRootRender } from "../src/lib/rootStartupGate.js";
 import {
   buildPersonalProviderInitialConfig,
   validatePersonalProviderSetup,

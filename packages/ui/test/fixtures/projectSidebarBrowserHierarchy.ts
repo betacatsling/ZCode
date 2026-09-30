@@ -158,7 +158,13 @@ export function installHierarchyFixture(
     pendingReason: "nonGit" as const,
   };
   const _otherMainEmpty = twoMain;
-  state.migration = makeMigration([native, firstPi, secondPi, secondProjectPi, pendingNonGitRecord]);
+  state.migration = makeMigration([
+    native,
+    firstPi,
+    secondPi,
+    secondProjectPi,
+    pendingNonGitRecord,
+  ]);
   state.tasks = [
     {
       taskId: "native-session",

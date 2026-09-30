@@ -55,7 +55,10 @@ test("orphan team/product-login helpers are removed", () => {
 
 test("orphan useEnterpriseCodingPlanProducts hook is removed; Display/entitlement kept", () => {
   const hookPath = fileURLToPath(
-    new URL("../src/settings/model-provider-section/useEnterpriseCodingPlanProducts.ts", import.meta.url),
+    new URL(
+      "../src/settings/model-provider-section/useEnterpriseCodingPlanProducts.ts",
+      import.meta.url,
+    ),
   );
   assert.equal(existsSync(hookPath), false);
 
@@ -63,7 +66,9 @@ test("orphan useEnterpriseCodingPlanProducts hook is removed; Display/entitlemen
   assert.match(display, /export type EnterpriseCodingPlanProductDisplay/);
   assert.equal(display.includes("resolveEnterpriseCodingPlanProductList"), false);
 
-  const entitlements = readUi("../src/settings/model-provider-section/useCodingPlanEntitlements.ts");
+  const entitlements = readUi(
+    "../src/settings/model-provider-section/useCodingPlanEntitlements.ts",
+  );
   assert.match(entitlements, /export function useCodingPlanEntitlements|useCodingPlanEntitlements/);
 });
 
