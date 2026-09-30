@@ -19,6 +19,7 @@
     "prepare:browser-import-helper": "node scripts/build-windows-browser-import-helper.mjs",
     "prepare:macos-window-bounds": "node scripts/build-macos-window-bounds.mjs",
     "build:no-runtime-assets": "pnpm prepare:build-meta && node scripts/run-production-build.mjs",
+    "prebuild": "node ../../scripts/ensure-cli-deps.mjs @zcode/adapters...",
     "build": "pnpm prepare:runtime-assets && pnpm run build:no-runtime-assets",
     "bundle": "node scripts/bundle.mjs",
     "audit:bundle-size": "node scripts/audit-bundle-size.mjs",
