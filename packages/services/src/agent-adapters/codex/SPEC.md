@@ -29,20 +29,20 @@
 
 `codexHarnessCapabilities()` 是唯一能力声明所有者。`CodexHarnessAdapter.capabilities()` 原样返回该对象。SessionHost 可以把字段拷进 `BindingPlan.capabilities`，但 **不得** 在 probe 为 `supported` 时升级它们。
 
-| Field | `support` | Reason must say |
-| ----- | --------- | --------------- |
-| `text` | `experimental` | pinned local app-server and Fake Model control path |
-| `tools` | `experimental` | pinned local app-server and Fake Model control path |
-| `approvals` | `experimental` | pinned local app-server and Fake Model control path |
-| `cancelTurn` | `experimental` | pinned local app-server and Fake Model control path |
-| `history` | `experimental` | pinned local app-server and Fake Model control path |
-| `resumeExecution` | `unsupported` | `thread/resume` cold-attaches saved history only; Host `resumeExecution` never replays uncertain in-flight turns |
-| `images` | `unsupported` | names the `images` surface (no image attachments on send) |
-| `modelSwitch` | `unsupported` | names the `modelSwitch` surface (no in-turn model switch) |
-| `detach` | `unsupported` | view detach stays on the host subscription and does not stop this app-server |
-| `terminateSession` | `experimental` | terminate stops only the named host session; not a live CLI certification |
-| `viewHistory` | `unsupported` | no read-only history snapshot and does not replay prompts |
-| `hostManagedModel` | `experimental` | custom provider points at an injected Gateway port, but no model execution trace has been observed |
+| Field              | `support`      | Reason must say                                                                                                  |
+| ------------------ | -------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `text`             | `experimental` | pinned local app-server and Fake Model control path                                                              |
+| `tools`            | `experimental` | pinned local app-server and Fake Model control path                                                              |
+| `approvals`        | `experimental` | pinned local app-server and Fake Model control path                                                              |
+| `cancelTurn`       | `experimental` | pinned local app-server and Fake Model control path                                                              |
+| `history`          | `experimental` | pinned local app-server and Fake Model control path                                                              |
+| `resumeExecution`  | `unsupported`  | `thread/resume` cold-attaches saved history only; Host `resumeExecution` never replays uncertain in-flight turns |
+| `images`           | `unsupported`  | names the `images` surface (no image attachments on send)                                                        |
+| `modelSwitch`      | `unsupported`  | names the `modelSwitch` surface (no in-turn model switch)                                                        |
+| `detach`           | `unsupported`  | view detach stays on the host subscription and does not stop this app-server                                     |
+| `terminateSession` | `experimental` | terminate stops only the named host session; not a live CLI certification                                        |
+| `viewHistory`      | `unsupported`  | no read-only history snapshot and does not replay prompts                                                        |
+| `hostManagedModel` | `experimental` | custom provider points at an injected Gateway port, but no model execution trace has been observed               |
 
 **probe `supported` ≠ Provider live cert，也 ≠ 升级 capabilities。** CLI 版本探针通过只说明 pinned app-server 可用；不得据此把上述 `experimental` / `unsupported` 字段抬成 `supported`，也不得当作真实 Provider 已认证。
 
