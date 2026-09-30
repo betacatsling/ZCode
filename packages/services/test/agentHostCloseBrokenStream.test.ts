@@ -726,6 +726,56 @@ test(
   },
 );
 
+/** `${sidecar}.<pid>.<uuid>.tmp` files an atomic sidecar write left behind under root. */
+async function sidecarTempFiles(root: string): Promise<string[]> {
+  return (await readdir(root)).filter((name) => /\.activity\.json\..+\.tmp$/.test(name));
+}
+
+/** A non-empty directory in place of the sidecar: every atomic rename onto it fails. */
+async function occupySidecar(root: string): Promise<void> {
+  const path = await sidecarPath(root);
+  await rm(path);
+  await mkdir(path);
+  await writeFile(join(path, "occupied"), "");
+}
+
+test(
+  "a sidecar write whose rename fails removes its temp file and still surfaces the rename error",
+  {
+    timeout: TEST_TIMEOUT_MS,
+    todo: "repro: #persistActivityIndex leaves its .tmp file behind when rename fails",
+  },
+  async () => {
+    await withRoot("zcode-sidecar-temp-", async (root, worktree) => {
+      const harness = new OpenTurnHarness();
+      const { host } = await idleHost(root, worktree, harness);
+      try {
+        await occupySidecar(root);
+        // Send admission persists "busy" (and then the released reservation) before accepting;
+        // the caller still sees the original rename error, not a cleanup error.
+        const admission = rejection(
+          await settle(host.dispatch(send("host-a", "1"))),
+          "send whose admission cannot persist the sidecar",
+        ) as NodeJS.ErrnoException;
+        assert.equal(admission.syscall, "rename", String(admission));
+        assert.deepEqual(harness.calls.send, [], "a prompt that was not admitted never runs");
+        assert.deepEqual(await sidecarTempFiles(root), [], "admission leaves no temp file");
+        // Force-close rewrites the sidecar best-effort: typed close error, and again no temp file.
+        const cause = await breakAndCapture(
+          host,
+          harness,
+          "foreign event identity",
+          /foreign event identity/,
+        );
+        assertTypedCloseError(await settle(host.close()), cause);
+        assert.deepEqual(await sidecarTempFiles(root), [], "force-close leaves no temp file");
+      } finally {
+        await settle(host.close()).catch(() => undefined);
+      }
+    });
+  },
+);
+
 for (const { kind, error: expected } of BREAKS) {
   test(
     `broken stream (${kind}), no open turn: force-close rewrites the stored activity to unknown`,
