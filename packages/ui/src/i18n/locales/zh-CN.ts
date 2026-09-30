@@ -1806,6 +1806,14 @@ const zhCN: Record<string, string> = {
   "chat.workspaceHookPending.message": "{count} 个工作区 Hook 待审核，本会话暂未启用",
   "chat.workspaceHookPending.review": "去审核",
   "chat.workspaceHookPending.dismiss": "忽略",
+  // Provider 凭证被拒绝（401）后需要用户重新配置：会话错误、发送回执与能力查询共用
+  "chat.providerReconfigure.title": "需要重新配置 Provider",
+  "chat.providerReconfigure.messageNamed":
+    "「{provider}」的认证已被拒绝。重新配置前，使用该 Provider 的请求会被拒绝，其他 Provider 不受影响。",
+  "chat.providerReconfigure.messageUnnamed":
+    "当前 Provider 的认证已被拒绝。重新配置前，使用该 Provider 的请求会被拒绝，其他 Provider 不受影响。",
+  "chat.providerReconfigure.open": "打开 Provider 设置",
+  "chat.providerReconfigure.dismiss": "稍后",
 
   // 任务列表
   "taskList.newTask": "新建任务",

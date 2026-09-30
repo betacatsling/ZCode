@@ -125,6 +125,14 @@ import { projectPendingGuideQueue } from "@/v4/pendingGuideProjection.js";
 import { ConversationQuotaBanner } from "@/v4/ConversationQuotaBanner.js";
 import { PendingCommandRecoveryBanner } from "@/v4/PendingCommandRecoveryBanner.js";
 import { WorkspaceHookPendingBanner } from "@/v4/WorkspaceHookPendingBanner.js";
+import { ProviderReconfigureNotice } from "@/v4/ProviderReconfigureNotice.js";
+import {
+  openProviderReconfigureSettings,
+  providerReconfigureReceiptFromAck,
+  resolveProviderReconfigureNotice,
+  type ProviderReconfigureReceipt,
+} from "@/v4/providerReconfigureNotice.js";
+import { useWorkflowSubagentModelProviderName } from "@/hooks/useWorkflowSubagentModelProviderName.js";
 import { ConversationStatusPanel } from "@/v4/ConversationStatusPanel.js";
 import { SessionSubscriptionErrorPanel } from "@/v4/SessionSubscriptionErrorPanel.js";
 import { ConversationTimeline } from "@/v4/ConversationTimeline.js";
@@ -1025,6 +1033,9 @@ export function SessionPane({
   );
   const [dismissedErrorKeys, setDismissedErrorKeys] = useState<readonly string[]>([]);
   const [sendSubmissionError, setSendSubmissionError] = useState<ZCodeUiError | null>(null);
+  const [providerReconfigureReceipt, setProviderReconfigureReceipt] =
+    useState<ProviderReconfigureReceipt | null>(null);
+  const [dismissedProviderNoticeKey, setDismissedProviderNoticeKey] = useState<string | null>(null);
   const [paneLocalSummaryPanelVariantOverride, setPaneLocalSummaryPanelVariantOverride] =
     useState<ChatViewSummaryPanelVariant | null>(null);
   const [terminalSectionOpen, setTerminalSectionOpen] = useState(false);
@@ -1491,6 +1502,11 @@ export function SessionPane({
         throw error;
       }
       pendingCommandRegistry.applyAck(envelope, ack);
+      // Host admission refused the turn because this session's Provider credential was rejected.
+      const reconfigureReceipt = providerReconfigureReceiptFromAck(ack, targetSessionId);
+      if (reconfigureReceipt) setProviderReconfigureReceipt(reconfigureReceipt);
+      else if (type === "sendText" && ack.status === "accepted")
+        setProviderReconfigureReceipt(null);
       if (ack.status === "accepted") {
         acceptSelection?.();
         acceptRecent?.();
@@ -3973,7 +3989,21 @@ export function SessionPane({
     (quotaBanner.takesOverError ? null : projectedComposerError);
   useEffect(() => {
     setSendSubmissionError(null);
+    setProviderReconfigureReceipt(null);
   }, [sessionId]);
+  const providerReconfigureNotice = resolveProviderReconfigureNotice({
+    sessionId: snapshot?.sessionId ?? sessionId,
+    phase: snapshot?.control.phase ?? null,
+    lastError: controlLastError,
+    receipt: providerReconfigureReceipt,
+    sessionProviderId: snapshot?.config.provider ?? null,
+    sessionModelId: snapshot?.config.model ?? null,
+  });
+  const lookupProviderName = useWorkflowSubagentModelProviderName(workspacePath, workspaceIdentity);
+  const handleOpenProviderReconfigure = useCallback(
+    (providerId: string) => openProviderReconfigureSettings(providerId, openSettingsTab),
+    [openSettingsTab],
+  );
   const handleDismissComposerError = useCallback(() => {
     if (draftModelReadinessError) {
       dismissDraftModelReadinessError();
@@ -4487,6 +4517,14 @@ export function SessionPane({
           state={quotaBanner.state}
           onShown={quotaBanner.markShown}
           onDismiss={quotaBanner.dismiss}
+        />
+      ) : null}
+      {providerReconfigureNotice && providerReconfigureNotice.key !== dismissedProviderNoticeKey ? (
+        <ProviderReconfigureNotice
+          notice={providerReconfigureNotice}
+          providerLabel={lookupProviderName?.(providerReconfigureNotice.providerId)}
+          onOpenSettings={handleOpenProviderReconfigure}
+          onDismiss={() => setDismissedProviderNoticeKey(providerReconfigureNotice.key)}
         />
       ) : null}
       {recoverableCommand ? (

@@ -1948,6 +1948,14 @@ const enUS: Record<string, string> = {
     "{count} workspace hook(s) pending review; disabled for this session",
   "chat.workspaceHookPending.review": "Review",
   "chat.workspaceHookPending.dismiss": "Dismiss",
+  // Provider credential rejected (401): shared by session error, send receipt and capability
+  "chat.providerReconfigure.title": "Provider needs to be reconfigured",
+  "chat.providerReconfigure.messageNamed":
+    "Authentication for “{provider}” was rejected. Requests using this Provider are refused until it is reconfigured; other Providers are unaffected.",
+  "chat.providerReconfigure.messageUnnamed":
+    "Authentication for the current Provider was rejected. Requests using this Provider are refused until it is reconfigured; other Providers are unaffected.",
+  "chat.providerReconfigure.open": "Open Provider settings",
+  "chat.providerReconfigure.dismiss": "Later",
 
   // Task list
   "taskList.newTask": "New task",
