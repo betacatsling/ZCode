@@ -15,11 +15,16 @@
  * - AgentHostTargetService.close() 照样关闭其余 Host、释放 owner fence，最后抛出该类型错误。
  * - 强制关闭把 activity sidecar 改写为 "unknown"（best-effort，写失败仍抛 EventStreamFailure），
  *   卸载后的会话不会一直显示损坏前存下的 "idle"。健康 close 不写 sidecar。
+ * - sidecar 原子写（临时文件 + rename）失败时删掉自己的临时文件，调用方仍收到原始写/rename 错误。
+ * - adapter run 在强制关闭之后才结束：什么都不写、不抛。关闭时正在写 turn 结算（命令 journal +
+ *   sidecar）的，close() 等它写完再关 journal；close() 落定之后不再有任何写入。
  *
  * 每个可能挂住的等待都用 settle() 限时观察，每个 test 也有 timeout，回归时快速失败而不是挂住 CI。
  */
 import assert from "node:assert/strict";
+import fs, { readdirSync, statSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -726,6 +731,53 @@ test(
   },
 );
 
+/** `${sidecar}.<pid>.<uuid>.tmp` files an atomic sidecar write left behind under root. */
+async function sidecarTempFiles(root: string): Promise<string[]> {
+  return (await readdir(root)).filter((name) => /\.activity\.json\..+\.tmp$/.test(name));
+}
+
+/** A non-empty directory in place of the sidecar: every atomic rename onto it fails. */
+async function occupySidecar(root: string): Promise<void> {
+  const path = await sidecarPath(root);
+  await rm(path);
+  await mkdir(path);
+  await writeFile(join(path, "occupied"), "");
+}
+
+test(
+  "a sidecar write whose rename fails removes its temp file and still surfaces the rename error",
+  { timeout: TEST_TIMEOUT_MS },
+  async () => {
+    await withRoot("zcode-sidecar-temp-", async (root, worktree) => {
+      const harness = new OpenTurnHarness();
+      const { host } = await idleHost(root, worktree, harness);
+      try {
+        await occupySidecar(root);
+        // Send admission persists "busy" (and then the released reservation) before accepting;
+        // the caller still sees the original rename error, not a cleanup error.
+        const admission = rejection(
+          await settle(host.dispatch(send("host-a", "1"))),
+          "send whose admission cannot persist the sidecar",
+        ) as NodeJS.ErrnoException;
+        assert.equal(admission.syscall, "rename", String(admission));
+        assert.deepEqual(harness.calls.send, [], "a prompt that was not admitted never runs");
+        assert.deepEqual(await sidecarTempFiles(root), [], "admission leaves no temp file");
+        // Force-close rewrites the sidecar best-effort: typed close error, and again no temp file.
+        const cause = await breakAndCapture(
+          host,
+          harness,
+          "foreign event identity",
+          /foreign event identity/,
+        );
+        assertTypedCloseError(await settle(host.close()), cause);
+        assert.deepEqual(await sidecarTempFiles(root), [], "force-close leaves no temp file");
+      } finally {
+        await settle(host.close()).catch(() => undefined);
+      }
+    });
+  },
+);
+
 for (const { kind, error: expected } of BREAKS) {
   test(
     `broken stream (${kind}), no open turn: force-close rewrites the stored activity to unknown`,
@@ -779,6 +831,194 @@ test(
       } finally {
         await settle(closing ?? service.close()).catch(() => undefined);
       }
+    });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Adapter run settling around a force-close
+// ---------------------------------------------------------------------------
+
+/** ino:size:mtime of every file under root except the worktree; any write or rename shows up. */
+function writeFingerprint(root: string): Record<string, string> {
+  const files: Record<string, string> = {};
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (path !== join(root, "worktree")) walk(path);
+        continue;
+      }
+      const metadata = statSync(path);
+      files[path.slice(root.length + 1)] = `${metadata.ino}:${metadata.size}:${metadata.mtimeMs}`;
+    }
+  };
+  walk(root);
+  return files;
+}
+
+/** Collects process-level unhandled rejections raised while run() is in progress. */
+async function collectingUnhandledRejections(
+  run: (unhandled: readonly unknown[]) => Promise<void>,
+): Promise<void> {
+  const unhandled: unknown[] = [];
+  const onRejection = (reason: unknown): void => {
+    unhandled.push(reason);
+  };
+  process.on("unhandledRejection", onRejection);
+  try {
+    await run(unhandled);
+  } finally {
+    process.off("unhandledRejection", onRejection);
+  }
+}
+
+/**
+ * Holds the next rename onto an activity sidecar under root until release(), pinning a writer
+ * mid-way through its atomic sidecar write. Swaps the node:fs/promises export that sessionHost.ts
+ * imports (syncBuiltinESMExports updates the live ESM binding); restore() puts it back.
+ */
+function holdNextSidecarRename(root: string) {
+  const promises = fs.promises as { rename: typeof fs.promises.rename };
+  const original = promises.rename;
+  let armed = true;
+  let signalHeld!: () => void;
+  let release!: () => void;
+  let signalDone!: () => void;
+  const held = new Promise<void>((resolve) => (signalHeld = resolve));
+  const released = new Promise<void>((resolve) => (release = resolve));
+  const done = new Promise<void>((resolve) => (signalDone = resolve));
+  promises.rename = async (from, to) => {
+    const destination = String(to);
+    if (!armed || !destination.startsWith(root) || !destination.endsWith(".activity.json"))
+      return original(from, to);
+    armed = false;
+    signalHeld();
+    await released;
+    try {
+      return await original(from, to);
+    } finally {
+      signalDone();
+    }
+  };
+  syncBuiltinESMExports();
+  return {
+    held,
+    done,
+    release: () => release(),
+    restore: () => {
+      promises.rename = original;
+      syncBuiltinESMExports();
+    },
+  };
+}
+
+test(
+  "broken stream: an adapter run that settles after force-close writes nothing and throws nothing",
+  { timeout: TEST_TIMEOUT_MS },
+  async () => {
+    await withRoot("zcode-close-late-run-", async (root, worktree) => {
+      await collectingUnhandledRejections(async (unhandled) => {
+        const harness = new OpenTurnHarness();
+        const { host, spec } = await hostWithOpenTurn(root, worktree, harness);
+        try {
+          const cause = await breakAndCapture(host, harness, "sequence gap", /sequence gap/);
+          assertTypedCloseError(await settle(host.close()), cause);
+          const atClose = writeFingerprint(root);
+          // The run that nothing could end finally settles (e.g. the backend process exits).
+          harness.releaseAll();
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          assert.deepEqual(writeFingerprint(root), atClose, "no journal or sidecar write");
+          assert.deepEqual(unhandled, [], "no unhandled rejection from the late settlement");
+          assert.match(
+            rejection(await settle(host.dispatch(send("host-a", "2"))), "dispatch after close")
+              .message,
+            /session host closed/,
+          );
+          const reopened = await within(
+            SessionHost.open({
+              root,
+              spec,
+              target: target(),
+              catalog,
+              registry: registryWith(harness),
+            }),
+            "reopen after force close",
+          );
+          assert.equal(reopened.queryCommand("send-1")?.status, "execution-unknown");
+          assert.equal(harness.calls.send.length, 1, "accepted prompt is never replayed");
+          await within(reopened.close(), "close reopened");
+        } finally {
+          harness.releaseAll();
+          await settle(host.close()).catch(() => undefined);
+        }
+      });
+    });
+  },
+);
+
+test(
+  "broken stream: a turn settlement in flight when close() force-closes lands before close() settles, never after",
+  { timeout: TEST_TIMEOUT_MS },
+  async () => {
+    await withRoot("zcode-close-late-settlement-", async (root, worktree) => {
+      await collectingUnhandledRejections(async (unhandled) => {
+        const harness = new OpenTurnHarness();
+        const { host, spec } = await hostWithOpenTurn(root, worktree, harness);
+        const cause = await breakAndCapture(host, harness, "sequence gap", /sequence gap/);
+        const gate = holdNextSidecarRename(root);
+        try {
+          // The run settles before anyone closes the host: its settlement records the send as
+          // execution-unknown and is now held inside its sidecar rewrite.
+          harness.releaseAll();
+          await within(gate.held, "turn settlement reaching its sidecar write");
+          let atClose: Record<string, string> | undefined;
+          const closing = settle(
+            host.close().then(
+              () => {
+                atClose = writeFingerprint(root);
+              },
+              (error: unknown) => {
+                atClose = writeFingerprint(root);
+                throw error;
+              },
+            ),
+          );
+          // Room for close() to settle while the settlement's write is still held.
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          gate.release();
+          assertTypedCloseError(await closing, cause);
+          await within(gate.done, "held sidecar rename");
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          assert.deepEqual(writeFingerprint(root), atClose, "nothing is written after close()");
+          assert.equal(await listedState(root), "unknown");
+          assert.deepEqual(unhandled, [], "no unhandled rejection from the settlement");
+          assert.match(
+            rejection(await settle(host.dispatch(send("host-a", "2"))), "dispatch after close")
+              .message,
+            /session host closed/,
+          );
+          gate.restore();
+          const reopened = await within(
+            SessionHost.open({
+              root,
+              spec,
+              target: target(),
+              catalog,
+              registry: registryWith(harness),
+            }),
+            "reopen after force close",
+          );
+          assert.equal(reopened.queryCommand("send-1")?.status, "execution-unknown");
+          assert.equal(harness.calls.send.length, 1, "accepted prompt is never replayed");
+          await within(reopened.close(), "close reopened");
+        } finally {
+          gate.release();
+          gate.restore();
+          harness.releaseAll();
+          await settle(host.close()).catch(() => undefined);
+        }
+      });
     });
   },
 );
