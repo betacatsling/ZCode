@@ -130,7 +130,10 @@ export function breakHostStream(r: ReopenHarness, host: SessionHost): void {
   );
 }
 
-/** Occupies the first activity sidecar path with a non-empty directory: its atomic rename fails. */
+/**
+ * Replaces the session's activity sidecar with a non-empty directory, so the next sidecar write
+ * (the atomic rename onto it) fails. Returns the undo.
+ */
 export async function occupySidecar(r: ReopenHarness): Promise<() => Promise<void>> {
   const spec = r.h.spec;
   const identity = [
@@ -141,6 +144,7 @@ export async function occupySidecar(r: ReopenHarness): Promise<() => Promise<voi
   ];
   const digest = createHash("sha256").update(JSON.stringify(identity)).digest("hex");
   const sidecar = join(r.root, `${digest}.activity.json`);
+  await rm(sidecar, { force: true });
   await mkdir(sidecar, { recursive: true });
   await writeFile(join(sidecar, "occupied"), "");
   return () => rm(sidecar, { recursive: true });
