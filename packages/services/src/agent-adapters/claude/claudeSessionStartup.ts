@@ -73,7 +73,7 @@ export async function startClaudeSession(
   if (!ctx.launchProcess && (await readClaudeCliVersion(executablePath)) !== ctx.version)
     throw new Error("Claude Code CLI version does not match 2.1.263");
   const model = prepared?.model ?? (await ctx.modelFactory(spec, plan));
-  validateClaudeModel(plan, model);
+  const effort = validateClaudeModel(plan, model);
   if (!ctx.isSelectionAuthorized(plan))
     throw new Error("Claude Model selection is no longer authorized");
   const guardedModel = guardClaudeModel(model, plan, ctx.isSelectionAuthorized);
@@ -83,8 +83,6 @@ export async function startClaudeSession(
     model.options.maxOutputTokens ?? model.optionSpecs.maxOutputTokens.max,
     CLAUDE_MAX_OUTPUT_TOKENS,
   );
-  const effort = plan.effective?.options?.reasoningLevel;
-  if (!effort) throw new Error("Claude Model binding has no selected effort level");
   const grant = gateway.createGrant({
     protocol: "anthropic-messages",
     sessionId: spec.hostSessionId,
@@ -183,7 +181,7 @@ export async function startClaudeSession(
     gateway.revoke(grant.id);
     if (process?.isRunning) await process.terminate();
     await hookServer.close();
-    if (runtime) ctx.registry.remove(spec.hostSessionId, runtime);
+    // Callers register the runtime only after this resolves, so there is nothing to unregister.
     throw error;
   }
 }

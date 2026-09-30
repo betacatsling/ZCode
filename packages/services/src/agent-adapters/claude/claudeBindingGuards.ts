@@ -99,16 +99,20 @@ export function assertClaudeGrantMatchesBinding(
   }
 }
 
-export function validateClaudeModel(plan: BindingPlan, model: Model): void {
+/** Returns the validated effort; startup passes it to the session profile. */
+export function validateClaudeModel(plan: BindingPlan, model: Model): string {
+  const effort = model.options.reasoningLevel;
   if (
     !plan.effective ||
     model.providerId !== plan.effective.providerId ||
     model.modelId !== plan.effective.modelId ||
-    model.options.reasoningLevel !== plan.effective.options?.reasoningLevel ||
-    !["low", "medium", "high", "xhigh", "max"].includes(model.options.reasoningLevel ?? "")
+    effort !== plan.effective.options?.reasoningLevel ||
+    !effort ||
+    !["low", "medium", "high", "xhigh", "max"].includes(effort)
   ) {
     throw new Error("Claude Model differs from its captured Messages binding or effort");
   }
+  return effort;
 }
 
 export function guardClaudeModel(
