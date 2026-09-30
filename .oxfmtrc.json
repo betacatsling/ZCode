@@ -5,6 +5,8 @@
     "third-party/inventory.json",
     "third-party/upstream/**",
     "third-party/native-search/licenses/**",
-    "third-party/runtime/*.txt"
+    "third-party/runtime/*.txt",
+    "packages/services/test/fixtures/codex-app-server-schema/0.157.1/codex_app_server_protocol.schemas.json",
+    "packages/services/test/fixtures/codex-app-server-schema/0.157.1/codex_app_server_protocol.v2.schemas.json"
   ]
 }
