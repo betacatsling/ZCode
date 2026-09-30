@@ -87,15 +87,15 @@ git switch -c recovery/multi-harness-completion FETCH_HEAD
 
 ### 元数据与比较口径
 
-| 项目 | 结果 |
-| --- | --- |
-| PR | #16 `M1/M7：发布版本锁定与隔离回滚演练（待集成验收）` |
-| 状态 | **open / Draft / 未合并**；GitHub 报告 mergeable clean，但没有合并结果 |
-| head | `cursor/wave5-release-hardening-c3f2` @ `db215c8e20d7c9635643b56d65364e0d03d81f54` |
-| base（GitHub 元数据） | `cursor/wave4-harness-integration-b7a9` @ `5ae4353d46caf9c3f22c44b07fa57cdd31127161` |
-| commit list | 1 个提交：`db215c8 feat: drill macOS-local harness release rollback`（父提交 `8caf1a793b7303a3b41b55c0f3b0ca4acd212906`） |
-| 对比 tip | `426bdf711b8e14e984b571067b8bcdeb4c8385c9`（当前 `cursor/wave4-harness-integration-b7a9`） |
-| GitHub 文件统计 | 8 个文件，659 additions，0 deletions |
+| 项目                  | 结果                                                                                                                      |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| PR                    | #16 `M1/M7：发布版本锁定与隔离回滚演练（待集成验收）`                                                                     |
+| 状态                  | **open / Draft / 未合并**；GitHub 报告 mergeable clean，但没有合并结果                                                    |
+| head                  | `cursor/wave5-release-hardening-c3f2` @ `db215c8e20d7c9635643b56d65364e0d03d81f54`                                        |
+| base（GitHub 元数据） | `cursor/wave4-harness-integration-b7a9` @ `5ae4353d46caf9c3f22c44b07fa57cdd31127161`                                      |
+| commit list           | 1 个提交：`db215c8 feat: drill macOS-local harness release rollback`（父提交 `8caf1a793b7303a3b41b55c0f3b0ca4acd212906`） |
+| 对比 tip              | `426bdf711b8e14e984b571067b8bcdeb4c8385c9`（当前 `cursor/wave4-harness-integration-b7a9`）                                |
+| GitHub 文件统计       | 8 个文件，659 additions，0 deletions                                                                                      |
 
 GitHub 的 changed-files 与 `8caf1a7..db215c8` 的提交级 diff 都是同一组 8 个新增文件。需要注意：head 的实际父提交不是 GitHub base SHA `5ae4353`；直接做 `5ae4353..db215c8` 会把父分支已有的 Pi/Claude 等变更也混入，得到 14 个文件。以下只按 #16 自身提交的 8 个文件分组，不把父提交差异冒充 #16；正式采纳前需维护者确认 base/parent 漂移（此元数据风险不计入下表资产数量）。
 
@@ -103,12 +103,12 @@ GitHub 的 changed-files 与 `8caf1a7..db215c8` 的提交级 diff 都是同一�
 
 按独立资产组计：**可采纳 2 组（5 文件）／过期 0 组（0 文件）／需复核 2 组（3 文件）**。没有发现已经被当前 tip 完全等价覆盖、应直接判定过期的 #16 文件；“可采纳”不等于已通过当前候选验收。
 
-| area | file(s) | change | grade | evidence | follow-up |
-| --- | --- | --- | --- | --- | --- |
-| 发布演练说明 | `docs/harness-refactor/RELEASE.md`; `packages/services/src/agent-host/release/SPEC.md` | 记录 macOS/launchd 限定、版本锁定、隔离临时目录、native/external sidecar、回滚和未支持项 | **可采纳** | 两个文件在 `426bdf7` 均不存在；总计划 §4/§7 要求 M1 固定依赖并保留 #16 的 fixture 限制，现有本记录也明确“fixture 不等于安装包认证” | 可作为独立文档补丁；合入前更新比较 SHA、当前构建结果和实际证据链接，不把历史 7 pass 直接升级为当前 tip 认证 |
-| 隔离与回滚基础 helper | `drillRoot.ts`; `nativeReplay.ts`; `upgradeRollback.ts` | 只在 `tmpdir` 内操作，复用 `readLegacyZCodeSession` 区分 native/external，备份/恢复原生文件并保持 sidecar 分离 | **可采纳** | tip 没有 `agent-host/release/`；当前仍有 `readLegacyZCodeSession`（`sessionRouter.ts`）和既有 schema/sidecar 语义，未发现同功能后续实现 | 可作为 standalone M1 fixture patch；在 tip 上运行隔离路径、坏记录、回滚幂等/失败不替换等测试后再采纳；不接入生产启动路径 |
-| macOS 假传输与演练测试 | `macLocalFakeTransport.ts`; `releaseDrill.test.ts` | 用 `CommandJournal` 演练同工作区三会话断线不重放、删除期间拒绝新会话、版本/回滚/未来字段负例 | **需复核** | tip 仍有 `CommandJournal.open`/`query`（`agent-host/commandJournal.ts`），但 release fixture 在 tip 不存在；PR 正文的 7 pass 是旧分支结果，不能替代 `426bdf7` 当前 API/构建验证 | 在 tip 新 worktree 运行 targeted test、typecheck、lint/architecture check；确认 `CommandJournal` 的 current/unknown/duplicate 语义与 40 次循环仍成立，再作为独立 patch |
-| 版本锁定表 | `versionLock.ts` | 锁定 Model Gateway、Codex/Pi/Claude/ACP/ZCode、schema 和 wire 版本；部分值用源码正则测试 | **需复核** | 当前 tip 的现值仍匹配：`MODEL_GATEWAY_VERSION=0.3.0`、Pi `0.87.1`、Codex `0.157.1`、ACP `0.1.0`、V4 wire `3`、ZCode protocol `1`；但 Pi/Codex adapter version 是源码字面量，且没有当前 release 模块 | 先解决 PR base/parent 漂移，再决定是否保留源码正则锁定或改为稳定导出；在标准构建中验证锁定值随依赖/CLI 变更失败而非静默过期 |
+| area                   | file(s)                                                                                | change                                                                                                         | grade      | evidence                                                                                                                                                                                            | follow-up                                                                                                                                                              |
+| ---------------------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 发布演练说明           | `docs/harness-refactor/RELEASE.md`; `packages/services/src/agent-host/release/SPEC.md` | 记录 macOS/launchd 限定、版本锁定、隔离临时目录、native/external sidecar、回滚和未支持项                       | **可采纳** | 两个文件在 `426bdf7` 均不存在；总计划 §4/§7 要求 M1 固定依赖并保留 #16 的 fixture 限制，现有本记录也明确“fixture 不等于安装包认证”                                                                  | 可作为独立文档补丁；合入前更新比较 SHA、当前构建结果和实际证据链接，不把历史 7 pass 直接升级为当前 tip 认证                                                            |
+| 隔离与回滚基础 helper  | `drillRoot.ts`; `nativeReplay.ts`; `upgradeRollback.ts`                                | 只在 `tmpdir` 内操作，复用 `readLegacyZCodeSession` 区分 native/external，备份/恢复原生文件并保持 sidecar 分离 | **可采纳** | tip 没有 `agent-host/release/`；当前仍有 `readLegacyZCodeSession`（`sessionRouter.ts`）和既有 schema/sidecar 语义，未发现同功能后续实现                                                             | 可作为 standalone M1 fixture patch；在 tip 上运行隔离路径、坏记录、回滚幂等/失败不替换等测试后再采纳；不接入生产启动路径                                               |
+| macOS 假传输与演练测试 | `macLocalFakeTransport.ts`; `releaseDrill.test.ts`                                     | 用 `CommandJournal` 演练同工作区三会话断线不重放、删除期间拒绝新会话、版本/回滚/未来字段负例                   | **需复核** | tip 仍有 `CommandJournal.open`/`query`（`agent-host/commandJournal.ts`），但 release fixture 在 tip 不存在；PR 正文的 7 pass 是旧分支结果，不能替代 `426bdf7` 当前 API/构建验证                     | 在 tip 新 worktree 运行 targeted test、typecheck、lint/architecture check；确认 `CommandJournal` 的 current/unknown/duplicate 语义与 40 次循环仍成立，再作为独立 patch |
+| 版本锁定表             | `versionLock.ts`                                                                       | 锁定 Model Gateway、Codex/Pi/Claude/ACP/ZCode、schema 和 wire 版本；部分值用源码正则测试                       | **需复核** | 当前 tip 的现值仍匹配：`MODEL_GATEWAY_VERSION=0.3.0`、Pi `0.87.1`、Codex `0.157.1`、ACP `0.1.0`、V4 wire `3`、ZCode protocol `1`；但 Pi/Codex adapter version 是源码字面量，且没有当前 release 模块 | 先解决 PR base/parent 漂移，再决定是否保留源码正则锁定或改为稳定导出；在标准构建中验证锁定值随依赖/CLI 变更失败而非静默过期                                            |
 
 ### 结论
 

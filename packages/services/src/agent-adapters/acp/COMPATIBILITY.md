@@ -2,11 +2,11 @@
 
 稳定合同是 ACP protocol version 1。客户端在 `initialize` 里提供 version 2，若对方降回 1，按 v1 协商结果工作。
 
-| 协商结果 | 准入 | resume | viewHistory |
-| --- | --- | --- | --- |
-| version 1，且 `loadSession` 或 `sessionCapabilities.resume` 为真 | harness-managed | 只调用被协商的方法 | 读已发出的宿主事件 |
-| version 1，两者都没有 | 可以新建会话 | unsupported，不发送 load/resume/new/prompt | 仍可查看 |
-| version 2 或未知版本 | experimental，不创建会话 | 不调用 session 方法 | 不依赖 Agent |
+| 协商结果                                                         | 准入                     | resume                                     | viewHistory        |
+| ---------------------------------------------------------------- | ------------------------ | ------------------------------------------ | ------------------ |
+| version 1，且 `loadSession` 或 `sessionCapabilities.resume` 为真 | harness-managed          | 只调用被协商的方法                         | 读已发出的宿主事件 |
+| version 1，两者都没有                                            | 可以新建会话             | unsupported，不发送 load/resume/new/prompt | 仍可查看           |
+| version 2 或未知版本                                             | experimental，不创建会话 | 不调用 session 方法                        | 不依赖 Agent       |
 
 认证方法只记录 `methodId`。本适配器不提交凭据，也不运行 `opencode auth login` / `goose acp` / `devin acp` / `devin auth login`。
 

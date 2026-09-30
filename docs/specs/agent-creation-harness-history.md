@@ -43,16 +43,16 @@ The Host owns accepted creation, request idempotency, execution binding, and own
 
 ## Acceptance cases
 
-| Setup and action | Required evidence |
-| --- | --- |
-| Create two Pi sessions and one native session on one verified worktree | Three SQLite/native owner facts after reread/restart; no new worktree record; each row has its own Harness and model binding |
-| Double-click, then retry after a transient create response loss | Same unchanged request ID reuses the persisted owner; editing any request field uses a new ID |
-| Submit while attachment is offline, capability is closed, or generation is stale | No owner write; form values remain; UI explains the unavailable state; Host independently rejects stale admission |
-| Select a created Native or Pi session | Existing production V4 body shows the correct owner/session facts; Native remains on the native owner path; Pi ID never enters native task API |
-| Select a target-B history row while target A is active | Route uses B's original owner path and B attachment; visible body and owner IDs identify B; no A legacy list substitution |
-| Open unknown or cold history | Visible verification/waiting state; no first-target guess and no execution route |
-| Render Harness identity in Sidebar, picker, and Chat Header; change model | Name and icon remain tied to identical Harness ID/manifest in all three surfaces |
-| Read a registered, unknown, traversal, oversized, or unsafe icon asset | Registered small static asset renders; every invalid case falls back; asset read invokes zero runtime bootstrap calls |
+| Setup and action                                                                 | Required evidence                                                                                                                              |
+| -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Create two Pi sessions and one native session on one verified worktree           | Three SQLite/native owner facts after reread/restart; no new worktree record; each row has its own Harness and model binding                   |
+| Double-click, then retry after a transient create response loss                  | Same unchanged request ID reuses the persisted owner; editing any request field uses a new ID                                                  |
+| Submit while attachment is offline, capability is closed, or generation is stale | No owner write; form values remain; UI explains the unavailable state; Host independently rejects stale admission                              |
+| Select a created Native or Pi session                                            | Existing production V4 body shows the correct owner/session facts; Native remains on the native owner path; Pi ID never enters native task API |
+| Select a target-B history row while target A is active                           | Route uses B's original owner path and B attachment; visible body and owner IDs identify B; no A legacy list substitution                      |
+| Open unknown or cold history                                                     | Visible verification/waiting state; no first-target guess and no execution route                                                               |
+| Render Harness identity in Sidebar, picker, and Chat Header; change model        | Name and icon remain tied to identical Harness ID/manifest in all three surfaces                                                               |
+| Read a registered, unknown, traversal, oversized, or unsafe icon asset           | Registered small static asset renders; every invalid case falls back; asset read invokes zero runtime bootstrap calls                          |
 
 Browser evidence must inspect visible body text and owner identity, and creation tests must inspect persisted Host/Native facts. DOM-node presence, callback counts, and container dimensions alone do not prove routing or creation.
 

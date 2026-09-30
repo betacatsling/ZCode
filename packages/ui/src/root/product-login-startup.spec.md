@@ -13,11 +13,11 @@
 
 ## 所有者
 
-| 事实 | 所有者 | UI |
-| --- | --- | --- |
-| 个人 Provider、endpoint、API Key、模型 | 目标端 Provider Settings / Registry | 模型设置提交草稿，不推断登录态 |
-| 启动是否进入工作区 | Root 的 workspace/tab 恢复 | 只等待模型视图读取结束或失败，以及既有 tab/workspace 引导 |
-| 产品 OAuth 会话 | 既有 OAuth service（P2 再拆） | P1 不把恢复结果当成启动门禁或全屏登录页 |
+| 事实                                   | 所有者                              | UI                                                        |
+| -------------------------------------- | ----------------------------------- | --------------------------------------------------------- |
+| 个人 Provider、endpoint、API Key、模型 | 目标端 Provider Settings / Registry | 模型设置提交草稿，不推断登录态                            |
+| 启动是否进入工作区                     | Root 的 workspace/tab 恢复          | 只等待模型视图读取结束或失败，以及既有 tab/workspace 引导 |
+| 产品 OAuth 会话                        | 既有 OAuth service（P2 再拆）       | P1 不把恢复结果当成启动门禁或全屏登录页                   |
 
 ## 不变量
 

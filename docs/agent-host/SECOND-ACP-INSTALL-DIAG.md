@@ -14,10 +14,10 @@ Code: `diagnoseAcpInstall` (`acpProfile.ts`), `negotiateAcp*` / `acpHarnessCapab
 
 ### What tip already pins in code (inventory, not a product pin)
 
-| Harness id | Executable on `PATH` | Args | Profile |
-| --- | --- | --- | --- |
-| `opencode` | `opencode` | `["acp"]` | `acp/agents/opencode.ts` |
-| `goose` | `goose` | `["acp"]` | `acp/agents/goose.ts` |
+| Harness id | Executable on `PATH` | Args      | Profile                  |
+| ---------- | -------------------- | --------- | ------------------------ |
+| `opencode` | `opencode`           | `["acp"]` | `acp/agents/opencode.ts` |
+| `goose`    | `goose`              | `["acp"]` | `acp/agents/goose.ts`    |
 
 There is **no** Host-enforced minimum CLI version yet. Until a later knife pins one, every diagnosis run must **record the observed version string** so the run is reproducible. Do not invent a pin in product code from this draft.
 
@@ -41,16 +41,16 @@ goose acp --help 2>&1 | head -n 40 || true
 
 Map shell results to `diagnoseAcpInstall`:
 
-| Shell observation | `executableFound` | Expected `install.support` | Typical `reason` / constraints |
-| --- | --- | --- | --- |
-| `command -v` empty | `false` | `unsupported` | `"<name> was not found"` |
-| Binary on PATH; optional `versionText` captured | `true` | `supported` | `constraints.executableName` + `args` (+ `versionText` if supplied) |
+| Shell observation                               | `executableFound` | Expected `install.support` | Typical `reason` / constraints                                      |
+| ----------------------------------------------- | ----------------- | -------------------------- | ------------------------------------------------------------------- |
+| `command -v` empty                              | `false`           | `unsupported`              | `"<name> was not found"`                                            |
+| Binary on PATH; optional `versionText` captured | `true`            | `supported`                | `constraints.executableName` + `args` (+ `versionText` if supplied) |
 
 ### Failure → what to read (I1)
 
-1. **Not on PATH** — Host/adapter surfaces install `unsupported` with `"… was not found"`. Compare Host process PATH vs interactive shell; check mise/npm user prefixes.  
-2. **Wrong / broken binary** — Record full `--version` and `ls -l "$(command -v …)"`.  
-3. **Version churn after upgrade** — Re-run probes; append a dated log line. Protocol stability is I3 / LIVE-CERT, not I1.  
+1. **Not on PATH** — Host/adapter surfaces install `unsupported` with `"… was not found"`. Compare Host process PATH vs interactive shell; check mise/npm user prefixes.
+2. **Wrong / broken binary** — Record full `--version` and `ls -l "$(command -v …)"`.
+3. **Version churn after upgrade** — Re-run probes; append a dated log line. Protocol stability is I3 / LIVE-CERT, not I1.
 4. **Host-side evidence** — SessionHost journal (`session.error`, `turn.finished`); ACP child stderr; unit-only: `acpOpenCodeGooseHonesty.test.ts`, `openCodeAcpSessionHost.integration.test.ts` (fake-transport ≠ install proof).
 
 ### Local diagnosis log template (I1 fields)
@@ -78,20 +78,20 @@ notes:
 
 ### How to read reports (order matters)
 
-1. **`install` (`diagnoseAcpInstall`)** — binary presence (+ optional `versionText`) only.  
-2. **`acpProbeReport(negotiation)`** — after a real `initialize`: experimental if unstable protocol; `unsupported` if auth methods were advertised (adapter does not submit credentials); else `supported` means “may attempt session,” **not** “session caps certified.”  
-3. **`acpHarnessCapabilities(negotiation)`** — text/tools/approvals/cancel follow **session** negotiation (`sessionReport`), not install.  
-4. **`resumeExecution`** — only from `loadSession` / `resumeSession` on **this** initialize (see I3). Never from “binary found” or profile name.  
+1. **`install` (`diagnoseAcpInstall`)** — binary presence (+ optional `versionText`) only.
+2. **`acpProbeReport(negotiation)`** — after a real `initialize`: experimental if unstable protocol; `unsupported` if auth methods were advertised (adapter does not submit credentials); else `supported` means “may attempt session,” **not** “session caps certified.”
+3. **`acpHarnessCapabilities(negotiation)`** — text/tools/approvals/cancel follow **session** negotiation (`sessionReport`), not install.
+4. **`resumeExecution`** — only from `loadSession` / `resumeSession` on **this** initialize (see I3). Never from “binary found” or profile name.
 5. **`hostManagedModel`** — always `unsupported` for these long-tail ACP agents in tip code.
 
 ### Forbidden interpretations
 
-| Observation | Must **not** conclude |
-| --- | --- |
-| `install.support === "supported"` | text/tools/resume/host-managed are supported |
-| Profile id is `opencode` / `goose` | `session/load` or `session/resume` is available |
-| Fake-transport SessionHost tests green | live CLI install or LIVE-CERT |
-| Honesty unit green | production admission / lazy registration |
+| Observation                            | Must **not** conclude                           |
+| -------------------------------------- | ----------------------------------------------- |
+| `install.support === "supported"`      | text/tools/resume/host-managed are supported    |
+| Profile id is `opencode` / `goose`     | `session/load` or `session/resume` is available |
+| Fake-transport SessionHost tests green | live CLI install or LIVE-CERT                   |
+| Honesty unit green                     | production admission / lazy registration        |
 
 ### Ops checklist (I2)
 
@@ -114,34 +114,34 @@ Mirror of `COMPATIBILITY.md` for ops + product triage. Fill observed cells durin
 
 ### Protocol version → Host stance
 
-| Negotiated protocol | `stability` | Create new session? | Resume / load? | viewHistory |
-| --- | --- | --- | --- | --- |
-| version **1**, and `loadSession` **or** `sessionCapabilities.resume` | `stable` | yes (harness-managed binding) | only the negotiated method (`session/load` or `session/resume`) | Host events |
-| version **1**, neither load nor resume | `stable` | yes | `unsupported` — do **not** send load/resume/new/prompt for resume | still view Host history |
-| version **2** | `experimental` | **no** | no session methods | do not depend on Agent |
-| unknown version | `experimental` | **no** | no session methods | do not depend on Agent |
+| Negotiated protocol                                                  | `stability`    | Create new session?           | Resume / load?                                                    | viewHistory             |
+| -------------------------------------------------------------------- | -------------- | ----------------------------- | ----------------------------------------------------------------- | ----------------------- |
+| version **1**, and `loadSession` **or** `sessionCapabilities.resume` | `stable`       | yes (harness-managed binding) | only the negotiated method (`session/load` or `session/resume`)   | Host events             |
+| version **1**, neither load nor resume                               | `stable`       | yes                           | `unsupported` — do **not** send load/resume/new/prompt for resume | still view Host history |
+| version **2**                                                        | `experimental` | **no**                        | no session methods                                                | do not depend on Agent  |
+| unknown version                                                      | `experimental` | **no**                        | no session methods                                                | do not depend on Agent  |
 
 Client may offer version 2 in `initialize`; if peer settles on 1, operate on the **v1 negotiated** row.
 
 ### Capability matrix stub (fill per observed CLI version)
 
-| Field | Source | OpenCode (observed) | Goose (observed) |
-| --- | --- | --- | --- |
-| CLI `versionText` | I1 `--version` | _TBD_ | _TBD_ |
-| protocol version from `initialize` result | negotiation | _TBD_ | _TBD_ |
-| `stability` / `stabilityReason` | `acpProtocol` | _TBD_ | _TBD_ |
-| `loadSession` | capabilities | _TBD_ | _TBD_ |
-| `resumeSession` (`sessionCapabilities.resume`) | capabilities | _TBD_ | _TBD_ |
-| `authMethodIds` (record only; never submit) | `authMethods` | _TBD_ | _TBD_ |
-| `resumeExecution.support` | `acpHarnessCapabilities` | _TBD_ | _TBD_ |
-| `text` / `tools` support | session report | _TBD_ | _TBD_ |
-| `hostManagedModel` | adapter constant | `unsupported` | `unsupported` |
+| Field                                          | Source                   | OpenCode (observed) | Goose (observed) |
+| ---------------------------------------------- | ------------------------ | ------------------- | ---------------- |
+| CLI `versionText`                              | I1 `--version`           | _TBD_               | _TBD_            |
+| protocol version from `initialize` result      | negotiation              | _TBD_               | _TBD_            |
+| `stability` / `stabilityReason`                | `acpProtocol`            | _TBD_               | _TBD_            |
+| `loadSession`                                  | capabilities             | _TBD_               | _TBD_            |
+| `resumeSession` (`sessionCapabilities.resume`) | capabilities             | _TBD_               | _TBD_            |
+| `authMethodIds` (record only; never submit)    | `authMethods`            | _TBD_               | _TBD_            |
+| `resumeExecution.support`                      | `acpHarnessCapabilities` | _TBD_               | _TBD_            |
+| `text` / `tools` support                       | session report           | _TBD_               | _TBD_            |
+| `hostManagedModel`                             | adapter constant         | `unsupported`       | `unsupported`    |
 
 ### Triage entry (unknown / experimental)
 
-1. Capture raw `initialize` result (sanitize secrets).  
-2. Classify with the version table above.  
-3. If `experimental`: do **not** create or resume; keep Host history readable; escalate as protocol pin / upgrade decision (I4), not as “retry install.”  
+1. Capture raw `initialize` result (sanitize secrets).
+2. Classify with the version table above.
+3. If `experimental`: do **not** create or resume; keep Host history readable; escalate as protocol pin / upgrade decision (I4), not as “retry install.”
 4. If `stable` but resume unsupported: allow new session only; history is Host-journal read-only for execution.
 
 ---
@@ -152,20 +152,20 @@ Client may offer version 2 in `initialize`; if peer settles on 1, operate on the
 
 ### Symptom → first action
 
-| Symptom | First action | Do **not** |
-| --- | --- | --- |
-| Binary missing / install `unsupported` | I1 PATH + version probes; fix PATH or install CLI | Flip lazy Host defaults; invent absolute paths in prod from this draft alone |
-| Auth methods advertised → probe `unsupported` | Record `methodId`s; keep adapter no-submit stance; user authenticates **outside** Host | Run `opencode auth login` / inject credentials via Host |
-| Protocol `experimental` (v2 / unknown) | Refuse create/resume; journal reason; plan CLI downgrade or wait for stable contract | Silent migrate old `backendSessionId` onto new protocol |
-| Mid-turn transport fault / disconnect | Expect journal `session.error` + `turn.finished` (fake-transport #90); re-open only after I3-stable negotiation | Treat disconnect as successful resume |
-| Want to remove second ACP from a registry | Unregister harness id from **opt-in** registry only; Host history remains readable | Touch `lazyTargetService` defaults |
+| Symptom                                       | First action                                                                                                    | Do **not**                                                                   |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Binary missing / install `unsupported`        | I1 PATH + version probes; fix PATH or install CLI                                                               | Flip lazy Host defaults; invent absolute paths in prod from this draft alone |
+| Auth methods advertised → probe `unsupported` | Record `methodId`s; keep adapter no-submit stance; user authenticates **outside** Host                          | Run `opencode auth login` / inject credentials via Host                      |
+| Protocol `experimental` (v2 / unknown)        | Refuse create/resume; journal reason; plan CLI downgrade or wait for stable contract                            | Silent migrate old `backendSessionId` onto new protocol                      |
+| Mid-turn transport fault / disconnect         | Expect journal `session.error` + `turn.finished` (fake-transport #90); re-open only after I3-stable negotiation | Treat disconnect as successful resume                                        |
+| Want to remove second ACP from a registry     | Unregister harness id from **opt-in** registry only; Host history remains readable                              | Touch `lazyTargetService` defaults                                           |
 
 ### Upgrade / rollback (draft)
 
-1. **Before upgrade:** record I1 `versionText` + I3 matrix row for current CLI.  
-2. **After upgrade:** re-run I1 + a single `initialize` (isolated data); fill a new I3 row.  
-3. **If stability left `stable`:** keep using new session creates; resume only if renegotiated.  
-4. **If stability became `experimental`:** rollback CLI pin or leave harness unregistered; do not create sessions.  
+1. **Before upgrade:** record I1 `versionText` + I3 matrix row for current CLI.
+2. **After upgrade:** re-run I1 + a single `initialize` (isolated data); fill a new I3 row.
+3. **If stability left `stable`:** keep using new session creates; resume only if renegotiated.
+4. **If stability became `experimental`:** rollback CLI pin or leave harness unregistered; do not create sessions.
 5. **Rollback registration:** remove opt-in factory registration for that id; do not delete Host journals.
 
 ---
@@ -220,12 +220,12 @@ result: not-run (docs stub) | pass | fail | aborted-experimental
 
 ### Pass / fail bar (for when a later knife executes)
 
-| Outcome | Means |
-| --- | --- |
-| **pass** | Real child completed create→send; journal shows a finished turn; CLI version + sanitized initialize recorded; lazy defaults untouched |
-| **fail** | Stable negotiate but create/send/journal incomplete; attach stderr + journal excerpt |
-| **aborted-experimental** | I3 experimental — correctly refused create; still counts as a useful probe, not LIVE-CERT pass |
-| **not-run** | This docs stub only — **current state of this knife** |
+| Outcome                  | Means                                                                                                                                 |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| **pass**                 | Real child completed create→send; journal shows a finished turn; CLI version + sanitized initialize recorded; lazy defaults untouched |
+| **fail**                 | Stable negotiate but create/send/journal incomplete; attach stderr + journal excerpt                                                  |
+| **aborted-experimental** | I3 experimental — correctly refused create; still counts as a useful probe, not LIVE-CERT pass                                        |
+| **not-run**              | This docs stub only — **current state of this knife**                                                                                 |
 
 ---
 
@@ -317,9 +317,8 @@ result: not-run | pass | fail
 
 ### Explicit non-goals
 
-- No real ACP process, network Provider call, or LIVE-CERT **pass** claim in this change.  
-- No execution of L1–L4 runs; stubs + templates only.  
-- No tip-SHA mass rewrite (ex6).  
-- No UI / CLI / UsageRemaining / productPresentation / sidebar badge edits.  
+- No real ACP process, network Provider call, or LIVE-CERT **pass** claim in this change.
+- No execution of L1–L4 runs; stubs + templates only.
+- No tip-SHA mass rewrite (ex6).
+- No UI / CLI / UsageRemaining / productPresentation / sidebar badge edits.
 - No lazy / production default flip.
-

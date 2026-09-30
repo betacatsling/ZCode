@@ -36,7 +36,10 @@ modules:
     managed: true
     requires: [shared]
     publicEntrypoints:
-      [packages/services/src/project-catalog/contract.ts, packages/services/src/project-catalog/index.ts]
+      [
+        packages/services/src/project-catalog/contract.ts,
+        packages/services/src/project-catalog/index.ts,
+      ]
     layers: { domain: domain, app: app, adapters: adapters }
     layerOrder: [domain, app, adapters]
     owner: project-catalog
@@ -45,7 +48,11 @@ modules:
     managed: true
     requires: [shared]
     publicEntrypoints:
-      [packages/services/src/worktree/contract.ts, packages/services/src/worktree/removalContract.ts, packages/services/src/worktree/index.ts]
+      [
+        packages/services/src/worktree/contract.ts,
+        packages/services/src/worktree/removalContract.ts,
+        packages/services/src/worktree/index.ts,
+      ]
     layers: { domain: domain, app: app, adapters: adapters }
     layerOrder: [domain, app, adapters]
     owner: target-worktree
@@ -54,7 +61,10 @@ modules:
     managed: true
     requires: [shared]
     publicEntrypoints:
-      [packages/services/src/session-hierarchy/contract.ts, packages/services/src/session-hierarchy/index.ts]
+      [
+        packages/services/src/session-hierarchy/contract.ts,
+        packages/services/src/session-hierarchy/index.ts,
+      ]
     layers: { domain: domain, app: app, adapters: adapters }
     layerOrder: [domain, app, adapters]
     owner: session-migration
@@ -63,7 +73,11 @@ modules:
     managed: true
     requires: [zcode-cli]
     publicEntrypoints:
-      [packages/services/src/model-gateway/contract.ts, packages/services/src/model-gateway/index.ts, packages/services/src/model-gateway/targetModelGateway.ts]
+      [
+        packages/services/src/model-gateway/contract.ts,
+        packages/services/src/model-gateway/index.ts,
+        packages/services/src/model-gateway/targetModelGateway.ts,
+      ]
     layers: { domain: domain, app: app, adapters: adapters }
     layerOrder: [domain, app, adapters]
     owner: target-model-gateway
