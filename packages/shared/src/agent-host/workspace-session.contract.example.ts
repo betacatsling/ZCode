@@ -61,5 +61,6 @@ export const piWorkspaceSessionCapabilityExample: WorkspaceSessionBindingCapabil
 export const piStaticHarnessAssetExample: StaticHarnessAsset = {
   assetId: "pi-light",
   mediaType: "image/svg+xml",
-  content: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><rect x="0" y="0" width="2" height="2" fill="#e48a7a"/></svg>',
+  content:
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><rect x="0" y="0" width="2" height="2" fill="#e48a7a"/></svg>',
 };

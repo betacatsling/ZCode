@@ -226,10 +226,9 @@ async function runServe(
       await writeStableLauncher(layout, platform, {
         command: process.execPath,
         entry: process.argv[1] ?? fileURLToPath(import.meta.url),
-        environment:
-          isMultiHarnessNewSessionAdmissionEnabled()
-            ? { ZCODE_MULTI_HARNESS_ENABLED: "1" }
-            : {},
+        environment: isMultiHarnessNewSessionAdmissionEnabled()
+          ? { ZCODE_MULTI_HARNESS_ENABLED: "1" }
+          : {},
       });
       const descriptor = createDaemonServiceDescriptor({ platform, layout });
       await mkdir(layout.serviceDir, { recursive: true, mode: 0o700 });
