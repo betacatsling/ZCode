@@ -619,6 +619,7 @@ export class SessionHost {
                   command,
                   error instanceof BindingPreparationFailure ? error.reasonCode : "invalid-binding",
                   error instanceof Error ? error.message : "model binding preparation failed",
+                  error instanceof BindingPreparationFailure ? error.failure : undefined,
                 );
               }
               this.#preparedTurns.set(command.commandId, prepared.binding);
@@ -766,6 +767,18 @@ export class SessionHost {
         plan.support.reason ?? "model binding is not supported for this turn",
       );
     }
+    // Provider credential rejected earlier (401) and not reconfigured since: refuse here,
+    // before any Model is bound or called; other Providers are unaffected.
+    const attention =
+      plan.requested.kind === "host-managed" && plan.effective
+        ? catalog.credentialAttention?.(plan.effective)
+        : undefined;
+    if (attention)
+      throw new BindingPreparationFailure(
+        "provider-reconfigure-required",
+        attention.message,
+        attention.failure,
+      );
     const binding = {
       ...(await prepareHostBinding(this.spec, this.#adapter, catalog, plan, this.#catalog)),
       turnId: command.turnId,
@@ -1019,6 +1032,7 @@ class BindingPreparationFailure extends Error {
   constructor(
     readonly reasonCode: NonNullable<AgentCommandReceipt["reasonCode"]>,
     message: string,
+    readonly failure?: AgentCommandReceipt["failure"],
   ) {
     super(message);
   }
@@ -1122,6 +1136,7 @@ function rejectedAdmission(
   command: AgentCommand,
   reasonCode: NonNullable<AgentCommandReceipt["reasonCode"]>,
   message: string,
+  failure?: AgentCommandReceipt["failure"],
 ): CommandAdmissionDecision {
   return {
     kind: "rejected",
@@ -1130,6 +1145,7 @@ function rejectedAdmission(
       status: "rejected",
       reasonCode,
       message,
+      ...(failure ? { failure } : {}),
     },
   };
 }
