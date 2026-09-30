@@ -7,6 +7,7 @@ import {
   type ClaudeSessionRuntime,
 } from "./claudeRuntime.js";
 import { upsertToolCall } from "./claudeRuntimeEvents.js";
+import { SESSION_ERROR_MESSAGE_MAX, truncateCodePointSafe } from "./claudeText.js";
 
 export async function requestClaudeApproval(
   runtime: ClaudeSessionRuntime,
@@ -17,7 +18,10 @@ export async function requestClaudeApproval(
   const deny = (detail: string): ClaudeHookDecision => {
     runtime.emit("session.error", {
       code: "claude-approval-correlation",
-      message: `Claude requested a stale, repeated or mismatched tool approval. (${detail})`,
+      message: truncateCodePointSafe(
+        `Claude requested a stale, repeated or mismatched tool approval. (${detail})`,
+        SESSION_ERROR_MESSAGE_MAX,
+      ),
     });
     return "deny";
   };
@@ -74,7 +78,7 @@ export async function requestClaudeApproval(
     turnId: turn.hostTurnId,
     interactionId,
     toolCallId: tool.hostToolCallId,
-    summary: `${tool.name}: ${JSON.stringify(input.tool_input).slice(0, 2_000)}`,
+    summary: `${tool.name}: ${truncateCodePointSafe(JSON.stringify(input.tool_input), 2_000)}`,
   });
   const abort = () => {
     pending.state = "resolved";

@@ -3,6 +3,10 @@ import test from "node:test";
 import type { AgentEvent } from "@zcode/shared/agent-host";
 import { requestClaudeApproval } from "../src/agent-adapters/claude/claudeHostApproval.js";
 import { markClaudeTurnUnknown } from "../src/agent-adapters/claude/claudeRuntimeOutcome.js";
+import {
+  SESSION_ERROR_MESSAGE_MAX,
+  truncateCodePointSafe,
+} from "../src/agent-adapters/claude/claudeText.js";
 import { CLAUDE_UNIT, claudeUnitRuntime, claudeUnitTurn } from "./fixtures/claudeUnitFixtures.js";
 
 // Capped Claude event text (session.error message: schema max 1024 UTF-16 units; approval
@@ -87,4 +91,27 @@ test("an approval summary cuts its tool input JSON at 2000 units without splitti
   );
   assert.ok(requested.summary.isWellFormed(), "no lone surrogate half at the cut");
   assert.equal(requested.summary, `Read: ${jsonPrefix}${kept}`);
+});
+
+test("truncateCodePointSafe caps by UTF-16 units and never leaves a lone surrogate half", () => {
+  assert.equal(truncateCodePointSafe("short", 10), "short", "within the cap: unchanged");
+  assert.equal(truncateCodePointSafe("abcdef", 3), "abc");
+  assert.equal(truncateCodePointSafe("abcdef", 0), "");
+  assert.equal(truncateCodePointSafe("é中文x", 3), "é中文", "BMP characters are one unit each");
+  // Every cut through a run of astral characters stays well formed and within the cap.
+  const astral = `a${EMOJI}${"\u{20BB7}"}${EMOJI}b`; // a + 3 pairs + b = 8 units
+  for (let cap = 0; cap <= astral.length; cap += 1) {
+    const cut = truncateCodePointSafe(astral, cap);
+    assert.ok(cut.length <= cap, `cap ${cap}: length ${cut.length}`);
+    assert.ok(cut.length >= cap - 1, `cap ${cap}: drops at most one unit`);
+    assert.ok(cut.isWellFormed(), `cap ${cap}: well formed`);
+    assert.ok(astral.startsWith(cut), `cap ${cap}: a prefix`);
+  }
+  assert.equal(
+    truncateCodePointSafe(`${EMOJI}${EMOJI}`, 3),
+    EMOJI,
+    "pair at the cap is dropped whole",
+  );
+  assert.equal(truncateCodePointSafe(`${EMOJI}${EMOJI}`, 1), "");
+  assert.equal(SESSION_ERROR_MESSAGE_MAX, 1024);
 });
