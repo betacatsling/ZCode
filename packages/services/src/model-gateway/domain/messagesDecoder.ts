@@ -104,7 +104,8 @@ function parseMetadata(value: unknown): void {
   if (value === undefined) return;
   const metadata = object(value, "metadata");
   exactKeys(metadata, ["user_id"], "metadata");
-  if (metadata.user_id !== undefined) boundedString(metadata.user_id, "metadata.user_id", 128);
+  // Claude Code embeds a JSON device/session blob in user_id (often >128 chars).
+  if (metadata.user_id !== undefined) boundedString(metadata.user_id, "metadata.user_id", 512);
 }
 
 function appendUserOrToolMessages(
@@ -145,15 +146,11 @@ function appendUserOrToolMessages(
         continue;
       }
       if (block.type !== "tool_use") unsupportedFeature(`${blockPath}.type is not supported`);
-      exactKeys(block, ["id", "input", "name", "type"], blockPath, [
-        "id",
-        "input",
-        "name",
-        "type",
-      ]);
+      exactKeys(block, ["id", "input", "name", "type"], blockPath, ["id", "input", "name", "type"]);
       const id = boundedString(block.id, `${blockPath}.id`, 256);
       const name = boundedString(block.name, `${blockPath}.name`, 128);
-      if (!id || !name || calls.has(id)) invalidRequest(`${blockPath} has an invalid or duplicate tool_use id`);
+      if (!id || !name || calls.has(id))
+        invalidRequest(`${blockPath} has an invalid or duplicate tool_use id`);
       const input = object(block.input, `${blockPath}.input`);
       calls.set(id, { name, resultSeen: false });
       toolCalls.push({ id, name, input });
@@ -185,7 +182,8 @@ function appendUserOrToolMessages(
     ]);
     const id = boundedString(block.tool_use_id, `${blockPath}.tool_use_id`, 256);
     const call = calls.get(id);
-    if (!call || call.resultSeen) invalidRequest(`${blockPath}.tool_use_id has no unmatched tool_use`);
+    if (!call || call.resultSeen)
+      invalidRequest(`${blockPath}.tool_use_id has no unmatched tool_use`);
     if (block.is_error !== undefined && typeof block.is_error !== "boolean")
       invalidRequest(`${blockPath}.is_error must be boolean`);
     flushUserText();
@@ -223,7 +221,9 @@ function parseMessages(value: unknown, beta: ReadonlySet<string>): ModelInputMes
   return output;
 }
 
-export function parsePinnedAnthropicBetaHeader(value: string | undefined): ReadonlySet<string> | undefined {
+export function parsePinnedAnthropicBetaHeader(
+  value: string | undefined,
+): ReadonlySet<string> | undefined {
   if (!value || value.length > 2_048) return undefined;
   const entries = value.split(",").map((entry) => entry.trim());
   if (!entries.length || entries.some((entry) => !entry || !pinnedAnthropicBetas.has(entry)))
@@ -239,12 +239,27 @@ export function decodeMessagesRequest(
   beta: ReadonlySet<string>,
 ): DecodedMessagesRequest {
   const request = object(value, "request");
+  // Claude Code 2.1.263 sends temperature on Messages; Host ignores it (effort is frozen on the binding).
   exactKeys(
     request,
-    ["max_tokens", "messages", "metadata", "model", "output_config", "stream", "system", "tools"],
+    [
+      "max_tokens",
+      "messages",
+      "metadata",
+      "model",
+      "output_config",
+      "stream",
+      "system",
+      "temperature",
+      "tools",
+    ],
     "request",
     ["max_tokens", "messages", "model", "output_config", "stream", "system", "tools"],
   );
+  if (Object.hasOwn(request, "temperature")) {
+    if (typeof request.temperature !== "number" || !Number.isFinite(request.temperature))
+      invalidRequest("temperature must be a finite number");
+  }
   if (request.model !== expectedModelId) invalidRequest("model does not match the session binding");
   if (request.stream !== true) unsupportedFeature("only streaming Messages are supported");
   if (
@@ -269,7 +284,8 @@ export function decodeMessagesRequest(
   const toolNames = new Set(tools.map((tool) => tool.name));
   for (const message of messages) {
     for (const call of message.toolCalls ?? []) {
-      if (!toolNames.has(call.name)) invalidRequest(`tool_use names an undefined tool: ${call.name}`);
+      if (!toolNames.has(call.name))
+        invalidRequest(`tool_use names an undefined tool: ${call.name}`);
     }
   }
   return {

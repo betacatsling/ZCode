@@ -12,6 +12,7 @@ import {
   closeJournal,
   durableAppend,
   journalPath,
+  JournalClosedError,
   openJournal,
   type JournalIdentity,
 } from "./journalStorage.js";
@@ -108,7 +109,7 @@ export class CommandJournal {
   ): Promise<AgentCommandReceipt> {
     const command = agentCommandSchema.parse(input);
     const run = this.#tail.then(async () => {
-      if (this.#closed) throw new Error("journal closed");
+      if (this.#closed) throw new JournalClosedError();
       if (command.hostSessionId !== this.#identity.hostSessionId)
         throw new Error("foreign command identity");
       const existing = this.#records.get(command.commandId);
@@ -158,7 +159,7 @@ export class CommandJournal {
 
   finish(commandId: string, receipt: AgentCommandReceipt): Promise<void> {
     const run = this.#tail.then(async () => {
-      if (this.#closed) throw new Error("journal closed");
+      if (this.#closed) throw new JournalClosedError();
       const original = this.#records.get(commandId);
       if (
         !original ||

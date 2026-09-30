@@ -2,7 +2,6 @@ import type { TelemetryRendererContext } from "@zcode/shared";
 
 interface StartupCoordinatorLike {
   onRendererReady(input: { hasPendingOAuthCallback: boolean; rendererId: number }): boolean;
-  onOAuthCallbackHandled(input: { rendererId: number }): boolean;
 }
 
 interface TelemetryCoreLike {
@@ -109,10 +108,8 @@ export function createAppTelemetryRuntime({
       }
     },
 
-    onOAuthCallbackHandled(input: { rendererId: number }): void {
-      if (appLaunchCoordinator.onOAuthCallbackHandled(input)) {
-        markStartupTelemetryPending(input.rendererId);
-      }
+    onOAuthCallbackHandled(_input: { rendererId: number }): void {
+      // 产品 OAuth deep-link 已卸；保留 no-op 以免旧 IPC 接线断裂。
     },
 
     dispose(): void {

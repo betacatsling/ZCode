@@ -4,6 +4,7 @@ import { access, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, isAbsolute, join } from "node:path";
 import { ZCODE_VERSION } from "@zcode/shared";
+import { isMultiHarnessNewSessionAdmissionEnabled } from "@zcode/shared/agent-host";
 import {
   controlRequestSchema,
   createStoppedServerStatus,
@@ -30,6 +31,7 @@ import {
   removeRunContentsExceptLock,
 } from "./runtime/uninstallGuard.js";
 import { readPersistedStatus, readPersistedStatusDetailed } from "./runtime/statusSnapshot.js";
+import { mergeCoreHostBootstrapToken } from "./runtime/coreHostBootstrap.js";
 import { waitForServerStopped } from "./runtime/shutdownWait.js";
 export { readPersistedStatus } from "./runtime/statusSnapshot.js";
 import {
@@ -189,7 +191,8 @@ async function runServe(
     const existing = await readControlStatus(layout, 500);
     if (existing && (existing.state === "ready" || existing.state === "starting")) {
       if ((existing.serviceRegistered && !legacyIdentityMigration) || startupMode === "fallback") {
-        if (json) stdout(io, existing);
+        // 已运行的 Supervisor 可能早于 M2（Core 已原地更新）：其 status 缺 secret 时回退 Core 文件。
+        if (json) stdout(io, await mergeCoreHostBootstrapToken(existing, layout));
         else
           stdout(
             io,
@@ -223,10 +226,9 @@ async function runServe(
       await writeStableLauncher(layout, platform, {
         command: process.execPath,
         entry: process.argv[1] ?? fileURLToPath(import.meta.url),
-        environment:
-          process.env.ZCODE_MULTI_HARNESS_ENABLED === "1"
-            ? { ZCODE_MULTI_HARNESS_ENABLED: "1" }
-            : {},
+        environment: isMultiHarnessNewSessionAdmissionEnabled()
+          ? { ZCODE_MULTI_HARNESS_ENABLED: "1" }
+          : {},
       });
       const descriptor = createDaemonServiceDescriptor({ platform, layout });
       await mkdir(layout.serviceDir, { recursive: true, mode: 0o700 });
@@ -274,7 +276,7 @@ async function runServe(
       },
       serviceStarted,
     );
-    if (json) stdout(io, started);
+    if (json) stdout(io, await mergeCoreHostBootstrapToken(started, layout));
     else stdout(io, `ZCode Server ${started.state} at ${started.host ?? ""}:${started.port ?? ""}`);
     process.stdin.pause();
     process.stdin.destroy();
@@ -334,7 +336,7 @@ async function runServe(
     await supervisor.stop("startup-failed").catch(() => undefined);
     throw error;
   }
-  if (json) stdout(io, status);
+  if (json) stdout(io, await mergeCoreHostBootstrapToken(status, layout));
   else stdout(io, `ZCode Server ${status.state} at ${status.host ?? ""}:${status.port ?? ""}`);
   await new Promise<void>((resolve) => {
     foregroundStopped = resolve;
@@ -417,9 +419,33 @@ async function runControl(
       throw error;
     }
   }
+  if (command === "status") result = await withCoreHostBootstrapToken(result, layout);
   if (json) stdout(io, result);
-  else stdout(io, result ?? "ok");
+  else stdout(io, redactHostBootstrapToken(result) ?? "ok");
   return 0;
+}
+
+/**
+ * Fills a missing Host bootstrap secret from the Core-written file (pre-M2 Supervisor + new Core).
+ * Only the secret is added; an unparsable or already-populated status is returned untouched.
+ */
+async function withCoreHostBootstrapToken(
+  result: unknown,
+  layout: ReturnType<typeof resolveServerLayout>,
+): Promise<unknown> {
+  const parsed = serverStatusSchema.safeParse(result);
+  if (!parsed.success || parsed.data.hostBootstrapToken) return result;
+  const merged = await mergeCoreHostBootstrapToken(parsed.data, layout);
+  if (!merged.hostBootstrapToken || typeof result !== "object" || result === null) return result;
+  return { ...result, hostBootstrapToken: merged.hostBootstrapToken };
+}
+
+/** Human-readable output must not echo the Host bootstrap secret into terminals or logs. */
+function redactHostBootstrapToken(result: unknown): unknown {
+  if (typeof result !== "object" || result === null || !("hostBootstrapToken" in result)) {
+    return result;
+  }
+  return { ...result, hostBootstrapToken: "[redacted]" };
 }
 
 function isControlEndpointUnavailable(error: unknown): boolean {

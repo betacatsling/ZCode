@@ -172,6 +172,8 @@ test("target service admits only authorized workspaces, detaches without stoppin
     },
     catalog,
     registry,
+    // Test fixture only: identity + path match. Production lazy Host uses
+    // authorizeLazyWorktreeAdmission (generation recheck); path-only ≠ admission.
     authorizeWorktree: async (candidate) =>
       candidate.execution.workspaceIdentity === "workspace-a" &&
       candidate.execution.worktreePath === worktree,

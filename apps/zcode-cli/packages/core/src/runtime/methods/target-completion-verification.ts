@@ -20,6 +20,7 @@ import { buildRuntimeProviderRequestMessages, throwIfTurnAborted } from "../help
 import { projectMessagesForModelMediaPolicy } from "../helpers/media-budget.js";
 import type { AgentRuntimeInternal } from "../internal.js";
 import { isRuntimeAttachmentEntry, type RuntimeMessageEntry } from "../../agent/message-history.js";
+import { toCoreModelInputMessage } from "../../agent/model-input-entry.js";
 import { createRefreshRuntimeHeadersBeforeModelAttempt } from "./model-runtime-headers.js";
 import { resolveModelRequestSessionTypeFromTaskType } from "./model-request-session-type.js";
 import { createRuntimeModel } from "./runtime-model.js";
@@ -171,7 +172,7 @@ async function verifyTargetCompletion(
     const result = await generateTargetCompletionVerificationText.call(this, {
       abortSignal: input.abortSignal,
       events: input.events,
-      messages,
+      messages: messages.map(toCoreModelInputMessage),
       model,
       traceContext: modelTraceContext,
     });

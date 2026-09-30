@@ -27,6 +27,11 @@ export const harnessCapabilitiesSchema = z.strictObject({
   history: capabilityReportSchema,
   images: capabilityReportSchema,
   modelSwitch: capabilityReportSchema,
+  // Plan §4 actions. Optional so already-published capability objects remain valid.
+  detach: capabilityReportSchema.optional(),
+  terminateSession: capabilityReportSchema.optional(),
+  viewHistory: capabilityReportSchema.optional(),
+  hostManagedModel: capabilityReportSchema.optional(),
 });
 export type HarnessCapabilities = z.infer<typeof harnessCapabilitiesSchema>;
 

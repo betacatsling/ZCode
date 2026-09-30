@@ -38,16 +38,14 @@ export function useAccountConnectionLossNotification(
       }
       if (!event.isCurrent()) return;
       const { intl: copy } = latest.current;
-      const label =
-        suggestion?.label ??
-        (suggestion
-          ? copy.formatMessage({
-              id:
-                suggestion.selection.kind === "start-plan"
-                  ? "settings.modelProvider.codingPlan.purchaseBanner.startPlanTitle"
-                  : "settings.modelProvider.codingPlan.purchase.individualsSectionTitle",
-            })
-          : "");
+      const label = suggestion
+        ? copy.formatMessage({
+            id:
+              suggestion.selection.kind === "start-plan"
+                ? "settings.modelProvider.planCard.startPlan"
+                : "settings.modelProvider.planCard.codingPlan",
+          })
+        : "";
       const target = suggestion;
       let id: number;
       let submitting = false;

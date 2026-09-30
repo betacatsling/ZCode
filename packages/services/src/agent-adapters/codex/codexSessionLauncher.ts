@@ -9,7 +9,12 @@ import {
   type SessionSpec,
 } from "@zcode/shared/agent-host";
 import type { ModelGateway, ModelGatewayGrant } from "@zcode/services/model-gateway";
-import { CodexAppServerProcess, type CodexJsonRpcMessage } from "./codexAppServerProcess.js";
+import {
+  CodexAppServerProcess,
+  type CodexAppServerLauncher,
+  type CodexAppServerTransport,
+  type CodexJsonRpcMessage,
+} from "./codexAppServerProcess.js";
 import {
   createCodexChildEnvironment,
   prepareCodexSessionProfile,
@@ -38,9 +43,10 @@ export interface CodexSessionLaunchOptions {
   ) => Promise<void>;
   readonly onFailure: (runtime: CodexSessionRuntime, error: Error) => void;
   readonly onStderr?: (hostSessionId: string, chunk: string) => void;
+  readonly launchAppServer?: CodexAppServerLauncher;
   readonly createRuntime: (
     binding: BackendBinding,
-    process: CodexAppServerProcess,
+    process: CodexAppServerTransport,
     threadId: string,
     context: { model: Model; gateway: ModelGateway; grant: ModelGatewayGrant },
   ) => CodexSessionRuntime;
@@ -61,9 +67,10 @@ export async function launchCodexSession(
     throw new Error("Codex workspace is not a directory");
 
   let runtime: CodexSessionRuntime | undefined;
-  let connection: CodexAppServerProcess | undefined;
+  let connection: CodexAppServerTransport | undefined;
   try {
-    connection = await CodexAppServerProcess.launch({
+    const launch = options.launchAppServer ?? CodexAppServerProcess.launch;
+    connection = await launch({
       executablePath: options.executablePath,
       cwd: profile.cwd,
       env: createCodexChildEnvironment({
@@ -88,7 +95,9 @@ export async function launchCodexSession(
         ? { onStderr: (chunk: string) => options.onStderr!(options.spec.hostSessionId, chunk) }
         : {}),
     });
-    options.onProcess?.(options.spec.hostSessionId, connection);
+    if (connection instanceof CodexAppServerProcess) {
+      options.onProcess?.(options.spec.hostSessionId, connection);
+    }
     await connection.request("initialize", {
       clientInfo: {
         name: "zcode-codex-adapter",

@@ -6,6 +6,7 @@ import { z } from "zod";
 import { conversationRowTargetSchema, timestampSchema } from "./core.js";
 import { attachmentRefSchema } from "./attachment-ref.js";
 import { v4ConversationFileRewindPreviewResultSchema } from "./transport.js";
+import { agentModelFailureSchema } from "../agent-host/events.js";
 import { modelSelectionSchema } from "../model-selection.js";
 import { modelExecutionSchema } from "../model-execution.js";
 import { submissionModeSchema } from "./submission.js";
@@ -466,6 +467,8 @@ export const commandAckSchema = z.object({
   revisionAtDecision: z.number(),
   // duplicate 回放缓存结果；accepted 亦可即时带（fork）。
   result: commandResultSchema.optional(),
+  /** Key-free typed cause from the host receipt (provider-reconfigure-required); older servers omit it. */
+  failure: agentModelFailureSchema.optional(),
 });
 export type CommandAck = z.infer<typeof commandAckSchema>;
 

@@ -1,5 +1,9 @@
 import type { AgentEvent } from "@zcode/shared/agent-host";
-import type { ClaudeActiveTurn, ClaudeSessionRuntime, ClaudeToolCallRecord } from "./claudeRuntime.js";
+import type {
+  ClaudeActiveTurn,
+  ClaudeSessionRuntime,
+  ClaudeToolCallRecord,
+} from "./claudeRuntime.js";
 import { claudeTurnMessageId, claudeTurnToolId } from "./claudeRuntime.js";
 import type { ClaudeStructuredMessage } from "./claudeStreamProcess.js";
 
@@ -55,7 +59,13 @@ function translateSystem(
     return;
   }
   if (message.subtype === "status") return;
-  failed(runtime, "Claude Code emitted an unsupported system event");
+  // Claude Code 2.1.x emits additional informational system subtypes during tool rounds
+  // (hooks/progress/tasks). Init is enforced above; ignore the rest so PreToolUse can proceed.
+  if (typeof message.subtype === "string") return;
+  failed(
+    runtime,
+    `Claude Code emitted an unsupported system event (${JSON.stringify(message.subtype)})`,
+  );
 }
 
 function translateStreamEvent(
@@ -66,10 +76,12 @@ function translateStreamEvent(
   const event = asRecord(value);
   const turn = runtime.activeTurn;
   if (!event || !turn) return failed(runtime, "Claude streamed output outside an active Host turn");
-  if (event.type === "ping" || event.type === "message_delta" || event.type === "message_stop") return;
+  if (event.type === "ping" || event.type === "message_delta" || event.type === "message_stop")
+    return;
   if (event.type === "message_start") {
     const message = asRecord(event.message);
-    if (!message || !nonEmptyString(message.id)) return failed(runtime, "Claude message_start is invalid");
+    if (!message || !nonEmptyString(message.id))
+      return failed(runtime, "Claude message_start is invalid");
     runtime.activeNativeMessageId = message.id;
     ensureTurnStarted(runtime, turn);
     return;
@@ -77,7 +89,8 @@ function translateStreamEvent(
   if (event.type === "content_block_start") {
     const block = asRecord(event.content_block);
     const index = safeIndex(event.index);
-    if (!block || index === undefined) return failed(runtime, "Claude content_block_start is invalid");
+    if (!block || index === undefined)
+      return failed(runtime, "Claude content_block_start is invalid");
     if (block.type === "text") return;
     if (block.type !== "tool_use" || !nonEmptyString(block.id) || !nonEmptyString(block.name))
       return failed(runtime, "Claude emitted an unsupported content block");
@@ -88,7 +101,8 @@ function translateStreamEvent(
   if (event.type === "content_block_delta") {
     const delta = asRecord(event.delta);
     const index = safeIndex(event.index);
-    if (!delta || index === undefined) return failed(runtime, "Claude content_block_delta is invalid");
+    if (!delta || index === undefined)
+      return failed(runtime, "Claude content_block_delta is invalid");
     if (delta.type === "text_delta" && typeof delta.text === "string") {
       const messageId = messageIdForEvent(runtime, event);
       if (!messageId) return failed(runtime, "Claude text delta has no message owner");
@@ -128,7 +142,8 @@ function translateAssistant(
   failed: (runtime: ClaudeSessionRuntime, message: string) => void,
 ): void {
   const turn = runtime.activeTurn;
-  if (!turn) return failed(runtime, "Claude emitted an assistant message outside an active Host turn");
+  if (!turn)
+    return failed(runtime, "Claude emitted an assistant message outside an active Host turn");
   if (message.session_id !== runtime.binding.backendSessionId) {
     failed(runtime, "Claude assistant message belongs to another native session");
     return;
@@ -144,7 +159,8 @@ function translateAssistant(
     const block = asRecord(value);
     if (!block) return failed(runtime, "Claude assistant content block is invalid");
     if (block.type === "text") {
-      if (typeof block.text !== "string") return failed(runtime, "Claude assistant text is invalid");
+      if (typeof block.text !== "string")
+        return failed(runtime, "Claude assistant text is invalid");
       text += block.text;
     } else if (block.type === "tool_use") {
       if (!nonEmptyString(block.id) || !nonEmptyString(block.name))
@@ -168,10 +184,8 @@ function translateUser(runtime: ClaudeSessionRuntime, message: RecordValue): voi
   const turn = runtime.activeTurn;
   const body = asRecord(message.message);
   if (!turn || !body || body.role !== "user") return;
-  if (
-    message.session_id !== undefined &&
-    message.session_id !== runtime.binding.backendSessionId
-  ) return;
+  if (message.session_id !== undefined && message.session_id !== runtime.binding.backendSessionId)
+    return;
   const blocks = Array.isArray(body.content)
     ? body.content.map(asRecord).filter((block): block is RecordValue => block !== undefined)
     : typeof body.content === "string"
@@ -208,7 +222,7 @@ function translateUser(runtime: ClaudeSessionRuntime, message: RecordValue): voi
   }
 }
 
-function upsertToolCall(
+export function upsertToolCall(
   runtime: ClaudeSessionRuntime,
   turn: ClaudeActiveTurn,
   nativeToolUseId: string,

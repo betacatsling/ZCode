@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "kind": "sanitized-identity-mapping",
+  "capturedFromLiveSession": false,
+  "sshConnected": false,
+  "credentialsIncluded": false,
+  "keyRule": "workspaceIdentity.trim() || workspacePath",
+  "keyRuleSource": "packages/shared/src/task-realtime-core.ts resolveWorkspaceKey",
+  "remoteFormatSource": "packages/shared/src/remote-workspace-identity.ts buildRemoteWorkspaceIdentity",
+  "samples": [
+    {
+      "id": "local-main",
+      "workspacePath": "/tmp/zcode-p0-git-samples/main",
+      "workspaceIdentity": null,
+      "workspaceKey": "/tmp/zcode-p0-git-samples/main",
+      "cwdForAgent": "/tmp/zcode-p0-git-samples/main",
+      "plannedEntity": "WorktreeWorkspace isMainWorktree=true，挂到该目标上的 RepositoryBinding.gitCommonDir"
+    },
+    {
+      "id": "local-linked",
+      "workspacePath": "/tmp/zcode-p0-git-samples/linked",
+      "workspaceIdentity": null,
+      "workspaceKey": "/tmp/zcode-p0-git-samples/linked",
+      "cwdForAgent": "/tmp/zcode-p0-git-samples/linked",
+      "plannedEntity": "同一 RepositoryBinding 下的另一个 WorktreeWorkspace，isMainWorktree=false"
+    },
+    {
+      "id": "local-non-git",
+      "workspacePath": "/tmp/zcode-p0-git-samples/non-git",
+      "workspaceIdentity": null,
+      "workspaceKey": "/tmp/zcode-p0-git-samples/non-git",
+      "cwdForAgent": "/tmp/zcode-p0-git-samples/non-git",
+      "plannedEntity": "没有 RepositoryBinding。发现结果 kind=nonGit。归属保持待核实，不生成 Git common dir"
+    },
+    {
+      "id": "ssh-host-a-same-path",
+      "workspacePath": "/opt/sample/app",
+      "workspaceIdentity": "remote:ssh:host-a.example.invalid:22:dev:/opt/sample/app",
+      "workspaceKey": "remote:ssh:host-a.example.invalid:22:dev:/opt/sample/app",
+      "remoteSessionId": "remote-session-a-example",
+      "plannedEntity": "目标机器 A 上的 WorktreeWorkspace。路径只作 cwd，身份键含 host/port/user"
+    },
+    {
+      "id": "ssh-host-b-same-path",
+      "workspacePath": "/opt/sample/app",
+      "workspaceIdentity": "remote:ssh:host-b.example.invalid:22:dev:/opt/sample/app",
+      "workspaceKey": "remote:ssh:host-b.example.invalid:22:dev:/opt/sample/app",
+      "remoteSessionId": "remote-session-b-example",
+      "plannedEntity": "目标机器 B 上的独立 WorktreeWorkspace。与 host-a 的键不同，不能按路径合并"
+    },
+    {
+      "id": "ssh-offline-unverified",
+      "workspacePath": "/opt/sample/app",
+      "workspaceIdentity": "remote:ssh:offline.example.invalid:22:dev:/opt/sample/app",
+      "observedThisRun": false,
+      "plannedEntity": "已有记录保留，verification=needsVerification。本次没有 SSH 连接，不能写成已停止或已完成"
+    }
+  ]
+}

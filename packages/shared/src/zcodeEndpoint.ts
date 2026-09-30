@@ -97,32 +97,6 @@ export function normalizeZCodeEndpointOrigin(value: string): string {
   return parsed.origin;
 }
 
-function isLoopbackHostname(hostname: string): boolean {
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
-}
-
-export function isTrustedCodingPlanWebviewOrigin(
-  value: string | null | undefined,
-  options?: {
-    e2eStoreBridgeEnabled?: boolean;
-  },
-): boolean {
-  if (!value) return false;
-  try {
-    const origin = normalizeZCodeEndpointOrigin(value);
-    if (
-      origin === DEFAULT_ZCODE_ENDPOINT_ORIGIN ||
-      origin === resolveRuntimeZCodeEndpointOrigin()
-    ) {
-      return true;
-    }
-    const parsed = new URL(origin);
-    return options?.e2eStoreBridgeEnabled === true && isLoopbackHostname(parsed.hostname);
-  } catch {
-    return false;
-  }
-}
-
 export function resolveZCodeEndpointOrigin(options?: {
   env?: ZCodeEnv;
   envBaseOrigin?: string | null;
@@ -218,18 +192,6 @@ export function resolveZaiOAuthClientId(
     readRuntimeEnvValue(env, "ZAI_OAUTH_APP_ID") ??
     DEFAULT_ZAI_OAUTH_CLIENT_ID
   );
-}
-
-export function buildZaiOAuthUrl(origin: string, path: string): string {
-  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-  return `${normalizeZCodeEndpointOrigin(origin)}${normalizedPath}`;
-}
-
-export function buildRuntimeZaiOAuthUrl(
-  env: RuntimeZaiEndpointEnv = readProductEndpointEnv(),
-  path: string,
-): string {
-  return buildZaiOAuthUrl(resolveZaiOAuthOrigin(env), path);
 }
 
 export function buildRuntimeZaiBusinessUrl(

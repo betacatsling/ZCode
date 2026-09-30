@@ -1,7 +1,7 @@
 import type { ProviderSettingsView } from "@zcode/services";
 import { ArrowLeftIcon, ChevronRightIcon, PlusIcon } from "lucide-react";
 import { resolveProviderTemplateName } from "@zcode/provider";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import {
   TID_MODEL_PROVIDER_TEMPLATE_BACK_BUTTON,
   TID_MODEL_PROVIDER_TEMPLATE_ITEM,
@@ -12,28 +12,34 @@ import { Button } from "@/components/ui/button.js";
 import { ControlHintTooltip } from "@/ControlHintTooltip.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { logger } from "@/logger.js";
+import { PersonalProviderSetupForm } from "./PersonalProviderSetupForm.js";
 import { ProviderLogo } from "./ProviderLogo.js";
 import { useProviderDetailFeedback } from "./ProviderDetailFeedback.js";
+import type { buildPersonalProviderInitialConfig } from "./personalProviderSetup.js";
 
 type ProviderTemplateCreate = (templateId: string) => Promise<void>;
-type CustomProviderCreate = (label: string) => Promise<void>;
+type ConfiguredProviderCreate = (input: {
+  providerName: string;
+  modelId: string;
+  initialConfig: ReturnType<typeof buildPersonalProviderInitialConfig>;
+}) => Promise<void>;
 
 export function ProviderTemplatePicker({
   templates,
   onBack,
   onCreateFromTemplate,
-  onCreateCustom,
+  onCreateConfiguredProvider,
   creating,
 }: {
   templates: ProviderSettingsView["providerTemplates"];
   onBack: () => void;
   onCreateFromTemplate: ProviderTemplateCreate;
-  onCreateCustom: CustomProviderCreate;
+  onCreateConfiguredProvider: ConfiguredProviderCreate;
   creating: boolean;
 }) {
   const { intl, locale } = useZCodeIntl();
   const { dismissFeedback, showFeedback } = useProviderDetailFeedback();
-  const customLabel = intl.formatMessage({ id: "settings.modelProvider.newProviderName" });
+  const [customSetupOpen, setCustomSetupOpen] = useState(false);
   const zhipuIds = ["bigmodel-api", "zai-api", "bigmodel-standard-api", "zai-standard-api"];
   const groups = [
     {
@@ -68,6 +74,15 @@ export function ProviderTemplatePicker({
       });
     }
   };
+  if (customSetupOpen) {
+    return (
+      <PersonalProviderSetupForm
+        creating={creating}
+        onBack={() => setCustomSetupOpen(false)}
+        onCreate={onCreateConfiguredProvider}
+      />
+    );
+  }
   return (
     <section className="space-y-5" data-testid={TID_MODEL_PROVIDER_TEMPLATE_PICKER}>
       <div className="flex items-center gap-3">
@@ -103,7 +118,7 @@ export function ProviderTemplatePicker({
                       <PlusIcon className="size-4" aria-hidden="true" />
                     </span>
                   }
-                  onClick={() => void createWithFeedback(() => onCreateCustom(customLabel))}
+                  onClick={() => setCustomSetupOpen(true)}
                 />
               ) : null}
               {group.templates.map((template) => {

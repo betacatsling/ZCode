@@ -2,8 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { basename, extname, relative, resolve, sep } from "node:path";
-import { hostname } from "node:os";
-import { Hono, type Context } from "hono";
+import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { serve } from "@hono/node-server";
 import { createNodeWebSocket } from "@hono/node-ws";
 import type { WebSocket } from "ws";
@@ -40,8 +39,23 @@ import {
   type ServerRemoteInfo,
   type ServerRemoteWorkspaceInfo,
 } from "@zcode/shared";
+import { verifyWebSocketUpgrade, type WebSocketUpgradeIncoming } from "@zcode/shared/node";
 import { connectRemote, createRemoteBackend, type RemoteConnection } from "./remote/index.js";
-import { createHostCapabilityStore } from "./hostCapability.js";
+import {
+  createHostCapabilityStore,
+  createHostCapabilityUpgradeGate,
+  HOST_CAPABILITY_WS_PATH,
+  hostBootstrapCredentialFingerprint,
+  type HostCapabilityBinding,
+  type HostCapabilityStore,
+} from "./hostCapability.js";
+import {
+  HOST_CAPABILITY_PATH,
+  presentedHostBootstrapCredential,
+  verifyHostBootstrapRequest,
+  verifyLocalEndpointHeaders,
+  type LocalEndpointHeaderPolicy,
+} from "./hostBootstrapAuth.js";
 
 function wrapWebSocket(ws: WebSocket): ISocket {
   const onData = new Emitter<VSBuffer>();
@@ -138,11 +152,19 @@ function generateId(): string {
 }
 
 interface HttpServerOptions {
+  /** Accepted for compatibility; no longer published by /api/server-info. */
   serverId?: string;
+  /** Accepted for compatibility; no longer published by /api/server-info. */
   name?: string;
   host?: string;
-  authRequired?: boolean;
   authToken?: string;
+  /**
+   * Dedicated private secret for POST /api/rpc-host-capability. When omitted, `authToken` (if
+   * configured) doubles as the bootstrap credential; with neither, ticket issuance is disabled.
+   */
+  hostBootstrapToken?: string;
+  /** Inject the one-time ticket store (tests); defaults to a fresh TTL store per server. */
+  hostCapabilityStore?: HostCapabilityStore;
   spaFallback?: boolean;
   staticRoot?: string;
   workspaces?: ServerRemoteWorkspaceInfo[];
@@ -151,12 +173,6 @@ interface HttpServerOptions {
 function readTrimmedEnv(name: string): string | undefined {
   const value = process.env[name]?.trim();
   return value ? value : undefined;
-}
-
-function resolveServerId(options: HttpServerOptions): string {
-  return (
-    options.serverId?.trim() || readTrimmedEnv("ZCODE_SERVER_ID") || hostname() || "zcode-server"
-  );
 }
 
 function resolveServerWorkspaces(options: HttpServerOptions): ServerRemoteWorkspaceInfo[] {
@@ -172,16 +188,20 @@ function resolveServerWorkspaces(options: HttpServerOptions): ServerRemoteWorksp
   ];
 }
 
+// `/api/server-info` 未鉴权：只返回真实调用方读取的字段。Web UI（packages/web/src/main.tsx）
+// 与分发冒烟只读 workspaces[0].path / workspaceIdentity；serverId（默认 os.hostname()）、
+// name 与 label 无人读取，不再公开。
 function createServerInfo(options: HttpServerOptions): ServerRemoteInfo {
   return {
-    serverId: resolveServerId(options),
-    ...(options.name?.trim() || readTrimmedEnv("ZCODE_SERVER_NAME")
-      ? { name: options.name?.trim() || readTrimmedEnv("ZCODE_SERVER_NAME") }
-      : {}),
     version: ZCODE_VERSION,
     protocolVersion: SERVER_REMOTE_PROTOCOL_VERSION,
-    authRequired: options.authRequired ?? Boolean(readTrimmedEnv("ZCODE_SERVER_TOKEN")),
-    workspaces: resolveServerWorkspaces(options),
+    // Host ticket 签发始终需要带外 bootstrap 凭据（未配置时直接 401），因此如实报告 true；
+    // 仅在配置 authToken 时 /ws 与其他 /api 才受 token middleware 保护。
+    authRequired: true,
+    workspaces: resolveServerWorkspaces(options).map(({ path, workspaceIdentity }) => ({
+      path,
+      ...(workspaceIdentity ? { workspaceIdentity } : {}),
+    })),
     capabilities: {
       desktopContinuous: true,
       websocketRpc: true,
@@ -242,8 +262,20 @@ function hasValidLiteToken(c: Context, token: string): boolean {
   return parseCookieHeader(c.req.header("cookie")).get(zcodeLiteTokenCookieName) === token;
 }
 
+function incomingOf(c: Context): WebSocketUpgradeIncoming | undefined {
+  return (c.env as { incoming?: WebSocketUpgradeIncoming } | undefined)?.incoming;
+}
+
 function isTokenProtectedPath(pathname: string): boolean {
   return pathname === "/ws" || pathname.startsWith("/ws/") || pathname.startsWith("/api/");
+}
+
+function isLoopbackBindHost(host: string | undefined): boolean {
+  const normalized = host
+    ?.trim()
+    .toLowerCase()
+    .replace(/^\[|\]$/gu, "");
+  return normalized === "127.0.0.1" || normalized === "::1" || normalized === "localhost";
 }
 
 function isStaticFallbackAllowed(pathname: string): boolean {
@@ -307,13 +339,66 @@ export function createHttpServer(
   options: HttpServerOptions = {},
 ) {
   const app = new Hono();
-  const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
-  const hostCapabilities = createHostCapabilityStore();
-
+  const { injectWebSocket, upgradeWebSocket, wss } = createNodeWebSocket({ app });
+  const hostCapabilities = options.hostCapabilityStore ?? createHostCapabilityStore();
   const authToken = options.authToken?.trim();
+  const hostBootstrapCredentials = [options.hostBootstrapToken?.trim(), authToken].filter(
+    (token): token is string => Boolean(token),
+  );
+  // ticket 绑定签发时出示的 bootstrap 凭据指纹；/ws/host 只接受当前已配置凭据的绑定，
+  // 因而凭据轮换（含 authToken 兼作凭据时）之前签发的 ticket 会被拒绝。未配置凭据时不绑定。
+  const acceptedHostCapabilityBindings: HostCapabilityBinding[] | undefined =
+    hostBootstrapCredentials.length > 0
+      ? hostBootstrapCredentials.map((credential) => ({
+          credentialFingerprint: hostBootstrapCredentialFingerprint(credential),
+        }))
+      : undefined;
+  // /ws/host 与签发端点同一请求头规则（Origin → 403；监听回环时非回环 Host → 403），先于 ticket 检查。
+  const hostRequestHeaderRules = { requireLoopbackHost: isLoopbackBindHost(options.host) };
+  // ticket 在 /ws/host middleware 里、ws 同款握手检查全部通过之后才消费（仍在路由之前），
+  // 普通请求、会失败的握手、半关闭的客户端或路由不符都不会烧掉它；verifyClient 只放行已准入的请求。
+  const hostUpgradeGate = createHostCapabilityUpgradeGate(hostCapabilities, {
+    acceptedBindings: () => acceptedHostCapabilityBindings,
+    ...hostRequestHeaderRules,
+  });
+  hostUpgradeGate.attach(wss);
+  // /ws、/ws/remote/* 与 server-info：唯一的浏览器客户端是本 server 托管的 Web UI（同源），
+  // Node 客户端不发 Origin；跨站 Origin → 403，监听回环时非回环 Host → 403（与签发端点同一 Host 规则）。
+  const localEndpointHeaderPolicy: LocalEndpointHeaderPolicy = {
+    ...hostRequestHeaderRules,
+    origin: "same-origin",
+  };
+  const guardLocalEndpoint =
+    (policy: LocalEndpointHeaderPolicy): MiddlewareHandler =>
+    async (c, next) => {
+      const rejection = verifyLocalEndpointHeaders(
+        {
+          origin: c.req.header("origin"),
+          host: c.req.header("host"),
+          contentType: c.req.header("content-type"),
+        },
+        policy,
+      );
+      if (rejection) return c.json({ error: rejection.error }, rejection.status);
+      await next();
+    };
+  for (const path of ["/ws", "/ws/remote/*", "/api/server-info"]) {
+    app.use(path, guardLocalEndpoint(localEndpointHeaderPolicy));
+  }
+  // connect-remote 有副作用（建立远程连接）：同样的 Origin/Host 规则，另外要求 application/json，
+  // 使没有 Origin 的请求只可能来自非浏览器客户端（跨站页面不经 CORS 预检发不出 JSON）。
+  app.use(
+    "/api/connect-remote",
+    guardLocalEndpoint({ ...localEndpointHeaderPolicy, body: "json" }),
+  );
   if (authToken) {
     app.use("*", async (c, next) => {
       const pathname = new URL(c.req.url).pathname;
+      if (pathname === HOST_CAPABILITY_PATH) {
+        // Host ticket 签发有独立且更严格的 Bearer 校验（不接受 cookie/query token），此处不重复拦截。
+        await next();
+        return;
+      }
       const validToken = hasValidLiteToken(c, authToken);
       if (!isTokenProtectedPath(pathname) || validToken) {
         await next();
@@ -324,7 +409,38 @@ export function createHttpServer(
   }
 
   app.get("/api/server-info", (c) => c.json(createServerInfo(options)));
-  app.post("/api/rpc-host-capability", (c) => c.json(hostCapabilities.issue()));
+  app.post(HOST_CAPABILITY_PATH, (c) => {
+    // 只认 Authorization: Bearer；浏览器 cookie/query token 不能换取 trusted-host ticket。
+    // 监听回环地址时额外拒绝非回环 Host 头（DNS rebinding）。拒绝时不得调用 issue()。
+    const verdict = verifyHostBootstrapRequest(
+      {
+        authorization: c.req.header("authorization"),
+        origin: c.req.header("origin"),
+        host: c.req.header("host"),
+      },
+      hostBootstrapCredentials,
+      hostRequestHeaderRules,
+    );
+    c.header("Cache-Control", "no-store");
+    if (!verdict.ok) return c.json({ error: verdict.error }, verdict.status);
+    // 校验已通过，出示的 Bearer 必然等于某个已配置凭据；只记录其指纹，绝不记录原文。
+    const presented = presentedHostBootstrapCredential(c.req.header("authorization")) ?? "";
+    return c.json(
+      hostUpgradeGate.issue({
+        credentialFingerprint: hostBootstrapCredentialFingerprint(presented),
+      }),
+    );
+  });
+
+  // @hono/node-ws 在路由里登记的 waiter 只在握手成功时删除：ws 会拒绝的升级（以及没走 upgrade
+  // 路径的 Upgrade: websocket）必须在路由之前拒绝，否则请求会一直被留住（见 webSocketUpgrade.ts）。
+  const guardWebSocketUpgrade: MiddlewareHandler = async (c, next) => {
+    const rejection = verifyWebSocketUpgrade(incomingOf(c) ?? { headers: {} });
+    if (rejection) return c.json({ error: rejection.error }, rejection.status);
+    await next();
+  };
+  app.use("/ws", guardWebSocketUpgrade);
+  app.use("/ws/remote/*", guardWebSocketUpgrade);
 
   // 普通 `/ws` 永远是 terminal-client；浏览器/任意客户端设置旧 mode header
   // 都不能再把自己提升为 trusted host。
@@ -342,18 +458,31 @@ export function createHttpServer(
       setupChannelServer(ws.raw as WebSocket, services, "desktop-continuous");
     },
   }));
-  app.use("/ws/host", async (c, next) => {
-    const capability = c.req.header(ZCODE_RPC_HOST_CAPABILITY_HEADER);
-    if (!hostCapabilities.consume(capability)) {
-      return c.json({ error: "Invalid or expired host capability" }, 401);
+  app.use(HOST_CAPABILITY_WS_PATH, async (c, next) => {
+    const admission = hostUpgradeGate.admit({
+      incoming: incomingOf(c),
+      capability: c.req.header(ZCODE_RPC_HOST_CAPABILITY_HEADER),
+      origin: c.req.header("origin"),
+      host: c.req.header("host"),
+      upgrade: c.req.header("upgrade"),
+      connection: c.req.header("connection"),
+    });
+    if (!admission.ok) {
+      for (const [name, value] of Object.entries(admission.headers ?? {})) c.header(name, value);
+      return c.json({ error: admission.error }, admission.status);
     }
     await next();
   });
-  app.get("/ws/host", upgradeTrustedHostWebSocket);
+  app.get(HOST_CAPABILITY_WS_PATH, upgradeTrustedHostWebSocket);
 
   // Web 模式下发起远程连接
   app.post("/api/connect-remote", async (c) => {
-    const rawBody = await c.req.json();
+    let rawBody: unknown;
+    try {
+      rawBody = await c.req.json();
+    } catch {
+      return c.json({ error: "Invalid request body: malformed JSON" }, 400);
+    }
     const parsedBody = remoteTargetSchema.safeParse(rawBody);
     if (!parsedBody.success) {
       return c.json({ error: `Invalid request body: ${formatZodError(parsedBody.error)}` }, 400);

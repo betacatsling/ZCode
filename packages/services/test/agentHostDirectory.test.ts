@@ -2,7 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { harnessManifestSchema, resolveHarnessIcon } from "@zcode/shared/agent-host";
 import { HarnessRegistry } from "../src/agent-host/harnessRegistry.js";
-import { createHarnessDirectory } from "../src/agent-host/harnessDirectory.js";
+import {
+  CLAUDE_CODE_HARNESS_MANIFEST,
+  CODEX_HARNESS_MANIFEST,
+  createHarnessDirectory,
+  createHostHarnessDirectory,
+  DEFAULT_HOST_HARNESS_MANIFESTS,
+  DEVIN_HARNESS_MANIFEST,
+  NATIVE_ZCODE_HARNESS_MANIFEST,
+  PI_HARNESS_MANIFEST,
+} from "../src/agent-host/harnessDirectory.js";
 import { MockHarness } from "../src/agent-host/mockHarness.js";
 
 function manifest(input: { id: string; name: string; adapterVersion: string; icon?: object }) {
@@ -107,4 +116,40 @@ test("registered adapters without manifests are not invented into the directory"
   const directory = createHarnessDirectory({ registry, manifests: [] });
   assert.deepEqual(directory.list(), []);
   assert.equal(directory.get("mock"), undefined);
+});
+
+test("default host directory lists zcode, pi, codex, claude-code, and devin manifests", () => {
+  const registry = new HarnessRegistry();
+  registry.register(new MockHarness());
+  const directory = createHostHarnessDirectory({ registry });
+  assert.deepEqual(
+    directory.list().map((entry) => [entry.manifest.id, entry.status, entry.source]),
+    [
+      ["zcode", "registered", "native"],
+      ["pi", "unavailable", "external"],
+      ["codex", "unavailable", "external"],
+      ["claude-code", "unavailable", "external"],
+      ["devin", "unavailable", "external"],
+    ],
+  );
+  assert.equal(
+    directory.get("codex")?.manifest.adapterVersion,
+    CODEX_HARNESS_MANIFEST.adapterVersion,
+  );
+  assert.equal(
+    directory.get("claude-code")?.manifest.adapterVersion,
+    CLAUDE_CODE_HARNESS_MANIFEST.adapterVersion,
+  );
+  assert.equal(directory.get("devin")?.manifest.name, DEVIN_HARNESS_MANIFEST.name);
+  assert.equal(directory.get("mock"), undefined);
+  assert.deepEqual(
+    DEFAULT_HOST_HARNESS_MANIFESTS.map((entry) => entry.id),
+    [
+      NATIVE_ZCODE_HARNESS_MANIFEST.id,
+      PI_HARNESS_MANIFEST.id,
+      CODEX_HARNESS_MANIFEST.id,
+      CLAUDE_CODE_HARNESS_MANIFEST.id,
+      DEVIN_HARNESS_MANIFEST.id,
+    ],
+  );
 });

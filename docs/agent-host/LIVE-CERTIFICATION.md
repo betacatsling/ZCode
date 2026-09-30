@@ -1,5 +1,7 @@
 # P3 live Pi route certification
 
+> Historical evidence only. Current project milestones and candidate acceptance: [PROJECT-DELIVERY-PLAN](../PROJECT-DELIVERY-PLAN.md). Preserve the original run versions, failures and limits below.
+
 This is the acceptance ledger for real Provider calls through the existing
 `ProviderRegistry`/`AiSdkModelAdapter` path and the Pi 0.87.1 worker. Fake model
 tests are evidence for deterministic behavior only; they are never live route

@@ -7,34 +7,16 @@ interface RendererReadyInput {
   rendererId: number;
 }
 
-interface OAuthCallbackHandledInput {
-  rendererId: number;
-}
-
 export function createAppLaunchCoordinator(appLaunchGate: AppLaunchGateLike) {
-  let waitingRendererId: number | null = null;
-
   return {
-    onRendererReady({ hasPendingOAuthCallback, rendererId }: RendererReadyInput): boolean {
-      if (hasPendingOAuthCallback) {
-        waitingRendererId = rendererId;
-        return false;
-      }
-
-      if (waitingRendererId !== null) {
-        return false;
-      }
-
+    onRendererReady(_input: RendererReadyInput): boolean {
+      // 产品 OAuth pending 路径已卸：renderer ready 即消费启动闸门。
       return appLaunchGate.consume();
     },
 
-    onOAuthCallbackHandled({ rendererId }: OAuthCallbackHandledInput): boolean {
-      if (waitingRendererId == null || waitingRendererId !== rendererId) {
-        return false;
-      }
-
-      waitingRendererId = null;
-      return appLaunchGate.consume();
+    onOAuthCallbackHandled(_input: { rendererId: number }): boolean {
+      // 产品 OAuth deep-link 已卸；保留签名以免拖动 telemetry runtime 大改。
+      return false;
     },
   };
 }

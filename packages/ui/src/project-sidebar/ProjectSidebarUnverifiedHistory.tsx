@@ -12,7 +12,9 @@ export function ProjectSidebarUnverifiedHistory({
   onOpenHistoryRecord: (targetId: string, record: SessionHierarchyRecord) => Promise<boolean>;
 }) {
   const { intl } = useZCodeIntl();
-  const [waiting, setWaiting] = useState<ReadonlyMap<string, "checking" | "target" | "owner">>(new Map());
+  const [waiting, setWaiting] = useState<ReadonlyMap<string, "checking" | "target" | "owner">>(
+    new Map(),
+  );
   const displayedSessionKeys = new Set(
     model.snapshot.projects.flatMap((project) =>
       project.workspaces.flatMap((workspace) =>
@@ -44,14 +46,17 @@ export function ProjectSidebarUnverifiedHistory({
     if (record.ownerKind === "native-v4") return Boolean(record.workspacePath);
     return Boolean(
       record.workspacePath &&
-        record.workspaceId &&
-        record.harnessId &&
-        (record.ownerAssociation || record.ownerHistoryAssociation),
+      record.workspaceId &&
+      record.harnessId &&
+      (record.ownerAssociation || record.ownerHistoryAssociation),
     );
   };
 
   return (
-    <div className="mt-2 border-t border-border pt-2" data-project-sidebar-unverified-history="true">
+    <div
+      className="mt-2 border-t border-border pt-2"
+      data-project-sidebar-unverified-history="true"
+    >
       <p className="px-1 pb-1 text-ui-xs text-foreground-subtle">
         {intl.formatMessage({ id: "projectSidebar.unverifiedHistory" })}
       </p>
@@ -60,26 +65,28 @@ export function ProjectSidebarUnverifiedHistory({
         const routeable = canResolve(target, record);
         const currentWaiting = waiting.get(key);
         const waitingFor =
-          currentWaiting === "target" && model.source.targetFreshness.get(target.targetId) === "live"
+          currentWaiting === "target" &&
+          model.source.targetFreshness.get(target.targetId) === "live"
             ? undefined
             : currentWaiting;
-        const statusText = waitingFor && waitingFor !== "checking"
-          ? intl.formatMessage({
-              id:
-                waitingFor === "target"
-                  ? "projectSidebar.historyWaitingTarget"
-                  : waitingFor === "owner"
-                    ? "projectSidebar.historyNeedsVerification"
-                    : "projectSidebar.historyCheckingOwner",
-            })
-          : !routeable
+        const statusText =
+          waitingFor && waitingFor !== "checking"
             ? intl.formatMessage({
                 id:
-                  model.source.targetFreshness.get(target.targetId) === "live"
-                    ? "projectSidebar.historyNeedsVerification"
-                    : "projectSidebar.historyWaitingTarget",
+                  waitingFor === "target"
+                    ? "projectSidebar.historyWaitingTarget"
+                    : waitingFor === "owner"
+                      ? "projectSidebar.historyNeedsVerification"
+                      : "projectSidebar.historyCheckingOwner",
               })
-            : "";
+            : !routeable
+              ? intl.formatMessage({
+                  id:
+                    model.source.targetFreshness.get(target.targetId) === "live"
+                      ? "projectSidebar.historyNeedsVerification"
+                      : "projectSidebar.historyWaitingTarget",
+                })
+              : "";
         return (
           <div key={key} className="space-y-0.5">
             <Button
@@ -91,7 +98,8 @@ export function ProjectSidebarUnverifiedHistory({
               aria-label={
                 statusText
                   ? `${record.title?.trim() || intl.formatMessage({ id: "projectSidebar.legacySession" })}: ${statusText}`
-                  : record.title?.trim() || intl.formatMessage({ id: "projectSidebar.legacySession" })
+                  : record.title?.trim() ||
+                    intl.formatMessage({ id: "projectSidebar.legacySession" })
               }
               onClick={() => {
                 if (!routeable) return;

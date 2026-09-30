@@ -20,7 +20,7 @@ Codex tool execution stays in Codex; function_call_output returns in the next re
 
 ## Network and lifecycle rules
 
-- Bind only `127.0.0.1` or `::1`; tests use an ephemeral loopback port. No remote listener or SSH path is part of this slice.
+- Bind only `127.0.0.1` or `::1`; tests use an ephemeral loopback port. There is no GUI-side or non-loopback listener. An SSH execution target uses this same loopback Gateway, owned by the remote Core that SSH attaches to. Closing the SSH tunnel does not tear that Gateway down. The SSH compatibility row stays experimental: FakeModel coverage proves the Codex shared-owner inject path only, and remote credentials are not certified. Claude is not given that shared owner in this slice.
 - Accept only `POST /v1/responses` with `stream: true`. Unknown paths, methods, and auxiliary endpoints return a structured 404/405; no model call occurs.
 - Require the grant bearer token. Reject missing, unknown, revoked, or wrong-protocol grants before reading/decoding a body or calling the model. An expired base grant remains authorized only while its matching Host-turn lease is active; if both windows expire, reject before Model execution. Revocation aborts all active requests for that grant.
 - A Host may renew a grant only by grant ID plus the expected immutable binding fingerprint; renewal cannot replace its Model, alias, session, or route. It rotates no token and cannot revive a revoked grant. The Host may begin one turn lease on an idle grant, renew that lease only for the same Host turn, and end it only for the matching turn. Lease extension is bounded by the configured short lease duration. Expired tokens remain unusable when no matching active lease exists; a new Model binding always gets a new token.

@@ -1,7 +1,7 @@
 /* oxlint-disable eslint(max-lines) -- Supervisor 集中维护生命周期、Core 代际和更新回滚状态机，启动恢复锁边界修复不应拆散其原子流程。 */
 
 import { type ChildProcess } from "node:child_process";
-import { mkdir } from "node:fs/promises";
+import { chmod, mkdir } from "node:fs/promises";
 import { createServiceLogger } from "@zcode/services/node";
 import {
   coreMessageSchema,
@@ -57,6 +57,8 @@ export class Supervisor {
   private generation = 0;
   private host: string | null = null;
   private port: number | null = null;
+  /** Current Core's private Host bootstrap secret; cleared with every Core-scoped status reset. */
+  private hostBootstrapToken: string | null = null;
   private startedAt: number | null = null;
   private runningTaskCount = 0;
   private lastExitReason: string | null = null;
@@ -99,6 +101,8 @@ export class Supervisor {
       // recovery 可能已经恢复 current pointer；必须在恢复后读取，避免启动已回滚的 candidate。
       this.activeRelease = await this.releaseManager.readCurrentForExecution();
       await mkdir(this.layout.runDir, { recursive: true, mode: 0o700 });
+      // status.json 携带当前 Core 的 Host bootstrap secret；mkdir 不会收紧旧目录权限，显式修正。
+      if (process.platform !== "win32") await chmod(this.layout.runDir, 0o700);
       const handler: ControlHandler = (request) => this.handleControl(request);
       this.control = await createControlServer(this.layout.controlEndpoint, handler);
       this.state = "starting";
@@ -343,6 +347,7 @@ export class Supervisor {
       runningTaskCount: this.runningTaskCount,
       crashBudget: this.crashBudget.snapshot(),
       updatedAt: Date.now(),
+      ...(this.hostBootstrapToken ? { hostBootstrapToken: this.hostBootstrapToken } : {}),
     };
   }
 
@@ -429,6 +434,7 @@ export class Supervisor {
       this.state = "ready";
       this.host = message.host;
       this.port = message.port;
+      this.hostBootstrapToken = message.hostBootstrapToken ?? null;
       this.generation = message.generation;
       this.startedAt = Date.now();
       log.info("server core ready", {
@@ -461,6 +467,7 @@ export class Supervisor {
   private clearCoreScopedStatus(): void {
     this.host = null;
     this.port = null;
+    this.hostBootstrapToken = null;
     this.startedAt = null;
     this.runningTaskCount = 0;
   }

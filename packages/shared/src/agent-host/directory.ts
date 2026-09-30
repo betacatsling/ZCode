@@ -64,7 +64,10 @@ export const staticHarnessAssetSchema = z
   .strictObject({
     assetId: staticAssetIdSchema,
     mediaType: z.literal("image/svg+xml"),
-    content: z.string().min(1).max(32 * 1024),
+    content: z
+      .string()
+      .min(1)
+      .max(32 * 1024),
   })
   .superRefine((asset, context) => {
     if (

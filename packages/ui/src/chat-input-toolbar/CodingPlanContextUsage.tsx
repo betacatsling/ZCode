@@ -251,11 +251,12 @@ export function ChatCodingPlanUsageRemainingPanel({
   const mcpResetTime = mcpQuotaLimit?.nextResetTime
     ? formatQuotaResetTime({ locale, value: mcpQuotaLimit.nextResetTime, format: "date" })
     : undefined;
+  // 产品 OAuth 已拆除：toolbar 的 not_authenticated 只说明登录已移除，并指向设置里的 API Key。
   const unavailableMessage =
     unavailableReason === "not_configured"
       ? intl.formatMessage({ id: "sidebar.usage.plan.notConfigured" })
       : unavailableReason === "not_authenticated"
-        ? intl.formatMessage({ id: "sidebar.usage.plan.loginRequired" })
+        ? intl.formatMessage({ id: "chat.quota.plan.productLoginRemoved" })
         : unavailableReason === "no_plan"
           ? intl.formatMessage({ id: "sidebar.usage.plan.noPlan" })
           : intl.formatMessage({ id: "sidebar.usage.plan.unavailable" });

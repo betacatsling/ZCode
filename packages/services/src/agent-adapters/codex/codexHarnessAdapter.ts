@@ -10,9 +10,12 @@ import {
   type SessionSpec,
 } from "@zcode/shared/agent-host";
 import type { HarnessAdapter, PreparedHostBinding } from "../../agent-host/harnessRegistry.js";
-import { TargetModelGateway } from "@zcode/services/model-gateway";
+import type { TargetModelGatewayPort } from "@zcode/services/model-gateway";
 import { resolveCodexApproval } from "./codexApprovalResolution.js";
-import { CodexAppServerProcess } from "./codexAppServerProcess.js";
+import {
+  type CodexAppServerLauncher,
+  type CodexAppServerProcess,
+} from "./codexAppServerProcess.js";
 import {
   HOST_APPROVAL_POLICY,
   type CodexApprovalPolicy,
@@ -21,7 +24,7 @@ import {
 import type { CodexSessionRuntime } from "./codexRuntime.js";
 import { CodexRuntimeEvents } from "./codexRuntimeEvents.js";
 import { CodexSessionRegistry } from "./codexSessionRegistry.js";
-import { CodexTargetGateway } from "./codexTargetGateway.js";
+import { resolveCodexTargetGateway } from "./codexTargetGateway.js";
 import { createCodexHarnessSession } from "./codexSessionFactory.js";
 import { CodexTurnLifecycle } from "./codexTurnLifecycle.js";
 import {
@@ -34,7 +37,7 @@ import {
 export interface CodexHarnessAdapterOptions {
   readonly root: string;
   readonly executablePath?: string;
-  readonly targetModelGateway?: TargetModelGateway;
+  readonly targetModelGateway?: TargetModelGatewayPort;
   readonly modelFactory: (spec: SessionSpec, plan: BindingPlan) => Promise<Model> | Model;
   readonly isOpenAiResponsesSelection: (selection: ModelSelection) => boolean;
   readonly fakeModelCompatibilityEvidence?: (
@@ -48,6 +51,8 @@ export interface CodexHarnessAdapterOptions {
   readonly approvalPolicy?: CodexApprovalPolicy;
   readonly onProcess?: (hostSessionId: string, process: CodexAppServerProcess) => void;
   readonly onStderr?: (hostSessionId: string, chunk: string) => void;
+  /** Replaces the spawned app-server. Tests pass a fake JSON-RPC transport. */
+  readonly launchAppServer?: CodexAppServerLauncher;
 }
 
 /** Pinned, target-local app-server adapter; it owns no accepted-input queue or Host journal. */
@@ -66,10 +71,11 @@ export class CodexHarnessAdapter implements HarnessAdapter {
   readonly #approvalPolicy: CodexApprovalPolicy;
   readonly #onProcess?: CodexHarnessAdapterOptions["onProcess"];
   readonly #onStderr?: CodexHarnessAdapterOptions["onStderr"];
+  readonly #launchAppServer?: CodexAppServerLauncher;
   readonly #sessionRegistry = new CodexSessionRegistry();
   readonly #subscriptions = new Map<string, Set<(event: AgentEvent) => void>>();
   readonly #events: CodexRuntimeEvents;
-  readonly #targetGateway: TargetModelGateway;
+  readonly #targetGateway: TargetModelGatewayPort;
   readonly #ownsTargetGateway: boolean;
   readonly #turnLifecycle: CodexTurnLifecycle;
   #shuttingDown = false;
@@ -85,12 +91,17 @@ export class CodexHarnessAdapter implements HarnessAdapter {
     this.#now = options.now ?? Date.now;
     this.#isSelectionAuthorized =
       options.isSelectionAuthorized ?? options.isBindingCurrent ?? (() => true);
-    this.#ownsTargetGateway = options.targetModelGateway === undefined;
-    this.#targetGateway = options.targetModelGateway ?? new CodexTargetGateway({ now: this.#now });
+    const resolvedGateway = resolveCodexTargetGateway({
+      ...(options.targetModelGateway ? { injected: options.targetModelGateway } : {}),
+      now: this.#now,
+    });
+    this.#ownsTargetGateway = resolvedGateway.ownsGateway;
+    this.#targetGateway = resolvedGateway.gateway;
     this.#sandboxMode = options.sandboxMode ?? "workspace-write";
     this.#approvalPolicy = options.approvalPolicy ?? HOST_APPROVAL_POLICY;
     this.#onProcess = options.onProcess;
     this.#onStderr = options.onStderr;
+    this.#launchAppServer = options.launchAppServer;
     this.#turnLifecycle = new CodexTurnLifecycle({
       adapterId: this.id,
       adapterVersion: this.version,
@@ -102,6 +113,11 @@ export class CodexHarnessAdapter implements HarnessAdapter {
       stopRuntime: (runtime) => this.#stopRuntime(runtime),
       markUnknown: (runtime, turn, message) => this.#events.markUnknown(runtime, turn, message),
     });
+  }
+
+  /** 适配器实际使用的 Gateway owner。注入的共享实例不会在 shutdown 时被关闭。 */
+  boundTargetGateway(): TargetModelGatewayPort {
+    return this.#targetGateway;
   }
 
   async probe(target: ExecutionTarget) {
@@ -297,6 +313,7 @@ export class CodexHarnessAdapter implements HarnessAdapter {
       events: this.#events,
       ...(this.#onProcess ? { onProcess: this.#onProcess } : {}),
       ...(this.#onStderr ? { onStderr: this.#onStderr } : {}),
+      ...(this.#launchAppServer ? { launchAppServer: this.#launchAppServer } : {}),
     });
   }
 

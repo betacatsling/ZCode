@@ -7,6 +7,7 @@ import type {
 import type { AgentHostActivityIndex, AgentHostActivityIndexEntry } from "@zcode/services";
 import type { ConversationTelemetryFact } from "@zcode/shared/zcode-protocol-v4";
 import type { AgentEvent, SessionSpec } from "@zcode/shared/agent-host";
+import { countRunningTasks } from "@zcode/services/agent-host/runtime";
 
 interface TaskActivityTracker extends IDisposable {
   readonly onDidChangeRunningTaskCount: Event<number>;
@@ -147,13 +148,14 @@ export function createTaskActivityTracker(
   let retryTimer: NodeJS.Timeout | undefined;
 
   const publishCount = (): void => {
-    const next =
-      [...workspaces.values()].reduce(
+    const next = countRunningTasks({
+      nativeActiveSessions: [...workspaces.values()].reduce(
         (total, workspace) => total + workspace.activeSessionIds.size,
         0,
-      ) +
-      [...externalSessions.values()].filter((session) => session.state !== "idle").length +
-      (externalActivityUncertain ? 1 : 0);
+      ),
+      external: [...externalSessions.values()],
+      externalUncertain: externalActivityUncertain,
+    });
     if (next === runningTaskCount) return;
     runningTaskCount = next;
     changed.fire(next);

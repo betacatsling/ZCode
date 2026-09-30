@@ -9,10 +9,8 @@ export function CodingPlanStatusMeta({
   expireTime,
   extraAction,
   statusLabel,
-  manageLabel,
   unlinkLabel,
   unlinkLoading,
-  onManage,
   onUnlink,
 }: {
   extraAction?: ReactNode;
@@ -26,29 +24,25 @@ export function CodingPlanStatusMeta({
   onUnlink?: () => void;
 }) {
   const { intl, locale } = useZCodeIntl();
-  const subscriptionTime = resolveCodingPlanSubscriptionTime({
+  const entitlementTime = resolveCodingPlanEntitlementTime({
     renewTime,
     expireTime,
   });
-  const subscriptionTimeLabel = subscriptionTime
+  const entitlementTimeLabel = entitlementTime
     ? intl.formatMessage(
         {
           id:
-            subscriptionTime.kind === "renew"
+            entitlementTime.kind === "renew"
               ? "settings.modelProvider.codingPlan.renewsAt"
               : "settings.modelProvider.codingPlan.expiresAt",
         },
         {
-          date: formatCodingPlanSubscriptionDate(subscriptionTime.value, locale),
+          date: formatCodingPlanEntitlementDate(entitlementTime.value, locale),
         },
       )
     : null;
   const hasMetaContent = Boolean(
-    statusLabel ||
-    subscriptionTimeLabel ||
-    extraAction ||
-    (manageLabel && onManage) ||
-    (unlinkLabel && onUnlink),
+    statusLabel || entitlementTimeLabel || extraAction || (unlinkLabel && onUnlink),
   );
   const fallbackStatusLabel =
     statusLabel ??
@@ -61,19 +55,12 @@ export function CodingPlanStatusMeta({
   return (
     <span className="flex flex-wrap items-center gap-1.5 text-ui-base text-foreground-subtle">
       {fallbackStatusLabel ? <span>{fallbackStatusLabel}</span> : null}
-      {subscriptionTimeLabel ? <span>{subscriptionTimeLabel}</span> : null}
-      <CodingPlanMetaSeparator visible={Boolean(subscriptionTimeLabel && extraAction)} />
+      {entitlementTimeLabel ? <span>{entitlementTimeLabel}</span> : null}
+      <CodingPlanMetaSeparator visible={Boolean(entitlementTimeLabel && extraAction)} />
       {extraAction}
       <CodingPlanMetaSeparator
-        visible={Boolean((subscriptionTimeLabel || extraAction) && manageLabel)}
-      />
-      {manageLabel && onManage ? (
-        <CodingPlanMetaAction label={manageLabel} onClick={onManage} />
-      ) : null}
-      <CodingPlanMetaSeparator
         visible={Boolean(
-          (subscriptionTimeLabel || extraAction || manageLabel || fallbackStatusLabel) &&
-          unlinkLabel,
+          (entitlementTimeLabel || extraAction || fallbackStatusLabel) && unlinkLabel,
         )}
       />
       {unlinkLabel && onUnlink ? (
@@ -138,8 +125,8 @@ export function StartPlanStatusMeta({
         },
       )
     : null;
-  // 产品语义：待生效时展示排期；到点但额度桶尚未同步时提供就地刷新；
-  // 对应额度桶出现后只保留过期日期。免费套餐无管理页，升级入口在卡片右侧。
+  // 待生效时展示排期；到点但额度桶尚未同步时提供就地刷新；
+  // 对应额度桶出现后只保留过期日期。免费套餐无管理页。
   return (
     <span className="flex flex-wrap items-center gap-1.5 text-ui-base text-foreground-subtle">
       {pendingEffectiveTimeLabel ? (
@@ -283,7 +270,7 @@ function CodingPlanMetaAction({
   );
 }
 
-function resolveCodingPlanSubscriptionTime({
+function resolveCodingPlanEntitlementTime({
   renewTime,
   expireTime,
 }: {
@@ -303,7 +290,7 @@ function resolveCodingPlanSubscriptionTime({
   return null;
 }
 
-function formatCodingPlanSubscriptionDate(value: string, locale: string): string {
+function formatCodingPlanEntitlementDate(value: string, locale: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
     return value;
@@ -314,7 +301,7 @@ function formatCodingPlanSubscriptionDate(value: string, locale: string): string
     ...(isCurrentYear ? {} : { year: "numeric" }),
     month: "short",
     day: "numeric",
-    // 订阅接口返回的是日期语义，按本地时区格式化 ISO 零点会让美国时区显示成前一天。
+    // 权益到期/续期时间是日期语义，按本地时区格式化 ISO 零点会让美国时区显示成前一天。
     // 同一年隐藏年份时也要按 UTC 判断，否则临界时区会把“今年”误判成去年/明年。
     timeZone: "UTC",
   }).format(date);

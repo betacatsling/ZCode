@@ -153,9 +153,13 @@ The attachment sequence is ordered and idempotent:
    accepted command with no confirmed terminal after Core crash remains
    `execution-unknown` and is not replayed.
 5. Window close, full GUI quit, and SSH disconnect never issue Supervisor
-   `stop`. Explicit user stop/terminate remains an owner command. Busy update or
-   uninstall is rejected by the existing activity gate. Rollback selects the
-   prior staged release only after the same gate proves the target idle.
+   `stop`. Explicit user stop/terminate remains an owner command. The target
+   Model Gateway has the same lifetime as that Core: `ssh-disconnect` closes
+   the tunnel and the RPC scope only, and does not close the Gateway or revoke
+   its grants. `explicit-stop` stops the Core, and that Core's dispose closes
+   the shared Gateway. Busy update or uninstall is rejected by the existing
+   activity gate. Rollback selects the prior staged release only after the
+   same gate proves the target idle.
 
 Browser, CUA, and native UI tools use an attached Host's explicit OS-resource
 capability. If that capability disappears with the GUI, the operation reports

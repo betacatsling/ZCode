@@ -1,0 +1,27 @@
+// Host capability bootstrap authentication has a single shared implementation in
+// @zcode/shared/node, used by both the legacy server and Server Core (see
+// docs/agent-host/HOST-CAPABILITY-BOOTSTRAP-AUTH.md). This module only keeps the historical
+// import path.
+export {
+  createHostBootstrapToken,
+  HOST_BOOTSTRAP_TOKEN_PATTERN,
+  HOST_CAPABILITY_PATH,
+  hostBootstrapTokenMatches,
+  isLoopbackAuthority,
+  isJsonContentType,
+  isSameOriginAsHost,
+  presentedHostBootstrapCredential,
+  verifyHostBootstrapRequest,
+  verifyHostRequestHeaders,
+  verifyLocalEndpointHeaders,
+  type HostBootstrapRejectReason,
+  type HostBootstrapRequest,
+  type HostBootstrapVerdict,
+  type HostRequestHeaderOptions,
+  type HostRequestHeaderRejection,
+  type HostRequestHeaders,
+  type LocalEndpointHeaderPolicy,
+  type LocalEndpointHeaderRejection,
+  type LocalEndpointOriginPolicy,
+  type LocalEndpointRequestHeaders,
+} from "@zcode/shared/node";

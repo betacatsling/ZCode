@@ -10,7 +10,7 @@ import type { Model } from "@zcode/contracts";
 import type { ModelGateway, ModelGatewayGrant } from "@zcode/services/model-gateway";
 import { emitTurnStarted } from "./codexEventTranslator.js";
 import type { CodexActiveTurn, CodexSessionRuntime } from "./codexRuntime.js";
-import type { CodexAppServerProcess } from "./codexAppServerProcess.js";
+import type { CodexAppServerTransport } from "./codexAppServerProcess.js";
 
 export class CodexRuntimeEvents {
   constructor(private readonly subscriptions: Map<string, Set<(event: AgentEvent) => void>>) {}
@@ -22,7 +22,7 @@ export class CodexRuntimeEvents {
     model: Model;
     gateway: ModelGateway;
     grant: ModelGatewayGrant;
-    process: CodexAppServerProcess;
+    process: CodexAppServerTransport;
     threadId: string;
     sequence: number;
   }): CodexSessionRuntime {

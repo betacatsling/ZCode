@@ -1,6 +1,7 @@
 import type { Model } from "@zcode/contracts";
 import type { Worker } from "node:worker_threads";
-import type { ToPiWorker } from "./piProtocol.js";
+import { extractModelFailure } from "../../agent-host/modelFailureClassification.js";
+import type { PiModelFailure, ToPiWorker } from "./piProtocol.js";
 
 export interface PiModelRuntimePort {
   readonly worker: Worker;
@@ -27,9 +28,22 @@ export async function runPiModelRequest(
       runtime.worker.postMessage({ type: "model.event", requestId, event } satisfies ToPiWorker);
     }
     runtime.worker.postMessage({ type: "model.done", requestId } satisfies ToPiWorker);
-  } catch {
-    runtime.worker.postMessage({ type: "model.failure", requestId } satisfies ToPiWorker);
+  } catch (error) {
+    const failure = classifyPiModelFailure(error, runtime.activeModel ?? runtime.model);
+    runtime.worker.postMessage({
+      type: "model.failure",
+      requestId,
+      ...(failure ? { failure } : {}),
+    } satisfies ToPiWorker);
   } finally {
     runtime.modelAborts.delete(requestId);
   }
+}
+
+/**
+ * Pi name for the shared, harness-neutral extraction (see agent-host/modelFailureClassification).
+ * Whitelisted scalars only; identity comes from the admitted turn Model.
+ */
+export function classifyPiModelFailure(error: unknown, model: Model): PiModelFailure | undefined {
+  return extractModelFailure(error, model);
 }

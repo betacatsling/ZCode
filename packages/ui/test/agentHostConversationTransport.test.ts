@@ -4,12 +4,14 @@ import { Emitter } from "@zcode/rpc";
 import type { IAgentHostService } from "@zcode/services";
 import {
   V4_WIRE_PROTOCOL_VERSION,
+  commandAckSchema,
   conversationTopic,
   conversationTopicFrameSchema,
   type ConversationTopicWireCandidate,
 } from "@zcode/shared/zcode-protocol-v4";
 import type { AgentCommand, AgentCommandReceipt, AgentEvent } from "@zcode/shared/agent-host";
 import { projectHostConversation } from "../../services/src/agent-ui-projection/projector.js";
+import { toProviderReconfigureFailure } from "../../services/src/agent-host/modelFailureClassification.js";
 import { createAgentHostConversationTransport } from "../src/v4/agentHostConversationTransport.js";
 
 const spec = {
@@ -23,7 +25,10 @@ const spec = {
   },
 };
 
-function makeClient(agentEvents: AgentEvent[] = []) {
+function makeClient(
+  agentEvents: AgentEvent[] = [],
+  receiptFor?: (command: AgentCommand) => AgentCommandReceipt,
+) {
   const events = new Emitter<ConversationTopicWireCandidate>();
   const snapshot = projectHostConversation({
     spec,
@@ -84,7 +89,7 @@ function makeClient(agentEvents: AgentEvent[] = []) {
     },
     async dispatch(_spec: typeof spec, command: AgentCommand): Promise<AgentCommandReceipt> {
       dispatched.push(command);
-      return { commandId: command.commandId, status: "accepted" };
+      return receiptFor?.(command) ?? { commandId: command.commandId, status: "accepted" };
     },
     async snapshot() {
       return snapshot;
@@ -253,4 +258,79 @@ test("conflicting approval action and declared option is rejected before dispatc
   );
   assert.equal(dispatched.length, 0);
   transport.dispose();
+});
+
+const SECRET_KEY = "sk-live-never-in-ack";
+const SECRET_URL = "https://gateway.internal.example/v1";
+
+function sendText(commandId: string) {
+  return {
+    commandId,
+    clientId: "client-1",
+    sessionId: spec.hostSessionId,
+    type: "sendText" as const,
+    payload: {
+      text: "hello",
+      modelSelection: spec.modelBinding.selection,
+      requestedDelivery: "startNow" as const,
+    },
+    issuedAt: Date.now(),
+  };
+}
+
+test("provider-reconfigure-required ack keeps the host receipt's typed failure (401 and 403)", async () => {
+  // Shared rule output: non-retryable auth_failed, 401 and 403 alike (no 401-only narrowing).
+  const failures = [401, 403].map((statusCode) =>
+    toProviderReconfigureFailure({
+      reason: "auth_failed",
+      providerId: "provider-rejected",
+      modelId: "model-rejected",
+      statusCode,
+      retryable: false,
+    }),
+  );
+  for (const failure of failures) {
+    assert.ok(failure);
+    const { client } = makeClient([], (command) => ({
+      commandId: command.commandId,
+      status: "rejected",
+      reasonCode: "provider-reconfigure-required",
+      message: "Provider credential was rejected; reconfigure the Provider.",
+      failure,
+    }));
+    const transport = createAgentHostConversationTransport(client, {
+      spec,
+      clientMode: "desktop-continuous",
+    });
+    const ack = await transport.sendCommand(sendText(`send-${failure.statusCode}`));
+    assert.equal(ack.status, "rejected");
+    assert.equal(ack.reasonCode, "provider-reconfigure-required");
+    assert.deepEqual(ack.failure, failure);
+    assert.equal(ack.failure?.providerId, "provider-rejected");
+    assert.equal(ack.failure?.statusCode, failure.statusCode);
+    assert.deepEqual(commandAckSchema.parse(ack), ack);
+    const wire = JSON.stringify(ack);
+    assert.ok(!wire.includes(SECRET_KEY) && !wire.includes(SECRET_URL));
+    assert.doesNotMatch(wire, /sk-|https?:\/\//);
+    transport.dispose();
+  }
+});
+
+test("an untyped rejection (old host or non-credential failure) yields an ack without a failure key", async () => {
+  const receipts: AgentCommandReceipt[] = [
+    { commandId: "send-old", status: "rejected", reasonCode: "provider-reconfigure-required" },
+    { commandId: "send-backend", status: "rejected", reasonCode: "backend-failure" },
+    { commandId: "send-ok", status: "accepted" },
+  ];
+  for (const receipt of receipts) {
+    const { client } = makeClient([], () => receipt);
+    const transport = createAgentHostConversationTransport(client, {
+      spec,
+      clientMode: "desktop-continuous",
+    });
+    const ack = await transport.sendCommand(sendText(receipt.commandId));
+    assert.equal(Object.hasOwn(ack, "failure"), false);
+    assert.equal(ack.reasonCode, receipt.reasonCode);
+    transport.dispose();
+  }
 });

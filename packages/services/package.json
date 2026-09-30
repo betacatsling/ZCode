@@ -13,12 +13,16 @@
     "./model-gateway": "./src/model-gateway/index.ts",
     "./agent-host/codex": "./src/agent-adapters/codex/createCodexHarness.ts",
     "./agent-host/claude": "./src/agent-adapters/claude/createClaudeHarness.ts",
+    "./agent-host/devin": "./src/agent-adapters/devin/createDevinHarness.ts",
     ".": "./src/index.ts",
     "./cua-permission-broker": "./src/cua-permission-broker/index.ts",
     "./process/processTreeTerminator": "./src/process/processTreeTerminator.ts",
     "./node": "./src/node.ts",
     "./agent-host/pi": "./src/agent-adapters/pi/createPiHarness.ts",
-    "./agent-host/mock-runtime-test": "./src/agent-host/mockRuntime.ts"
+    "./agent-host/mock-runtime-test": "./src/agent-host/mockRuntime.ts",
+    "./agent-host/runtime": "./src/agent-host/runtimeSupervisor.ts",
+    "./agent-adapters/mock": "./src/agent-adapters/mock/index.ts",
+    "./agent-host/plugins": "./src/agent-host/harnessPluginLoader.ts"
   },
   "scripts": {
     "lint": "oxlint",

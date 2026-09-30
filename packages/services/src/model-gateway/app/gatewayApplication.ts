@@ -6,6 +6,7 @@ import type {
   ModelGatewayGrantInput,
 } from "../contract.js";
 import { ModelGatewayProtocolError } from "../domain/errors.js";
+import { rejectResponsesBeyondBoundModel } from "../domain/boundModelLimits.js";
 import { decodeResponsesRequest } from "../domain/responsesDecoder.js";
 import type {
   GatewayHttpHandler,
@@ -15,7 +16,10 @@ import type {
 } from "./transport.js";
 import { parseResponsesJson } from "./responsesHttpEncoding.js";
 import { streamGatewayModelResponse } from "./modelResponseStream.js";
-import { decodeMessagesRequest, parsePinnedAnthropicBetaHeader } from "../domain/messagesDecoder.js";
+import {
+  decodeMessagesRequest,
+  parsePinnedAnthropicBetaHeader,
+} from "../domain/messagesDecoder.js";
 import { parseMessagesJson } from "./messagesHttpEncoding.js";
 import { streamGatewayMessagesResponse } from "./messagesResponseStream.js";
 import { GatewayGrantStore } from "./grantStore.js";
@@ -158,7 +162,8 @@ export class GatewayApplication implements GatewayHttpHandler {
   }
 
   async handle(request: GatewayHttpRequest): Promise<GatewayHttpResponse> {
-    if (this.grantStore.isClosed) return errorResponse("unavailable", 503, "Model Gateway is closed");
+    if (this.grantStore.isClosed)
+      return errorResponse("unavailable", 503, "Model Gateway is closed");
     if (request.path === "/api/hello" && request.method === "HEAD") {
       return {
         status: 200,
@@ -172,8 +177,7 @@ export class GatewayApplication implements GatewayHttpHandler {
         : request.path === "/v1/messages" || request.path === "/v1/messages?beta=true"
           ? "anthropic-messages"
           : undefined;
-    if (!protocol)
-      return errorResponse("not_found", 404, "Route is not supported");
+    if (!protocol) return errorResponse("not_found", 404, "Route is not supported");
     if (request.method !== "POST")
       return protocol === "openai-responses"
         ? errorResponse("method_not_allowed", 405, "Method is not supported")
@@ -181,22 +185,44 @@ export class GatewayApplication implements GatewayHttpHandler {
     let betas: ReadonlySet<string> | undefined;
     if (protocol === "anthropic-messages") {
       if (request.anthropicVersion !== "2023-06-01")
-        return anthropicErrorResponse("unsupported_feature", 400, "Anthropic-Version is not supported");
+        return anthropicErrorResponse(
+          "unsupported_feature",
+          400,
+          "Anthropic-Version is not supported",
+        );
       if (request.contentType?.split(";", 1)[0]?.trim().toLowerCase() !== "application/json")
-        return anthropicErrorResponse("invalid_request", 400, "Content-Type must be application/json");
+        return anthropicErrorResponse(
+          "invalid_request",
+          400,
+          "Content-Type must be application/json",
+        );
       if (request.anthropicDirectBrowserAccess !== "true")
-        return anthropicErrorResponse("unsupported_feature", 400, "Anthropic client header is not supported");
+        return anthropicErrorResponse(
+          "unsupported_feature",
+          400,
+          "Anthropic client header is not supported",
+        );
       betas = parsePinnedAnthropicBetaHeader(request.anthropicBeta);
       if (!betas)
-        return anthropicErrorResponse("unsupported_feature", 400, "Anthropic beta header is not supported");
+        return anthropicErrorResponse(
+          "unsupported_feature",
+          400,
+          "Anthropic beta header is not supported",
+        );
     }
     const token =
-      protocol === "openai-responses" ? parseBearer(request.authorization) : parseCapability(request.apiKey);
+      protocol === "openai-responses"
+        ? parseBearer(request.authorization)
+        : parseCapability(request.apiKey);
     const record = token ? this.grantStore.authorize(token, protocol) : undefined;
     if (!record)
       return protocol === "openai-responses"
         ? errorResponse("unauthorized", 401, "Session grant is missing, expired, or revoked")
-        : anthropicErrorResponse("unauthorized", 401, "Session grant is missing, expired, or revoked");
+        : anthropicErrorResponse(
+            "unauthorized",
+            401,
+            "Session grant is missing, expired, or revoked",
+          );
     try {
       if (protocol === "anthropic-messages") {
         const body = parseMessagesJson(await readBody(request, record.limits.maxBodyBytes));
@@ -215,7 +241,11 @@ export class GatewayApplication implements GatewayHttpHandler {
         const available =
           record.limits.maxOutputTokens - record.usedOutputTokens - record.reservedOutputTokens;
         const modelLimit = record.model.optionSpecs.maxOutputTokens.max;
-        const requestLimit = Math.min(available, record.limits.maxOutputTokensPerRequest, modelLimit);
+        const requestLimit = Math.min(
+          available,
+          record.limits.maxOutputTokensPerRequest,
+          modelLimit,
+        );
         if (requestLimit < 1 || decoded.maxOutputTokens > requestLimit)
           failure("budget_exceeded", 429, "Session output-token budget is exhausted");
         record.requestCount += 1;
@@ -247,6 +277,14 @@ export class GatewayApplication implements GatewayHttpHandler {
       }
       const body = parseResponsesJson(await readBody(request, record.limits.maxBodyBytes));
       const decoded = decodeResponsesRequest(body, record.publicModelId);
+      rejectResponsesBeyondBoundModel({
+        ...(decoded.maxOutputTokens === undefined
+          ? {}
+          : { maxOutputTokens: decoded.maxOutputTokens }),
+        contextWindow: record.model.properties.contextWindow,
+        toolCount: decoded.tools.length,
+        supportsToolCall: record.model.properties.supportsToolCall,
+      });
       if (
         record.clientSessionId !== undefined &&
         record.clientSessionId !== decoded.clientSessionId

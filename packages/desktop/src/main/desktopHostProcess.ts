@@ -109,11 +109,7 @@ export function listDisposingHostProcesses(): ElectronUtilityProcess[] {
   return Array.from(disposingHostProcesses);
 }
 
-export function loadWindow(
-  win: BrowserWindow,
-  page: "index" | "login" = "index",
-  bootstrap?: WindowBootstrapOptions,
-): Promise<void> {
+export function loadWindow(win: BrowserWindow, bootstrap?: WindowBootstrapOptions): Promise<void> {
   const query = Object.fromEntries(
     Object.entries({
       restoreSession:
@@ -128,24 +124,22 @@ export function loadWindow(
     }).filter((entry): entry is [string, string] => entry[1] != null),
   );
 
-  if (page === "index") {
-    const partial = getMainLaunchPartialMarks();
-    query[LAUNCH_MARKS_QUERY_KEY] = serializeLaunchMarks({
-      ...partial,
-      loadUrl: Date.now(), // T3
-    });
-  }
+  const partial = getMainLaunchPartialMarks();
+  query[LAUNCH_MARKS_QUERY_KEY] = serializeLaunchMarks({
+    ...partial,
+    loadUrl: Date.now(), // T3
+  });
 
   // 生产包不能信任继承环境中的开发服务器地址，否则会被本机开发会话劫持为空白页。
   if (!app.isPackaged && process.env["ELECTRON_RENDERER_URL"]) {
     const base = process.env["ELECTRON_RENDERER_URL"];
-    const url = new URL(page === "login" ? `${base}/login.html` : base);
+    const url = new URL(base);
     for (const [key, value] of Object.entries(query)) {
       url.searchParams.set(key, value);
     }
     return win.loadURL(url.toString());
   } else {
-    return win.loadFile(join(import.meta.dirname, `../renderer/${page}.html`), {
+    return win.loadFile(join(import.meta.dirname, "../renderer/index.html"), {
       query,
     });
   }

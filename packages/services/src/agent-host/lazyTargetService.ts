@@ -1,4 +1,4 @@
-import { isAbsolute, join } from "node:path";
+import { join } from "node:path";
 import { Emitter } from "@zcode/rpc";
 import { AiSdkModelAdapter } from "@zcode/adapters/model";
 import type { ProviderRegistryService } from "@zcode/provider";
@@ -9,14 +9,21 @@ import {
   workspaceSessionBindingCapabilityResultSchema,
   type SessionSpec,
   type WorkspaceSessionBindingCapabilityRequest,
+  type WorkspaceSessionBindingCapabilityResult,
 } from "@zcode/shared/agent-host";
+import { TargetModelGateway } from "@zcode/services/model-gateway";
 import type { IWorktreeService } from "../projectWorkspaceServices.js";
-import { HarnessRegistry } from "./harnessRegistry.js";
+import { HarnessRegistry, type HarnessAdapter } from "./harnessRegistry.js";
 import { createAgentHostConversationBridge } from "./conversationBridge.js";
 import { createRegistryModelCatalog } from "./registryCatalog.js";
+import {
+  ProviderCredentialAttention,
+  readRegistryCredentialAttention,
+} from "./providerCredentialAttention.js";
 import { createRpcAgentHostService } from "./rpcTargetService.js";
 import type { IAgentHostService } from "./serviceContract.js";
 import { readHarnessStaticAsset } from "./harnessAssets.js";
+import { authorizeLazyWorktreeAdmission } from "./lazyAuthorizeWorktree.js";
 import {
   AgentHostTargetService,
   type TargetHostEvent,
@@ -24,8 +31,11 @@ import {
   type NativeWorkspaceSessionOwnerPort,
   type WorkspaceAdmissionFenceChecker,
 } from "./targetService.js";
+import { createServiceLogger } from "../logger/serviceLogger.js";
 
-/** Lazy registration avoids loading Pi/CLI model adapters during native-only startup. */
+const logger = createServiceLogger("agent-host-lazy-target");
+
+/** Lazy registration avoids loading Pi/Codex/Claude/Devin CLI adapters during native-only startup. */
 export function createLazyTargetAgentHostService(input: {
   root: string;
   target: ExecutionTarget;
@@ -35,46 +45,58 @@ export function createLazyTargetAgentHostService(input: {
   withWorkspaceAdmission?: WorkspaceAdmissionRunner;
   nativeOwner?: NativeWorkspaceSessionOwnerPort;
   checkAdmissionFence?: WorkspaceAdmissionFenceChecker;
-}): { service: IAgentHostService; dispose(): Promise<void> } {
+  // 继续透传 owner generation，避免懒加载 Host 丢掉已有 owner fence。
+  ownerGeneration?: number;
+  /** 只读观察已注册 harness，不改变准入，也不另建 Gateway。 */
+  observeRegisteredHarness?: (harness: HarnessAdapter) => void;
+  /** Host-level credential attention; defaults to one owned by this lazy Host. */
+  credentialAttention?: ProviderCredentialAttention;
+}): {
+  service: IAgentHostService;
+  /**
+   * 这个目标 Core 上的唯一共享 Gateway。
+   * 注入 Codex 与 Claude（二者都不拥有它）。dispose 是唯一关闭者。
+   * SSH 隧道断开不会调用它。
+   */
+  targetModelGateway: TargetModelGateway;
+  dispose(): Promise<void>;
+} {
   let target: AgentHostTargetService | undefined;
   let flight: Promise<AgentHostTargetService> | undefined;
+  // 一份 owner 覆盖整个目标服务，包括尚未 warm 的阶段。
+  // Codex 与 Claude 共用它；Pi / Devin 不经过 Gateway。
+  const targetModelGateway = new TargetModelGateway();
   let targetDispose: (() => void) | undefined;
   let disposed = false;
+  let disposing: Promise<void> | undefined;
   const events = new Emitter<TargetHostEvent>();
   const conversationFrames = new Emitter<AgentHostConversationFrame>();
-  const authorizeWorktree = async (spec: SessionSpec, realPath: string) => {
-    if (
-      !input.worktrees ||
-      !isAbsolute(spec.execution.worktreePath) ||
-      realPath !== spec.execution.worktreePath
-    ) {
-      return false;
-    }
-    const catalog = await input.worktrees.read();
-    const workspace = catalog.workspaces.find(
-      (candidate) => candidate.id === spec.execution.workspaceId,
-    );
-    if (!workspace) return false;
-    const revalidated = await input.worktrees.revalidate(workspace.id);
-    if (
-      revalidated.status !== "verified" ||
-      revalidated.workspace.id !== workspace.id ||
-      revalidated.workspace.worktreePath !== realPath ||
-      revalidated.workspace.worktreeGeneration !== spec.execution.worktreeGeneration
-    ) {
-      return false;
-    }
-    const key = workspace.workspaceIdentity?.trim() || workspace.worktreePath;
-    return (
-      spec.execution.targetId === input.target.id &&
-      spec.execution.workspaceId === workspace.id &&
-      spec.execution.worktreeGeneration === workspace.worktreeGeneration &&
-      spec.execution.workspaceIdentity === key &&
-      spec.execution.worktreePath === workspace.worktreePath &&
-      workspace.lifecycle === "active" &&
-      workspace.verification === "verified"
-    );
+  const credentialAttention = input.credentialAttention ?? new ProviderCredentialAttention();
+  // Cold capability reads report the Host-level mark without warming the target.
+  const withCredentialAttention = (
+    request: WorkspaceSessionBindingCapabilityRequest,
+    result: WorkspaceSessionBindingCapabilityResult,
+  ): WorkspaceSessionBindingCapabilityResult => {
+    if (request.modelBinding.kind === "harness-managed") return result;
+    const failure = readRegistryCredentialAttention(
+      input.registry,
+      credentialAttention,
+      request.modelBinding.selection,
+    )?.failure;
+    return failure
+      ? workspaceSessionBindingCapabilityResultSchema.parse({
+          ...result,
+          credentialAttention: failure,
+        })
+      : result;
   };
+  const authorizeWorktree = async (spec: SessionSpec, realPath: string) =>
+    authorizeLazyWorktreeAdmission({
+      worktrees: input.worktrees,
+      targetId: input.target.id,
+      spec,
+      realPath,
+    });
   const historyOnly = new AgentHostTargetService({
     root: join(input.root, "sessions"),
     target: input.target,
@@ -87,6 +109,7 @@ export function createLazyTargetAgentHostService(input: {
     ...(input.worktrees ? { worktrees: input.worktrees } : {}),
     ...(input.nativeOwner ? { nativeOwner: input.nativeOwner } : {}),
     ...(input.checkAdmissionFence ? { checkAdmissionFence: input.checkAdmissionFence } : {}),
+    ...(input.ownerGeneration ? { ownerGeneration: input.ownerGeneration } : {}),
   });
   const getTarget = async (): Promise<AgentHostTargetService> => {
     if (disposed) throw new Error("agent host service disposed");
@@ -95,19 +118,51 @@ export function createLazyTargetAgentHostService(input: {
       flight = (async () => {
         await input.registry.start();
         const { createRegistryPiHarness } = await import("../agent-adapters/pi/createPiHarness.js");
+        const { createExperimentalRegistryCodexHarness } =
+          await import("../agent-adapters/codex/createCodexHarness.js");
+        const { createExperimentalRegistryClaudeHarness } =
+          await import("../agent-adapters/claude/createClaudeHarness.js");
+        const { createExperimentalRegistryDevinHarness } =
+          await import("../agent-adapters/devin/createDevinHarness.js");
         const modelAdapter = new AiSdkModelAdapter({});
         const harnesses = new HarnessRegistry();
-        harnesses.register(
+        const workerRoot = join(input.root, "workers");
+        const register = (harness: HarnessAdapter) => {
+          harnesses.register(harness);
+          input.observeRegisteredHarness?.(harness);
+        };
+        register(
           createRegistryPiHarness({
-            root: join(input.root, "workers"),
+            root: workerRoot,
             registry: input.registry,
             adapter: modelAdapter,
+          }),
+        );
+        register(
+          createExperimentalRegistryCodexHarness({
+            root: workerRoot,
+            registry: input.registry,
+            adapter: modelAdapter,
+            targetModelGateway,
+          }),
+        );
+        register(
+          createExperimentalRegistryClaudeHarness({
+            root: workerRoot,
+            registry: input.registry,
+            adapter: modelAdapter,
+            targetModelGateway,
+          }),
+        );
+        register(
+          createExperimentalRegistryDevinHarness({
+            root: workerRoot,
           }),
         );
         const instance = new AgentHostTargetService({
           root: join(input.root, "sessions"),
           target: input.target,
-          catalog: createRegistryModelCatalog(input.registry, modelAdapter),
+          catalog: createRegistryModelCatalog(input.registry, modelAdapter, credentialAttention),
           registry: harnesses,
           // Trusted target channel only; reject symlink aliases in this environment.
           authorizeWorktree,
@@ -117,6 +172,7 @@ export function createLazyTargetAgentHostService(input: {
             : {}),
           ...(input.nativeOwner ? { nativeOwner: input.nativeOwner } : {}),
           ...(input.checkAdmissionFence ? { checkAdmissionFence: input.checkAdmissionFence } : {}),
+          ...(input.ownerGeneration ? { ownerGeneration: input.ownerGeneration } : {}),
         });
         const rpc = createRpcAgentHostService(instance, input.allowNewSessions);
         const unsubscribe = rpc.service.onEvent((event) => events.fire(event));
@@ -156,7 +212,7 @@ export function createLazyTargetAgentHostService(input: {
       target: input.target,
       harnesses: [
         ...(input.nativeOwner ? ["zcode"] : []),
-        ...(input.allowNewSessions() ? ["pi"] : []),
+        ...(input.allowNewSessions() ? ["pi", "codex", "claude-code", "devin"] : []),
       ],
       admissionEnabled:
         input.target.available && (Boolean(input.nativeOwner) || input.allowNewSessions()),
@@ -168,7 +224,9 @@ export function createLazyTargetAgentHostService(input: {
       const directory = await (target ?? historyOnly).getDirectory();
       const availableHarnesses = new Set([
         ...(input.target.available && input.nativeOwner ? ["zcode"] : []),
-        ...(input.target.available && input.allowNewSessions() ? ["pi"] : []),
+        ...(input.target.available && input.allowNewSessions()
+          ? ["pi", "codex", "claude-code", "devin"]
+          : []),
       ]);
       return harnessDirectorySnapshotSchema.parse({
         schemaVersion: 1,
@@ -230,16 +288,22 @@ export function createLazyTargetAgentHostService(input: {
     },
     async getWorkspaceSessionCapability(request: WorkspaceSessionBindingCapabilityRequest) {
       if (request.harnessId === "zcode") {
-        return historyOnly.getWorkspaceSessionCapability(request);
+        return withCredentialAttention(
+          request,
+          await historyOnly.getWorkspaceSessionCapability(request),
+        );
       }
       if (!input.target.available || !input.allowNewSessions()) {
-        return workspaceSessionBindingCapabilityResultSchema.parse({
-          targetId: input.target.id,
-          report: {
-            support: "unsupported",
-            reason: input.target.available ? "admission-disabled" : "target-unavailable",
-          },
-        });
+        return withCredentialAttention(
+          request,
+          workspaceSessionBindingCapabilityResultSchema.parse({
+            targetId: input.target.id,
+            report: {
+              support: "unsupported",
+              reason: input.target.available ? "admission-disabled" : "target-unavailable",
+            },
+          }),
+        );
       }
       return (await getTarget()).getWorkspaceSessionCapability(request);
     },
@@ -253,17 +317,49 @@ export function createLazyTargetAgentHostService(input: {
   };
   return {
     service,
-    async dispose() {
-      disposed = true;
-      conversationFrameSubscription.dispose();
-      conversation.dispose();
-      targetDispose?.();
-      events.dispose();
-      conversationFrames.dispose();
-      // Process shutdown with an active turn leaves durable accepted/unknown; no
-      // fabricated completion or implicit prompt replay on the next target epoch.
-      if (target) await target.close();
-      await historyOnly.close();
+    targetModelGateway,
+    dispose() {
+      // A second dispose shares the first one's outcome instead of re-running the closes.
+      disposing ??= (async () => {
+        disposed = true;
+        conversationFrameSubscription.dispose();
+        conversation.dispose();
+        targetDispose?.();
+        events.dispose();
+        conversationFrames.dispose();
+        // Process shutdown with an active turn leaves durable accepted/unknown; no
+        // fabricated completion or implicit prompt replay on the next target epoch.
+        // Codex 不拥有注入的 Gateway，所以要在 harness shutdown 之后由这里关闭。
+        // ssh-disconnect 不会走到 dispose。
+        // Each close runs even if an earlier one rejected. target.close() first closes every
+        // mounted host (AgentHostTargetService.#finishClose -> closeSessionHosts); a host close
+        // refused only by a starting send is retried once after whenStartingSendsSettled().
+        // Exactly one host failure is rethrown unchanged, so typed errors (EventStreamFailure...)
+        // stay matchable; two or more reject with TargetHostsCloseError (an AggregateError, code
+        // "target-close-failed", `errors` and `failures` {hostSessionId, error} in close order).
+        // This loop still rethrows its own first failure as is; later ones are logged.
+        let failed = false;
+        let failure: unknown;
+        const closes: [string, () => Promise<void> | undefined][] = [
+          ["target", () => target?.close()],
+          ["target model gateway", () => targetModelGateway.close()],
+          ["history-only", () => historyOnly.close()],
+        ];
+        for (const [name, close] of closes) {
+          try {
+            await close();
+          } catch (error) {
+            if (!failed) {
+              failed = true;
+              failure = error;
+            } else {
+              logger.warn(undefined, "agent host dispose: later close failed", { name, error });
+            }
+          }
+        }
+        if (failed) throw failure;
+      })();
+      return disposing;
     },
   };
 }

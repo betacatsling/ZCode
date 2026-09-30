@@ -9,6 +9,7 @@ import {
 } from "../contracts.js";
 import { encodeJsonLine, JsonLineDecoder } from "./framing.js";
 import { ControlRequestError } from "./controlError.js";
+import { ensurePrivateControlSocketDir, relocatedControlSocketDir } from "./controlSocketDir.js";
 
 const CONTROL_CLOSE_TIMEOUT_MS = 2_000;
 
@@ -20,6 +21,9 @@ export async function createControlServer(
   endpoint: string,
   handler: ControlHandler,
 ): Promise<{ server: Server; close: () => Promise<void> }> {
+  // macOS 超长路径改用的短目录不在 0700 的 run 目录下；先确认它私有，再清理旧 socket。
+  const relocatedDir = relocatedControlSocketDir(endpoint);
+  if (relocatedDir) await ensurePrivateControlSocketDir(relocatedDir, { create: true });
   await rm(endpoint, { force: true }).catch(() => undefined);
   await mkdir(endpoint.includes("/") ? endpoint.slice(0, endpoint.lastIndexOf("/")) : ".", {
     recursive: true,

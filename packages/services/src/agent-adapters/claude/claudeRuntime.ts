@@ -1,5 +1,10 @@
 import type { Model } from "@zcode/contracts";
-import type { AgentEvent, BackendBinding, BindingPlan, SessionSpec } from "@zcode/shared/agent-host";
+import type {
+  AgentEvent,
+  BackendBinding,
+  BindingPlan,
+  SessionSpec,
+} from "@zcode/shared/agent-host";
 import type { ModelGateway, ModelGatewayGrant } from "@zcode/services/model-gateway";
 import type { ClaudeSessionProfile } from "./claudeProfile.js";
 import type { ClaudeApprovalHookServer } from "./claudeApprovalHookServer.js";
@@ -109,10 +114,18 @@ export function createClaudeDecision(): {
   };
 }
 
-export function claudeTurnToolId(runtime: ClaudeSessionRuntime, turnId: string, nativeId: string): string {
+export function claudeTurnToolId(
+  runtime: ClaudeSessionRuntime,
+  turnId: string,
+  nativeId: string,
+): string {
   return `claude:${runtime.binding.runtimeEpoch}:${turnId}:${nativeId}`;
 }
 
-export function claudeTurnMessageId(runtime: ClaudeSessionRuntime, turnId: string, nativeId: string): string {
+export function claudeTurnMessageId(
+  runtime: ClaudeSessionRuntime,
+  turnId: string,
+  nativeId: string,
+): string {
   return `claude:${runtime.binding.runtimeEpoch}:${turnId}:message:${nativeId}`;
 }

@@ -1,9 +1,5 @@
 import type { ModelSelection } from "@zcode/shared/model-selection";
-import type {
-  AgentCommand,
-  BindingPlan,
-  SessionSpec,
-} from "@zcode/shared/agent-host";
+import type { AgentCommand, BindingPlan, SessionSpec } from "@zcode/shared/agent-host";
 import type { PreparedHostBinding } from "../../agent-host/harnessRegistry.js";
 import { MODEL_GATEWAY_TURN_LEASE_RENEW_INTERVAL_MS } from "@zcode/services/model-gateway";
 import type { ClaudeActiveTurn, ClaudeSessionRuntime } from "./claudeRuntime.js";
@@ -113,6 +109,10 @@ export class ClaudeTurnLifecycle {
     };
     void turn.completion.promise.catch(() => undefined);
     runtime.activeTurn = turn;
+    // Projector requires turn.started before any message.finished for that turnId
+    // (SessionHost.open replays the journal through projectHostConversation).
+    turn.started = true;
+    runtime.emit("turn.started", { turnId: turn.hostTurnId });
     runtime.emit("message.finished", {
       turnId: command.turnId,
       messageId: claudeTurnMessageId(runtime, command.turnId, `host-input-${command.turnId}`),
@@ -123,7 +123,8 @@ export class ClaudeTurnLifecycle {
       try {
         this.renew(command.hostSessionId, command.turnId);
       } catch (error) {
-        runtime.failed = error instanceof Error ? error : new Error("Claude turn lease renewal failed");
+        runtime.failed =
+          error instanceof Error ? error : new Error("Claude turn lease renewal failed");
         void this.ports.stopRuntime(runtime).catch(() => undefined);
       }
     }, this.leaseRenewIntervalMs);

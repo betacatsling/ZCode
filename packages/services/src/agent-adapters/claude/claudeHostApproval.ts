@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { AgentCommand } from "@zcode/shared/agent-host";
 import type { ClaudePreToolUseInput, ClaudeHookDecision } from "./claudeApprovalHookServer.js";
-import { createClaudeDecision, type ClaudePendingApproval, type ClaudeSessionRuntime } from "./claudeRuntime.js";
+import {
+  createClaudeDecision,
+  type ClaudePendingApproval,
+  type ClaudeSessionRuntime,
+} from "./claudeRuntime.js";
+import { upsertToolCall } from "./claudeRuntimeEvents.js";
 
 export async function requestClaudeApproval(
   runtime: ClaudeSessionRuntime,
@@ -9,25 +14,48 @@ export async function requestClaudeApproval(
   signal: AbortSignal,
 ): Promise<ClaudeHookDecision> {
   const turn = runtime.activeTurn;
-  const tool = runtime.toolCalls.get(input.tool_use_id);
-  if (
-    runtime.stopping ||
-    runtime.failed ||
-    !turn ||
-    input.session_id !== runtime.binding.backendSessionId ||
-    !tool ||
-    tool.name !== input.tool_name ||
-    !tool.input ||
-    !sameJsonSubset(tool.name, tool.input, input.tool_input) ||
-    (tool.name === "Bash" && isRecord(input.tool_input) && input.tool_input.dangerouslyDisableSandbox === true) ||
-    turn.requestedToolIds.has(input.tool_use_id)
-  ) {
+  const deny = (detail: string): ClaudeHookDecision => {
     runtime.emit("session.error", {
       code: "claude-approval-correlation",
-      message: "Claude requested a stale, repeated or mismatched tool approval.",
+      message: `Claude requested a stale, repeated or mismatched tool approval. (${detail})`,
     });
     return "deny";
+  };
+
+  if (runtime.stopping) return deny("stopping");
+  if (runtime.failed) return deny("failed");
+  if (!turn) return deny("no-active-turn");
+  if (input.session_id !== runtime.binding.backendSessionId) {
+    return deny(
+      `session-mismatch hook=${input.session_id} bind=${runtime.binding.backendSessionId}`,
+    );
   }
+  if (turn.requestedToolIds.has(input.tool_use_id)) return deny(`repeat-tool ${input.tool_use_id}`);
+
+  // Claude blocks on PreToolUse before stdout may register the same tool_use — seed from hook.
+  let tool;
+  try {
+    tool = upsertToolCall(runtime, turn, input.tool_use_id, input.tool_name, input.tool_input);
+  } catch (error) {
+    return deny(`upsert:${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  if (!tool) return deny("no-tool-after-upsert");
+  if (tool.name !== input.tool_name) return deny(`name ${tool.name}!=${input.tool_name}`);
+  if (!tool.input) return deny(`no-input typeof_hook=${typeof input.tool_input}`);
+  if (!sameJsonSubset(tool.name, tool.input, input.tool_input)) {
+    return deny(
+      `subset toolKeys=${JSON.stringify(isRecord(tool.input) ? Object.keys(tool.input) : tool.input)} hookKeys=${JSON.stringify(isRecord(input.tool_input) ? Object.keys(input.tool_input) : input.tool_input)}`,
+    );
+  }
+  if (
+    tool.name === "Bash" &&
+    isRecord(input.tool_input) &&
+    input.tool_input.dangerouslyDisableSandbox === true
+  ) {
+    return deny("dangerouslyDisableSandbox");
+  }
+
   turn.requestedToolIds.add(input.tool_use_id);
   const deferred = createClaudeDecision();
   const interactionId = randomUUID();
@@ -110,7 +138,8 @@ function sameJsonSubset(toolName: string, expected: unknown, actual: unknown): b
   const right = actual as Record<string, unknown>;
   if (
     !Object.entries(left).every(
-      ([key, value]) => Object.hasOwn(right, key) && canonicalJson(value) === canonicalJson(right[key]),
+      ([key, value]) =>
+        Object.hasOwn(right, key) && canonicalJson(value) === canonicalJson(right[key]),
     )
   ) {
     return false;
@@ -119,7 +148,10 @@ function sameJsonSubset(toolName: string, expected: unknown, actual: unknown): b
     if (Object.hasOwn(left, key)) return true;
     if (toolName !== "Bash") return false;
     if (key === "description") return typeof value === "string" && value.length <= 16_000;
-    if (key === "timeout") return typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= 300_000;
+    if (key === "timeout")
+      return (
+        typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= 300_000
+      );
     if (key === "run_in_background" || key === "dangerouslyDisableSandbox") return value === false;
     return false;
   });

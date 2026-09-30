@@ -6,13 +6,18 @@ import {
   type ToolCallRow,
   type TurnHeaderRow,
 } from "@zcode/shared/zcode-protocol-v4";
-import type { AgentEvent, SessionSpec } from "@zcode/shared/agent-host";
+import type {
+  AgentEvent,
+  AgentModelFailure,
+  CompatibleSessionSpec,
+} from "@zcode/shared/agent-host";
+import { createExternalEventProjection } from "./externalEventProjection.js";
 
 const unavailable = { allowed: false as const, reasonCode: "externalHarnessUnsupported" };
 
 /** Pure V4 read projection. Replay never sends a prompt, performs a tool, or resolves approval. */
 export function projectHostConversation(input: {
-  spec: SessionSpec;
+  spec: CompatibleSessionSpec;
   runtimeEpoch: string;
   events: readonly AgentEvent[];
   windowSize?: number;
@@ -34,10 +39,15 @@ export function projectHostConversation(input: {
   const messages = new Map<string, ConversationRow>();
   const tools = new Map<string, ToolCallRow>();
   const interactions = new Map<string, PendingInteraction>();
+  /** Tool rows created by an approval request that arrived before its tool.started. */
+  const seededByApproval = new Set<string>();
   let activeTurn: string | undefined;
   let phase: ConversationSnapshot["control"]["phase"] = "draft";
   let errorCode: string | undefined;
+  let errorMessage = "";
   let lastErrorAt = 0;
+  let errorFailure: AgentModelFailure | undefined;
+  const external = createExternalEventProjection();
   let inputTokens = 0;
   let outputTokens = 0;
   let revision = 0;
@@ -127,8 +137,28 @@ export function projectHostConversation(input: {
         break;
       }
       case "tool.started": {
-        if (event.turnId !== activeTurn || tools.has(event.toolCallId))
-          throw new Error("duplicate tool or wrong turn");
+        if (event.turnId !== activeTurn) throw new Error("duplicate tool or wrong turn");
+        if (external.hasFileSeed(event.toolCallId)) {
+          external.adoptFileSeed(event, tools);
+          break;
+        }
+        const seeded = seededByApproval.has(event.toolCallId)
+          ? tools.get(event.toolCallId)
+          : undefined;
+        if (seeded) {
+          // 审批先到时已建好占位行：只补工具名和参数，保留审批结果（等待/放行/拒绝）。
+          if (seeded.turnId !== event.turnId) throw new Error("duplicate tool or wrong turn");
+          seededByApproval.delete(event.toolCallId);
+          seeded.toolName = event.name;
+          if (event.inputText !== undefined) seeded.inputText = event.inputText;
+          // 审批卡在请求投影时复制了占位名 "unknown"；仍在等待时同步真实工具名。已裁决的审批不动。
+          const pending = seeded.approvalInteractionId
+            ? interactions.get(seeded.approvalInteractionId)
+            : undefined;
+          if (pending?.payload.kind === "permission") pending.payload.toolName = event.name;
+          break;
+        }
+        if (tools.has(event.toolCallId)) throw new Error("duplicate tool or wrong turn");
         const row: ToolCallRow = {
           ...base(event),
           kind: "toolCall",
@@ -143,14 +173,26 @@ export function projectHostConversation(input: {
         break;
       }
       case "interaction.requested": {
-        const row = tools.get(event.toolCallId);
-        if (
-          event.turnId !== activeTurn ||
-          !row ||
-          row.turnId !== event.turnId ||
-          interactions.has(event.interactionId)
-        )
+        if (event.turnId !== activeTurn || interactions.has(event.interactionId))
           throw new Error("unmatched approval request");
+        let row = tools.get(event.toolCallId);
+        if (!row) {
+          // ACP session/request_permission 等可以先于 tool.started 到达；Host 已把它记进 journal。
+          // 这里建占位工具行承载审批，而不是让之后每次 snapshot 都抛错、审批永远不可见。
+          row = {
+            ...base(event),
+            kind: "toolCall",
+            toolCallId: event.toolCallId,
+            toolName: "unknown",
+            inputText: "",
+            status: "pendingApproval",
+            startedAt: event.at,
+          };
+          rows.push(row);
+          tools.set(event.toolCallId, row);
+          seededByApproval.add(event.toolCallId);
+        }
+        if (row.turnId !== event.turnId) throw new Error("unmatched approval request");
         row.status = "pendingApproval";
         row.approvalInteractionId = event.interactionId;
         interactions.set(event.interactionId, {
@@ -202,21 +244,12 @@ export function projectHostConversation(input: {
         row.endedAt = event.at;
         if (event.outcome === "error")
           row.error = { code: "backend-tool-error", message: "Tool failed" };
-        if (event.outputText !== undefined) row.output = { text: event.outputText };
+        external.onToolFinished(event, row);
         break;
       }
-      case "file.changed": {
-        const header = headers.get(event.turnId);
-        if (header) {
-          const previous = header.fileChanges;
-          header.fileChanges = {
-            files: (previous?.files ?? 0) + 1,
-            additions: (previous?.additions ?? 0) + event.additions,
-            deletions: (previous?.deletions ?? 0) + event.deletions,
-          };
-        }
+      case "file.changed":
+        external.onFileChanged(event, { headers, tools, rows, base });
         break;
-      }
       case "usage.reported":
         inputTokens += event.inputTokens;
         outputTokens += event.outputTokens;
@@ -253,24 +286,34 @@ export function projectHostConversation(input: {
         if (event.state === "execution-unknown" || event.state === "error") phase = "error";
         break;
       case "session.error":
+        // 保留宿主给出的 message，不用固定文案盖掉。
         errorCode = event.code;
+        errorMessage = event.message;
         lastErrorAt = event.at;
+        errorFailure = event.failure;
         phase = "error";
         break;
       case "plan.updated":
+        if (!headers.has(event.turnId)) throw new Error("plan outside turn");
+        external.onPlan(event);
+        break;
       case "subagent.updated":
+        if (!headers.has(event.turnId)) throw new Error("subagent outside turn");
+        external.onSubagent(event, rows, base);
+        break;
       case "extension.event":
-        // Retained in the canonical journal. Uncertified rich UI is not fabricated here.
+        external.onExtension(event, rows, base);
         break;
     }
   }
   const lastError = errorCode
     ? {
         code: errorCode,
-        message: "External harness error; inspect target-host diagnostics",
+        message: errorMessage,
         recoverable: false,
         at: lastErrorAt,
         source: "runtime" as const,
+        ...(errorFailure ? { failure: errorFailure } : {}),
       }
     : null;
   const eligibleRows =
@@ -341,9 +384,9 @@ export function projectHostConversation(input: {
     pendingInteractions: [...interactions.values()],
     pendingCommands: [],
     backgroundWorks: [],
-    subagents: { revision: 0, childSessionIds: [], running: [], endedTotal: 0 },
+    subagents: external.subagents(),
     goal: null,
-    plan: null,
+    plan: external.plan,
     workspaceHookAdmission: null,
     // firstRowId is the full projection's oldest row, not the tail window's
     // first row; the renderer uses it to decide whether rowsRange can page.

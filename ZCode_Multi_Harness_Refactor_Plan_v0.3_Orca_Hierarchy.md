@@ -63,23 +63,23 @@ Agent 名单为目标形态；真实可用性仍以分阶段验收与 Host 目�
 
 以下是源码事实，不是计划中的新接口。
 
-| 边界 | 当前文件 | 对改造的影响 |
-|---|---|---|
-| Agent 身份 | `packages/shared/src/providers.ts` | 当前 Agent provider 枚举只有 `glm`。[S2] |
-| Agent 归一化 | `packages/shared/src/zcode-agent-policy.ts` | 归一化函数始终返回 ZCode Agent，不能原样用于第三方会话。[S3] |
-| 第三方兼容退役测试 | `packages/ui/test/nonCliAcpRetirement.test.ts` | 有拒绝第三方 Agent 身份、移除旧设置的断言。应限定原生路径的适用范围，而非整份删除。[S4] |
-| 模型执行工厂 | `apps/zcode-cli/packages/bootstrap/src/app/provider-registry-model-runtime.ts` | 已经通过 Registry 解析选择、验证配置并创建模型，值得复用。[S5] |
-| 统一模型执行 | `apps/zcode-cli/packages/adapters/src/model/model.ts` | 有 `generateText`、`streamText`、`bind`、请求与选项校验，不应再平行发明一套模型客户端。[S6] |
-| V4 命令 | `packages/shared/src/zcode-protocol-v4/command.ts` | 当前包含 createSession、sendText、stop、resolveInteraction、队列与文件恢复等产品语义。[S7] |
-| UI 传输接口 | `packages/ui/src/v4/transport.ts` | 已经有命令、ACK、查询、订阅、重同步、历史分页和附件接口。[S8] |
-| UI 投影状态 | `packages/ui/src/v4/conversationProjectionStore.ts` | snapshot 整体替换、delta 必须连续、断档重订阅；不能靠零散文本事件直接填充 UI。[S9] |
-| 服务装配 | `packages/services/src/node.ts` | 新路由器、模型服务和宿主的候选装配位置；仍需实施时确认完整依赖图。[S10] |
-| Agent 进程 | `packages/services/src/zcode-agent/zcodeAgentProcessManager.ts` | 当前有 ZCode 协议和进程生命周期耦合；应先包装，不直接拿来启动任意协议 CLI。[S11] |
-| 远程执行底座 | `packages/server/src/remote/backend.ts` | 已有 detect、upload、exec、断线通知等；接口本身并不证明 GUI 退出后进程仍存活。[S12] |
-| 窗口 tab 状态 | `packages/ui/src/store/tabStore.ts` | 有 per-window 的 WorkspaceTabState、workspaceIdentity、远端信息和展开/选择状态；持久化项目与工作区不能继续仅靠打开的 tabs 枚举。[H1] |
-| Git 工作区分类 | `packages/shared/src/git.ts` | 已有 not-repository / main-tree / linked-worktree 类型；可复用分类，不代表已实现新 worktree 生命周期服务。[H2] |
-| 现有 Agent 图标 | `packages/ui/src/lib/providerCliIcon.tsx` | 该基线忽略传入 provider 并返回 GLM 图标；需保留原生兼容入口并增加真正按 Harness 解析的图标组件。[H3] |
-| 参考插件图标 | CodexHost `packages/adapters/pi/manifest.json` | 声明 id/name/entry/icon，相对图标路径作为资源声明，可参考其元数据来源；不能直接透传任意文件路径给浏览器。[H4] |
+| 边界               | 当前文件                                                                       | 对改造的影响                                                                                                                         |
+| ------------------ | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Agent 身份         | `packages/shared/src/providers.ts`                                             | 当前 Agent provider 枚举只有 `glm`。[S2]                                                                                             |
+| Agent 归一化       | `packages/shared/src/zcode-agent-policy.ts`                                    | 归一化函数始终返回 ZCode Agent，不能原样用于第三方会话。[S3]                                                                         |
+| 第三方兼容退役测试 | `packages/ui/test/nonCliAcpRetirement.test.ts`                                 | 有拒绝第三方 Agent 身份、移除旧设置的断言。应限定原生路径的适用范围，而非整份删除。[S4]                                              |
+| 模型执行工厂       | `apps/zcode-cli/packages/bootstrap/src/app/provider-registry-model-runtime.ts` | 已经通过 Registry 解析选择、验证配置并创建模型，值得复用。[S5]                                                                       |
+| 统一模型执行       | `apps/zcode-cli/packages/adapters/src/model/model.ts`                          | 有 `generateText`、`streamText`、`bind`、请求与选项校验，不应再平行发明一套模型客户端。[S6]                                          |
+| V4 命令            | `packages/shared/src/zcode-protocol-v4/command.ts`                             | 当前包含 createSession、sendText、stop、resolveInteraction、队列与文件恢复等产品语义。[S7]                                           |
+| UI 传输接口        | `packages/ui/src/v4/transport.ts`                                              | 已经有命令、ACK、查询、订阅、重同步、历史分页和附件接口。[S8]                                                                        |
+| UI 投影状态        | `packages/ui/src/v4/conversationProjectionStore.ts`                            | snapshot 整体替换、delta 必须连续、断档重订阅；不能靠零散文本事件直接填充 UI。[S9]                                                   |
+| 服务装配           | `packages/services/src/node.ts`                                                | 新路由器、模型服务和宿主的候选装配位置；仍需实施时确认完整依赖图。[S10]                                                              |
+| Agent 进程         | `packages/services/src/zcode-agent/zcodeAgentProcessManager.ts`                | 当前有 ZCode 协议和进程生命周期耦合；应先包装，不直接拿来启动任意协议 CLI。[S11]                                                     |
+| 远程执行底座       | `packages/server/src/remote/backend.ts`                                        | 已有 detect、upload、exec、断线通知等；接口本身并不证明 GUI 退出后进程仍存活。[S12]                                                  |
+| 窗口 tab 状态      | `packages/ui/src/store/tabStore.ts`                                            | 有 per-window 的 WorkspaceTabState、workspaceIdentity、远端信息和展开/选择状态；持久化项目与工作区不能继续仅靠打开的 tabs 枚举。[H1] |
+| Git 工作区分类     | `packages/shared/src/git.ts`                                                   | 已有 not-repository / main-tree / linked-worktree 类型；可复用分类，不代表已实现新 worktree 生命周期服务。[H2]                       |
+| 现有 Agent 图标    | `packages/ui/src/lib/providerCliIcon.tsx`                                      | 该基线忽略传入 provider 并返回 GLM 图标；需保留原生兼容入口并增加真正按 Harness 解析的图标组件。[H3]                                 |
+| 参考插件图标       | CodexHost `packages/adapters/pi/manifest.json`                                 | 声明 id/name/entry/icon，相对图标路径作为资源声明，可参考其元数据来源；不能直接透传任意文件路径给浏览器。[H4]                        |
 
 源码审阅不等于运行验证。P0 必须实测干净环境中的构建、原生会话与 SSH 行为。
 
@@ -121,10 +121,10 @@ ACP 是 Harness 与宿主之间的协议，不是通用模型注入协议。加�
 
 用户面只有两种明确语义：
 
-| 模式 | 行为 | 是否满足统一模型路由 |
-|---|---|---|
-| `host-managed` | 用户从 ZCode 的模型目录选择，调用经过保留的模型执行层 | 是 |
-| `harness-managed` | Agent 自行管理模型和账号，界面明确标记 | 否；作为可选兼容模式保留 |
+| 模式              | 行为                                                  | 是否满足统一模型路由     |
+| ----------------- | ----------------------------------------------------- | ------------------------ |
+| `host-managed`    | 用户从 ZCode 的模型目录选择，调用经过保留的模型执行层 | 是                       |
+| `harness-managed` | Agent 自行管理模型和账号，界面明确标记                | 否；作为可选兼容模式保留 |
 
 `host-managed` 内部可以使用直接 SDK 适配或 Gateway。不能把“向 CLI 写入真实 Provider URL 和 Key、让它绕过现有模型执行层直接请求”算作完成统一模型层。
 
@@ -201,13 +201,13 @@ Harness Adapter 提供探测、创建、连接现有会话、发送、停止、�
 
 把以下动作严格区分：
 
-| 动作 | 语义 |
-|---|---|
-| `detach` | 关闭客户端订阅，不终止任务 |
-| `cancelTurn` | 取消指定执行轮次，不等于杀死会话 |
-| `terminateSession` | 用户明确结束整个会话及其受管执行 |
-| `resumeExecution` | 用 Harness 的原生会话状态续跑 |
-| `viewHistory` | 读取宿主已记录的展示历史，不承诺可续跑 |
+| 动作               | 语义                                   |
+| ------------------ | -------------------------------------- |
+| `detach`           | 关闭客户端订阅，不终止任务             |
+| `cancelTurn`       | 取消指定执行轮次，不等于杀死会话       |
+| `terminateSession` | 用户明确结束整个会话及其受管执行       |
+| `resumeExecution`  | 用 Harness 的原生会话状态续跑          |
+| `viewHistory`      | 读取宿主已记录的展示历史，不承诺可续跑 |
 
 不要创建 ClaudeSSHAdapter、ClaudeLocalAdapter 等乘积类。Agent 接口依赖 ExecutionTarget；执行层负责目标机器上的启动、文件与进程能力。
 
@@ -225,17 +225,17 @@ CodexHost 的能力模型区分权限选择 live/atCreate、fork/forkAcrossCwd�
 
 ### 4.3 明确状态所有权
 
-| 数据 | 权威方 |
-|---|---|
-| 项目分组、名称、工作区引用与排序 | 用户 profile 的 Project Catalog；首期明确单写入方，不伪装多端强一致 |
-| 实际仓库绑定、worktree 身份/代际与执行准入 | 目标 Runtime Host；Catalog 只缓存它的验证结果 |
-| 用户会话选择、BindingPlan、宿主会话索引 | Runtime Host |
-| 当前窗口焦点、展开态、草稿/滚动位置 | 独立 UI view store；不拥有执行生命周期 |
-| Agent 内部上下文、压缩状态、原生恢复文件 | 对应 Harness |
-| 外部 Agent 的标准展示事件和投影日志 | Runtime Host |
-| ZCode 原生会话的 V4 执行与投影事实 | 现有 ZCode runtime；先不复制写入 |
-| 仓库文件、Git 状态 | 执行目标上的文件系统与 Git |
-| Provider Secret | 经授权的凭据存储/模型服务，不是 renderer |
+| 数据                                       | 权威方                                                              |
+| ------------------------------------------ | ------------------------------------------------------------------- |
+| 项目分组、名称、工作区引用与排序           | 用户 profile 的 Project Catalog；首期明确单写入方，不伪装多端强一致 |
+| 实际仓库绑定、worktree 身份/代际与执行准入 | 目标 Runtime Host；Catalog 只缓存它的验证结果                       |
+| 用户会话选择、BindingPlan、宿主会话索引    | Runtime Host                                                        |
+| 当前窗口焦点、展开态、草稿/滚动位置        | 独立 UI view store；不拥有执行生命周期                              |
+| Agent 内部上下文、压缩状态、原生恢复文件   | 对应 Harness                                                        |
+| 外部 Agent 的标准展示事件和投影日志        | Runtime Host                                                        |
+| ZCode 原生会话的 V4 执行与投影事实         | 现有 ZCode runtime；先不复制写入                                    |
+| 仓库文件、Git 状态                         | 执行目标上的文件系统与 Git                                          |
+| Provider Secret                            | 经授权的凭据存储/模型服务，不是 renderer                            |
 
 不能把统一展示历史直接当成所有 Harness 的原生运行状态。需要跨 Harness 接续时，另做显式的“创建新会话并导入摘要”，不称为无损恢复。
 
@@ -373,23 +373,23 @@ Codex 优先接官方 app-server，而非解析 TUI；模型侧使用 custom pro
 
 以下是计划，不是已创建的 PR。
 
-| PR | 内容 | 依赖 |
-|---|---|---|
-| 01 | 基线、隔离目录、原生 fixture、CodexHost 参考/许可清单 | 无 |
-| 02 | Adapter/Session/Turn-Item + Project/Workspace/Session 契约、schema、registry、图标描述、Mock | 01 |
-| 02A | Project Catalog、RepositoryBinding、WorktreeService、只读发现与显式接管/新建 | 02 |
-| 03 | SessionRouter / ZCode adapter / additive metadata；旧会话到 workspaceId 的映射 | 02、02A |
-| 04 | UI facade、Host 目录驱动 Picker、能力开关、原生回归 | 03 |
-| 04A | Orca 式三层侧栏、轻量汇总、Harness/状态双图标、view state 与 focus 测试 | 04、02A |
-| 05 | 现有模型执行层可复用入口与 ModelBindingPlanner | 02 |
-| 06 | Pi RPC/SDK transport 受限验证、自定义模型桥、Harness adapter | 05 |
-| 07 | 外部事件/命令日志、ZCodeV4Projector、Pi 双模式与同工作区多会话端到端 | 04A、06 |
-| 08 | Runtime Host、SSH 独立生命周期、工作区目标继承、恢复和安全 | 07 |
-| 08A | 工作区移除准入、目录消失/重建、离线重同步、隐藏与归档安全回归 | 08 |
-| 09 | Gateway core + Responses + Codex | 08 |
-| 10 | Messages 协议 + Claude 原生 SDK adapter（参考 CodexHost 生命周期） | 09；Gateway 契约固定后部分并行 |
-| 11 | 可复用 ACP 接入与一个长尾 Agent，不扩展公共专用分支 | 08；复用已验证模型绑定 |
-| 12 | 层级/并发/focus 压测、迁移与回滚演练、版本锁定和发布 | 08A、09、10、11 |
+| PR  | 内容                                                                                         | 依赖                           |
+| --- | -------------------------------------------------------------------------------------------- | ------------------------------ |
+| 01  | 基线、隔离目录、原生 fixture、CodexHost 参考/许可清单                                        | 无                             |
+| 02  | Adapter/Session/Turn-Item + Project/Workspace/Session 契约、schema、registry、图标描述、Mock | 01                             |
+| 02A | Project Catalog、RepositoryBinding、WorktreeService、只读发现与显式接管/新建                 | 02                             |
+| 03  | SessionRouter / ZCode adapter / additive metadata；旧会话到 workspaceId 的映射               | 02、02A                        |
+| 04  | UI facade、Host 目录驱动 Picker、能力开关、原生回归                                          | 03                             |
+| 04A | Orca 式三层侧栏、轻量汇总、Harness/状态双图标、view state 与 focus 测试                      | 04、02A                        |
+| 05  | 现有模型执行层可复用入口与 ModelBindingPlanner                                               | 02                             |
+| 06  | Pi RPC/SDK transport 受限验证、自定义模型桥、Harness adapter                                 | 05                             |
+| 07  | 外部事件/命令日志、ZCodeV4Projector、Pi 双模式与同工作区多会话端到端                         | 04A、06                        |
+| 08  | Runtime Host、SSH 独立生命周期、工作区目标继承、恢复和安全                                   | 07                             |
+| 08A | 工作区移除准入、目录消失/重建、离线重同步、隐藏与归档安全回归                                | 08                             |
+| 09  | Gateway core + Responses + Codex                                                             | 08                             |
+| 10  | Messages 协议 + Claude 原生 SDK adapter（参考 CodexHost 生命周期）                           | 09；Gateway 契约固定后部分并行 |
+| 11  | 可复用 ACP 接入与一个长尾 Agent，不扩展公共专用分支                                          | 08；复用已验证模型绑定         |
+| 12  | 层级/并发/focus 压测、迁移与回滚演练、版本锁定和发布                                         | 08A、09、10、11                |
 
 契约和共享 schema 指定一个集成人负责。模型侧、Pi adapter、UI projector 可以在契约冻结后并行；不要让不同 Agent 独立发明自己的 SessionId、能力字段或事件格式。
 
@@ -521,23 +521,23 @@ API Key、refresh token、Authorization 头不进入 UI 事件、普通日志或
 
 ### 10.2 首个版本的明确验收
 
-| 检查 | 合格标准 |
-|---|---|
-| 选择真实性 | 实际模型调用经过选定 Provider/Model；不只改变 UI 标签 |
-| 组合覆盖 | ZCode/Pi × 两个 Provider 模型 × 本地/SSH，八个已认证组合 |
-| 工具循环 | 读文件、修改、测试执行、下一轮追问完整成功 |
-| 关闭 GUI | 远端当前任务继续，后续模型调用也不依赖 GUI |
-| 重连 | 不重复 prompt、工具副作用或审批；历史与状态收敛 |
-| 权限 | 拒绝时工具未执行；重复/过期审批无副作用 |
-| 隔离 | 同路径不同主机、同 worktree 多会话、同 native ID 不串状态 |
-| 配置 | 不改用户的全局 Agent 配置或凭据 |
-| 回滚 | 开关关闭能恢复原生入口；新旧存储不会互相损坏 |
-| UI 体验 | 后台输出不抢焦点；会话切换不重启任务 |
-| 层级 | Project → Worktree Workspace → 多 Agent；空工作区与主检出都有稳定节点 |
+| 检查           | 合格标准                                                                   |
+| -------------- | -------------------------------------------------------------------------- |
+| 选择真实性     | 实际模型调用经过选定 Provider/Model；不只改变 UI 标签                      |
+| 组合覆盖       | ZCode/Pi × 两个 Provider 模型 × 本地/SSH，八个已认证组合                   |
+| 工具循环       | 读文件、修改、测试执行、下一轮追问完整成功                                 |
+| 关闭 GUI       | 远端当前任务继续，后续模型调用也不依赖 GUI                                 |
+| 重连           | 不重复 prompt、工具副作用或审批；历史与状态收敛                            |
+| 权限           | 拒绝时工具未执行；重复/过期审批无副作用                                    |
+| 隔离           | 同路径不同主机、同 worktree 多会话、同 native ID 不串状态                  |
+| 配置           | 不改用户的全局 Agent 配置或凭据                                            |
+| 回滚           | 开关关闭能恢复原生入口；新旧存储不会互相损坏                               |
+| UI 体验        | 后台输出不抢焦点；会话切换不重启任务                                       |
+| 层级           | Project → Worktree Workspace → 多 Agent；空工作区与主检出都有稳定节点      |
 | 同工作区多会话 | 同 Harness 可开两个以上；创建会话不增加 worktree，不串模型/上下文/停止命令 |
-| 图标 | 按实际 harnessId；模型换品牌不改 Agent 图标；未知/失效资源有安全 fallback |
-| 管理语义 | 新建/接管/隐藏/归档/删除互相区分；发现不会启动 Agent 或自动清理 Git |
-| 远端归属 | 工作区绑定稳定目标；离线不删树、不显示虚假完成，重连身份不变化 |
+| 图标           | 按实际 harnessId；模型换品牌不改 Agent 图标；未知/失效资源有安全 fallback  |
+| 管理语义       | 新建/接管/隐藏/归档/删除互相区分；发现不会启动 Agent 或自动清理 Git        |
+| 远端归属       | 工作区绑定稳定目标；离线不删树、不显示虚假完成，重连身份不变化             |
 
 建议压力验收目标：至少 50 个发现的 worktree、跨至少 5 个展开工作区的 10 个会话并发、至少 8 小时运行、重复断线/重连、总计至少十万条合成事件。这些是拟定测试负载，不是现有性能结论。记录输入延迟、会话切换 p95、事件积压、内存和子进程数；与 P0 固定硬件/负载基线对比，交互 p95 的初始回归预算可设为不超过 10%，最终阈值由实测基线确认。以静置后的内存趋势和已退出子进程回收判断泄漏，不声称进程 RSS 必须完全回到启动值。
 
@@ -590,19 +590,19 @@ CodexHost 的 `HarnessModelRef` 是 adapter 拥有的 opaque 标识；Pi 具体�
 
 ### 12.2 代码导航：读什么、拿什么、不拿什么
 
-| 参考入口 | 已查看的内容 | 用途 | 移植限制 |
-|---|---|---|---|
-| `packages/harness-adapter/src/text-session.ts` [C1] | Adapter/Session、控制命令、HostItem/HostEvent、交互和快照契约 | P1 契约、P3 adapter 骨架 | 不直接继承所有 Codex 产品假设；本项目补 sequence/epoch、detach 和模型绑定 |
-| `packages/harness-adapter/src/plugin.ts` [C2] | manifest 入口返回工厂、Context 不含 Host/Renderer 内部 | 插件构造与依赖隔离 | 环境快照不是安全过滤；不得注入不必要的真实密钥 |
-| `.agents/skills/codexhost-add-harness/SKILL.md` [C3] | 接入过程、职责、原生优先、后端/发行/Desktop 分开验收 | 编写本项目 add-harness 开发流程 | 它是被审阅的项目文档，不是对本项目自动生效的指令；文中的“七个”等说明不可替代当前源码 |
-| `packages/adapters/pi/src/pi-adapter.ts` [C4] | PiTurnTransport、依赖注入、公共/原生类型分离、活动轮次状态 | Pi adapter/transport 分离 | 不照抄整个文件；模型注入另做 |
-| `packages/adapters/pi/src/pi-rpc-session.ts` [C4b] | Pi 状态、工具/文本/交互事件、RPC 参数和错误类型 | 固定原生边界、timeout/cleanup 调研入口 | 本次没有执行 Pi RPC，不能据源码声明断线存活或完整版本兼容 |
-| `packages/shared-contracts/src/harness-models.ts` [C5] | opaque ref、有效配置、权限 live/atCreate、history/subagents 能力 | 状态与能力设计 | capability 不等于品牌名单；我们要补 resume、历史只读与统一模型路由能力 |
-| `packages/adapters/pi/src/pi-model-catalog.ts` [C6] | ref 编解码、目录校验、实际模型与 thinking 校验 | 原生模型身份适配 | 不取代 ZCode Provider Registry/模型执行器 |
-| `packages/protocol-core/src/codex-ui-projector.ts` [C7] | 公共 Item/Turn 到 Codex 展示的映射；工具展示兼容处理 | ZCodeV4Projector 设计 | 不保留 Codex wire 格式；不为了展示把读取工具伪装成命令执行 |
-| `packages/adapters/claude-code/src/sdk-transport.ts` [C9] | SDK query、流式输入、交互 ID、Abort/timeout、状态结构 | Claude 控制/事件接入 | 这不是统一 Model Gateway；SDK 与认证语义单独验证 |
-| `packages/adapters/claude-code/src/plugin.ts` [C9b] | darwin 受管远端选择 Broker、其他场景直接 adapter | 研究执行策略封装 | 不是所有平台/Agent 的通用持久化证明 |
-| `packages/harness-adapter/test/text-session.test.ts` [C11] | fake lifecycle、流式最终态、usage replacement、拒绝/并发测试 | P1 确定性测试 | Fake 测试存在或通过都不能代替原生、模型、SSH 实测 |
+| 参考入口                                                   | 已查看的内容                                                     | 用途                                   | 移植限制                                                                             |
+| ---------------------------------------------------------- | ---------------------------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------ |
+| `packages/harness-adapter/src/text-session.ts` [C1]        | Adapter/Session、控制命令、HostItem/HostEvent、交互和快照契约    | P1 契约、P3 adapter 骨架               | 不直接继承所有 Codex 产品假设；本项目补 sequence/epoch、detach 和模型绑定            |
+| `packages/harness-adapter/src/plugin.ts` [C2]              | manifest 入口返回工厂、Context 不含 Host/Renderer 内部           | 插件构造与依赖隔离                     | 环境快照不是安全过滤；不得注入不必要的真实密钥                                       |
+| `.agents/skills/codexhost-add-harness/SKILL.md` [C3]       | 接入过程、职责、原生优先、后端/发行/Desktop 分开验收             | 编写本项目 add-harness 开发流程        | 它是被审阅的项目文档，不是对本项目自动生效的指令；文中的“七个”等说明不可替代当前源码 |
+| `packages/adapters/pi/src/pi-adapter.ts` [C4]              | PiTurnTransport、依赖注入、公共/原生类型分离、活动轮次状态       | Pi adapter/transport 分离              | 不照抄整个文件；模型注入另做                                                         |
+| `packages/adapters/pi/src/pi-rpc-session.ts` [C4b]         | Pi 状态、工具/文本/交互事件、RPC 参数和错误类型                  | 固定原生边界、timeout/cleanup 调研入口 | 本次没有执行 Pi RPC，不能据源码声明断线存活或完整版本兼容                            |
+| `packages/shared-contracts/src/harness-models.ts` [C5]     | opaque ref、有效配置、权限 live/atCreate、history/subagents 能力 | 状态与能力设计                         | capability 不等于品牌名单；我们要补 resume、历史只读与统一模型路由能力               |
+| `packages/adapters/pi/src/pi-model-catalog.ts` [C6]        | ref 编解码、目录校验、实际模型与 thinking 校验                   | 原生模型身份适配                       | 不取代 ZCode Provider Registry/模型执行器                                            |
+| `packages/protocol-core/src/codex-ui-projector.ts` [C7]    | 公共 Item/Turn 到 Codex 展示的映射；工具展示兼容处理             | ZCodeV4Projector 设计                  | 不保留 Codex wire 格式；不为了展示把读取工具伪装成命令执行                           |
+| `packages/adapters/claude-code/src/sdk-transport.ts` [C9]  | SDK query、流式输入、交互 ID、Abort/timeout、状态结构            | Claude 控制/事件接入                   | 这不是统一 Model Gateway；SDK 与认证语义单独验证                                     |
+| `packages/adapters/claude-code/src/plugin.ts` [C9b]        | darwin 受管远端选择 Broker、其他场景直接 adapter                 | 研究执行策略封装                       | 不是所有平台/Agent 的通用持久化证明                                                  |
+| `packages/harness-adapter/test/text-session.test.ts` [C11] | fake lifecycle、流式最终态、usage replacement、拒绝/并发测试     | P1 确定性测试                          | Fake 测试存在或通过都不能代替原生、模型、SSH 实测                                    |
 
 其他只作为继续阅读导航的目录：`packages/mapping-store/`、`packages/harness-broker/`、`packages/host-runtime/`。此处不宣称已全面审计这些目录；实施时先读其实际源码/测试，确认状态所有权、进程归属与脱离前端后的行为，再决定复用。
 
@@ -644,18 +644,18 @@ CodexHost 该快照根 `package.json` 明确声明 `LGPL-3.0-only`，根 LICENSE
 
 ### 12.7 新增验收用例
 
-| 场景 | 预期 |
-|---|---|
-| 安装一个未在 UI 源码列过的受信插件 | Host 目录发现并返回描述，UI 据目录生成入口，无新的硬编码品牌分支 |
-| 插件发现但未授权启用 | 不执行工厂、不启动 CLI；项目内文件不能偷偷启用插件 |
-| Turn 拒绝接收/并发冲突 | 不产生虚假 started/completed，不影响当前活动轮次 |
-| 流式 item.completed 携完整快照 | 对齐/upsert，不将同一正文再次 append |
-| 批准/问题等待后取消 | 原始 interaction 明确关闭，迟到答复不能继续工具 |
-| usage 返回完整快照 | 按 replacement 语义处理，不重复累加；Gateway/Agent 两路统计标明来源 |
-| Session readSnapshot() | 只读且 identity 稳定，不触发 prompt，不重放到实时事件输出 |
-| Pi 原生模型模式与 host-managed 模式切换 | 原生模式只算适配验证；host-managed 必须以真实调用轨迹证明经过 ZCode 模型层 |
-| ZCode V4 投影缺失序号或 runtime 换代 | 保持权威状态不被错误 merge，恢复订阅，不重发已可能执行的命令 |
-| GUI 关闭而 Remote Agent 仍需下一次模型调用 | Agent、输出消费、Gateway 与认证链独立可用，不只证明进程 PID 还在 |
+| 场景                                       | 预期                                                                       |
+| ------------------------------------------ | -------------------------------------------------------------------------- |
+| 安装一个未在 UI 源码列过的受信插件         | Host 目录发现并返回描述，UI 据目录生成入口，无新的硬编码品牌分支           |
+| 插件发现但未授权启用                       | 不执行工厂、不启动 CLI；项目内文件不能偷偷启用插件                         |
+| Turn 拒绝接收/并发冲突                     | 不产生虚假 started/completed，不影响当前活动轮次                           |
+| 流式 item.completed 携完整快照             | 对齐/upsert，不将同一正文再次 append                                       |
+| 批准/问题等待后取消                        | 原始 interaction 明确关闭，迟到答复不能继续工具                            |
+| usage 返回完整快照                         | 按 replacement 语义处理，不重复累加；Gateway/Agent 两路统计标明来源        |
+| Session readSnapshot()                     | 只读且 identity 稳定，不触发 prompt，不重放到实时事件输出                  |
+| Pi 原生模型模式与 host-managed 模式切换    | 原生模式只算适配验证；host-managed 必须以真实调用轨迹证明经过 ZCode 模型层 |
+| ZCode V4 投影缺失序号或 runtime 换代       | 保持权威状态不被错误 merge，恢复订阅，不重发已可能执行的命令               |
+| GUI 关闭而 Remote Agent 仍需下一次模型调用 | Agent、输出消费、Gateway 与认证链独立可用，不只证明进程 PID 还在           |
 
 最终评判标准仍是 P4 的闭环和 P5/P6 的兼容矩阵，不是源码拷贝数、插件数量、构建成功或单条聊天成功。
 
@@ -715,9 +715,7 @@ interface WorktreeWorkspace {
   worktreePath: string;
   worktreeGeneration: string;
   isMainWorktree: boolean;
-  head:
-    | { kind: "branch"; ref: string; oid: string | null }
-    | { kind: "detached"; oid: string };
+  head: { kind: "branch"; ref: string; oid: string | null } | { kind: "detached"; oid: string };
   origin: "created" | "adopted";
   lifecycle: "active" | "archived" | "missing" | "removed";
 }
@@ -787,15 +785,15 @@ interface AgentSessionRecord {
 
 ### 13.6 生命周期、安全和删除语义
 
-| 用户动作 | 改什么 | 不应隐式做什么 |
-|---|---|---|
-| 折叠项目/工作区 | UI view state | 不停任务、不删会话 |
-| 隐藏工作区 | 展示偏好；摘要可保留待处理计数 | 不删目录、不关 Agent |
-| 归档会话/工作区 | Catalog 展示/准入元数据 | 不以归档代替 cancel；活动条目应明确提示状态 |
-| 关闭 Chat/Terminal 视图 | detach 该视图 | 不自动 terminate Session |
-| 停止 Agent | 取消指定轮次或显式终止指定会话 | 不误杀同 workspace 的其他会话 |
-| 移除 linked worktree | 经过预检与确认的 Git 操作 | 不顺便删 branch、历史或主仓库 |
-| 从应用移除项目 | 移除/归档项目入口，按明确策略保留历史引用 | 不 rm 仓库、不默认强杀不在授权范围内的进程 |
+| 用户动作                | 改什么                                    | 不应隐式做什么                              |
+| ----------------------- | ----------------------------------------- | ------------------------------------------- |
+| 折叠项目/工作区         | UI view state                             | 不停任务、不删会话                          |
+| 隐藏工作区              | 展示偏好；摘要可保留待处理计数            | 不删目录、不关 Agent                        |
+| 归档会话/工作区         | Catalog 展示/准入元数据                   | 不以归档代替 cancel；活动条目应明确提示状态 |
+| 关闭 Chat/Terminal 视图 | detach 该视图                             | 不自动 terminate Session                    |
+| 停止 Agent              | 取消指定轮次或显式终止指定会话            | 不误杀同 workspace 的其他会话               |
+| 移除 linked worktree    | 经过预检与确认的 Git 操作                 | 不顺便删 branch、历史或主仓库               |
+| 从应用移除项目          | 移除/归档项目入口，按明确策略保留历史引用 | 不 rm 仓库、不默认强杀不在授权范围内的进程  |
 
 Worktree 删除按“检查 → 冻结新会话准入 → 明确停止必要执行 → 重检 → Git remove → 更新目录与历史位置状态”处理。审批等待、运行中工具、连接离线或进程归属未知时不能默认安全。必须显示修改/未跟踪文件、submodule、锁状态等风险；保留主检出，不通过普通 linked-worktree 删除菜单处理。git lock 不等于我们的运行互斥锁。[H5]
 
@@ -818,36 +816,36 @@ Worktree 删除按“检查 → 冻结新会话准入 → 明确停止必要执�
 
 具体接缝：
 
-| 既有入口 | 改造方式 |
-|---|---|
-| `packages/ui/src/store/tabStore.ts` [H1] | 保留窗口选择能力；加到实体 ID 的适配，Catalog 不以 tabs 为数据库 |
-| `packages/shared/src/git.ts` [H2] | 复用已有 Git 分类与错误语义，新增工作区管理契约，不误将 branch 等同 worktree |
-| `packages/ui/src/lib/providerCliIcon.tsx` [H3] | 保留原生调用兼容，新会话 UI 迁到目录驱动 HarnessIcon |
-| `packages/ui/src/v4/transport.ts` [S8] | 正文仍复用已有传输；workspace 路由由新身份解析，轻量侧栏走摘要索引 |
-| `packages/ui/src/v4/conversationProjectionStore.ts` [S9] | 保留正文连续帧规则；侧栏不直接消费或复制全量 transcript |
-| CodexHost Pi `manifest.json` [H4] | 参考图标元数据；资源加载受校验，不引入第二份静态品牌注册表 |
+| 既有入口                                                 | 改造方式                                                                     |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `packages/ui/src/store/tabStore.ts` [H1]                 | 保留窗口选择能力；加到实体 ID 的适配，Catalog 不以 tabs 为数据库             |
+| `packages/shared/src/git.ts` [H2]                        | 复用已有 Git 分类与错误语义，新增工作区管理契约，不误将 branch 等同 worktree |
+| `packages/ui/src/lib/providerCliIcon.tsx` [H3]           | 保留原生调用兼容，新会话 UI 迁到目录驱动 HarnessIcon                         |
+| `packages/ui/src/v4/transport.ts` [S8]                   | 正文仍复用已有传输；workspace 路由由新身份解析，轻量侧栏走摘要索引           |
+| `packages/ui/src/v4/conversationProjectionStore.ts` [S9] | 保留正文连续帧规则；侧栏不直接消费或复制全量 transcript                      |
+| CodexHost Pi `manifest.json` [H4]                        | 参考图标元数据；资源加载受校验，不引入第二份静态品牌注册表                   |
 
 此处是经过定位的接入点，不宣称已经枚举全部调用者。P0 仍需追踪会话索引、持久化和多窗口消费者，再提交完整的变更清单。
 
 ### 13.8 测试、交付和产品验收
 
-| 测试场景 | 合格行为 |
-|---|---|
-| 一个 Project 有主检出和两个 linked worktree | 三个 Workspace 正确归属，branch 名不作为 ID |
-| 同 Workspace 新建三个会话，其中两个 Pi | 三个独立会话；worktree 数和 branch 不变 |
-| Pi 使用不同厂商模型 | 仍为 Pi 图标；模型信息单独展示 |
-| Host 新增受信 Harness manifest | Picker/侧栏/Header 使用同一名称/图标，无需新增品牌条件分支 |
-| 图标缺失或恶意资源引用 | 安全 fallback，不请求任意 URL 或执行资源代码 |
-| 关闭最后一个会话视图后重新打开 | 工作区仍在，原会话可恢复或明确报告受限；不新建替身会话 |
-| 后台 Agent 更新、发现新 worktree、SSH 重连 | 当前输入焦点、草稿、选中会话不变 |
-| workspace 折叠/隐藏时出现审批 | 项目摘要仍显示待处理，存在可点击入口 |
-| SSH 断开时重新扫描失败 | 树保留且 freshness 过期，不批量判 missing 或 completed |
-| 同路径在两台主机、或两份不同 clone | 不串归属、不按 origin URL 自动合并 |
-| 外部 branch 改名 / worktree 被移走或删除重建 | 同实例核实后更新；不确定时标待核实，不错绑历史 |
-| 工作区删除与新 Agent 并发创建 | 准入互斥；失败不先破坏会话或用户目录 |
-| 旧 cwd 在 worktree 子目录 | 归到正确工作区并保留 cwd，不静默换执行位置 |
-| 同 worktree 两会话写文件 | 明确共享语义；Git diff 不伪归因；取消一个不影响另一个 |
-| 至少 50 worktree 候选、10 活动会话 | 摘要查询不读取全部历史、不隐式启动 CLI；无持续列表跳动 |
+| 测试场景                                     | 合格行为                                                   |
+| -------------------------------------------- | ---------------------------------------------------------- |
+| 一个 Project 有主检出和两个 linked worktree  | 三个 Workspace 正确归属，branch 名不作为 ID                |
+| 同 Workspace 新建三个会话，其中两个 Pi       | 三个独立会话；worktree 数和 branch 不变                    |
+| Pi 使用不同厂商模型                          | 仍为 Pi 图标；模型信息单独展示                             |
+| Host 新增受信 Harness manifest               | Picker/侧栏/Header 使用同一名称/图标，无需新增品牌条件分支 |
+| 图标缺失或恶意资源引用                       | 安全 fallback，不请求任意 URL 或执行资源代码               |
+| 关闭最后一个会话视图后重新打开               | 工作区仍在，原会话可恢复或明确报告受限；不新建替身会话     |
+| 后台 Agent 更新、发现新 worktree、SSH 重连   | 当前输入焦点、草稿、选中会话不变                           |
+| workspace 折叠/隐藏时出现审批                | 项目摘要仍显示待处理，存在可点击入口                       |
+| SSH 断开时重新扫描失败                       | 树保留且 freshness 过期，不批量判 missing 或 completed     |
+| 同路径在两台主机、或两份不同 clone           | 不串归属、不按 origin URL 自动合并                         |
+| 外部 branch 改名 / worktree 被移走或删除重建 | 同实例核实后更新；不确定时标待核实，不错绑历史             |
+| 工作区删除与新 Agent 并发创建                | 准入互斥；失败不先破坏会话或用户目录                       |
+| 旧 cwd 在 worktree 子目录                    | 归到正确工作区并保留 cwd，不静默换执行位置                 |
+| 同 worktree 两会话写文件                     | 明确共享语义；Git diff 不伪归因；取消一个不影响另一个      |
+| 至少 50 worktree 候选、10 活动会话           | 摘要查询不读取全部历史、不隐式启动 CLI；无持续列表跳动     |
 
 **首个可用版本的新增交付包：**三级数据模型、WorktreeService、迁移脚本与报告、Orca 式侧栏、双图标组件、轻量聚合索引、三层 fixture、并发/focus/离线安全测试。真实 Codex/Claude 会话仍按 P5 交付；不要为了演示三个 logo 放出不能运行的启动选项。
 
@@ -896,7 +894,6 @@ pnpm --filter @zcode/cli... build
 - [S17] [Codex Advanced Configuration](https://developers.openai.com/codex/config-file/config-advanced)
 - [S18] [Claude Code gateway compatibility guide](https://code.claude.com/docs/en/llm-gateway-protocol)
 
-
 ## 附录 C：CodexHost 固定版本参考
 
 以下为本次实际读取的源码/文档入口；部分大型文件按相关区间阅读，没有宣称全仓库审计、完成构建或测试通过。PR 状态是本次查询快照，不作为将来状态保证。
@@ -919,7 +916,6 @@ pnpm --filter @zcode/cli... build
 - [C13] [归档的反向 ZCode 接入 PR #337](https://github.com/BytePioneer-AI/codex-host/pull/337)
 - [C14] [LGPL v3 许可证文本](https://github.com/BytePioneer-AI/codex-host/blob/d9fa7aa26474127bb80cbf086cd49503f7cc4ccf/LICENSE)
 - [C15] [按原生传输划分的代码导航](https://github.com/BytePioneer-AI/codex-host/blob/d9fa7aa26474127bb80cbf086cd49503f7cc4ccf/.agents/skills/codexhost-add-harness/references/current-harness-implementations.md)
-
 
 ## 附录 D：v0.3 工作区与侧栏参考
 

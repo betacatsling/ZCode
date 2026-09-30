@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { createRequire } from "node:module";
 import { Worker } from "node:worker_threads";
 import type { Model } from "@zcode/contracts";
 import type { ModelSelection } from "@zcode/shared/model-selection";
@@ -14,6 +15,7 @@ import type {
   SessionSpec,
 } from "@zcode/shared/agent-host";
 import type { HarnessAdapter, PreparedHostBinding } from "../../agent-host/harnessRegistry.js";
+import { piHarnessCapabilities, piHarnessHostManagedSupport } from "./piCapabilities.js";
 import type { FromPiWorker, PiWorkerBoot } from "./piProtocol.js";
 import { PiSessionStartupReservations, waitForPiWorkerReady } from "./piSessionStartup.js";
 import {
@@ -21,6 +23,25 @@ import {
   routePiWorkerMessage,
   sendPiWorkerCommand,
 } from "./piWorkerMessageRouter.js";
+
+/** Source-mode Workers need Node >=24 so `--import tsx` loads `.ts` (and deps like node:sqlite). */
+function assertPiWorkerNodeRuntime(): void {
+  const major = Number(process.versions.node.split(".")[0] ?? 0);
+  if (Number.isFinite(major) && major >= 24) return;
+  throw new Error(
+    `Pi worker requires Node.js >=24.0.0 (engines); current process is ${process.versions.node}`,
+  );
+}
+
+function piWorkerExecArgv(sourceMode: boolean): string[] | undefined {
+  if (!sourceMode) return undefined;
+  try {
+    const require = createRequire(import.meta.url);
+    return ["--import", require.resolve("tsx")];
+  } catch {
+    return ["--import", "tsx"];
+  }
+}
 
 interface Pending {
   resolve(): void;
@@ -71,34 +92,17 @@ export class PiHarnessAdapter implements HarnessAdapter {
         support: "unsupported" as const,
         reason: "Pi worker must run on the execution target, not across an SSH stdio attachment",
       };
-    return { support: "supported" as const };
+    return {
+      support: "supported" as const,
+      reason:
+        "Pi worker probe only checks an available macOS or Linux target on this process platform. It does not certify resumeExecution, images, or modelSwitch.",
+    };
   }
   async hostManagedSupport(target: ExecutionTarget, selection: ModelSelection) {
-    const report = await this.probe(target);
-    if (report.support !== "supported") return report;
-    if (
-      !selection.options?.reasoningLevel ||
-      !["off", "low"].includes(selection.options.reasoningLevel)
-    )
-      return {
-        support: "unsupported" as const,
-        reason: "Pi host bridge certifies only reasoningLevel=off or low",
-      };
-    return report;
+    return piHarnessHostManagedSupport(await this.probe(target), selection);
   }
   async capabilities(_target: ExecutionTarget): Promise<HarnessCapabilities> {
-    const yes = { support: "supported" as const };
-    const no = { support: "unsupported" as const, reason: "not certified by the Pi host bridge" };
-    return {
-      text: yes,
-      tools: yes,
-      approvals: yes,
-      cancelTurn: yes,
-      history: yes,
-      resumeExecution: no,
-      images: no,
-      modelSwitch: no,
-    };
+    return piHarnessCapabilities();
   }
   async prepareModel(spec: SessionSpec, plan: BindingPlan): Promise<Model> {
     return this.#modelFactory(spec, plan);
@@ -319,12 +323,14 @@ export class PiHarnessAdapter implements HarnessAdapter {
         options: { reasoningLevel },
       },
     };
+    assertPiWorkerNodeRuntime();
     const sourceMode = import.meta.url.endsWith(".ts");
+    const execArgv = piWorkerExecArgv(sourceMode);
     const worker = new Worker(
       new URL(sourceMode ? "./piWorker.ts" : "./piWorker.js", import.meta.url),
       {
         workerData: boot,
-        ...(sourceMode ? { execArgv: ["--import", "tsx"] } : {}),
+        ...(execArgv ? { execArgv } : {}),
         env: {
           PATH: process.env.PATH ?? "/usr/bin:/bin",
           HOME: isolatedAgentDir,

@@ -84,30 +84,37 @@ export function createClaudeHarnessFakeModel(input: {
         await input.routeChange.release.promise;
       }
 
+      // Only count tool results after the latest user turn. Session history keeps
+      // earlier allow/deny tool rows, so a global priorToolResults.length===0 check
+      // makes DENY_/RUN_TWO_/… fall through to plain text and hang the Host waiter.
+      const lastUserIndex = request.messages.map((m) => m.role).lastIndexOf("user");
+      const toolsAfterLastUser = request.messages
+        .slice(Math.max(0, lastUserIndex + 1))
+        .filter((message) => message.role === "tool");
       const priorToolResults = request.messages.filter((message) => message.role === "tool");
-      if (userText.includes("ALLOW_FIXED_WRITE") && priorToolResults.length === 0) {
+      if (userText.includes("ALLOW_FIXED_WRITE") && toolsAfterLastUser.length === 0) {
         yield toolCall("toolu-allow", writeInput(input.paths.allowedWrite, "allowed"));
         yield finish("tool-calls", request.messages.length);
         return;
       }
-      if (userText.includes("DENY_FIXED_WRITE") && priorToolResults.length === 0) {
+      if (userText.includes("DENY_FIXED_WRITE") && toolsAfterLastUser.length === 0) {
         yield toolCall("toolu-deny", writeInput(input.paths.deniedWrite, "denied"));
         yield finish("tool-calls", request.messages.length);
         return;
       }
-      if (userText.includes("RUN_TWO_TOOLS") && priorToolResults.length === 0) {
+      if (userText.includes("RUN_TWO_TOOLS") && toolsAfterLastUser.length === 0) {
         yield toolCall("toolu-multi-a", writeInput(input.paths.multiWriteA, "alpha"));
         yield toolCall("toolu-multi-b", writeInput(input.paths.multiWriteB, "beta"));
         yield finish("tool-calls", request.messages.length);
         return;
       }
-      if (userText.includes("DUPLICATE_NATIVE_TOOL_ID") && priorToolResults.length === 0) {
+      if (userText.includes("DUPLICATE_NATIVE_TOOL_ID") && toolsAfterLastUser.length === 0) {
         yield toolCall("toolu-duplicate", writeInput(input.paths.deniedWrite, "duplicate"));
         yield toolCall("toolu-duplicate", writeInput(input.paths.deniedWrite, "duplicate"));
         yield finish("tool-calls", request.messages.length);
         return;
       }
-      if (userText.includes("CHECK_TOOL_ENV") && priorToolResults.length === 0) {
+      if (userText.includes("CHECK_TOOL_ENV") && toolsAfterLastUser.length === 0) {
         yield toolCall("toolu-env", {
           command:
             "if env | grep -E '^(ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|CLAUDE_CONFIG_DIR|ZCODE_CODEX_GATEWAY_TOKEN)=' >/dev/null; then printf leaked; else printf clean; fi",
@@ -115,9 +122,9 @@ export function createClaudeHarnessFakeModel(input: {
         yield finish("tool-calls", request.messages.length);
         return;
       }
-      const text = priorToolResults.some((message) => message.isError)
+      const text = toolsAfterLastUser.some((message) => message.isError)
         ? "tool denied safely"
-        : priorToolResults.length
+        : toolsAfterLastUser.length
           ? "tool roundtrip complete"
           : `fake-${input.routeId}:${userText}`;
       yield { type: "text_start", id: `text-${trace.length}` };
@@ -126,16 +133,21 @@ export function createClaudeHarnessFakeModel(input: {
       yield finish("stop", request.messages.length);
     },
   };
-  return { model, trace, get abortCount() { return abortCount; } };
+  return {
+    model,
+    trace,
+    get abortCount() {
+      return abortCount;
+    },
+  };
 }
 
 function writeInput(path: string, value: string): Record<string, unknown> {
+  // Only `command` is correlated against PreToolUse; Claude may add description/timeout/etc.
+  // Prefer a workspace-relative basename so Claude's default sandbox can write under cwd.
+  const base = path.includes("/") ? path.slice(path.lastIndexOf("/") + 1) : path;
   return {
-    command: `printf '%s' '${value}' >> '${path}'`,
-    description: `Write the fixed ${value} fixture marker`,
-    timeout: 10_000,
-    run_in_background: false,
-    dangerouslyDisableSandbox: false,
+    command: `printf '%s' '${value}' >> '${base}'`,
   };
 }
 
@@ -155,11 +167,18 @@ function finish(reason: string, inputCount: number): ModelStreamEvent {
 }
 
 function messageText(content: ModelRequest["messages"][number]["content"]): string {
-  if (typeof content === "string") return content;
-  return content
-    .filter((part) => part.type === "text")
-    .map((part) => part.text)
-    .join("\n");
+  if (typeof content === "string") return stripClaudeSystemReminders(content);
+  return stripClaudeSystemReminders(
+    content
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("\n"),
+  );
+}
+
+/** Claude Code 2.1.263 prepends sandbox/date <system-reminder> blocks onto the user turn text. */
+function stripClaudeSystemReminders(text: string): string {
+  return text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "").trim();
 }
 
 export interface Deferred<T> {

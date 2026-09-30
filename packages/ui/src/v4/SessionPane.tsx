@@ -17,7 +17,6 @@ import {
 } from "react";
 import { Hand } from "lucide-react";
 import {
-  BUILTIN_MODEL_PROVIDER_IDS,
   buildCustomSupplierKey,
   TID_CHAT_EMPTY,
   TID_V4_SESSION_PANE,
@@ -77,10 +76,6 @@ import { usePlanIdentitySnapshot } from "@/hooks/usePlanIdentitySnapshot.js";
 import { useBaseWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
 import { useWorkspaceHomePath } from "@/hooks/useWorkspaceHomePath.js";
 import { prepareWorkspaceWithZCodeSessionService } from "@/hooks/useWorkspacePrepare.js";
-import {
-  createCodingPlanFunnelContext,
-  resolveCodingPlanEntryPlanState,
-} from "@/lib/codingPlanFunnelTelemetry.js";
 import { decodeCustomModelValue, encodeCustomModelValue } from "@/lib/zcodeCustomModelValue.js";
 import { parseModelPickerValue } from "@/lib/zcodeSessionProjection.js";
 import { captureComposerRecentSubmission } from "@/lib/composerRecent.js";
@@ -130,6 +125,15 @@ import { projectPendingGuideQueue } from "@/v4/pendingGuideProjection.js";
 import { ConversationQuotaBanner } from "@/v4/ConversationQuotaBanner.js";
 import { PendingCommandRecoveryBanner } from "@/v4/PendingCommandRecoveryBanner.js";
 import { WorkspaceHookPendingBanner } from "@/v4/WorkspaceHookPendingBanner.js";
+import { ProviderReconfigureNotice } from "@/v4/ProviderReconfigureNotice.js";
+import {
+  openProviderReconfigureSettings,
+  providerReconfigureReceiptFromAck,
+  providerReconfigureTarget,
+  resolveProviderReconfigureNotice,
+  type ProviderReconfigureReceipt,
+} from "@/v4/providerReconfigureNotice.js";
+import { useWorkflowSubagentModelProviderName } from "@/hooks/useWorkflowSubagentModelProviderName.js";
 import { ConversationStatusPanel } from "@/v4/ConversationStatusPanel.js";
 import { SessionSubscriptionErrorPanel } from "@/v4/SessionSubscriptionErrorPanel.js";
 import { ConversationTimeline } from "@/v4/ConversationTimeline.js";
@@ -240,7 +244,6 @@ import {
 } from "@/v4/chatLoadingVisibility.js";
 import type { ZCodeUiError } from "@/lib/zcodeUiError.js";
 import { isProviderNotReadyError } from "@/lib/chatPrepareError.js";
-import { useOptionalCodingPlanUpgradeDialog } from "@/settings/CodingPlanUpgradeDialogProvider.js";
 import { setPendingSettingsSectionIntent } from "@/lib/settingsNavigation.js";
 import { useOptionalTabStore } from "@/store/TabStoreProvider.js";
 import type {
@@ -1031,6 +1034,9 @@ export function SessionPane({
   );
   const [dismissedErrorKeys, setDismissedErrorKeys] = useState<readonly string[]>([]);
   const [sendSubmissionError, setSendSubmissionError] = useState<ZCodeUiError | null>(null);
+  const [providerReconfigureReceipt, setProviderReconfigureReceipt] =
+    useState<ProviderReconfigureReceipt | null>(null);
+  const [dismissedProviderNoticeKey, setDismissedProviderNoticeKey] = useState<string | null>(null);
   const [paneLocalSummaryPanelVariantOverride, setPaneLocalSummaryPanelVariantOverride] =
     useState<ChatViewSummaryPanelVariant | null>(null);
   const [terminalSectionOpen, setTerminalSectionOpen] = useState(false);
@@ -1295,7 +1301,6 @@ export function SessionPane({
     () => createComposerSubmissionConfig(draftConfig, modelSelectionView) !== null,
     [draftConfig, modelSelectionView],
   );
-  const codingPlanUpgradeDialog = useOptionalCodingPlanUpgradeDialog();
   const openSettingsTab = useOptionalTabStore((state) => state.openSettingsTab);
   const promoteGroupedDraftTask = useZCodeSessionStore((state) => state.promoteGroupedDraftTask);
   // 首发 commandId 在 accepted 时已存在，也是 completion 的 message_id；不必等回复完成。
@@ -1498,6 +1503,11 @@ export function SessionPane({
         throw error;
       }
       pendingCommandRegistry.applyAck(envelope, ack);
+      // Host admission refused the turn because this session's Provider credential was rejected.
+      const reconfigureReceipt = providerReconfigureReceiptFromAck(ack, targetSessionId);
+      if (reconfigureReceipt) setProviderReconfigureReceipt(reconfigureReceipt);
+      else if (type === "sendText" && ack.status === "accepted")
+        setProviderReconfigureReceipt(null);
       if (ack.status === "accepted") {
         acceptSelection?.();
         acceptRecent?.();
@@ -3980,7 +3990,21 @@ export function SessionPane({
     (quotaBanner.takesOverError ? null : projectedComposerError);
   useEffect(() => {
     setSendSubmissionError(null);
+    setProviderReconfigureReceipt(null);
   }, [sessionId]);
+  const providerReconfigureNotice = resolveProviderReconfigureNotice({
+    sessionId: snapshot?.sessionId ?? sessionId,
+    phase: snapshot?.control.phase ?? null,
+    lastError: controlLastError,
+    receipt: providerReconfigureReceipt,
+    sessionProviderId: snapshot?.config.provider ?? null,
+    sessionModelId: snapshot?.config.model ?? null,
+  });
+  const lookupProviderName = useWorkflowSubagentModelProviderName(workspacePath, workspaceIdentity);
+  const handleOpenProviderReconfigure = useCallback(
+    (providerId: string) => openProviderReconfigureSettings(providerId, openSettingsTab),
+    [openSettingsTab],
+  );
   const handleDismissComposerError = useCallback(() => {
     if (draftModelReadinessError) {
       dismissDraftModelReadinessError();
@@ -4006,42 +4030,6 @@ export function SessionPane({
     setPendingSettingsSectionIntent("modelProvider");
     openSettingsTab();
   }, [openSettingsTab]);
-  const handleOpenModelUpgrade = useCallback(() => {
-    if (!codingPlanUpgradeDialog) return;
-    const providerId =
-      sharedSettings?.providerFamilyDomain === "bigmodel"
-        ? BUILTIN_MODEL_PROVIDER_IDS.bigmodelIndividualCodingPlan
-        : BUILTIN_MODEL_PROVIDER_IDS.zaiIndividualCodingPlan;
-    codingPlanUpgradeDialog.openCodingPlanUpgrade({ providerId });
-  }, [codingPlanUpgradeDialog, sharedSettings?.providerFamilyDomain]);
-  const handleOpenQuotaUpgrade = useCallback(() => {
-    const providerId = quotaBanner.upgradeProviderId;
-    if (!providerId || !codingPlanUpgradeDialog) return;
-    const eventText = intl.formatMessage({
-      id: quotaBanner.upgradeActionLabelId,
-    });
-    // 横幅只建立漏斗上下文；coding_plan_upgrade_ck 仍由真实购买面板打开后统一上报。
-    codingPlanUpgradeDialog.openCodingPlanUpgrade({
-      providerId,
-      funnelContext: createCodingPlanFunnelContext({
-        providerId,
-        upgradeSource: "session_quota_alert",
-        eventRegion: "app.session",
-        eventText,
-        entryPlanState: resolveCodingPlanEntryPlanState({
-          providerId,
-          displayStatus: "purchased",
-          planLevel: "start",
-        }),
-      }),
-    });
-  }, [
-    codingPlanUpgradeDialog,
-    intl,
-    quotaBanner.upgradeActionLabelId,
-    quotaBanner.upgradeProviderId,
-  ]);
-
   const handleConfirmShareDisclosure = useCallback(async () => {
     if (!sessionId || !shareDraft || sharePublishing) return;
     const productTurnIds = getConversationShareSelectedProductTurnIds(
@@ -4457,7 +4445,6 @@ export function SessionPane({
       error={composerError}
       onDismissError={handleDismissComposerError}
       onOpenModelSettings={isAgentHostSession ? undefined : handleOpenModelSettings}
-      onOpenModelUpgrade={isAgentHostSession ? undefined : handleOpenModelUpgrade}
       onOpenCodeViewer={isAgentHostSession ? undefined : onOpenCodeViewer}
       suppressGoalCommands={selectionSideChat}
       appSlashCommands={isAgentHostSession ? undefined : appSlashCommands}
@@ -4530,13 +4517,17 @@ export function SessionPane({
         <ConversationQuotaBanner
           state={quotaBanner.state}
           onShown={quotaBanner.markShown}
-          upgradeActionLabelId={quotaBanner.upgradeActionLabelId}
-          onUpgrade={
-            quotaBanner.upgradeProviderId && codingPlanUpgradeDialog
-              ? handleOpenQuotaUpgrade
-              : undefined
-          }
           onDismiss={quotaBanner.dismiss}
+        />
+      ) : null}
+      {providerReconfigureNotice && providerReconfigureNotice.key !== dismissedProviderNoticeKey ? (
+        <ProviderReconfigureNotice
+          notice={providerReconfigureNotice}
+          providerLabel={lookupProviderName?.(providerReconfigureNotice.providerId)}
+          onOpenSettings={handleOpenProviderReconfigure}
+          onDismiss={() => setDismissedProviderNoticeKey(providerReconfigureNotice.key)}
+          // Remote-target sessions: local Provider settings would edit this device, not the target.
+          target={providerReconfigureTarget({ workspaceIdentity, remoteSessionId })}
         />
       ) : null}
       {recoverableCommand ? (

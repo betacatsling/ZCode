@@ -14,7 +14,6 @@ import type {
   IntegratedTerminalShellSelection,
   Locale,
   UsageEntitlementSnapshot,
-  UserInfo,
   ZCodeInteractionBehavior,
 } from "@zcode/shared";
 import {
@@ -55,13 +54,8 @@ import {
 } from "@/lib/accountProviderAccess.js";
 import { buildUsageEntitlementCacheKey } from "@/lib/usageEntitlementCache.js";
 import { ModelProviderSection } from "@/settings/ModelProviderSection.js";
-import { useCodingPlanUpgradeDialog } from "@/settings/CodingPlanUpgradeDialogProvider.js";
-import { useEnterpriseCodingPlanProducts } from "@/settings/model-provider-section/useEnterpriseCodingPlanProducts.js";
 import { UsageStatsSection, type UsageStatsSectionTab } from "@/settings/UsageStatsSection.js";
-import {
-  buildCodingPlanUsageSources,
-  type CodingPlanUsageSource,
-} from "@/settings/usage-stats/CodingPlanUsagePanel.js";
+import { type CodingPlanUsageSource } from "@/settings/usage-stats/CodingPlanUsagePanel.js";
 import { buildPersonalCodingPlanUsageSource } from "@/lib/codingPlanUsageSources.js";
 import { SubagentsSection } from "@/settings/SubagentsSection.js";
 import { AutomationsSection } from "@/settings/AutomationsSection.js";
@@ -277,9 +271,6 @@ export function SettingsPage({
   onCreateTask,
   onOpenWorkspace,
   allowOpenWorkspace = true,
-  onLogin,
-  onLogout,
-  user,
 }: {
   isDesktop?: boolean;
   isWindowsDesktop?: boolean;
@@ -290,9 +281,6 @@ export function SettingsPage({
   onCreateTask?: (request?: CreateTaskRequest) => void;
   onOpenWorkspace?: () => void;
   allowOpenWorkspace?: boolean;
-  onLogin?: () => void;
-  onLogout?: () => void;
-  user?: UserInfo | null;
 }) {
   const { intl, localePreference, setLocalePreference } = useZCodeIntl();
   const { settingsSectionGroups, settingsSections } = useMemo(
@@ -375,14 +363,6 @@ export function SettingsPage({
     usageProviderSettingsView,
     BUILTIN_MODEL_PROVIDER_IDS.bigmodelIndividualCodingPlan,
   );
-  const usageZaiTeamProviderFingerprint = resolveEntitledAccountProviderAccessFingerprint(
-    usageProviderSettingsView,
-    BUILTIN_MODEL_PROVIDER_IDS.zaiTeamCodingPlan,
-  );
-  const usageBigmodelTeamProviderFingerprint = resolveEntitledAccountProviderAccessFingerprint(
-    usageProviderSettingsView,
-    BUILTIN_MODEL_PROVIDER_IDS.bigmodelTeamCodingPlan,
-  );
   const usageZaiEntitlement = useUsageEntitlement({
     enabled:
       activeSection === "usage" &&
@@ -419,34 +399,6 @@ export function SettingsPage({
     }),
     refreshOnMount: true,
   });
-  // 原只拉 bigmodel family 的企业 pricing，zai team plan 在使用统计页
-  // 永远拿不到 team project 上下文；后续又误用 Individual Provider 的权益作为 Team
-  // 商品门禁，导致仅有 Team Plan 的账号仍然没有 Usage 来源。企业商品只依赖对应的
-  // Team Account Provider，个人额度继续依赖 Individual Provider，避免两个产品身份串线。
-  const usageBigmodelEnterpriseProducts = useEnterpriseCodingPlanProducts({
-    enabled: !usageProviderSettingsLoading && Boolean(usageBigmodelTeamProviderFingerprint),
-    authenticated: true,
-    family: "bigmodel",
-  });
-  const usageZaiEnterpriseProducts = useEnterpriseCodingPlanProducts({
-    enabled: !usageProviderSettingsLoading && Boolean(usageZaiTeamProviderFingerprint),
-    authenticated: true,
-    family: "zai",
-  });
-  const usageSubscribedTeamProducts = useMemo(
-    () => [
-      ...(usageBigmodelEnterpriseProducts.snapshot?.productList.filter(
-        (product) => product.subscribed === true,
-      ) ?? []),
-      ...(usageZaiEnterpriseProducts.snapshot?.productList.filter(
-        (product) => product.subscribed === true,
-      ) ?? []),
-    ],
-    [
-      usageBigmodelEnterpriseProducts.snapshot?.productList,
-      usageZaiEnterpriseProducts.snapshot?.productList,
-    ],
-  );
   const [usageActiveTab, setUsageActiveTab] = useState<UsageStatsSectionTab>(() => {
     const pendingTab = consumePendingSettingsUsageTab();
     return pendingTab === "codingPlan" ? "codingPlan" : (pendingTab ?? "app");
@@ -492,41 +444,8 @@ export function SettingsPage({
     usageZaiProvider,
     usageZaiProviderAccess,
   ]);
-  const usageTeamCodingPlanSources = useMemo(
-    () =>
-      buildCodingPlanUsageSources({
-        accountAccesses: {
-          ...(resolveEntitledAccountProviderAccess(
-            usageProviderSettingsView,
-            BUILTIN_MODEL_PROVIDER_IDS.zaiTeamCodingPlan,
-          )?.access
-            ? {
-                zai: resolveEntitledAccountProviderAccess(
-                  usageProviderSettingsView,
-                  BUILTIN_MODEL_PROVIDER_IDS.zaiTeamCodingPlan,
-                )!.access,
-              }
-            : {}),
-          ...(resolveEntitledAccountProviderAccess(
-            usageProviderSettingsView,
-            BUILTIN_MODEL_PROVIDER_IDS.bigmodelTeamCodingPlan,
-          )?.access
-            ? {
-                bigmodel: resolveEntitledAccountProviderAccess(
-                  usageProviderSettingsView,
-                  BUILTIN_MODEL_PROVIDER_IDS.bigmodelTeamCodingPlan,
-                )!.access,
-              }
-            : {}),
-        },
-        subscribedTeamProducts: usageSubscribedTeamProducts,
-      }),
-    [usageProviderSettingsView, usageSubscribedTeamProducts],
-  );
-  const usageCodingPlanSources = useMemo(
-    () => [...usagePersonalCodingPlanSources, ...usageTeamCodingPlanSources],
-    [usagePersonalCodingPlanSources, usageTeamCodingPlanSources],
-  );
+  // Team 用量展示走 entitlement / personal source。
+  const usageCodingPlanSources = usagePersonalCodingPlanSources;
   const selectedUsageCodingPlanSourceId =
     usageActiveTab === "codingPlan"
       ? (usageCodingPlanSources[0]?.id ?? null)
@@ -546,11 +465,8 @@ export function SettingsPage({
   const checkingUsageCodingPlanTab =
     usageProviderSettingsLoading ||
     checkingUsageZaiCodingPlanTab ||
-    checkingUsageBigmodelCodingPlanTab ||
-    usageBigmodelEnterpriseProducts.loading ||
-    usageZaiEnterpriseProducts.loading;
+    checkingUsageBigmodelCodingPlanTab;
   const [initialModelProviderTarget] = useState(() => consumePendingSettingsModelProviderTarget());
-  const { openCodingPlanUpgrade } = useCodingPlanUpgradeDialog();
   const [pendingModelProviderTarget, setPendingModelProviderTarget] = useState<
     SettingsModelProviderTarget | undefined
   >(() => initialModelProviderTarget);
@@ -599,25 +515,8 @@ export function SettingsPage({
     },
     [activeSection],
   );
-  const handleOpenCodingPlanUpgradeSettings = useCallback(
-    (
-      providerId: string,
-      funnelContext?: import("@/lib/codingPlanFunnelTelemetry.js").CodingPlanFunnelContext,
-    ) => {
-      openCodingPlanUpgrade({
-        providerId,
-        funnelContext,
-      });
-    },
-    [openCodingPlanUpgrade],
-  );
   const handleOpenModelProviderSettings = useCallback(() => {
     setActiveSettingsSection("modelProvider");
-  }, [setActiveSettingsSection]);
-  const handleOpenUsageSettings = useCallback(() => {
-    // 设置页 sidebar footer 里的齿轮/返回按钮复用 onBack，
-    // 但头像菜单的“使用统计”应该停留在设置页并切到 Usage，不能跟着返回工作区。
-    setActiveSettingsSection("usage");
   }, [setActiveSettingsSection]);
   const activeWorkspacePath = useTabStore((state) => state.activeWorkspacePath);
   const tabs = useTabStore((state) => state.tabs);
@@ -734,7 +633,6 @@ export function SettingsPage({
   }, [
     checkingUsageCodingPlanTab,
     showUsageCodingPlanTab,
-    usageSubscribedTeamProducts.length,
     usageActiveTab,
     usageProviderSettingsLoading,
   ]);
@@ -1536,12 +1434,7 @@ export function SettingsPage({
                   onLocaleChange={handleFooterLocaleChange}
                   onThemeChange={handleFooterThemeChange}
                   onSettingsButtonClick={onBack}
-                  onUsageClick={handleOpenUsageSettings}
-                  onUpgradeClick={handleOpenCodingPlanUpgradeSettings}
-                  onLogin={onLogin}
-                  onLogout={onLogout}
                   settingsButtonMode="back"
-                  user={user}
                   // 头像菜单是 WorkspaceSidebarFooter 的共享菜单，Settings 场景不能丢失桌面平台能力。
                   // 之前这里没透传 isDesktop，导致同一个头像菜单在设置页缺少界面缩放入口。
                   isDesktop={isDesktop}

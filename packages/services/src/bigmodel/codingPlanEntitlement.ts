@@ -27,8 +27,8 @@ const teamSchema = z.object({
   subscribeEndTime: z.string().nullish(),
   subscribePeriod: z.string().nullish(),
 });
-type PersonalCodingPlanSubscription = z.infer<typeof personalSchema>;
-type TeamCodingPlanSubscription = z.infer<typeof teamSchema>;
+type PersonalCodingPlanEntitlementRecord = z.infer<typeof personalSchema>;
+type TeamCodingPlanEntitlementRecord = z.infer<typeof teamSchema>;
 export type CodingPlanEntitlement<T> =
   | { kind: "available"; subscription: T }
   | { kind: "unavailable"; reason?: "expired" | "unassigned" }
@@ -73,7 +73,7 @@ export async function fetchPersonalCodingPlanEntitlement(params: {
   authorization: string;
   url: string;
   timeoutMs: number;
-}): Promise<CodingPlanEntitlement<PersonalCodingPlanSubscription>> {
+}): Promise<CodingPlanEntitlement<PersonalCodingPlanEntitlementRecord>> {
   if (!params.authorization.trim()) return { kind: "unknown" };
   const payload = await readApiJson<unknown>(params.apiClient, params.url, {
     method: "GET",
@@ -83,7 +83,7 @@ export async function fetchPersonalCodingPlanEntitlement(params: {
   const list = z.array(z.unknown()).safeParse(readSuccessfulData(payload));
   if (!list.success) return { kind: "unknown" };
   let malformedCodingEntry = false;
-  // 订阅列表包含异构商品：只严格验证采用的 Coding 条目，无关条目不能遮蔽有效权益。
+  // 权益列表包含异构商品：只严格验证采用的 Coding 条目，无关条目不能遮蔽有效权益。
   for (const item of list.data) {
     const parsed = personalSchema.safeParse(item);
     if (parsed.success && isActivePersonalCodingPlan(parsed.data)) {
@@ -101,7 +101,7 @@ export async function fetchTeamCodingPlanEntitlement(params: {
   host: string;
   teamContext: BigModelTeamPlanBizContext;
   timeoutMs: number;
-}): Promise<CodingPlanEntitlement<TeamCodingPlanSubscription>> {
+}): Promise<CodingPlanEntitlement<TeamCodingPlanEntitlementRecord>> {
   if (!params.authorization.trim()) return { kind: "unknown" };
   const payload = await readApiJson<unknown>(
     params.apiClient,

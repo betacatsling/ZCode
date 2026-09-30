@@ -1,6 +1,6 @@
 /* eslint-disable max-lines -- Host lifecycle, history projection and journal ownership stay one state machine. */
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, open, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import type { Model } from "@zcode/contracts";
@@ -32,14 +32,21 @@ import {
   type HarnessAdapter,
   type PreparedHostBinding,
 } from "./harnessRegistry.js";
-import type { JournalIdentity } from "./journalStorage.js";
+import { JournalClosedError, type JournalIdentity } from "./journalStorage.js";
+import { assertWorkspaceExecution, type WorkspaceSessionOwnership } from "./sessionRouter.js";
 import {
   planModelBinding,
   type ModelCatalogPort,
   type ModelCatalogSnapshotPort,
 } from "./modelBindingPlanner.js";
 import { projectHostConversation } from "../agent-ui-projection/projector.js";
+import { createServiceLogger } from "../logger/serviceLogger.js";
 import type { AgentHostActivityIndexEntry } from "./activityIndex.js";
+import { staleModelBindingError } from "./modelBindingErrors.js";
+
+const logger = createServiceLogger("agent-host-session");
+const ACTIVE_TURN_MESSAGE =
+  "active turn: detach a client, cancel the turn or terminate the session before closing the host";
 
 const manifestSchema = z.strictObject({
   schemaVersion: z.literal(1),
@@ -73,6 +80,8 @@ export interface SessionHostOptions {
   target: ExecutionTarget;
   catalog: ModelCatalogPort;
   registry: HarnessRegistry;
+  /** Adopted-workspace admission from the worktree service. Absent only for tests of the host itself. */
+  workspaces?: WorkspaceSessionOwnership;
 }
 
 interface PreparedTurnContext {
@@ -95,17 +104,36 @@ export class SessionHost {
   readonly #events: EventJournal;
   readonly #listeners = new Set<(event: AgentEvent) => void>();
   readonly #active = new Set<Promise<void>>();
+  /** Turn-settlement and live sidecar writes in flight (#settleTurn, #persistActivityWhileOpen). */
+  readonly #settlements = new Set<Promise<void>>();
   readonly #interactions = new Map<string, string>();
   readonly #unsettledTurns = new Set<string>();
   readonly #preparedTurns = new Map<string, PreparedHostBinding>();
+  /** Sends reserved by admission whose run has not started (or been refused) yet; see close(). */
+  readonly #startingSends = new Map<string, { settled: Promise<void>; settle: () => void }>();
   #activeTurn?: string;
   #lastKnownStatus: AgentHostSessionSummary["lastKnownStatus"] = "idle";
   #recentOutcome: AgentHostSessionSummary["recentOutcome"] = "none";
   #lastActivityAt = 0;
   #eventTail: Promise<void> = Promise.resolve();
-  #eventError?: Error;
+  #eventFailure?: Error;
+  #signalEventStreamBroken!: () => void;
+  /** Settles once the event stream breaks; turn-settlement waits race it instead of hanging. */
+  readonly #eventStreamBroken = new Promise<void>((resolve) => {
+    this.#signalEventStreamBroken = resolve;
+  });
   #unsubscribe: () => void;
   #closed = false;
+
+  // 事件流损坏后 dispatch() 拒绝一切命令，包括能结束打开 turn 的 cancel/resolve/terminate；
+  // 写入错误的同时唤醒 whenIdle()，否则它会永远等一个再也结束不了的 adapter run。
+  get #eventError(): Error | undefined {
+    return this.#eventFailure;
+  }
+  set #eventError(error: Error | undefined) {
+    this.#eventFailure = error;
+    if (error) this.#signalEventStreamBroken();
+  }
 
   private constructor(options: {
     manifestPath: string;
@@ -133,6 +161,21 @@ export class SessionHost {
     this.#events = options.events;
     for (const event of this.#events.since(0)) this.#applyEventState(event);
     this.#unsubscribe = options.adapter.subscribe(options.spec.hostSessionId, (source) => {
+      // 旧 runtimeEpoch 后端的迟到事件不属于当前代际：journal 本来就不会收它，这里记录后丢弃，
+      // 而不是让 appendWithStatus 抛错并把 #eventError 永久锁死当前会话。别的会话的事件仍失败关闭。
+      if (
+        source.hostSessionId === this.spec.hostSessionId &&
+        source.runtimeEpoch !== this.binding.runtimeEpoch
+      ) {
+        logger.warn(undefined, "dropped late event from an older runtime epoch", {
+          hostSessionId: source.hostSessionId,
+          eventRuntimeEpoch: source.runtimeEpoch,
+          currentRuntimeEpoch: this.binding.runtimeEpoch,
+          kind: source.kind,
+          sequence: source.sequence,
+        });
+        return;
+      }
       this.#eventTail = this.#eventTail
         .then(async () => {
           if (this.#eventError) return;
@@ -155,6 +198,20 @@ export class SessionHost {
     },
   ): Promise<SessionHost> {
     const spec = sessionSpecSchema.parse(options.spec);
+    // 原生 V4 是唯一可写 owner。在创建 manifest 之前拒绝，避免留下第二份会话状态。
+    if (spec.harness.id === "zcode")
+      throw new Error("native sessions must use the existing V4 route");
+    // 删除中的工作区由 worktree 服务拒绝。这里只读它的结论，并且在写 manifest 之前停住。
+    if (options.workspaces) {
+      assertWorkspaceExecution(await options.workspaces.readExecution(spec.hostSessionId), {
+        targetId: spec.execution.targetId,
+        ...(spec.execution.workspaceId ? { workspaceId: spec.execution.workspaceId } : {}),
+        worktreePath: spec.execution.worktreePath,
+        ...(spec.execution.worktreeGeneration
+          ? { worktreeGeneration: spec.execution.worktreeGeneration }
+          : {}),
+      });
+    }
     const target = executionTargetSchema.parse(options.target);
     const adapter = options.registry.require(spec.harness.id);
     const catalog = captureModelCatalog(options.catalog);
@@ -165,7 +222,10 @@ export class SessionHost {
       catalog,
     });
     if (plan.support.support !== "supported")
-      throw new Error(plan.support.reason ?? "unsupported model binding");
+      throw (
+        staleModelBindingError(spec, catalog) ??
+        new Error(plan.support.reason ?? "unsupported model binding")
+      );
     const prepared = await prepareHostBinding(spec, adapter, catalog, plan, options.catalog);
     assertCatalogCurrent(catalog);
     const path = manifestPath(options.root, spec);
@@ -209,12 +269,28 @@ export class SessionHost {
       adapter,
       options.title,
     );
-    await host.#persistActivityIndex();
+    try {
+      await host.#persistActivityIndex();
+    } catch (error) {
+      // The backend is confirmed and the manifest says "running": this is a real, attachable
+      // session, so keep it (a missing sidecar lists as unknown) but release the host nobody will
+      // own, or its journal locks and adapter subscription outlive the failed create.
+      await host.close().catch((closeError: unknown) => {
+        logger.warn(undefined, "failed create: mounted host not released cleanly", {
+          hostSessionId: spec.hostSessionId,
+          error: closeError,
+        });
+      });
+      throw error;
+    }
     return host;
   }
 
   static async open(options: SessionHostOptions): Promise<SessionHost> {
     const spec = sessionSpecSchema.parse(options.spec);
+    // 打开路径同样不能把 zcode 挂成外部 owner，也不能为了检查而创建目录。
+    if (spec.harness.id === "zcode")
+      throw new Error("native sessions must use the existing V4 route");
     const path = manifestPath(options.root, spec);
     const manifest = manifestSchema.parse(JSON.parse(await readFile(path, "utf8")));
     if (JSON.stringify(manifest.spec) !== JSON.stringify(spec))
@@ -234,7 +310,10 @@ export class SessionHost {
       catalog,
     });
     if (plan.support.support !== "supported")
-      throw new Error(plan.support.reason ?? "unsupported model binding");
+      throw (
+        staleModelBindingError(spec, catalog) ??
+        new Error(plan.support.reason ?? "unsupported model binding")
+      );
     const prepared = await prepareHostBinding(spec, adapter, catalog, plan, options.catalog);
     assertCatalogCurrent(catalog);
     const host = await SessionHost.#mount(
@@ -450,8 +529,14 @@ export class SessionHost {
             pendingInteractionIds: stored.pendingInteractionIds,
           };
         } catch (error: unknown) {
-          if (error instanceof Error && "code" in error && error.code === "ENOENT") return unknown;
-          throw error;
+          // One unreadable sidecar (EISDIR, EACCES, truncated JSON...) is this session's unknown,
+          // never a failed listing for every other session. A missing one is expected (pre-index).
+          if (!(error instanceof Error && "code" in error && error.code === "ENOENT"))
+            logger.warn(undefined, "activity sidecar unreadable; listing session as unknown", {
+              hostSessionId: record.spec.hostSessionId,
+              error,
+            });
+          return unknown;
         }
       }),
     );
@@ -521,7 +606,20 @@ export class SessionHost {
   }
 
   async dispatch(raw: AgentCommand): Promise<AgentCommandReceipt> {
-    if (this.#closed) throw new Error("session host closed");
+    try {
+      return await this.#dispatch(raw);
+    } catch (error) {
+      // close() closed the journals while this command was in flight (e.g. still inside the
+      // adapter after the stream broke): its outcome cannot be recorded any more, the journal
+      // refused the write, and the command stays durable accepted = execution-unknown.
+      if (error instanceof JournalClosedError)
+        throw new SessionHostClosedError("its outcome was not recorded", { cause: error });
+      throw error;
+    }
+  }
+
+  async #dispatch(raw: AgentCommand): Promise<AgentCommandReceipt> {
+    if (this.#closed) throw new SessionHostClosedError();
     if (this.#eventError) throw this.#eventError;
     const command = agentCommandSchema.parse(raw);
     if (command.hostSessionId !== this.spec.hostSessionId)
@@ -559,16 +657,24 @@ export class SessionHost {
                   command,
                   error instanceof BindingPreparationFailure ? error.reasonCode : "invalid-binding",
                   error instanceof Error ? error.message : "model binding preparation failed",
+                  error instanceof BindingPreparationFailure ? error.failure : undefined,
                 );
+              }
+              // close() began while this send was preparing: refuse before reserving, so there is
+              // no sidecar write after close and no accepted record for a send that never runs.
+              if (this.#closed) {
+                await this.#adapter.discardPreparedTurn?.(this.spec, prepared.binding);
+                return rejectedAdmission(command, "backend-failure", "session host is closing");
               }
               this.#preparedTurns.set(command.commandId, prepared.binding);
               // 修复依据：模型/route/credential 预检在现有 admission lane 内完成；只有可执行
               // 的冻结 binding 才能先落 busy、再 accepted，避免无副作用失败变成 uncertain。
               this.#activeTurn = command.turnId;
               this.#unsettledTurns.add(command.turnId);
+              this.#startingSends.set(command.commandId, startingSend());
               this.#lastKnownStatus = "starting";
               try {
-                await this.#persistActivityIndex();
+                await this.#persistActivityWhileOpen();
               } catch (error) {
                 this.#preparedTurns.delete(command.commandId);
                 await this.#adapter.discardPreparedTurn?.(this.spec, prepared.binding);
@@ -620,6 +726,9 @@ export class SessionHost {
     if (command.type === "send") {
       const prepared = this.#preparedTurns.get(command.commandId);
       this.#preparedTurns.delete(command.commandId);
+      // Synchronous with the #closed check above and with #track: close() sees it as starting
+      // or active, never neither.
+      this.#sendStartSettled(command.commandId);
       if (!prepared)
         return this.#reject(command, "backend-failure", "accepted send lost its prepared binding");
       try {
@@ -636,7 +745,7 @@ export class SessionHost {
         };
         this.#lastKnownStatus = "unknown";
         await this.#commands.finish(command.commandId, uncertain);
-        await this.#persistActivityIndex();
+        await this.#persistActivityWhileOpen();
         return uncertain;
       }
     }
@@ -695,11 +804,29 @@ export class SessionHost {
       catalog,
     });
     if (plan.support.support !== "supported") {
+      // 会话自身绑定的 Provider/模型已不在目录中（被删除等）：需要用户重新配置，
+      // 不能与 busy / 未认证 harness 共用 unsupported，也绝不换成其他模型。
+      const selection =
+        this.spec.modelBinding.kind === "host-managed"
+          ? this.spec.modelBinding.selection
+          : undefined;
       throw new BindingPreparationFailure(
-        "unsupported",
+        selection && !catalog.validateSelection(selection).ok ? "invalid-binding" : "unsupported",
         plan.support.reason ?? "model binding is not supported for this turn",
       );
     }
+    // Provider credential rejected earlier (401) and not reconfigured since: refuse here,
+    // before any Model is bound or called; other Providers are unaffected.
+    const attention =
+      plan.requested.kind === "host-managed" && plan.effective
+        ? catalog.credentialAttention?.(plan.effective)
+        : undefined;
+    if (attention)
+      throw new BindingPreparationFailure(
+        "provider-reconfigure-required",
+        attention.message,
+        attention.failure,
+      );
     const binding = {
       ...(await prepareHostBinding(this.spec, this.#adapter, catalog, plan, this.#catalog)),
       turnId: command.turnId,
@@ -777,21 +904,71 @@ export class SessionHost {
     await this.#eventTail;
     if (this.#eventError) throw this.#eventError;
   }
+  /**
+   * Resolves once every send that is starting now (reserved, see close()) has started its run or
+   * been refused. A close() refused with reason "starting-send" can be retried after it.
+   */
+  async whenStartingSendsSettled(): Promise<void> {
+    await Promise.all([...this.#startingSends.values()].map((send) => send.settled));
+  }
   async whenIdle(): Promise<void> {
-    await Promise.all(this.#active);
+    // A broken stream can no longer settle an open turn (see #eventError): stop waiting and
+    // report the stream error instead of awaiting an adapter run that nothing can end.
+    await Promise.race([Promise.all(this.#active), this.#eventStreamBroken]);
     await this.whenEventsSettled();
   }
+  /**
+   * Healthy stream: refuses while a turn is active or a reserved send has yet to start its run;
+   * the caller can still cancel or terminate it.
+   * Broken stream: no command can end the turn any more, so force-close (unsubscribe, close the
+   * journals; an in-flight send stays durable accepted = execution-unknown, never replayed) and
+   * reject with EventStreamFailure so the caller knows the session ended unhealthy.
+   */
   async close(): Promise<void> {
     if (this.#closed) return;
-    if (this.#active.size)
-      throw new Error(
-        "active turn: detach a client, cancel the turn or terminate the session before closing the host",
-      );
-    await this.whenIdle();
+    if (this.#active.size && !this.#eventError) throw new SessionHostBusyError("active-turn");
+    try {
+      await this.whenIdle();
+    } catch (error) {
+      if (!this.#eventError) throw error;
+    }
+    const failure = this.#eventError;
+    // Re-checked synchronously with setting #closed: while close() waited, a send accepted before
+    // #closed may have started its run (dispatch checks #closed, then starts), or be reserved and
+    // about to start. Closing the journals under it would leave it execution-unknown.
+    if (!failure && (this.#active.size > 0 || this.#startingSends.size > 0))
+      throw new SessionHostBusyError(this.#active.size > 0 ? "active-turn" : "starting-send");
     this.#closed = true;
     this.#unsubscribe();
+    // Events delivered before unsubscribe may still be journaling (bounded local I/O): let their
+    // journal and sidecar writes land now, never after close() settles.
+    await this.#eventTail;
+    // A stream break during that wait comes after `failure` was captured: deliberately no
+    // force-close write and no EventStreamFailure; the sidecar keeps its last good state.
+    // A turn settlement or send-reservation release that started before #closed may still be
+    // writing; let it land before the journals close (and before a force-close sidecar write).
+    await Promise.all(this.#settlements);
+    if (failure) await this.#persistForceClosedActivity(failure);
     await this.#commands.close();
     await this.#events.close();
+    if (failure) throw new EventStreamFailure(failure);
+  }
+
+  /**
+   * The last sidecar write predates the stream break, so an unmounted session with no open turn
+   * would keep listing "idle". activityIndexEntry() already derives "unknown" from #eventError;
+   * persist that. Best-effort: a failed write is logged and never masks EventStreamFailure.
+   */
+  async #persistForceClosedActivity(failure: Error): Promise<void> {
+    try {
+      await this.#persistActivityIndex();
+    } catch (error) {
+      logger.warn(undefined, "force-closed session activity sidecar not rewritten", {
+        hostSessionId: this.spec.hostSessionId,
+        eventStreamError: failure.message,
+        error,
+      });
+    }
   }
 
   async #persistActivityIndex(): Promise<void> {
@@ -802,47 +979,73 @@ export class SessionHost {
     const tempPath = `${this.#activityIndexPath}.${process.pid}.${randomUUID()}.tmp`;
     const file = await open(tempPath, "wx", 0o600);
     try {
-      await file.writeFile(JSON.stringify(entry));
-      await file.sync();
-    } finally {
-      await file.close();
+      try {
+        await file.writeFile(JSON.stringify(entry));
+        await file.sync();
+      } finally {
+        await file.close();
+      }
+      await rename(tempPath, this.#activityIndexPath);
+    } catch (error) {
+      // The temp file is ours ("wx" + uuid); never leave it next to the sidecar. Cleanup is
+      // best-effort so callers keep seeing the write/rename error, not the unlink one.
+      await unlink(tempPath).catch((cleanup: unknown) => {
+        if ((cleanup as NodeJS.ErrnoException).code === "ENOENT") return;
+        logger.warn(undefined, "activity sidecar temp file not removed", {
+          hostSessionId: this.spec.hostSessionId,
+          error: cleanup,
+        });
+      });
+      throw error;
     }
-    await rename(tempPath, this.#activityIndexPath);
   }
 
   #track(commandId: string, turnId: string, run: Promise<void>): void {
     const tracked = run.then(
-      async () => {
-        await this.#eventTail;
-        if (this.#eventError || this.#activeTurn === turnId) {
-          this.#lastKnownStatus = "unknown";
-          await this.#commands.finish(commandId, {
-            commandId,
-            status: "execution-unknown",
-            reasonCode: "execution-unknown",
-          });
-        } else {
-          await this.#commands.finish(commandId, { commandId, status: "completed" });
-          this.#unsettledTurns.delete(turnId);
-        }
-        await this.#persistActivityIndex();
-      },
-      async () => {
-        await this.#eventTail;
-        this.#lastKnownStatus = "unknown";
-        await this.#commands.finish(commandId, {
-          commandId,
-          status: "execution-unknown",
-          reasonCode: "execution-unknown",
-        });
-        await this.#persistActivityIndex();
-      },
+      () => this.#settleTurn(commandId, turnId, "returned"),
+      () => this.#settleTurn(commandId, turnId, "threw"),
     );
     this.#active.add(tracked);
     void tracked.then(
       () => this.#active.delete(tracked),
       () => this.#active.delete(tracked),
     );
+  }
+  /**
+   * Journal + sidecar writes for a settled adapter run. close() waits for any that are in flight
+   * (bounded local I/O, unlike the run itself), so none lands on closed journals or after close()
+   * settles; one that starts after close() is a no-op. Errors still reach whenIdle() via #active.
+   */
+  #settleTurn(commandId: string, turnId: string, run: "returned" | "threw"): Promise<void> {
+    const settlement = this.#writeTurnSettlement(commandId, turnId, run);
+    const settled = settlement.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.#settlements.add(settled);
+    void settled.then(() => this.#settlements.delete(settled));
+    return settlement;
+  }
+  async #writeTurnSettlement(
+    commandId: string,
+    turnId: string,
+    run: "returned" | "threw",
+  ): Promise<void> {
+    await this.#eventTail;
+    // Force-closed with a broken stream: the journals are closed and the send stays uncertain.
+    if (this.#closed) return;
+    if (run === "threw" || this.#eventError || this.#activeTurn === turnId) {
+      this.#lastKnownStatus = "unknown";
+      await this.#commands.finish(commandId, {
+        commandId,
+        status: "execution-unknown",
+        reasonCode: "execution-unknown",
+      });
+    } else {
+      await this.#commands.finish(commandId, { commandId, status: "completed" });
+      this.#unsettledTurns.delete(turnId);
+    }
+    await this.#persistActivityIndex();
   }
   #isCurrentTurn(command: { runtimeEpoch: string; turnId: string }): boolean {
     return (
@@ -896,11 +1099,37 @@ export class SessionHost {
     }
   }
 
+  /**
+   * Undoes a send admission that never reached the adapter. Its sidecar write follows the same
+   * rule as turn settlements (#persistActivityWhileOpen), so a stale host never overwrites or
+   * resurrects the sidecar after close() settled (force-close persisted its own "unknown").
+   */
+  #sendStartSettled(commandId: string): void {
+    this.#startingSends.get(commandId)?.settle();
+    this.#startingSends.delete(commandId);
+  }
   async #releaseSendReservation(command: Extract<AgentCommand, { type: "send" }>): Promise<void> {
+    this.#sendStartSettled(command.commandId);
     this.#unsettledTurns.delete(command.turnId);
     if (this.#activeTurn === command.turnId) this.#activeTurn = undefined;
     if (this.#lastKnownStatus === "starting") this.#lastKnownStatus = "idle";
-    await this.#persistActivityIndex();
+    await this.#persistActivityWhileOpen();
+  }
+  /**
+   * Sidecar write of a live host (send admission and release, failed send): none starts once
+   * #closed is set, and one already in flight is tracked in #settlements, so close() waits for it
+   * before its force-close write and journal close. None lands after close() settles.
+   */
+  #persistActivityWhileOpen(): Promise<void> {
+    if (this.#closed) return Promise.resolve();
+    const write = this.#persistActivityIndex();
+    const settled = write.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.#settlements.add(settled);
+    void settled.then(() => this.#settlements.delete(settled));
+    return write;
   }
   async #reject(
     command: AgentCommand,
@@ -918,10 +1147,73 @@ export class SessionHost {
   }
 }
 
+/**
+ * close() of a host whose event stream broke: resources are released, the session ended unhealthy.
+ * `code` matches the receipt reasonCode dispatch() uses for the same condition; `cause` is the
+ * original stream error.
+ */
+export class EventStreamFailure extends Error {
+  readonly code = "backend-failure" as const;
+  constructor(cause: Error) {
+    // Same wording as dispatch()'s rejection; the cause text stays matchable for existing callers.
+    super(`event stream is no longer reliable: ${cause.message}`, { cause });
+    this.name = "EventStreamFailure";
+  }
+}
+
+/**
+ * dispatch() on a host that close() has closed (healthy or force-closed), or whose close() landed
+ * while the command was in flight; with `owner: "target"`, a call on a target owner
+ * (AgentHostTargetService) that is closing or closed, where no host accepts work any more.
+ * `code` is host-local, not a receipt reasonCode: an in-flight command keeps its durable
+ * "accepted" record (execution-unknown after restart, never replayed). The @zcode/rpc channel
+ * carries `name`, `message` and `code` to the client (not the class, so match on name/code).
+ */
+export class SessionHostClosedError extends Error {
+  readonly code = "host-closed" as const;
+  constructor(detail?: string, options?: ErrorOptions & { owner?: "session" | "target" }) {
+    // Message prefixes are what existing callers match on: keep both wordings.
+    super(
+      closedMessage(
+        options?.owner === "target" ? "target host is closing" : "session host closed",
+        detail,
+      ),
+      options,
+    );
+    this.name = "SessionHostClosedError";
+  }
+}
+
+/**
+ * Healthy close() refused: a turn is running ("active-turn"), or a reserved send has yet to start
+ * its run or be refused ("starting-send"; retry after whenStartingSendsSettled()). One message for
+ * both, the wording existing callers match on.
+ */
+export class SessionHostBusyError extends Error {
+  readonly code = "host-busy" as const;
+  readonly reason: "active-turn" | "starting-send";
+  constructor(reason: "active-turn" | "starting-send") {
+    super(ACTIVE_TURN_MESSAGE);
+    this.name = "SessionHostBusyError";
+    this.reason = reason;
+  }
+}
+
+function startingSend(): { settled: Promise<void>; settle: () => void } {
+  let settle!: () => void;
+  const settled = new Promise<void>((resolve) => (settle = resolve));
+  return { settled, settle };
+}
+
+function closedMessage(subject: string, detail: string | undefined): string {
+  return detail ? `${subject}: ${detail}` : subject;
+}
+
 class BindingPreparationFailure extends Error {
   constructor(
     readonly reasonCode: NonNullable<AgentCommandReceipt["reasonCode"]>,
     message: string,
+    readonly failure?: AgentCommandReceipt["failure"],
   ) {
     super(message);
   }
@@ -1025,6 +1317,7 @@ function rejectedAdmission(
   command: AgentCommand,
   reasonCode: NonNullable<AgentCommandReceipt["reasonCode"]>,
   message: string,
+  failure?: AgentCommandReceipt["failure"],
 ): CommandAdmissionDecision {
   return {
     kind: "rejected",
@@ -1033,6 +1326,7 @@ function rejectedAdmission(
       status: "rejected",
       reasonCode,
       message,
+      ...(failure ? { failure } : {}),
     },
   };
 }

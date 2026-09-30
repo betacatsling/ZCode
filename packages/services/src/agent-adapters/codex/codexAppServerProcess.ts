@@ -23,6 +23,19 @@ export interface CodexAppServerProcessOptions {
   readonly onStderr?: (chunk: string) => void;
 }
 
+/** JSON-RPC control plane. Production spawns app-server; tests inject a fake transport. */
+export interface CodexAppServerTransport {
+  request(method: string, params: unknown, timeoutMs?: number): Promise<unknown>;
+  notify(method: string, params: unknown): Promise<void>;
+  respondToServerRequest(id: JsonRpcId, result: unknown): Promise<void>;
+  rejectServerRequest(id: JsonRpcId, code: number, message: string): Promise<void>;
+  terminate(): Promise<void>;
+}
+
+export type CodexAppServerLauncher = (
+  options: CodexAppServerProcessOptions,
+) => Promise<CodexAppServerTransport>;
+
 interface PendingRequest {
   readonly method: string;
   readonly timer: ReturnType<typeof setTimeout>;
@@ -34,7 +47,7 @@ const MAX_PROTOCOL_LINE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_RPC_TIMEOUT_MS = 30_000;
 const STDIO_WRITE_TIMEOUT_MS = 30_000;
 
-export class CodexAppServerProcess {
+export class CodexAppServerProcess implements CodexAppServerTransport {
   readonly child: ChildProcess;
   readonly closed: Promise<void>;
   readonly #pending = new Map<string, PendingRequest>();

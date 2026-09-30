@@ -327,7 +327,6 @@ export function useRootWorkspaceActions({
     const nextProviderFamilyDomain = resolveLogoutProviderFamilyDomain({
       currentDomain: settingsBeforeLogout.providerFamilyDomain,
     });
-    await services.oauthService.logout();
     await updateAppSettings({
       providerFamilyDomain: (nextProviderFamilyDomain ?? "") as AppSettings["providerFamilyDomain"],
       providerFamilyDomainUpdatedAt: Date.now(),
@@ -342,8 +341,6 @@ export function useRootWorkspaceActions({
     setUser(null);
     // 退出登录后刷新 Account Source 与 Registry，避免继续展示退出前的 Provider 状态。
     await refreshProviderState();
-    // Coding Plan 官网 webview 使用独立持久 partition，App logout 必须同步清理。
-    await platform.executeDesktopCommand(DesktopCommandIds.ClearCodingPlanWebviewStorage);
     await platform.executeDesktopCommand(DesktopCommandIds.RelaunchApp);
   }, [
     intl,
@@ -351,7 +348,6 @@ export function useRootWorkspaceActions({
     refreshProviderState,
     onProviderFamilyDomainClearedAfterLogout,
     platform,
-    services.oauthService,
     services.modelSelectionService,
     services.settingService,
     setOAuthError,

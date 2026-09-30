@@ -1675,7 +1675,7 @@ function openUpdateStatusWindow() {
     }
   });
 
-  loadWindow(win, "index", {
+  loadWindow(win, {
     restoreSession: false,
     supportsSettings: false,
     windowKind: "update-status",
@@ -1717,6 +1717,7 @@ function createWindowInstance(startupBootstrap: StartupWindowBootstrap = {}) {
         port: target.port,
         targetId: target.targetId,
         runtimeArchives: target.runtimeArchives,
+        ...(target.hostBootstrapToken ? { hostBootstrapToken: target.hostBootstrapToken } : {}),
       };
     },
     spawnHostProcess: (win, label, initMessage) =>
@@ -2191,9 +2192,6 @@ app.whenReady().then(async () => {
   registerRemoteIpcHandlers({
     logger,
     appTelemetryRuntime,
-    onOAuthCallbackHandledSideEffect: () => {
-      void armsUserIdentitySync.refresh();
-    },
     appTelemetryCore,
     reportRemoteUsageEvent: reportRemoteUsageEventForRenderer,
     armsCustomContext: {
@@ -2338,7 +2336,7 @@ app.on("browser-window-created", (_, win) => {
     }
     // Electron 进入 closed 回调时，win.webContents 可能已经被销毁。
     // 之前这里现取 win.webContents.id，会在关窗收尾阶段抛出 "Object has been destroyed"。
-    // 改为在窗口创建时缓存 webContents id，确保清理 OAuth 路由时不再访问已销毁对象。
+    // 改为在窗口创建时缓存 webContents id，确保清理 deep link 挂起态时不再访问已销毁对象。
     clearOAuthRoutesForWindow(windowWebContentsId);
     // 录制中关窗/崩溃时 renderer 不会发复位 IPC，这里按发起 webContents 复位录制态，
     // 防止菜单 accelerator 被永久摘除。

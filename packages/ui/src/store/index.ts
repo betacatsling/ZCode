@@ -138,10 +138,6 @@ export interface ZCodeState {
   authSessionSeq: number;
   setUser: (user: UserInfo | null) => void;
 
-  /** 启动阶段是否仍在恢复 OAuth 登录态 */
-  isRestoringOAuthSession: boolean;
-  setIsRestoringOAuthSession: (restoring: boolean) => void;
-
   /** OAuth 回调错误（Root 层写入，统一登录入口读取） */
   oauthError: string | null;
   setOAuthError: (error: string | null) => void;
@@ -153,13 +149,13 @@ export interface ZCodeState {
   apiKeyLoginSuccessSeq: number;
   lastApiKeyLoginModel: string | null;
   markApiKeyLoginSuccess: (preferredModel?: string | null) => void;
-  /** 请求打开统一登录入口，可携带需要自动发起登录/连接的 provider */
+  /** 历史统一登录入口请求；Ex2 后 no-op，不再打开 Welcome */
   loginEntryRequest: {
     id: number;
     providerId?: OAuthProviderId;
     purpose?: LoginEntryPurpose;
   } | null;
-  /** 当前统一登录尝试；购买等后续动作通过 id 只续接自己发起的 OAuth。 */
+  /** 历史统一登录尝试槽；产品购买/Welcome 已卸，requestLoginEntry 不再发布 attempt。 */
   loginEntryAttempt: LoginEntryAttempt | null;
   requestLoginEntry: (providerId?: OAuthProviderId, purpose?: LoginEntryPurpose) => number;
   clearLoginEntryRequest: (requestId?: number) => void;
@@ -227,12 +223,7 @@ const STATE_CHANNEL_PREFIX = "state:";
  *
  * @param broadcastService - 广播服务。Desktop 走 RPC，Web 可传 no-op 实现
  */
-export function createZCodeStore(
-  broadcastService: IBroadcastService,
-  options: {
-    initialIsRestoringOAuthSession?: boolean;
-  } = {},
-) {
+export function createZCodeStore(broadcastService: IBroadcastService) {
   /** 标记：正在应用来自广播的更新，此时不再重复广播（防止循环） */
   let applyingBroadcast = false;
   let loginEntryRequestSeq = 0;
@@ -320,9 +311,6 @@ export function createZCodeStore(
           state.user === null && user !== null ? state.authSessionSeq + 1 : state.authSessionSeq,
       })),
 
-    isRestoringOAuthSession: options.initialIsRestoringOAuthSession ?? false,
-    setIsRestoringOAuthSession: (restoring: boolean) => set({ isRestoringOAuthSession: restoring }),
-
     oauthError: null,
     setOAuthError: (error: string | null) => set({ oauthError: error }),
     oauthPollingActive: false,
@@ -343,23 +331,10 @@ export function createZCodeStore(
       })),
     loginEntryRequest: null,
     loginEntryAttempt: null,
-    requestLoginEntry: (providerId?: OAuthProviderId, purpose?: LoginEntryPurpose) => {
-      const id = ++loginEntryRequestSeq;
-      const attempt: LoginEntryAttempt = {
-        id,
-        providerId,
-        purpose,
-        status: "requested",
-      };
-      set({
-        loginEntryRequest: {
-          id,
-          providerId,
-          purpose,
-        },
-        loginEntryAttempt: attempt,
-      });
-      return id;
+    requestLoginEntry: (_providerId?: OAuthProviderId, _purpose?: LoginEntryPurpose) => {
+      // Product Welcome / Root OAuth login shell removed (Ex2).
+      // Keep signature for Ex4 settings callers; never publish loginEntryRequest.
+      return ++loginEntryRequestSeq;
     },
     clearLoginEntryRequest: (requestId?: number) =>
       set((state) => {

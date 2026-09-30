@@ -2,6 +2,7 @@ import {
   ProviderConfigService,
   type ProviderConfigLayerSnapshot,
   type ProviderConfigLayerUpdate,
+  type ProviderConfigSnapshot,
 } from "@zcode/provider";
 import { NodeZCodeBuiltinProviderConfigSource } from "./zcode-builtin-provider-config-source.js";
 import {
@@ -27,6 +28,14 @@ export interface NodeProviderConfigRuntimeOptions {
     "bundledFilePath"
   >;
   readonly onZCodeBuiltinRefreshError?: (error: unknown) => void;
+  /**
+   * Gate for the background ZCode Built-in remote check (the startup check and the 60 s interval).
+   * When set, the remote refresh only runs while it returns true for the current config; config
+   * changes re-evaluate it, so enabling starts the check right away and disabling stops the
+   * interval. Local check listeners still run once at startup. Explicit refreshZCodeBuiltin() calls
+   * are not gated. Unset keeps the previous always-on behaviour.
+   */
+  readonly zcodeBuiltinBackgroundCheckEnabled?: (config: ProviderConfigSnapshot) => boolean;
   readonly onPersonalConfigRecovery?: (event: PersonalProviderConfigRecoveryEvent) => void;
   readonly onPersonalConfigPollingError?: (error: unknown) => void;
   readonly personalFilePath: string;
@@ -51,6 +60,10 @@ export class NodeProviderConfigRuntime {
   readonly #checkListeners = new Set<() => Promise<void>>();
   #checkTimer: ReturnType<typeof setInterval> | null = null;
   #checkInFlight: Promise<void> | null = null;
+  readonly #backgroundCheckEnabled?: (config: ProviderConfigSnapshot) => boolean;
+  #backgroundRemoteEnabled = false;
+  #gateGeneration = 0;
+  #disposeGateWatch: (() => void) | null = null;
 
   constructor(options: NodeProviderConfigRuntimeOptions) {
     this.#zcodeBuiltinSource = options.zcodeBuiltinEnvironment
@@ -72,6 +85,7 @@ export class NodeProviderConfigRuntime {
           })
         : undefined;
     this.#onRemoteRefreshError = options.onZCodeBuiltinRefreshError;
+    this.#backgroundCheckEnabled = options.zcodeBuiltinBackgroundCheckEnabled;
     this.#personalRepository = new NodePersonalProviderConfigRepository({
       filePath: options.personalFilePath,
       onRecovery: options.onPersonalConfigRecovery,
@@ -108,20 +122,16 @@ export class NodeProviderConfigRuntime {
   start(): Promise<void> {
     if (this.#disposed) throw new Error("NodeProviderConfigRuntime 已 dispose");
     if (this.#startPromise) return this.#startPromise;
-    const startPromise = this.configService.read().then(() => {
+    const startPromise = this.configService.read().then((config) => {
       if (this.#disposed) return;
-      void this.#checkBackground();
-      // Managed Worker 无下载配置也无恢复 owner，不建立周期任务。
-      if (
-        this.#remoteSynchronizer ||
-        this.#zcodeBuiltinSource instanceof EndpointScopedZCodeBuiltinSource ||
-        this.#checkListeners.size > 0
-      ) {
-        this.#checkTimer = setInterval(() => {
-          void this.#checkBackground();
-        }, 60_000);
-        this.#checkTimer.unref?.();
+      this.#backgroundRemoteEnabled = this.#backgroundCheckEnabled?.(config) ?? true;
+      void this.#checkBackground(this.#backgroundRemoteEnabled);
+      if (this.#backgroundCheckEnabled) {
+        this.#disposeGateWatch = this.configService.onDidChange(() => {
+          void this.#reevaluateBackgroundGate();
+        });
       }
+      this.#syncCheckTimer();
     });
     this.#startPromise = startPromise;
     void startPromise.catch(() => {
@@ -138,11 +148,54 @@ export class NodeProviderConfigRuntime {
     return this.#remoteSynchronizer?.refresh(options) ?? Promise.resolve("skipped");
   }
 
-  #checkBackground(): Promise<void> {
+  /** Managed Worker 无下载配置也无恢复 owner，不建立周期任务；Gate 关闭时也不建立。 */
+  #syncCheckTimer(): void {
+    const wanted =
+      !this.#disposed &&
+      this.#backgroundRemoteEnabled &&
+      (this.#remoteSynchronizer !== undefined ||
+        this.#zcodeBuiltinSource instanceof EndpointScopedZCodeBuiltinSource ||
+        this.#checkListeners.size > 0);
+    if (wanted && !this.#checkTimer) {
+      this.#checkTimer = setInterval(() => {
+        void this.#checkBackground(true);
+      }, 60_000);
+      this.#checkTimer.unref?.();
+    } else if (!wanted && this.#checkTimer) {
+      clearInterval(this.#checkTimer);
+      this.#checkTimer = null;
+    }
+  }
+
+  async #reevaluateBackgroundGate(): Promise<void> {
+    const generation = ++this.#gateGeneration;
+    let config: ProviderConfigSnapshot;
+    try {
+      config = await this.configService.read();
+    } catch {
+      return;
+    }
+    if (this.#disposed || generation !== this.#gateGeneration || !this.#backgroundCheckEnabled)
+      return;
+    const enabled = this.#backgroundCheckEnabled(config);
+    if (enabled === this.#backgroundRemoteEnabled) return;
+    this.#backgroundRemoteEnabled = enabled;
+    this.#syncCheckTimer();
+    // Newly in use: check now instead of waiting for the next interval (TTL/back-off still apply).
+    if (enabled) void this.#checkBackground(true);
+  }
+
+  #checkBackground(remote: boolean): Promise<void> {
     if (this.#disposed) return Promise.resolve();
-    if (this.#checkInFlight) return this.#checkInFlight;
+    if (this.#checkInFlight) {
+      return remote
+        ? this.#checkInFlight.then(() =>
+            this.#backgroundRemoteEnabled ? this.#checkBackground(true) : undefined,
+          )
+        : this.#checkInFlight;
+    }
     const check = Promise.allSettled([
-      this.refreshZCodeBuiltin(),
+      ...(remote ? [this.refreshZCodeBuiltin()] : []),
       ...[...this.#checkListeners].map((listener) => Promise.resolve().then(listener)),
     ])
       .then((results) => {
@@ -162,6 +215,8 @@ export class NodeProviderConfigRuntime {
     this.#disposed = true;
     if (this.#checkTimer) clearInterval(this.#checkTimer);
     this.#checkTimer = null;
+    this.#disposeGateWatch?.();
+    this.#disposeGateWatch = null;
     this.#checkListeners.clear();
     this.#remoteSynchronizer?.dispose();
     this.configService.dispose();

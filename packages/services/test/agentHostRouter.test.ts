@@ -9,11 +9,33 @@ test("legacy sessions always retain native owner; unknown external sessions fail
   registry.register(new MockHarness());
   const router = new SessionRouter(registry, { allowExternalAdmission: false });
   assert.deepEqual(router.resolve({ sessionId: "old-session" }, "local-1"), { kind: "native" });
-  const meta = { schemaVersion: 1 as const, harnessId: "mock", targetId: "local-1", hostSessionId: "new-session", modelBindingKind: "host-managed" as const };
-  assert.equal(router.resolve({ sessionId: "new-session", agentHost: meta }, "local-1").kind, "external");
-  assert.throws(() => router.resolve({ sessionId: "new-session", agentHost: meta }, "remote-2"), /target/);
-  assert.throws(() => router.resolve({ sessionId: "new-session", agentHost: { ...meta, harnessId: "unknown" } }, "local-1"), /unknown harness/);
+  const meta = {
+    schemaVersion: 1 as const,
+    harnessId: "mock",
+    targetId: "local-1",
+    hostSessionId: "new-session",
+    modelBindingKind: "host-managed" as const,
+  };
+  assert.equal(
+    router.resolve({ sessionId: "new-session", agentHost: meta }, "local-1").kind,
+    "external",
+  );
+  assert.throws(
+    () => router.resolve({ sessionId: "new-session", agentHost: meta }, "remote-2"),
+    /target/,
+  );
+  assert.throws(
+    () =>
+      router.resolve(
+        { sessionId: "new-session", agentHost: { ...meta, harnessId: "unknown" } },
+        "local-1",
+      ),
+    /unknown harness/,
+  );
   assert.throws(() => router.assertCanCreate("mock"), /disabled/);
   // The flag changes new-session admission only; an existing external session still routes to its old owner.
-  assert.equal(router.resolve({ sessionId: "new-session", agentHost: meta }, "local-1").kind, "external");
+  assert.equal(
+    router.resolve({ sessionId: "new-session", agentHost: meta }, "local-1").kind,
+    "external",
+  );
 });

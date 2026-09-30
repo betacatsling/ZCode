@@ -66,6 +66,8 @@ export async function codexHostManagedSupport(input: {
     cliVersion: input.adapterVersion,
     gatewayVersion: MODEL_GATEWAY_VERSION,
     apiFormat: "openai-responses",
+    // 控制面 fixture 不能标成已经打到模型执行层的统一路由。
+    unifiedModelRoute: "experimental",
   };
   if (
     evidence &&
@@ -99,19 +101,41 @@ export function codexHarnessCapabilities(): HarnessCapabilities {
     support: "experimental" as const,
     reason: "Verified only through the pinned local app-server and Fake Model control path.",
   };
-  const no = {
-    support: "unsupported" as const,
-    reason:
-      "thread/resume cold-attaches saved history only; uncertain in-flight turns are never replayed by Host resumeExecution.",
-  };
   return {
     text: yes,
     tools: yes,
     approvals: yes,
     cancelTurn: yes,
     history: yes,
-    resumeExecution: no,
-    images: no,
-    modelSwitch: no,
+    resumeExecution: {
+      support: "unsupported",
+      reason:
+        "thread/resume cold-attaches saved history only; uncertain in-flight turns are never replayed by Host resumeExecution.",
+    },
+    images: {
+      support: "unsupported",
+      reason: "Codex app-server send accepts text only; the images surface is unsupported.",
+    },
+    modelSwitch: {
+      support: "unsupported",
+      reason: "In-turn modelSwitch is unsupported; model binding is fixed at session admission.",
+    },
+    detach: {
+      support: "unsupported",
+      reason: "View detach stays on the host subscription and does not stop this app-server.",
+    },
+    terminateSession: {
+      support: "experimental",
+      reason: "terminate stops only the named host session; it is not a live CLI certification.",
+    },
+    viewHistory: {
+      support: "unsupported",
+      reason: "This adapter has no read-only history snapshot and does not replay prompts.",
+    },
+    hostManagedModel: {
+      support: "experimental",
+      reason:
+        "The custom provider points at an injected Gateway port, but no model execution trace has been observed.",
+    },
   };
 }

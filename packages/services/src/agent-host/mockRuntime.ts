@@ -29,6 +29,7 @@ export function createMockAgentHostRuntime(input: {
       fingerprint: "mock-runtime",
       validateSelection: () => ({ ok: true }),
     },
+    // Test fixture only: path match. Production lazy Host uses authorizeLazyWorktreeAdmission (generation recheck).
     authorizeWorktree: async (spec, realPath) =>
       spec.execution.worktreePath === input.worktreePath && realPath === input.worktreePath,
   });
