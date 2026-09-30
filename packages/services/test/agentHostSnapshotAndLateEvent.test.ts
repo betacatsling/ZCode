@@ -428,6 +428,68 @@ test(
   },
 );
 
+test(
+  "projection: tool.started filling an approval-first row refreshes the still-pending approval's tool name",
+  { timeout: TEST_TIMEOUT_MS },
+  () => {
+    const spec = makeSpec("host-projection-pending", "/tmp/unused");
+    const epoch = "epoch-projection";
+    let sequence = 0;
+    const event = (payload: Record<string, unknown> & { kind: AgentEvent["kind"] }) =>
+      agentEventSchema.parse({
+        hostSessionId: "host-projection-pending",
+        runtimeEpoch: epoch,
+        sequence: ++sequence,
+        eventId: `evt-${sequence}`,
+        at: sequence * 1000,
+        ...payload,
+      });
+    const events = [
+      event({ kind: "turn.started", turnId: "turn-1" }),
+      event({
+        kind: "interaction.requested",
+        turnId: "turn-1",
+        interactionId: "approval-1",
+        toolCallId: "tool-1",
+        summary: "Run command?",
+      }),
+    ];
+    const seeded = projectHostConversation({ spec, runtimeEpoch: epoch, events });
+    const seededPayload = seeded.pendingInteractions[0]?.payload;
+    assert.equal(seededPayload?.kind === "permission" && seededPayload.toolName, "unknown");
+
+    // 审批仍在等待时 tool.started 到达：行和审批卡必须显示同一个真实工具名，而不是卡上停在 "unknown"。
+    const filled = projectHostConversation({
+      spec,
+      runtimeEpoch: epoch,
+      events: [
+        ...events,
+        event({
+          kind: "tool.started",
+          turnId: "turn-1",
+          toolCallId: "tool-1",
+          name: "exec_command",
+          inputText: "ls",
+        }),
+      ],
+    });
+    const row = filled.rows.window.find((item) => item.kind === "toolCall");
+    assert.equal(row?.kind === "toolCall" && row.toolName, "exec_command");
+    assert.equal(row?.kind === "toolCall" && row.status, "pendingApproval");
+    assert.equal(filled.pendingInteractions.length, 1);
+    const pending = filled.pendingInteractions[0];
+    assert.equal(pending?.interactionId, "approval-1");
+    assert.equal(pending?.anchorRowId, row?.rowId);
+    assert.equal(pending?.payload.kind, "permission");
+    assert.equal(
+      pending?.payload.kind === "permission" && pending.payload.toolName,
+      "exec_command",
+    );
+    assert.equal(pending?.payload.kind === "permission" && pending.payload.toolCallId, "tool-1");
+    assert.equal(pending?.payload.kind === "permission" && pending.payload.summary, "Run command?");
+  },
+);
+
 // ---------------------------------------------------------------------------
 // Bug 2: late event from an older runtime epoch
 // ---------------------------------------------------------------------------
