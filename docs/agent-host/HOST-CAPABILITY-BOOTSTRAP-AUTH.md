@@ -9,7 +9,9 @@ credential"). `/ws/host` applies the issue endpoint's `Origin`/`Host` rule
 before it looks at the ticket ("`/ws/host` request header checks"). The
 unauthenticated `/ws` and `/api/server-info` refuse browser and DNS-rebinding
 requests and publish only non-sensitive fields ("Local endpoints: `/ws` and
-`/api/server-info`"); token auth for them is deferred.
+`/api/server-info`"); token auth for them is deferred. The legacy
+`POST /api/connect-remote` has the same `Origin`/`Host` rule and accepts only
+JSON bodies ("`POST /api/connect-remote`").
 
 Requirement: `docs/PROJECT-DELIVERY-PLAN.md` §4 M2 risks and the §5 security row
 ("reject unauthorised Host/Web access"). Before this change, both HTTP servers
@@ -318,7 +320,9 @@ importing it. Services was avoided because other teams are actively changing it.
 
 These endpoints have no token (full token auth is deferred), so they are locked
 down by request headers and by publishing less. The same rules cover the
-legacy server's `/ws/remote/:id`, whose only client is the same Web UI.
+legacy server's `/ws/remote/:id`, whose only client is the same Web UI. The
+legacy `POST /api/connect-remote` uses the same rules plus a JSON-only body
+("`POST /api/connect-remote`").
 
 ### Who connects (audit)
 
@@ -398,6 +402,63 @@ optional fields for old servers.
     workspace from them, and the distribution smoke asserts the path. The same
     page gets the same data over `/ws` anyway, and with `authToken` set,
     `/api/*` needs the lite token.
+
+### `POST /api/connect-remote`
+
+Legacy server only. The handler builds an SSH, WSL or Docker backend from the
+request body, connects, and keeps the connection for `/ws/remote/:id`. That is a
+side effect an attacker controls, so the route must not be reachable by CSRF.
+Before this change, a cross-site `<form>` or `fetch(..., {mode: "no-cors"})`
+with a `text/plain` body got through, because `c.req.json()` parses any body
+that looks like JSON whatever its `Content-Type`.
+
+Callers, found with `git grep` for `connect-remote`, `connectRemote` and
+`/api/connect-remote` across `packages`, `apps` and `scripts`, and
+`git log -S'"/api/connect-remote"'` (the route has existed unchanged since the
+initial import):
+
+| Caller                                                                                                                                                                                         | Reaches the route? | `Origin` / `Host` it would send                                                                                                                                                                                                            |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Web UI `connectRemote` (`packages/web/src/main.tsx:164-169`)                                                                                                                                   | No                 | Returns "Remote connect is not supported in Web mode yet" without a request. If it is wired up later, a browser sends `Origin` on every `POST`, same-origin included (Fetch spec), so: `Origin: http(s)://<Host>`, `Host` = page authority |
+| Same page under Vite dev (`packages/web/vite.config.ts:52-56`, `/api` proxy)                                                                                                                   | No (as above)      | `Origin: http://localhost:5173`, `Host: localhost:5173`. No `changeOrigin`, so both are forwarded unchanged                                                                                                                                |
+| Desktop `connectRemote` (preload `packages/desktop/src/preload/index.ts:246` → IPC `zcode:connect-remote`, `desktopMainIpcRemote.ts:294`, Host `packages/desktop/src/host/index.ts:3055-3058`) | No                 | In-process `connectRemote()` from `packages/server/src/remote`; no HTTP                                                                                                                                                                    |
+| UI hooks (`packages/ui/src/hooks/usePlatform.tsx:46`, `packages/ui/src/root/useRemoteWorkspaceHistory.ts:756`)                                                                                 | No                 | Go through `IPlatformService.connectRemote`, i.e. one of the two rows above                                                                                                                                                                |
+| Scripts, smoke tests, `apps/zcode-cli`                                                                                                                                                         | No                 | None found                                                                                                                                                                                                                                 |
+| `packages/server/src/connectRemoteHeaders.test.ts`                                                                                                                                             | Yes                | Node `http.request`: no `Origin`, `Host: 127.0.0.1:<port>` unless the test sets one                                                                                                                                                        |
+
+So there is no real caller today. The rule keeps the path open for a future
+same-origin Web UI call and for Node clients, and refuses everything else.
+The shared predicate is `verifyLocalEndpointHeaders` with the legacy `/ws`
+policy plus `body: "json"`. It is registered before the lite-token middleware.
+
+- **`Origin` present:** it must be exactly `http(s)://<Host>`, as for `/ws`.
+  Anything else gets **403**: `null`, other sites, and other loopback ports.
+  Another port on `localhost` is cross-origin but _same-site_, so the lite
+  token's `SameSite=Lax` cookie would still be attached. The `Origin` rule is
+  what refuses it.
+- **`Host`:** loopback is required while the server is bound to loopback
+  (**403**), which also stops the DNS-rebinding pair. Bound to another
+  interface, `Host` is not checked and `authToken` is the defence, as for `/ws`.
+- **Body:** the media type must be `application/json` (parameters and case
+  ignored), with or without `Origin`. Anything else gets **415**.
+- **No `Origin`:** allowed only together with the JSON rule, and this is the
+  Node-client path. Modern browsers always send `Origin` on a `POST`. A
+  cross-site page can send a `POST` without a CORS preflight only as
+  `text/plain`, `application/x-www-form-urlencoded` or `multipart/form-data`.
+  An `application/json` request needs a preflight, and neither server ever
+  answers one (there is no CORS middleware). So even a browser or extension
+  that strips `Origin` cannot deliver a request that passes. Alternatives that
+  were considered and not taken:
+  - Requiring the lite token when there is no `Origin`. The token is off by
+    default on loopback, so this would lock out Node clients with no gain over
+    the JSON rule.
+  - Refusing any `Origin`. That would rule out the intended same-origin Web UI
+    flow (`/ws/remote/:id` exists for it).
+  - `Sec-Fetch-Site`. It is redundant with `Origin` in the browsers that send
+    it, and absent in the ones that do not.
+- Order: 403 (`Origin`/`Host`), then 401 (lite token, if configured), then 415
+  (body type), then 400 (malformed JSON, which used to be a 500, or a schema
+  error). Nothing before the schema check has a side effect.
 
 ### Compatibility
 
@@ -501,8 +562,9 @@ first post-M2 update, was not taken. Code:
   cookie or subprotocol for the Web UI) would close this. It needs client
   changes in the Web UI and the connectors. Until then, the legacy server bound
   to a non-loopback interface depends on `authToken`.
-- The legacy `POST /api/connect-remote` has no `Origin`/`Host` check beyond the
-  lite token.
+- **Token auth for `POST /api/connect-remote`.** The header and JSON rules stop
+  browsers, but, as for `/ws`, any local process can still call it when
+  `authToken` is not configured.
 
 ## Tests
 
@@ -561,6 +623,18 @@ first post-M2 update, was not taken. Code:
     (Linux only), `Host` is unchecked but cross-site `Origin` is still refused.
   - Controls: Node clients and the fields they read, the same-origin Web UI
     page, and the Vite dev proxy form.
+- `packages/server/src/connectRemoteHeaders.test.ts`:
+  - cross-site `Origin`s (`null`, other sites, other loopback ports, the
+    rebinding name) → 403 for simple and JSON content types;
+  - non-loopback `Host` → 403 when bound to loopback;
+  - a body that is not `application/json` → 415, with or without `Origin`;
+  - malformed JSON → 400;
+  - with `authToken`, the `SameSite=Lax` cookie from another port is still
+    refused;
+  - bound to `127.0.0.2` (Linux only): `Host` unchecked, `Origin` and JSON still
+    enforced;
+  - control: Node clients, the same-origin page and the Vite dev proxy reach the
+    handler (a schema 400 on `{}`, never a real connection).
 - `packages/server/src/remote/persistentTargetClient.test.ts`: the secret is
   sent only to the capability endpoint; a missing secret surfaces the 401.
 - `runtimeLifecycle.integration.test.ts`: the real Supervisor/Core path uses the
