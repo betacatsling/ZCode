@@ -32,7 +32,7 @@ import {
   type HarnessAdapter,
   type PreparedHostBinding,
 } from "./harnessRegistry.js";
-import type { JournalIdentity } from "./journalStorage.js";
+import { JournalClosedError, type JournalIdentity } from "./journalStorage.js";
 import { assertWorkspaceExecution, type WorkspaceSessionOwnership } from "./sessionRouter.js";
 import {
   planModelBinding,
@@ -265,7 +265,20 @@ export class SessionHost {
       adapter,
       options.title,
     );
-    await host.#persistActivityIndex();
+    try {
+      await host.#persistActivityIndex();
+    } catch (error) {
+      // The backend is confirmed and the manifest says "running": this is a real, attachable
+      // session, so keep it (a missing sidecar lists as unknown) but release the host nobody will
+      // own, or its journal locks and adapter subscription outlive the failed create.
+      await host.close().catch((closeError: unknown) => {
+        logger.warn(undefined, "failed create: mounted host not released cleanly", {
+          hostSessionId: spec.hostSessionId,
+          error: closeError,
+        });
+      });
+      throw error;
+    }
     return host;
   }
 
@@ -589,7 +602,20 @@ export class SessionHost {
   }
 
   async dispatch(raw: AgentCommand): Promise<AgentCommandReceipt> {
-    if (this.#closed) throw new Error("session host closed");
+    try {
+      return await this.#dispatch(raw);
+    } catch (error) {
+      // close() closed the journals while this command was in flight (e.g. still inside the
+      // adapter after the stream broke): its outcome cannot be recorded any more, the journal
+      // refused the write, and the command stays durable accepted = execution-unknown.
+      if (error instanceof JournalClosedError)
+        throw new SessionHostClosedError("its outcome was not recorded", { cause: error });
+      throw error;
+    }
+  }
+
+  async #dispatch(raw: AgentCommand): Promise<AgentCommandReceipt> {
+    if (this.#closed) throw new SessionHostClosedError();
     if (this.#eventError) throw this.#eventError;
     const command = agentCommandSchema.parse(raw);
     if (command.hostSessionId !== this.spec.hostSessionId)
@@ -1076,6 +1102,20 @@ export class EventStreamFailure extends Error {
     // Same wording as dispatch()'s rejection; the cause text stays matchable for existing callers.
     super(`event stream is no longer reliable: ${cause.message}`, { cause });
     this.name = "EventStreamFailure";
+  }
+}
+
+/**
+ * dispatch() on a host that close() has closed (healthy or force-closed), or whose close() landed
+ * while the command was in flight. `code` is host-local, not a receipt reasonCode: an in-flight
+ * command keeps its durable "accepted" record (execution-unknown after restart, never replayed).
+ * Over RPC only `name` and `message` cross the wire.
+ */
+export class SessionHostClosedError extends Error {
+  readonly code = "host-closed" as const;
+  constructor(detail?: string, options?: ErrorOptions) {
+    super(detail ? `session host closed: ${detail}` : "session host closed", options);
+    this.name = "SessionHostClosedError";
   }
 }
 

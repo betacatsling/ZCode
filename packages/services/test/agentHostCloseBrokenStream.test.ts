@@ -18,6 +18,9 @@
  * - sidecar 原子写（临时文件 + rename）失败时删掉自己的临时文件，调用方仍收到原始写/rename 错误。
  * - adapter run 在强制关闭之后才结束：什么都不写、不抛。关闭时正在写 turn 结算（命令 journal +
  *   sidecar）的，close() 等它写完再关 journal；close() 落定之后不再有任何写入。
+ * - 关闭之后的 dispatch()，以及 close() 落定时还卡在 adapter 里的 cancel / resolve / terminate，
+ *   都以 SessionHostClosedError（code "host-closed"）拒绝；journal 拒写，命令保持 accepted
+ *   （重启后 execution-unknown）。terminate 仍记录 adapter 已确认的 "terminated" manifest。
  *
  * 每个可能挂住的等待都用 settle() 限时观察，每个 test 也有 timeout，回归时快速失败而不是挂住 CI。
  */
@@ -38,7 +41,11 @@ import {
   type SessionSpec,
 } from "@zcode/shared/agent-host";
 import { HarnessRegistry, type HarnessAdapter } from "../src/agent-host/harnessRegistry.js";
-import { EventStreamFailure, SessionHost } from "../src/agent-host/sessionHost.js";
+import {
+  EventStreamFailure,
+  SessionHost,
+  SessionHostClosedError,
+} from "../src/agent-host/sessionHost.js";
 import { AgentHostTargetService } from "../src/agent-host/targetService.js";
 
 const catalog = { fingerprint: "registry-v1", validateSelection: () => ({ ok: true as const }) };
@@ -67,6 +74,7 @@ class OpenTurnHarness implements HarnessAdapter {
   readonly #sequences = new Map<string, number>();
   readonly #listeners = new Map<string, Set<(event: AgentEvent) => void>>();
   readonly #openTurns = new Map<string, () => void>();
+  readonly #holds = new Map<HeldCall, { reached: () => void; released: Promise<void> }>();
   #epochCounter = 0;
 
   constructor(private readonly options: { endTurnsOnShutdown?: boolean } = {}) {}
@@ -114,6 +122,7 @@ class OpenTurnHarness implements HarnessAdapter {
   }
   async cancelTurn(command: Extract<AgentCommand, { type: "cancelTurn" }>): Promise<void> {
     this.calls.cancelTurn.push(command.commandId);
+    await this.#held("cancelTurn");
     this.emit(command.hostSessionId, {
       kind: "turn.finished",
       turnId: command.turnId,
@@ -126,9 +135,11 @@ class OpenTurnHarness implements HarnessAdapter {
     command: Extract<AgentCommand, { type: "resolveInteraction" }>,
   ): Promise<void> {
     this.calls.resolveInteraction.push(command.commandId);
+    await this.#held("resolveInteraction");
   }
   async terminate(hostSessionId: string): Promise<void> {
     this.calls.terminate.push(hostSessionId);
+    await this.#held("terminate");
   }
   async shutdown(): Promise<void> {
     this.calls.shutdown += 1;
@@ -139,6 +150,22 @@ class OpenTurnHarness implements HarnessAdapter {
     listeners.add(listener);
     this.#listeners.set(hostSessionId, listeners);
     return () => listeners.delete(listener);
+  }
+  /** Holds the next such adapter call (after it is recorded in calls) until release(). */
+  holdNext(call: HeldCall): { reached: Promise<void>; release: () => void } {
+    let reached!: () => void;
+    let release!: () => void;
+    const reachedPromise = new Promise<void>((resolve) => (reached = resolve));
+    const released = new Promise<void>((resolve) => (release = resolve));
+    this.#holds.set(call, { reached, released });
+    return { reached: reachedPromise, release: () => release() };
+  }
+  async #held(call: HeldCall): Promise<void> {
+    const hold = this.#holds.get(call);
+    if (!hold) return;
+    this.#holds.delete(call);
+    hold.reached();
+    await hold.released;
   }
   listenerCount(hostSessionId: string): number {
     return this.#listeners.get(hostSessionId)?.size ?? 0;
@@ -174,6 +201,8 @@ class OpenTurnHarness implements HarnessAdapter {
       listener(event);
   }
 }
+
+type HeldCall = "cancelTurn" | "resolveInteraction" | "terminate";
 
 type BreakKind = "foreign event identity" | "sequence gap";
 const BREAKS: readonly { kind: BreakKind; error: RegExp }[] = [
@@ -1019,6 +1048,168 @@ test(
           await settle(host.close()).catch(() => undefined);
         }
       });
+    });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Commands in flight across a force-close, and commands after close
+// ---------------------------------------------------------------------------
+
+/** The typed refusal of a closed host; name/code are what an RPC client or log can match on. */
+function assertHostClosed(result: Settled<unknown>, label: string): void {
+  const error = rejection(result, label) as Error & { code?: unknown };
+  assert.ok(error instanceof SessionHostClosedError, `${label}: ${String(error)}`);
+  assert.equal(error.name, "SessionHostClosedError");
+  assert.equal(error.code, "host-closed");
+  assert.match(error.message, /session host closed/);
+}
+
+const IN_FLIGHT: readonly {
+  call: HeldCall;
+  command: (epoch: string) => AgentCommand;
+}[] = [
+  {
+    call: "cancelTurn",
+    command: (runtimeEpoch) => ({
+      type: "cancelTurn",
+      commandId: "cancel-1",
+      hostSessionId: "host-a",
+      runtimeEpoch,
+      turnId: "turn-1",
+    }),
+  },
+  {
+    call: "resolveInteraction",
+    command: (runtimeEpoch) => ({
+      type: "resolveInteraction",
+      commandId: "resolve-1",
+      hostSessionId: "host-a",
+      runtimeEpoch,
+      turnId: "turn-1",
+      interactionId: "approval-1",
+      decision: "deny",
+    }),
+  },
+  {
+    call: "terminate",
+    command: () => ({
+      type: "terminateSession",
+      commandId: "terminate-1",
+      hostSessionId: "host-a",
+    }),
+  },
+];
+
+for (const { call, command } of IN_FLIGHT) {
+  test(
+    `broken stream: a ${call} still inside the adapter when close() force-closes rejects typed and writes no journal or sidecar`,
+    { timeout: TEST_TIMEOUT_MS },
+    async () => {
+      await withRoot("zcode-close-inflight-", async (root, worktree) => {
+        await collectingUnhandledRejections(async (unhandled) => {
+          const harness = new OpenTurnHarness();
+          const { host, spec } = await hostWithOpenTurn(root, worktree, harness);
+          try {
+            harness.emit("host-a", {
+              kind: "interaction.requested",
+              turnId: "turn-1",
+              interactionId: "approval-1",
+              toolCallId: "tool-1",
+              summary: "approve",
+            });
+            await within(host.whenEventsSettled(), "interaction.requested to settle");
+            const hold = harness.holdNext(call);
+            const inFlight = settle(
+              host.dispatch(command(host.binding.runtimeEpoch)),
+              SETTLE_MS * 3,
+            );
+            await within(hold.reached, `${call} to reach the adapter`);
+            const cause = await breakAndCapture(host, harness, "sequence gap", /sequence gap/);
+            assertTypedCloseError(await settle(host.close()), cause);
+            const atClose = writeFingerprint(root);
+
+            // The adapter call returns after the journals closed.
+            hold.release();
+            assertHostClosed(await inFlight, `${call} completing after force-close`);
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            const journalsAndSidecar = (files: Record<string, string>) =>
+              Object.fromEntries(
+                Object.entries(files).filter(([name]) => !name.endsWith(".session.json")),
+              );
+            assert.deepEqual(
+              journalsAndSidecar(writeFingerprint(root)),
+              journalsAndSidecar(atClose),
+              "no journal or sidecar write after close()",
+            );
+            assert.deepEqual(unhandled, [], "no unhandled rejection");
+            // The adapter confirmed the termination: the manifest records it, so no reopen revives it.
+            const stored = await SessionHost.listStoredSessions(root, { targetId: TARGET_ID });
+            assert.equal(stored[0]?.state, call === "terminate" ? "terminated" : "running");
+            assertHostClosed(
+              await settle(host.dispatch(send("host-a", "2"))),
+              "dispatch after the in-flight command",
+            );
+            // Its completion was never recorded: durable accepted, i.e. execution-unknown.
+            const commandId = command(host.binding.runtimeEpoch).commandId;
+            assert.equal(
+              (await SessionHost.queryCommandHistory(root, spec, commandId))?.status,
+              "execution-unknown",
+            );
+          } finally {
+            harness.releaseAll();
+            await settle(host.close()).catch(() => undefined);
+          }
+        });
+      });
+    },
+  );
+}
+
+test(
+  "a dispatch that starts after close() (healthy or force-closed) rejects with the typed host-closed error",
+  { timeout: TEST_TIMEOUT_MS },
+  async () => {
+    await withRoot("zcode-close-dispatch-after-", async (root, worktree) => {
+      const harness = new OpenTurnHarness();
+      const healthy = await idleHost(root, worktree, harness);
+      await within(healthy.host.close(), "healthy close");
+      assertHostClosed(
+        await settle(healthy.host.dispatch(send("host-a", "1"))),
+        "send after a healthy close",
+      );
+      const reopened = await within(
+        SessionHost.open({
+          root,
+          spec: healthy.spec,
+          target: target(),
+          catalog,
+          registry: registryWith(harness),
+        }),
+        "reopen",
+      );
+      try {
+        const cause = await breakAndCapture(
+          reopened,
+          harness,
+          "foreign event identity",
+          /foreign event identity/,
+        );
+        assertTypedCloseError(await settle(reopened.close()), cause);
+        assertHostClosed(
+          await settle(
+            reopened.dispatch({
+              type: "terminateSession",
+              commandId: "terminate-after",
+              hostSessionId: "host-a",
+            }),
+          ),
+          "terminate after a force-close",
+        );
+        assert.deepEqual(harness.calls.terminate, [], "a closed host never reaches the adapter");
+      } finally {
+        await settle(reopened.close()).catch(() => undefined);
+      }
     });
   },
 );
