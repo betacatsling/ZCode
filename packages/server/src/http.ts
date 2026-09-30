@@ -349,9 +349,12 @@ export function createHttpServer(
           credentialFingerprint: hostBootstrapCredentialFingerprint(credential),
         }))
       : undefined;
+  // /ws/host 与签发端点同一请求头规则（Origin → 403；监听回环时非回环 Host → 403），先于 ticket 检查。
+  const hostRequestHeaderRules = { requireLoopbackHost: isLoopbackBindHost(options.host) };
   // ticket 只在 ws 接受握手（verifyClient，紧挨 101）时消费；普通请求、握手失败或路由不符都不会烧掉它。
   const hostUpgradeGate = createHostCapabilityUpgradeGate(hostCapabilities, {
     acceptedBindings: () => acceptedHostCapabilityBindings,
+    ...hostRequestHeaderRules,
   });
   hostUpgradeGate.attach(wss);
   if (authToken) {
@@ -382,7 +385,7 @@ export function createHttpServer(
         host: c.req.header("host"),
       },
       hostBootstrapCredentials,
-      { requireLoopbackHost: isLoopbackBindHost(options.host) },
+      hostRequestHeaderRules,
     );
     c.header("Cache-Control", "no-store");
     if (!verdict.ok) return c.json({ error: verdict.error }, verdict.status);
@@ -415,6 +418,8 @@ export function createHttpServer(
     const admission = hostUpgradeGate.admit({
       incoming: (c.env as { incoming?: object } | undefined)?.incoming,
       capability: c.req.header(ZCODE_RPC_HOST_CAPABILITY_HEADER),
+      origin: c.req.header("origin"),
+      host: c.req.header("host"),
       upgrade: c.req.header("upgrade"),
       connection: c.req.header("connection"),
     });

@@ -31,6 +31,22 @@ export {
   type NodeSelfResourceSamplerOptions,
 } from "./node/nodeSelfResourceTelemetry.js";
 export {
+  createHostBootstrapToken,
+  HOST_BOOTSTRAP_TOKEN_PATTERN,
+  HOST_CAPABILITY_PATH,
+  hostBootstrapTokenMatches,
+  isLoopbackAuthority,
+  presentedHostBootstrapCredential,
+  verifyHostBootstrapRequest,
+  verifyHostRequestHeaders,
+  type HostBootstrapRejectReason,
+  type HostBootstrapRequest,
+  type HostBootstrapVerdict,
+  type HostRequestHeaderOptions,
+  type HostRequestHeaderRejection,
+  type HostRequestHeaders,
+} from "./node/hostBootstrapAuth.js";
+export {
   createHostCapabilityStore,
   createHostCapabilityUpgradeGate,
   DEFAULT_HOST_CAPABILITY_TTL_MS,

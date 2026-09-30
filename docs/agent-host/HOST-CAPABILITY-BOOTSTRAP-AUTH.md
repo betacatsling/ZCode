@@ -5,7 +5,8 @@ fallback ("Version-skew fallback"). Tickets are consumed only when the
 `/ws/host` upgrade is accepted, and both servers share one store ("Ticket
 consume-on-upgrade"). Tickets are bound to the bootstrap credential that
 authorised them and to the Core generation ("Ticket binding to the bootstrap
-credential").
+credential"). `/ws/host` applies the issue endpoint's `Origin`/`Host` rule
+before it looks at the ticket ("`/ws/host` request header checks").
 
 Requirement: `docs/PROJECT-DELIVERY-PLAN.md` §4 M2 risks and the §5 security row
 ("reject unauthorised Host/Web access"). Before this change, both HTTP servers
@@ -100,7 +101,10 @@ A per-Core-launch private bootstrap secret, presented as `Authorization: Bearer`
      `run/core-host-bootstrap.json` (`0600`). The new CLI reads it only when the
      Supervisor status lacks the secret. See "Version-skew fallback".
 3. **Verification.** `verifyHostBootstrapRequest`
-   (`hostBootstrapAuth.ts`, one copy in each package) checks, in this order:
+   (`packages/shared/src/node/hostBootstrapAuth.ts`, exported from
+   `@zcode/shared/node`; each server's `hostBootstrapAuth.ts` is a re-export)
+   checks, in this order. The first two checks are
+   `verifyHostRequestHeaders`, which `/ws/host` also uses:
    - Any `Origin` header → **403**. Real callers are Node. Browsers always send
      `Origin` on cross-origin POSTs, and `Authorization` also forces a CORS
      preflight, which is never answered.
@@ -133,6 +137,9 @@ when the request first arrives. Both servers wire the same gate
 
 1. **HTTP middleware on `/ws/host` (`admit`, never consumes).** It runs for
    every method, in the order below:
+   - Any `Origin`, or a non-loopback `Host` where the issue endpoint requires
+     one → **403** ("`/ws/host` request header checks"). The ticket is not
+     looked at.
    - Missing, unknown or expired ticket, or one whose binding is not current
      ("Ticket binding") → **401**. The check is `store.peek()`, which is
      non-consuming. It purges expired entries, so an expired ticket stays dead
@@ -177,6 +184,32 @@ Resulting semantics, identical on both servers:
 `peek`, an invalid ticket is refused at the consume point (401) instead of in
 the middleware. How such stores interact with binding is described under
 "Ticket binding".
+
+### `/ws/host` request header checks
+
+`/ws/host` applies the same browser and authority rule as
+`POST /api/rpc-host-capability`: the same predicate
+(`verifyHostRequestHeaders` in `packages/shared/src/node/hostBootstrapAuth.ts`)
+with the same options object that each server passes to
+`verifyHostBootstrapRequest` (`hostRequestHeaderRules` in each `http.ts`).
+
+- Any `Origin` header → **403**. Real `/ws/host` clients are Node `ws`
+  clients (`connectToPersistentTarget` in
+  `packages/server/src/remote/persistentTargetClient.ts`, used by the Desktop
+  Host and the SSH connector, and `verify-remote-ssh.mjs`). None sets the `ws`
+  `origin` option, and `ws` sends `Origin` only when that option is set. A
+  browser always sends `Origin` on a WebSocket handshake, so this refuses
+  cross-site WebSocket hijacking and rebinding pages outright.
+- A `Host` authority other than `127.0.0.1` / `localhost` / `[::1]` (optional
+  port) → **403** (DNS rebinding). This applies on Server Core always, and on
+  the legacy server when it is bound to loopback, exactly as for issuance.
+  Clients connect to `/ws/host` with the same authority they used to obtain
+  the ticket.
+- **Order.** The check is the first step of the shared gate's `admit`, before
+  any `peek`, and a request rejected there is never remembered, so the
+  `verifyClient` consume point never sees it. A rejected request can never
+  burn a ticket. On the legacy server with `authToken`, the lite-token
+  middleware still runs first; it does not touch tickets either.
 
 ### Ticket binding to the bootstrap credential
 
@@ -241,16 +274,16 @@ credential)`. It is one-way, so the ticket record never holds the secret,
   own tickets keep working exactly as before. With no policy (legacy server
   without credentials) the wrapper is transparent.
 
-**Shared location.** `packages/shared/src/node/hostCapabilityStore.ts`,
-exported from the Node-only subpath `@zcode/shared/node`. Both
+**Shared location.** `packages/shared/src/node/hostCapabilityStore.ts` (and
+`hostBootstrapAuth.ts` next to it), exported from the Node-only subpath `@zcode/shared/node`. Both
 `packages/server` and `packages/zcode-server-cli` already depend on
 `@zcode/shared`, so no new dependency edge was added. The subpath is
 Node-only, because the store uses `node:crypto`, and it is never imported by
 renderer or browser bundles. The gate talks to the `ws` server through a
 structural type, so `@zcode/shared` does not depend on `ws`.
-`packages/server/src/hostCapability.ts` and
-`packages/zcode-server-cli/src/server-core/hostCapability.ts` are now plain
-re-exports that keep the historical import paths. `@zcode/server` could not
+`hostCapability.ts` and `hostBootstrapAuth.ts` in `packages/server/src` and
+`packages/zcode-server-cli/src/server-core` are now plain re-exports that keep
+the historical import paths. `@zcode/server` could not
 host the store, because the dependency boundary forbids server-cli from
 importing it. Services was avoided because other teams are actively changing it.
 
@@ -356,11 +389,6 @@ first post-M2 update, was not taken. Code:
      service-level scoped channel API.
   3. _Bind to connection origin_ (peer address). Weak: every caller, including
      SSH forwards, appears as loopback.
-- **Duplicated bootstrap verification.** The ticket store is shared now
-  ("Ticket consume-on-upgrade"), but `hostBootstrapAuth.ts` still exists in
-  both `packages/server` and `packages/zcode-server-cli`. The two copies are
-  byte-identical and must be changed together. It could move to
-  `@zcode/shared/node` the same way.
 - Windows: `chmod` is a no-op, so the confidentiality of `status.json` and
   `core-host-bootstrap.json` relies on the per-user profile ACL and the
   named-pipe control endpoint. The reader skips the mode and uid checks there.
@@ -409,6 +437,13 @@ first post-M2 update, was not taken. Code:
   - A binding-unaware injected store keeps working at its issuer and fails
     closed elsewhere and for tickets the server did not issue.
   - Control: unbound in-process tickets stay usable.
+- `hostCapability.wsHostHeaders.test.ts` in both packages: any `Origin`
+  (including `null` and a loopback page origin) and non-loopback `Host`
+  authorities get 403 with a valid ticket, which then still opens once. The
+  header checks come before the ticket and upgrade checks: `Origin` without a
+  ticket, a foreign `Host` with an unknown ticket, and a plain `GET` with
+  `Origin` all get 403 (not 401 or 426). Control: loopback authorities without
+  `Origin` upgrade.
 - `packages/server/src/remote/persistentTargetClient.test.ts`: the secret is
   sent only to the capability endpoint; a missing secret surfaces the 401.
 - `runtimeLifecycle.integration.test.ts`: the real Supervisor/Core path uses the

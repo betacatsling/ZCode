@@ -187,8 +187,11 @@ export async function createCoreHttpServer(
     ...(options.generation === undefined ? {} : { generation: options.generation }),
   };
   const acceptedHostCapabilityBindings = [hostCapabilityBinding];
+  // /ws/host 与签发端点同一请求头规则（Origin → 403，非回环 Host → 403），先于 ticket 检查。
+  const hostRequestHeaderRules = { requireLoopbackHost: true };
   const hostUpgradeGate = createHostCapabilityUpgradeGate(capabilities, {
     acceptedBindings: () => acceptedHostCapabilityBindings,
+    ...hostRequestHeaderRules,
   });
   hostUpgradeGate.attach(wss);
   app.get("/api/server-info", (context) => context.json(info));
@@ -204,6 +207,8 @@ export async function createCoreHttpServer(
     const admission = hostUpgradeGate.admit({
       incoming: (context.env as { incoming?: object } | undefined)?.incoming,
       capability: context.req.header(ZCODE_RPC_HOST_CAPABILITY_HEADER),
+      origin: context.req.header("origin"),
+      host: context.req.header("host"),
       upgrade: context.req.header("upgrade"),
       connection: context.req.header("connection"),
     });
@@ -233,7 +238,7 @@ export async function createCoreHttpServer(
         host: context.req.header("host"),
       },
       [hostBootstrapToken],
-      { requireLoopbackHost: true },
+      hostRequestHeaderRules,
     );
     context.header("Cache-Control", "no-store");
     if (!verdict.ok) return context.json({ error: verdict.error }, verdict.status);
