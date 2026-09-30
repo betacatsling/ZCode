@@ -67,6 +67,7 @@ class OpenTurnHarness implements HarnessAdapter {
   readonly #sequences = new Map<string, number>();
   readonly #listeners = new Map<string, Set<(event: AgentEvent) => void>>();
   readonly #openTurns = new Map<string, () => void>();
+  readonly #holds = new Map<HeldCall, { reached: () => void; released: Promise<void> }>();
   #epochCounter = 0;
 
   constructor(private readonly options: { endTurnsOnShutdown?: boolean } = {}) {}
@@ -114,6 +115,7 @@ class OpenTurnHarness implements HarnessAdapter {
   }
   async cancelTurn(command: Extract<AgentCommand, { type: "cancelTurn" }>): Promise<void> {
     this.calls.cancelTurn.push(command.commandId);
+    await this.#held("cancelTurn");
     this.emit(command.hostSessionId, {
       kind: "turn.finished",
       turnId: command.turnId,
@@ -126,9 +128,11 @@ class OpenTurnHarness implements HarnessAdapter {
     command: Extract<AgentCommand, { type: "resolveInteraction" }>,
   ): Promise<void> {
     this.calls.resolveInteraction.push(command.commandId);
+    await this.#held("resolveInteraction");
   }
   async terminate(hostSessionId: string): Promise<void> {
     this.calls.terminate.push(hostSessionId);
+    await this.#held("terminate");
   }
   async shutdown(): Promise<void> {
     this.calls.shutdown += 1;
@@ -139,6 +143,22 @@ class OpenTurnHarness implements HarnessAdapter {
     listeners.add(listener);
     this.#listeners.set(hostSessionId, listeners);
     return () => listeners.delete(listener);
+  }
+  /** Holds the next such adapter call (after it is recorded in calls) until release(). */
+  holdNext(call: HeldCall): { reached: Promise<void>; release: () => void } {
+    let reached!: () => void;
+    let release!: () => void;
+    const reachedPromise = new Promise<void>((resolve) => (reached = resolve));
+    const released = new Promise<void>((resolve) => (release = resolve));
+    this.#holds.set(call, { reached, released });
+    return { reached: reachedPromise, release: () => release() };
+  }
+  async #held(call: HeldCall): Promise<void> {
+    const hold = this.#holds.get(call);
+    if (!hold) return;
+    this.#holds.delete(call);
+    hold.reached();
+    await hold.released;
   }
   listenerCount(hostSessionId: string): number {
     return this.#listeners.get(hostSessionId)?.size ?? 0;
@@ -174,6 +194,8 @@ class OpenTurnHarness implements HarnessAdapter {
       listener(event);
   }
 }
+
+type HeldCall = "cancelTurn" | "resolveInteraction" | "terminate";
 
 type BreakKind = "foreign event identity" | "sequence gap";
 const BREAKS: readonly { kind: BreakKind; error: RegExp }[] = [
@@ -1019,6 +1041,170 @@ test(
           await settle(host.close()).catch(() => undefined);
         }
       });
+    });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Commands in flight across a force-close, and commands after close
+// ---------------------------------------------------------------------------
+
+/** The typed refusal of a closed host (name + code, so the repro loads before the class exists). */
+function assertHostClosed(result: Settled<unknown>, label: string): void {
+  const error = rejection(result, label) as Error & { code?: unknown };
+  assert.equal(error.name, "SessionHostClosedError", `${label}: ${String(error)}`);
+  assert.equal(error.code, "host-closed");
+  assert.match(error.message, /session host closed/);
+}
+
+const IN_FLIGHT: readonly {
+  call: HeldCall;
+  command: (epoch: string) => AgentCommand;
+}[] = [
+  {
+    call: "cancelTurn",
+    command: (runtimeEpoch) => ({
+      type: "cancelTurn",
+      commandId: "cancel-1",
+      hostSessionId: "host-a",
+      runtimeEpoch,
+      turnId: "turn-1",
+    }),
+  },
+  {
+    call: "resolveInteraction",
+    command: (runtimeEpoch) => ({
+      type: "resolveInteraction",
+      commandId: "resolve-1",
+      hostSessionId: "host-a",
+      runtimeEpoch,
+      turnId: "turn-1",
+      interactionId: "approval-1",
+      decision: "deny",
+    }),
+  },
+  {
+    call: "terminate",
+    command: () => ({
+      type: "terminateSession",
+      commandId: "terminate-1",
+      hostSessionId: "host-a",
+    }),
+  },
+];
+
+for (const { call, command } of IN_FLIGHT) {
+  test(
+    `broken stream: a ${call} still inside the adapter when close() force-closes rejects typed and writes no journal or sidecar`,
+    {
+      timeout: TEST_TIMEOUT_MS,
+      todo: "repro: the late completion hits the closed command journal as an untyped 'journal closed'",
+    },
+    async () => {
+      await withRoot("zcode-close-inflight-", async (root, worktree) => {
+        await collectingUnhandledRejections(async (unhandled) => {
+          const harness = new OpenTurnHarness();
+          const { host, spec } = await hostWithOpenTurn(root, worktree, harness);
+          try {
+            harness.emit("host-a", {
+              kind: "interaction.requested",
+              turnId: "turn-1",
+              interactionId: "approval-1",
+              toolCallId: "tool-1",
+              summary: "approve",
+            });
+            await within(host.whenEventsSettled(), "interaction.requested to settle");
+            const hold = harness.holdNext(call);
+            const inFlight = settle(
+              host.dispatch(command(host.binding.runtimeEpoch)),
+              SETTLE_MS * 3,
+            );
+            await within(hold.reached, `${call} to reach the adapter`);
+            const cause = await breakAndCapture(host, harness, "sequence gap", /sequence gap/);
+            assertTypedCloseError(await settle(host.close()), cause);
+            const atClose = writeFingerprint(root);
+
+            // The adapter call returns after the journals closed.
+            hold.release();
+            assertHostClosed(await inFlight, `${call} completing after force-close`);
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            const journalsAndSidecar = (files: Record<string, string>) =>
+              Object.fromEntries(
+                Object.entries(files).filter(([name]) => !name.endsWith(".session.json")),
+              );
+            assert.deepEqual(
+              journalsAndSidecar(writeFingerprint(root)),
+              journalsAndSidecar(atClose),
+              "no journal or sidecar write after close()",
+            );
+            assert.deepEqual(unhandled, [], "no unhandled rejection");
+            assertHostClosed(
+              await settle(host.dispatch(send("host-a", "2"))),
+              "dispatch after the in-flight command",
+            );
+            // Its completion was never recorded: durable accepted, i.e. execution-unknown.
+            const commandId = command(host.binding.runtimeEpoch).commandId;
+            assert.equal(
+              (await SessionHost.queryCommandHistory(root, spec, commandId))?.status,
+              "execution-unknown",
+            );
+          } finally {
+            harness.releaseAll();
+            await settle(host.close()).catch(() => undefined);
+          }
+        });
+      });
+    },
+  );
+}
+
+test(
+  "a dispatch that starts after close() (healthy or force-closed) rejects with the typed host-closed error",
+  {
+    timeout: TEST_TIMEOUT_MS,
+    todo: "repro: dispatch() after close() throws a bare Error('session host closed')",
+  },
+  async () => {
+    await withRoot("zcode-close-dispatch-after-", async (root, worktree) => {
+      const harness = new OpenTurnHarness();
+      const healthy = await idleHost(root, worktree, harness);
+      await within(healthy.host.close(), "healthy close");
+      assertHostClosed(
+        await settle(healthy.host.dispatch(send("host-a", "1"))),
+        "send after a healthy close",
+      );
+      const reopened = await within(
+        SessionHost.open({
+          root,
+          spec: healthy.spec,
+          target: target(),
+          catalog,
+          registry: registryWith(harness),
+        }),
+        "reopen",
+      );
+      try {
+        const cause = await breakAndCapture(
+          reopened,
+          harness,
+          "foreign event identity",
+          /foreign event identity/,
+        );
+        assertTypedCloseError(await settle(reopened.close()), cause);
+        assertHostClosed(
+          await settle(
+            reopened.dispatch({
+              type: "terminateSession",
+              commandId: "terminate-after",
+              hostSessionId: "host-a",
+            }),
+          ),
+          "terminate after a force-close",
+        );
+        assert.deepEqual(harness.calls.terminate, [], "a closed host never reaches the adapter");
+      } finally {
+        await settle(reopened.close()).catch(() => undefined);
+      }
     });
   },
 );
