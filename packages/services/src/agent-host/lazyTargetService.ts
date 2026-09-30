@@ -55,7 +55,7 @@ export function createLazyTargetAgentHostService(input: {
   service: IAgentHostService;
   /**
    * 这个目标 Core 上的唯一共享 Gateway。
-   * 只注入 Codex；Claude 继续自建。dispose 是唯一关闭者。
+   * 注入 Codex 与 Claude（二者都不拥有它）。dispose 是唯一关闭者。
    * SSH 隧道断开不会调用它。
    */
   targetModelGateway: TargetModelGateway;
@@ -64,7 +64,7 @@ export function createLazyTargetAgentHostService(input: {
   let target: AgentHostTargetService | undefined;
   let flight: Promise<AgentHostTargetService> | undefined;
   // 一份 owner 覆盖整个目标服务，包括尚未 warm 的阶段。
-  // Codex 使用它；Claude 不接收，避免本 PR 改 Claude 适配器。
+  // Codex 与 Claude 共用它；Pi / Devin 不经过 Gateway。
   const targetModelGateway = new TargetModelGateway();
   let targetDispose: (() => void) | undefined;
   let disposed = false;
@@ -151,6 +151,7 @@ export function createLazyTargetAgentHostService(input: {
             root: workerRoot,
             registry: input.registry,
             adapter: modelAdapter,
+            targetModelGateway,
           }),
         );
         register(

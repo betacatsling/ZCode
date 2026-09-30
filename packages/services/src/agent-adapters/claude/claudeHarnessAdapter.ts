@@ -136,6 +136,11 @@ export class ClaudeHarnessAdapter implements HarnessAdapter {
     );
   }
 
+  /** The Gateway owner this adapter grants on: the Host's shared one when injected. */
+  boundTargetGateway(): TargetModelGateway {
+    return this.#targetGateway;
+  }
+
   async probe(target: ExecutionTarget) {
     return probeClaudeTarget(target, this.#executablePath);
   }
