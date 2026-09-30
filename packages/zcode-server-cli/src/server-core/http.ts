@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { hostname } from "node:os";
 import { serve } from "@hono/node-server";
 import { createNodeWebSocket } from "@hono/node-ws";
-import { Hono } from "hono";
+import { Hono, type MiddlewareHandler } from "hono";
 import type { WebSocket } from "ws";
 import type { WebSocketServer } from "ws";
 import {
@@ -41,6 +40,7 @@ import {
   HOST_BOOTSTRAP_TOKEN_PATTERN,
   HOST_CAPABILITY_PATH,
   verifyHostBootstrapRequest,
+  verifyLocalEndpointHeaders,
 } from "./hostBootstrapAuth.js";
 
 interface CoreHttpServer {
@@ -164,12 +164,12 @@ export async function createCoreHttpServer(
     throw new Error("Host bootstrap token must be 32 random bytes encoded as base64url");
   }
   const info: ServerRemoteInfo = {
-    serverId: options.serverId ?? hostname() ?? "zcode-server",
+    // 未注入安装级 identity（嵌入/单测）时用常量，不对未鉴权端点公开 os.hostname()。
+    serverId: options.serverId ?? "zcode-server",
     version: ZCODE_VERSION,
     protocolVersion: SERVER_REMOTE_PROTOCOL_VERSION,
     // Host ticket 签发需要私有 bootstrap 凭据（见 docs/agent-host/HOST-CAPABILITY-BOOTSTRAP-AUTH.md）。
     authRequired: true,
-    workspaces: [],
     capabilities: {
       desktopContinuous: true,
       websocketRpc: true,
@@ -194,6 +194,19 @@ export async function createCoreHttpServer(
     ...hostRequestHeaderRules,
   });
   hostUpgradeGate.attach(wss);
+  // /ws 与 server-info 无 token：Core 的真实调用方都是 Node（不发 Origin），Core 也不托管网页，
+  // 因此任何 Origin → 403、非回环 Host → 403（anti DNS rebinding）。
+  const localEndpointHeaderPolicy = { requireLoopbackHost: true, origin: "no-browser" } as const;
+  const guardLocalEndpoint: MiddlewareHandler = async (context, next) => {
+    const rejection = verifyLocalEndpointHeaders(
+      { origin: context.req.header("origin"), host: context.req.header("host") },
+      localEndpointHeaderPolicy,
+    );
+    if (rejection) return context.json({ error: rejection.error }, rejection.status);
+    await next();
+  };
+  app.use("/ws", guardLocalEndpoint);
+  app.use("/api/server-info", guardLocalEndpoint);
   app.get("/api/server-info", (context) => context.json(info));
   app.get(
     "/ws",

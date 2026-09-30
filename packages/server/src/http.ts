@@ -2,8 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { basename, extname, relative, resolve, sep } from "node:path";
-import { hostname } from "node:os";
-import { Hono, type Context } from "hono";
+import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { serve } from "@hono/node-server";
 import { createNodeWebSocket } from "@hono/node-ws";
 import type { WebSocket } from "ws";
@@ -53,6 +52,7 @@ import {
   HOST_CAPABILITY_PATH,
   presentedHostBootstrapCredential,
   verifyHostBootstrapRequest,
+  verifyLocalEndpointHeaders,
 } from "./hostBootstrapAuth.js";
 
 function wrapWebSocket(ws: WebSocket): ISocket {
@@ -150,7 +150,9 @@ function generateId(): string {
 }
 
 interface HttpServerOptions {
+  /** Accepted for compatibility; no longer published by /api/server-info. */
   serverId?: string;
+  /** Accepted for compatibility; no longer published by /api/server-info. */
   name?: string;
   host?: string;
   authToken?: string;
@@ -171,12 +173,6 @@ function readTrimmedEnv(name: string): string | undefined {
   return value ? value : undefined;
 }
 
-function resolveServerId(options: HttpServerOptions): string {
-  return (
-    options.serverId?.trim() || readTrimmedEnv("ZCODE_SERVER_ID") || hostname() || "zcode-server"
-  );
-}
-
 function resolveServerWorkspaces(options: HttpServerOptions): ServerRemoteWorkspaceInfo[] {
   if (options.workspaces) {
     return options.workspaces;
@@ -190,18 +186,20 @@ function resolveServerWorkspaces(options: HttpServerOptions): ServerRemoteWorksp
   ];
 }
 
+// `/api/server-info` 未鉴权：只返回真实调用方读取的字段。Web UI（packages/web/src/main.tsx）
+// 与分发冒烟只读 workspaces[0].path / workspaceIdentity；serverId（默认 os.hostname()）、
+// name 与 label 无人读取，不再公开。
 function createServerInfo(options: HttpServerOptions): ServerRemoteInfo {
   return {
-    serverId: resolveServerId(options),
-    ...(options.name?.trim() || readTrimmedEnv("ZCODE_SERVER_NAME")
-      ? { name: options.name?.trim() || readTrimmedEnv("ZCODE_SERVER_NAME") }
-      : {}),
     version: ZCODE_VERSION,
     protocolVersion: SERVER_REMOTE_PROTOCOL_VERSION,
     // Host ticket 签发始终需要带外 bootstrap 凭据（未配置时直接 401），因此如实报告 true；
     // 仅在配置 authToken 时 /ws 与其他 /api 才受 token middleware 保护。
     authRequired: true,
-    workspaces: resolveServerWorkspaces(options),
+    workspaces: resolveServerWorkspaces(options).map(({ path, workspaceIdentity }) => ({
+      path,
+      ...(workspaceIdentity ? { workspaceIdentity } : {}),
+    })),
     capabilities: {
       desktopContinuous: true,
       websocketRpc: true,
@@ -357,6 +355,18 @@ export function createHttpServer(
     ...hostRequestHeaderRules,
   });
   hostUpgradeGate.attach(wss);
+  // /ws、/ws/remote/* 与 server-info：唯一的浏览器客户端是本 server 托管的 Web UI（同源），
+  // Node 客户端不发 Origin；跨站 Origin → 403，监听回环时非回环 Host → 403（与签发端点同一 Host 规则）。
+  const localEndpointHeaderPolicy = { ...hostRequestHeaderRules, origin: "same-origin" } as const;
+  const guardLocalEndpoint: MiddlewareHandler = async (c, next) => {
+    const rejection = verifyLocalEndpointHeaders(
+      { origin: c.req.header("origin"), host: c.req.header("host") },
+      localEndpointHeaderPolicy,
+    );
+    if (rejection) return c.json({ error: rejection.error }, rejection.status);
+    await next();
+  };
+  for (const path of ["/ws", "/ws/remote/*", "/api/server-info"]) app.use(path, guardLocalEndpoint);
   if (authToken) {
     app.use("*", async (c, next) => {
       const pathname = new URL(c.req.url).pathname;
