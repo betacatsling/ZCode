@@ -24,6 +24,7 @@
     }
   },
   "scripts": {
+    "prebuild": "node ../../../../scripts/ensure-cli-deps.mjs @zcode/core^...",
     "build": "tsc",
     "clean": "node ../../scripts/clean-dist.mjs",
     "typecheck": "tsc --noEmit",
