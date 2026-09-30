@@ -35,6 +35,8 @@ export function projectHostConversation(input: {
   const messages = new Map<string, ConversationRow>();
   const tools = new Map<string, ToolCallRow>();
   const interactions = new Map<string, PendingInteraction>();
+  /** Tool rows created by an approval request that arrived before its tool.started. */
+  const seededByApproval = new Set<string>();
   let activeTurn: string | undefined;
   let phase: ConversationSnapshot["control"]["phase"] = "draft";
   let errorCode: string | undefined;
@@ -135,6 +137,17 @@ export function projectHostConversation(input: {
           external.adoptFileSeed(event, tools);
           break;
         }
+        const seeded = seededByApproval.has(event.toolCallId)
+          ? tools.get(event.toolCallId)
+          : undefined;
+        if (seeded) {
+          // 审批先到时已建好占位行：只补工具名和参数，保留审批结果（等待/放行/拒绝）。
+          if (seeded.turnId !== event.turnId) throw new Error("duplicate tool or wrong turn");
+          seededByApproval.delete(event.toolCallId);
+          seeded.toolName = event.name;
+          if (event.inputText !== undefined) seeded.inputText = event.inputText;
+          break;
+        }
         if (tools.has(event.toolCallId)) throw new Error("duplicate tool or wrong turn");
         const row: ToolCallRow = {
           ...base(event),
@@ -150,14 +163,26 @@ export function projectHostConversation(input: {
         break;
       }
       case "interaction.requested": {
-        const row = tools.get(event.toolCallId);
-        if (
-          event.turnId !== activeTurn ||
-          !row ||
-          row.turnId !== event.turnId ||
-          interactions.has(event.interactionId)
-        )
+        if (event.turnId !== activeTurn || interactions.has(event.interactionId))
           throw new Error("unmatched approval request");
+        let row = tools.get(event.toolCallId);
+        if (!row) {
+          // ACP session/request_permission 等可以先于 tool.started 到达；Host 已把它记进 journal。
+          // 这里建占位工具行承载审批，而不是让之后每次 snapshot 都抛错、审批永远不可见。
+          row = {
+            ...base(event),
+            kind: "toolCall",
+            toolCallId: event.toolCallId,
+            toolName: "unknown",
+            inputText: "",
+            status: "pendingApproval",
+            startedAt: event.at,
+          };
+          rows.push(row);
+          tools.set(event.toolCallId, row);
+          seededByApproval.add(event.toolCallId);
+        }
+        if (row.turnId !== event.turnId) throw new Error("unmatched approval request");
         row.status = "pendingApproval";
         row.approvalInteractionId = event.interactionId;
         interactions.set(event.interactionId, {
