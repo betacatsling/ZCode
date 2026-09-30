@@ -27,6 +27,10 @@ export interface ModelCatalogSnapshotPort {
   ): Promise<import("@zcode/contracts").Model> | import("@zcode/contracts").Model;
   isCurrent?(): boolean;
   credentialSource?(selection: ModelSelection): "provider-api-key" | "provider-account" | undefined;
+  /** Key-free refusal while the Provider's current credential was rejected (401) earlier. */
+  credentialAttention?(
+    selection: ModelSelection,
+  ): import("./providerCredentialAttention.js").ProviderCredentialAttentionNotice | undefined;
   /** Opaque id only. Callers must not pass a key, token, or provider URL. */
   credentialRef?(selection: ModelSelection): string | undefined;
 }

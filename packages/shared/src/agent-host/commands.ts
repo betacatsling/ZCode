@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { agentModelFailureSchema } from "./events.js";
 
 const commandBase = {
   commandId: z.string().trim().min(1).max(256),
@@ -49,6 +50,7 @@ export const agentErrorCodeSchema = z.enum([
   "stale-interaction",
   "execution-unknown",
   "backend-failure",
+  "provider-reconfigure-required",
 ]);
 export type AgentErrorCode = z.infer<typeof agentErrorCodeSchema>;
 export const agentCommandReceiptSchema = z.strictObject({
@@ -56,5 +58,7 @@ export const agentCommandReceiptSchema = z.strictObject({
   status: z.enum(["accepted", "completed", "duplicate", "rejected", "execution-unknown"]),
   reasonCode: agentErrorCodeSchema.optional(),
   message: z.string().max(1024).optional(),
+  /** Key-free typed cause for provider-reconfigure-required refusals. */
+  failure: agentModelFailureSchema.optional(),
 });
 export type AgentCommandReceipt = z.infer<typeof agentCommandReceiptSchema>;

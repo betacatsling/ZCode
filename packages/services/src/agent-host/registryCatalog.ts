@@ -2,17 +2,29 @@ import { ProviderRegistry, type ProviderRegistryService } from "@zcode/provider"
 import type { AiSdkModelAdapter } from "@zcode/adapters/model";
 import { bindHostModel } from "./modelBinding.js";
 import type { ModelCatalogPort, ModelCatalogSnapshotPort } from "./modelBindingPlanner.js";
+import {
+  ProviderCredentialAttention,
+  providerCredentialFingerprint,
+} from "./providerCredentialAttention.js";
 
 /** Each capture pins validation and Model creation to the same registry revisions. */
 export function createRegistryModelCatalog(
   registry: ProviderRegistryService,
   adapter?: AiSdkModelAdapter,
 ): ModelCatalogPort {
+  // One "credential needs attention" state per catalog, shared by every session of this Host.
+  const attention = new ProviderCredentialAttention();
   const capture = (): ModelCatalogSnapshotPort => {
     const snapshot = registry.getSnapshot();
     if (!snapshot) throw new Error("Provider Registry not started");
     const frozen = new ProviderRegistry(snapshot.registry.providers);
     const fingerprint = JSON.stringify(snapshot.sourceRevisions);
+    const credentialOf = (providerId: string) => {
+      const provider = frozen.getProvider(providerId);
+      return provider
+        ? providerCredentialFingerprint(provider.config, snapshot.sourceRevisions.account)
+        : undefined;
+    };
     const pinnedRegistry = {
       getSnapshot: () => snapshot,
       validateSelection: (selection: Parameters<typeof frozen.validateSelection>[0]) =>
@@ -33,17 +45,26 @@ export function createRegistryModelCatalog(
       ...(adapter
         ? {
             bindModel(plan) {
-              return bindHostModel({
+              const model = bindHostModel({
                 plan,
                 registry: pinnedRegistry,
                 adapter,
               });
+              const credential = credentialOf(model.providerId);
+              return credential ? attention.observe(model, credential) : model;
             },
           }
         : {}),
       isCurrent() {
         const current = registry.getSnapshot();
         return current !== null && JSON.stringify(current.sourceRevisions) === fingerprint;
+      },
+      credentialAttention(selection) {
+        return attention.check(
+          selection.providerId,
+          selection.modelId,
+          credentialOf(selection.providerId),
+        );
       },
       credentialSource(selection) {
         const access = frozen.getProvider(selection.providerId)?.config.access;
