@@ -21,7 +21,11 @@ import {
   ProviderConfig,
 } from "@zcode/provider";
 import { createNodeProviderRegistryRuntime } from "@zcode/provider-node";
-import type { AgentEvent, SessionSpec } from "@zcode/shared/agent-host";
+import {
+  agentCommandReceiptSchema,
+  type AgentEvent,
+  type SessionSpec,
+} from "@zcode/shared/agent-host";
 import { createRegistryPiHarness } from "../src/agent-adapters/pi/createPiHarness.js";
 import { createAgentHostConversationBridge } from "../src/agent-host/conversationBridge.js";
 import { HarnessRegistry } from "../src/agent-host/harnessRegistry.js";
@@ -528,3 +532,143 @@ test(
     }
   },
 );
+
+test(
+  "credential needs attention after 401: next turns on that Provider are refused before any request; others unaffected; reconfigure clears",
+  { timeout: 60_000 },
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "zcode-stale-provider-attention-"));
+    const fakes = await startFakes();
+    const env = await createHostEnvironment(root, fakes.origin);
+    const target = env.makeTarget();
+    try {
+      const spec = env.specFor("attention-session", {
+        providerId: env.staleId,
+        modelId: "stale-model",
+      });
+      const sibling = env.specFor("attention-sibling-session", {
+        providerId: env.staleId,
+        modelId: "stale-model",
+      });
+      const other = env.specFor("attention-other-session", {
+        providerId: env.otherId,
+        modelId: "other-model",
+      });
+      for (const created of [spec, sibling, other]) await target.create(created);
+      assert.equal((await send(target, spec, "turn-1", "remember me")).status, "accepted");
+      await target.waitForIdle(spec);
+      assert.deepEqual(assistantTexts(await target.eventsSince(spec, 0), "turn-1"), [
+        "answer-from-stale",
+      ]);
+
+      // The stored key expires: exactly one turn reaches the Provider and fails with 401.
+      fakes.expiredKeys.add("stale-key-v1");
+      assert.equal((await send(target, spec, "turn-2", "after expiry")).status, "accepted");
+      await target.waitForIdle(spec);
+      assert.equal(fakes.count("stale"), 2);
+      const statusesAfter401 = env.statuses.length;
+      const modelsAfter401 = env.createdModels.length;
+
+      const expectedFailure = {
+        reason: "auth_failed",
+        action: "reconfigure-provider",
+        providerId: env.staleId,
+        modelId: "stale-model",
+        statusCode: 401,
+        retryable: false,
+      };
+      const assertRefused = async (
+        session: SessionSpec,
+        turn: string,
+        failure: Record<string, unknown>,
+      ) => {
+        const receipt = await send(target, session, turn, "try again");
+        assert.equal(receipt.status, "rejected");
+        assert.equal(receipt.reasonCode, "provider-reconfigure-required");
+        assert.deepEqual((receipt as Record<string, unknown>).failure, failure);
+        assert.equal(receipt.message?.includes(env.staleId), true);
+        assert.equal(receipt.message?.includes("401"), true);
+        assert.equal(JSON.stringify(receipt).includes("stale-key"), false);
+        assert.equal(JSON.stringify(receipt).includes("127.0.0.1"), false);
+        assert.deepEqual(await target.queryCommand(session, `${turn}-command`), receipt);
+        assert.deepEqual(turnEvents(await target.eventsSince(session, 0), turn), []);
+      };
+
+      // Next turn on the same session: refused at admission, zero extra Provider requests.
+      await assertRefused(spec, "turn-3", expectedFailure);
+      // Per Provider, not per session: a sibling session on the same Provider is refused too.
+      await assertRefused(sibling, "sibling-1", expectedFailure);
+      // Unrelated Registry change on that Provider (a new model) does not clear the state.
+      await env.runtime.configService.addPersonalModel(env.staleId, "stale-model-2", modelConfig());
+      await env.runtime.registryService.refresh("user-added-model");
+      await assertRefused(spec, "turn-4", expectedFailure);
+      assert.equal(fakes.count("stale"), 2);
+      assert.equal(env.statuses.length, statusesAfter401);
+      assert.equal(env.createdModels.length, modelsAfter401);
+
+      // Another Provider is unaffected.
+      assert.equal((await send(target, other, "other-1", "use the other one")).status, "accepted");
+      await target.waitForIdle(other);
+      assert.deepEqual(assistantTexts(await target.eventsSince(other, 0), "other-1"), [
+        "answer-from-other",
+      ]);
+      assert.equal(fakes.count("other"), 1);
+      assert.equal(fakes.count("stale"), 2);
+
+      // Reconfiguring the credential clears the state: the next turn is admitted and reaches it.
+      await env.runtime.configService.savePersonalProviderOverlay(
+        env.staleId,
+        providerConfig(`${fakes.origin}/stale/v1`, "stale-key-v2"),
+      );
+      await env.runtime.registryService.refresh("user-rotated-key");
+      assert.equal((await send(target, spec, "turn-5", "with new key")).status, "accepted");
+      await target.waitForIdle(spec);
+      assert.deepEqual(assistantTexts(await target.eventsSince(spec, 0), "turn-5"), [
+        "answer-from-stale",
+      ]);
+      assert.equal((await send(target, sibling, "sibling-2", "sibling again")).status, "accepted");
+      await target.waitForIdle(sibling);
+      assert.deepEqual(assistantTexts(await target.eventsSince(sibling, 0), "sibling-2"), [
+        "answer-from-stale",
+      ]);
+      assert.deepEqual(
+        fakes.requests.filter((request) => request.route === "stale"),
+        [
+          { route: "stale", authorization: "Bearer stale-key-v1" },
+          { route: "stale", authorization: "Bearer stale-key-v1" },
+          { route: "stale", authorization: "Bearer stale-key-v2" },
+          { route: "stale", authorization: "Bearer stale-key-v2" },
+        ],
+      );
+      assert.equal(fakes.count("other"), 1);
+    } finally {
+      await target.close().catch(() => undefined);
+      env.runtime.dispose();
+      await fakes.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test("send receipt accepts an optional key-free reconfigure failure and stays strict", () => {
+  const failure = {
+    reason: "auth_failed",
+    action: "reconfigure-provider",
+    providerId: "p",
+    modelId: "m",
+    statusCode: 401,
+    retryable: false,
+  };
+  const receipt = {
+    commandId: "c",
+    status: "rejected",
+    reasonCode: "provider-reconfigure-required",
+    message: "Provider p needs attention",
+    failure,
+  };
+  assert.deepEqual(agentCommandReceiptSchema.parse(receipt), receipt);
+  assert.throws(() =>
+    agentCommandReceiptSchema.parse({ ...receipt, failure: { ...failure, apiKey: "k" } }),
+  );
+  assert.throws(() => agentCommandReceiptSchema.parse({ ...receipt, providerKey: "k" }));
+});
