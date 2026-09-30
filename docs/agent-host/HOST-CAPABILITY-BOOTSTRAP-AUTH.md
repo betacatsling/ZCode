@@ -631,6 +631,18 @@ first post-M2 update, was not taken. Code:
 - **Token auth for `POST /api/connect-remote`.** The header and JSON rules stop
   browsers, but, as for `/ws`, any local process can still call it when
   `authToken` is not configured.
+- **Known limitation: the window between our upgrade checks and `ws`.**
+  Consuming the ticket in `admit` (approved) is where it stays. After our
+  middleware (`verifyWebSocketUpgrade`, then the ticket consume on
+  `/ws/host`) has passed a request, only microtasks run before `ws` makes its
+  own checks and writes 101. If the socket is destroyed by something else in
+  that window, or the server starts closing (503), `ws` refuses the upgrade
+  after the route has registered its `@hono/node-ws` waiter. That waiter still
+  leaks. On `/ws/host`, that client's ticket is also lost, because it was
+  already consumed. On `/ws`, only the retained request is lost. Recovery is
+  on the client: it requests a new ticket and upgrades again. The server keeps
+  no state that would block the retry. See "Ticket consume-on-upgrade" and
+  "Upgrade waiters".
 
 ## Tests
 
