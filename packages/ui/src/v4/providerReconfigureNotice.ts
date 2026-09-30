@@ -39,17 +39,21 @@ export function providerReconfigureReceiptFromAck(
   return { sessionId, commandId: ack.commandId, ...(ack.failure ? { failure: ack.failure } : {}) };
 }
 
-/** Provider/model the hint names: the typed failure's own Provider, else the session config. */
+/**
+ * Provider/model the hint names: the typed failure's own Provider, else the session config.
+ * Null when neither names one (untyped error on a session without a host-managed Provider).
+ */
 function noticeTarget(
   failure: AgentModelFailure | undefined,
-  sessionProviderId: string,
+  sessionProviderId: string | undefined,
   sessionModelId: string | undefined,
-): { providerId: string; modelId?: string } {
+): { providerId: string; modelId?: string } | null {
   if (failure?.action === "reconfigure-provider" && failure.providerId.trim())
     return {
       providerId: failure.providerId,
       ...(failure.modelId ? { modelId: failure.modelId } : {}),
     };
+  if (!sessionProviderId) return null;
   return { providerId: sessionProviderId, ...(sessionModelId ? { modelId: sessionModelId } : {}) };
 }
 
@@ -59,8 +63,9 @@ function noticeTarget(
  * - a rejected command receipt for this session;
  * - the projected session.error (`control.lastError`) while the session is still in error.
  * Receipt and session.error name the typed failure's Provider when the host sent one (any
- * status code, e.g. non-retryable 403 too), else the session's host-managed `config.provider`.
- * Harness-managed sessions project an empty provider and never get a hint.
+ * status code, e.g. non-retryable 403 too), even when `config.provider` is empty; otherwise
+ * the session's host-managed `config.provider`. Without a typed failure, sessions that project
+ * an empty provider (harness-managed) get no hint.
  */
 export function resolveProviderReconfigureNotice(input: {
   sessionId: string | null;
@@ -80,23 +85,27 @@ export function resolveProviderReconfigureNotice(input: {
       key: `capability:${attention.providerId}:${attention.modelId ?? ""}`,
     };
   }
+  if (!input.sessionId) return null;
   const sessionProviderId = input.sessionProviderId?.trim();
-  if (!input.sessionId || !sessionProviderId) return null;
   const sessionModelId = input.sessionModelId?.trim();
   if (input.receipt && input.receipt.sessionId === input.sessionId) {
-    return {
-      source: "command-receipt",
-      ...noticeTarget(input.receipt.failure, sessionProviderId, sessionModelId),
-      key: `command-receipt:${input.sessionId}:${input.receipt.commandId}`,
-    };
+    const target = noticeTarget(input.receipt.failure, sessionProviderId, sessionModelId);
+    if (target)
+      return {
+        source: "command-receipt",
+        ...target,
+        key: `command-receipt:${input.sessionId}:${input.receipt.commandId}`,
+      };
   }
   // lastError stays in the projection after later turns; only an error phase is current.
   if (input.lastError?.code === PROVIDER_RECONFIGURE_REQUIRED && input.phase === "error") {
-    return {
-      source: "session-error",
-      ...noticeTarget(input.lastError.failure, sessionProviderId, sessionModelId),
-      key: `session-error:${input.sessionId}:${input.lastError.at ?? 0}`,
-    };
+    const target = noticeTarget(input.lastError.failure, sessionProviderId, sessionModelId);
+    if (target)
+      return {
+        source: "session-error",
+        ...target,
+        key: `session-error:${input.sessionId}:${input.lastError.at ?? 0}`,
+      };
   }
   return null;
 }
