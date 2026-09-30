@@ -7,6 +7,7 @@ import type { Model, ModelRequest } from "@zcode/contracts";
 import type { ProviderRegistryService } from "@zcode/provider";
 import type { BindingPlan, ExecutionTarget } from "@zcode/shared/agent-host";
 import { TargetModelGateway, describeGatewayCompatibility } from "@zcode/services/model-gateway";
+import { ClaudeHarnessAdapter } from "../src/agent-adapters/claude/claudeHarnessAdapter.js";
 import { CodexHarnessAdapter } from "../src/agent-adapters/codex/codexHarnessAdapter.js";
 import {
   CodexTargetGateway,
@@ -208,7 +209,7 @@ test("shared Gateway serves FakeModel on loopback for an ssh target and survives
   await assert.rejects(post(), /fetch failed|ECONNREFUSED|connect/);
 });
 
-test("lazy SSH target injects one shared Gateway into Codex and leaves Claude on its own owner", async () => {
+test("lazy SSH target injects one shared Gateway into Codex and Claude", async () => {
   const root = await mkdtemp(join(tmpdir(), "zcode-ssh-gateway-lazy-"));
   const closes = new Map<object, number>();
   const original = TargetModelGateway.prototype.close;
@@ -217,7 +218,7 @@ test("lazy SSH target injects one shared Gateway into Codex and leaves Claude on
     return original.call(this);
   };
   const codexGateways: object[] = [];
-  let claudeRegistered = false;
+  const claudeGateways: object[] = [];
   try {
     const host = createLazyTargetAgentHostService({
       root,
@@ -225,7 +226,8 @@ test("lazy SSH target injects one shared Gateway into Codex and leaves Claude on
       registry: fakeRegistry(),
       allowNewSessions: () => true,
       observeRegisteredHarness(harness) {
-        if (harness.id === "claude-code") claudeRegistered = true;
+        if (harness instanceof ClaudeHarnessAdapter)
+          claudeGateways.push(harness.boundTargetGateway());
         if (harness instanceof CodexHarnessAdapter)
           codexGateways.push(harness.boundTargetGateway());
       },
@@ -235,11 +237,11 @@ test("lazy SSH target injects one shared Gateway into Codex and leaves Claude on
       modelBinding: { kind: "harness-managed" },
     });
     assert.equal(capability.targetId, sshTarget.id);
-    assert.equal(claudeRegistered, true);
+    assert.deepEqual(claudeGateways, [host.targetModelGateway]);
     assert.deepEqual(codexGateways, [host.targetModelGateway]);
     await host.dispose();
-    // Claude 关闭自己的实例一次。Codex 不关闭注入的 owner。dispose 关闭共享 owner 一次。
-    assert.equal(closes.size, 2);
+    // Codex 与 Claude 都不关闭注入的 owner；dispose 关闭共享 owner 一次，没有别的 owner。
+    assert.equal(closes.size, 1);
     assert.equal(closes.get(host.targetModelGateway), 1);
   } finally {
     TargetModelGateway.prototype.close = original;
