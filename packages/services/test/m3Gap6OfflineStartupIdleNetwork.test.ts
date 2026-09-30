@@ -7,13 +7,17 @@
  * that contains leftover product-login credentials and account settings. Nothing here is mocked
  * inside services; the guard only replaces the network.
  *
- * Observed current behaviour (documented, not hidden): the service layer makes exactly one kind
- * of non-loopback request at startup and while idle, the anonymous ZCode Built-in provider
- * config check `GET https://zcode.z.ai/api/v1/client/configs?app_version&platform`
- * (provider-node `downloadZCodeBuiltinRelease`, `credentials: "omit"`, no Authorization/Cookie).
- * Offline it fails and backs off exponentially (60 s base, 1 h cap) on a 60 s check interval.
- * It is not an auth/renewal/account/plan request, but it is product-host traffic; the tests pin
- * it exactly so any new product request (or a change in this one) fails loudly.
+ * The only non-loopback request the service layer may make at startup or while idle is the
+ * anonymous ZCode Built-in provider config check
+ * `GET https://zcode.z.ai/api/v1/client/configs?app_version&platform` (provider-node
+ * `downloadZCodeBuiltinRelease`, `credentials: "omit"`, no Authorization/Cookie). It is not an
+ * auth/renewal/account/plan request, but it is product-host traffic, so it only runs while the
+ * ZCode Built-in layer is in use: at least one enabled personal Provider bound to a ZCode
+ * Built-in template (`isZCodeBuiltinInUse`). Not in use (a fresh install, only custom
+ * providers): zero requests at startup and while idle. In use: offline it fails and backs off
+ * exponentially (60 s base, 1 h cap) on a 60 s check interval. Adding/removing such a Provider
+ * at runtime starts/stops the background check. The tests pin this exactly so any new product
+ * request (or a change in this one) fails loudly.
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -83,6 +87,7 @@ const {
   IAgentHostService,
   IModelSelectionService,
   IProjectCatalogService,
+  IProviderSettingsService,
   IWorktreeService,
   IZCodeTaskService,
 } = await import("../src/index.js");
@@ -117,6 +122,8 @@ const LEGACY_SETTINGS = {
   providerFamilyDomainUpdatedAt: 1_700_000_000_000,
 };
 const HISTORY_TEXT = "retained offline history after product logout";
+/** A ZCode Built-in template (config/provider/zcode-builtin.json `templateRules`). */
+const BUILTIN_TEMPLATE_ID = "zai-api";
 
 after(async () => {
   console.warn = originalWarn;
@@ -429,8 +436,8 @@ test("offline fresh start and restart open the workspace, project and history wi
 
   const observed = guard.since(bootMark);
   assertOnlyAnonymousBuiltinConfigChecks(observed);
-  // One anonymous config check at the first boot; the restart is inside the failure back-off.
-  assert.equal(observed.length, 1, JSON.stringify(observed));
+  // No Provider uses the ZCode Built-in layer, so neither boot contacts the product host at all.
+  assert.deepEqual(observed, [], JSON.stringify(observed));
   // Legacy login material is left on disk untouched (not read into requests, not erased).
   assert.equal(await readFile(credentialsPath, "utf8"), credentialsBytes);
 });
@@ -439,11 +446,54 @@ test("offline fresh start and restart open the workspace, project and history wi
 // §7 row 11: idle window. node:test mock timers drive the 60 s check interval, every setTimeout
 // (including the off-peak sync back-off) and Date for a virtual 2 hours.
 // ---------------------------------------------------------------------------
-test("idle for a virtual 2 hours: no product auth/renewal/account request, only the backed-off anonymous config check", async (t) => {
-  // Start the idle window from a clean back-off state so the schedule is deterministic.
+async function resetBuiltinRefreshBackoff(): Promise<void> {
+  // Start from a clean back-off state so the schedule is deterministic.
   for (const control of await findFiles(getAppConfigDir(), "zcode-builtin-refresh.json")) {
     await rm(control);
   }
+}
+
+async function tickFor(totalMs: number, stepMs = 10_000): Promise<void> {
+  for (let elapsed = 0; elapsed < totalMs; elapsed += stepMs) {
+    mock.timers.tick(stepMs);
+    await settle(40);
+  }
+}
+
+/** Resolve a services call while mock timers are on (it may wait on debounce/poll timers). */
+async function whileTicking<T>(promise: Promise<T>): Promise<T> {
+  let done = false;
+  const tracked = promise.finally(() => {
+    done = true;
+  });
+  for (let i = 0; i < 400 && !done; i += 1) {
+    mock.timers.tick(100);
+    await realSleep(5);
+  }
+  return tracked;
+}
+
+function assertBackoffSchedule(
+  observed: readonly OutboundAttempt[],
+  t0: number,
+  diagnostic: (message: string) => void,
+): void {
+  assertOnlyAnonymousBuiltinConfigChecks(observed);
+  const offsetsSeconds = observed.map((attempt) => Math.round((attempt.at - t0) / 1_000));
+  diagnostic(`anonymous config checks at virtual seconds: ${offsetsSeconds.join(", ")}`);
+  // Exact phases depend on when the 60 s interval is armed; the contract is back-off, not polling:
+  // one check right away, then gaps that never shrink, at least 60 s and at most the 1 h cap.
+  assert.ok(offsetsSeconds[0]! < 60, "one check right away");
+  const gaps = offsetsSeconds.slice(1).map((offset, index) => offset - offsetsSeconds[index]!);
+  for (const [index, gap] of gaps.entries()) {
+    assert.ok(gap >= 60, `gap ${gap}s >= 60s`);
+    assert.ok(gap <= 3_600 + 120, `gap ${gap}s within the 1 h cap`);
+    if (index > 0) assert.ok(gap >= gaps[index - 1]!, `gaps never shrink: ${gaps.join(",")}`);
+  }
+}
+
+test("idle for a virtual 2 hours without a ZCode Built-in Provider: zero outbound requests; the off-peak failure warns once", async (t) => {
+  await resetBuiltinRefreshBackoff();
   const t0 = Date.now();
   mock.timers.enable({ apis: ["setInterval", "setTimeout", "Date"], now: t0 });
   const mark = guard.mark();
@@ -451,31 +501,81 @@ test("idle for a virtual 2 hours: no product auth/renewal/account request, only 
   const services = startServices();
   try {
     await settle();
-    const stepMs = 10_000;
-    for (let elapsed = 0; elapsed < 2 * 60 * 60 * 1_000; elapsed += stepMs) {
-      mock.timers.tick(stepMs);
-      await settle(40);
-    }
+    await tickFor(2 * 60 * 60 * 1_000);
     const observed = guard.since(mark);
-    assertOnlyAnonymousBuiltinConfigChecks(observed);
-    const offsetsSeconds = observed.map((attempt) => Math.round((attempt.at - t0) / 1_000));
-    t.diagnostic(`anonymous config checks at virtual seconds: ${offsetsSeconds.join(", ")}`);
-    // Exact phases depend on when the 60 s interval is armed; the contract is back-off, not polling:
-    // one check at startup, then gaps that never shrink, at least 60 s and at most the 1 h cap.
-    assert.ok(offsetsSeconds[0]! < 60, "one check at startup");
-    const gaps = offsetsSeconds.slice(1).map((offset, index) => offset - offsetsSeconds[index]!);
-    for (const [index, gap] of gaps.entries()) {
-      assert.ok(gap >= 60, `gap ${gap}s >= 60s`);
-      assert.ok(gap <= 3_600 + 120, `gap ${gap}s within the 1 h cap`);
-      if (index > 0) assert.ok(gap >= gaps[index - 1]!, `gaps never shrink: ${gaps.join(",")}`);
-    }
-    assert.ok(observed.length >= 4 && observed.length <= 8, `${observed.length} checks in 2 h`);
-    // The off-peak legacy ticket keeps retrying on its own timer and never reaches the network.
+    assert.deepEqual(observed, [], JSON.stringify(observed));
+    // The legacy off-peak ticket keeps retrying on its own timer without reaching the network;
+    // the failure is a warning once for that task, not once per retry.
     const idleSyncFailures = offPeakSyncFailures().slice(syncFailuresBefore);
-    t.diagnostic(`off-peak sync retries while idle: ${idleSyncFailures.length}`);
-    assert.ok(idleSyncFailures.length >= 2, "off-peak sync back-off timer fired while idle");
+    t.diagnostic(`off-peak sync failure warnings while idle: ${idleSyncFailures.length}`);
+    assert.equal(idleSyncFailures.length, 1, idleSyncFailures.join("\n"));
+    assert.ok(idleSyncFailures[0]!.includes("OffPeakCodingPlanUnavailableError"));
   } finally {
     mock.timers.reset();
     await disposeServiceResourcesAndWait(services);
   }
+});
+
+test("adding a ZCode Built-in template Provider at runtime starts the config check; removing it stops it", async (t) => {
+  await resetBuiltinRefreshBackoff();
+  const t0 = Date.now();
+  mock.timers.enable({ apis: ["setInterval", "setTimeout", "Date"], now: t0 });
+  const mark = guard.mark();
+  const services = startServices();
+  try {
+    await settle();
+    await tickFor(10 * 60 * 1_000);
+    assert.deepEqual(guard.since(mark), [], "nothing before a Built-in Provider exists");
+
+    const settings = services.get(IProviderSettingsService);
+    const enabledAt = Date.now();
+    const enabledMark = guard.mark();
+    const created = await whileTicking(
+      settings.createPersonalProvider({ templateId: BUILTIN_TEMPLATE_ID }),
+    );
+    await settle();
+    await tickFor(30 * 60 * 1_000);
+    const whileEnabled = guard.since(enabledMark);
+    assert.ok(whileEnabled.length >= 2, `checks after enabling: ${whileEnabled.length}`);
+    assertBackoffSchedule(whileEnabled, enabledAt, (message) => t.diagnostic(message));
+
+    await whileTicking(settings.deletePersonalProvider(created.providerId));
+    await settle();
+    const disabledMark = guard.mark();
+    await tickFor(2 * 60 * 60 * 1_000);
+    assert.deepEqual(guard.since(disabledMark), [], "no check after the Provider is removed");
+  } finally {
+    mock.timers.reset();
+    await disposeServiceResourcesAndWait(services);
+  }
+});
+
+test("idle for a virtual 2 hours with a ZCode Built-in template Provider: only the backed-off anonymous config check", async (t) => {
+  // Persist a Provider bound to a Built-in template, then restart with it already present.
+  const setup = startServices();
+  let providerId: string;
+  try {
+    ({ providerId } = await setup
+      .get(IProviderSettingsService)
+      .createPersonalProvider({ templateId: BUILTIN_TEMPLATE_ID }));
+    await settle();
+  } finally {
+    await disposeServiceResourcesAndWait(setup);
+  }
+  await resetBuiltinRefreshBackoff();
+  const t0 = Date.now();
+  mock.timers.enable({ apis: ["setInterval", "setTimeout", "Date"], now: t0 });
+  const mark = guard.mark();
+  const services = startServices();
+  try {
+    await settle();
+    await tickFor(2 * 60 * 60 * 1_000);
+    const observed = guard.since(mark);
+    assertBackoffSchedule(observed, t0, (message) => t.diagnostic(message));
+    assert.ok(observed.length >= 4 && observed.length <= 8, `${observed.length} checks in 2 h`);
+  } finally {
+    mock.timers.reset();
+    await disposeServiceResourcesAndWait(services);
+  }
+  assert.ok(providerId);
 });

@@ -134,7 +134,7 @@ test("offline guard positive control: product token call and raw socket are reco
   );
 });
 
-test("standalone HTTP server entry starts offline, serves loopback, and only makes the anonymous Built-in config check", async () => {
+test("standalone HTTP server entry starts offline, serves loopback, and makes no outbound request without a ZCode Built-in Provider", async () => {
   const before = outbound.length;
   const bundledPath = fileURLToPath(
     new URL("../../../config/provider/zcode-builtin.json", import.meta.url),
@@ -186,10 +186,10 @@ test("standalone HTTP server entry starts offline, serves loopback, and only mak
       const url = new URL(target);
       return `${layer} ${method} ${url.origin}${url.pathname} ${[...url.searchParams.keys()].sort().join(",")}`;
     }),
-    ["fetch GET https://zcode.z.ai/api/v1/client/configs app_version,platform"],
+    // No Provider is bound to a ZCode Built-in template, so even the anonymous Built-in config
+    // check (`GET https://zcode.z.ai/api/v1/client/configs`) stays off.
+    [],
   );
-  assert.equal(observed[0]?.headerNames?.includes("authorization"), false);
-  assert.equal(observed[0]?.headerNames?.includes("cookie"), false);
   assert.equal(JSON.stringify(observed).includes(LEGACY_JWT), false);
   assert.equal(
     readFileSync(join(root, ".zcode", "v2", "credentials.json"), "utf8"),
