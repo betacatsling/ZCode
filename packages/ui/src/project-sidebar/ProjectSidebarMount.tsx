@@ -109,7 +109,8 @@ export function ProjectSidebarMount({
               request,
             );
             if (action.ownerKind === "native-v4") {
-              if (!action.workspacePath) throw new Error("project-sidebar-created-owner-path-missing");
+              if (!action.workspacePath)
+                throw new Error("project-sidebar-created-owner-path-missing");
               onSelectTask(
                 action.workspacePath,
                 action.nativeSessionId,

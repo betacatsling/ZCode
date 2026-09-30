@@ -52,9 +52,7 @@ export function WorkspaceSidebarFooterUsageSummary({
     workspaceIdentity,
     workspacePath,
   });
-  return (
-    <WorkspaceSidebarFooterUsageSummaryContent state={state} onUsageClick={onUsageClick} />
-  );
+  return <WorkspaceSidebarFooterUsageSummaryContent state={state} onUsageClick={onUsageClick} />;
 }
 
 export function useWorkspaceSidebarFooterUsageSummaryState({

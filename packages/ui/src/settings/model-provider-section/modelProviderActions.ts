@@ -51,11 +51,7 @@ export async function confirmAndDeleteModelProvider({
   }
 }
 
-export async function refreshModelProviderSection({
-  refresh,
-}: {
-  refresh: () => Promise<void>;
-}) {
+export async function refreshModelProviderSection({ refresh }: { refresh: () => Promise<void> }) {
   // Model Provider 顶部刷新：企业 Team 产品列表已拆除，只刷 provider 列表。
   // entitlement / quota 由调用方另行触发。
   await refresh();
@@ -76,10 +72,7 @@ export async function refreshProviderPanelAfterAuthChange({
 }): Promise<void> {
   await refreshActiveOAuthProvider();
   if (refreshPlanSnapshots) {
-    await Promise.all([
-      refreshModelProviders(),
-      refreshCodingPlanEntitlements(),
-    ]);
+    await Promise.all([refreshModelProviders(), refreshCodingPlanEntitlements()]);
   } else {
     // 切换连接方式只是保存本地连接选择和刷新目标 provider key。
     // 不能顺手刷新今日余额/套餐快照，否则 Start Plan balance 与 entitlement 查询会并发放大。

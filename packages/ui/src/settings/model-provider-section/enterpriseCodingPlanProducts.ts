@@ -1,7 +1,4 @@
-import type {
-  EnterpriseCodingPlanPricingProduct,
-  ProviderFamilyDomain,
-} from "@zcode/shared";
+import type { EnterpriseCodingPlanPricingProduct, ProviderFamilyDomain } from "@zcode/shared";
 
 /**
  * Team Plan 连接/用量所需的已购企业套餐视图。

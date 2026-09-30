@@ -1,20 +1,29 @@
 import { useCallback } from "react";
 import type { Theme } from "@/useTheme.js";
-import type { IProjectCatalogService, ProjectCatalogReadModel } from "@zcode/services/project-catalog";
+import type {
+  IProjectCatalogService,
+  ProjectCatalogReadModel,
+} from "@zcode/services/project-catalog";
 import type { ProjectSidebarTargetServices } from "@/project-sidebar/contract.js";
 import type {
   ProjectSidebarTargetOption,
   ProjectSidebarTargetViewSnapshot,
   ProjectSidebarViewModel,
 } from "@/project-sidebar/contract.js";
-import type { SessionHierarchyRecord, WorkspaceSessionCreateRequest } from "@zcode/shared/agent-host";
+import type {
+  SessionHierarchyRecord,
+  WorkspaceSessionCreateRequest,
+} from "@zcode/shared/agent-host";
 import { projectSidebarSessionViewKey } from "@/project-sidebar/viewKeys.js";
 import {
   createProjectSidebarWorkspaceAgent,
   openProjectSidebarHistoryRecord,
   type ProjectSidebarHistoryRoute,
 } from "@/project-sidebar/sessionActions.js";
-import { refreshProjectSidebarTarget, type TargetServiceSource } from "@/project-sidebar/targetRefresh.js";
+import {
+  refreshProjectSidebarTarget,
+  type TargetServiceSource,
+} from "@/project-sidebar/targetRefresh.js";
 
 export function useProjectSidebarSessionActions(params: {
   theme: Theme;
@@ -65,7 +74,10 @@ export function useProjectSidebarSessionActions(params: {
       target: ProjectSidebarTargetOption,
       workspaceId: string,
       worktreeGeneration: string,
-      request: Pick<WorkspaceSessionCreateRequest, "requestId" | "harnessId" | "modelBinding" | "title">,
+      request: Pick<
+        WorkspaceSessionCreateRequest,
+        "requestId" | "harnessId" | "modelBinding" | "title"
+      >,
     ) => {
       const source = params.resolveCurrentTarget(target);
       return params.enqueueTarget(target.targetId, () =>
@@ -76,7 +88,8 @@ export function useProjectSidebarSessionActions(params: {
           request,
           source,
           isCurrentSource: params.isCurrentSource,
-          currentFreshness: (targetId) => params.modelRef.current?.source.targetFreshness.get(targetId),
+          currentFreshness: (targetId) =>
+            params.modelRef.current?.source.targetFreshness.get(targetId),
           currentAction: (hierarchySessionId) =>
             params.modelRef.current?.sessionActions.get(
               projectSidebarSessionViewKey(target.targetId, workspaceId, hierarchySessionId),

@@ -48,10 +48,11 @@ interface DriverState {
   heldReads: Array<{ targetId: string; started: boolean; released: boolean }>;
 }
 
-const driverHealth = await fetch("/__project-sidebar/health").then((response) =>
-  response.json() as Promise<DriverHealth>,
+const driverHealth = await fetch("/__project-sidebar/health").then(
+  (response) => response.json() as Promise<DriverHealth>,
 );
-const locale = new URLSearchParams(window.location.search).get("locale") === "zh-CN" ? "zh-CN" : "en-US";
+const locale =
+  new URLSearchParams(window.location.search).get("locale") === "zh-CN" ? "zh-CN" : "en-US";
 const targetAlpha = driverHealth.targetIds[0]!;
 const initialTargetIds = driverHealth.targetIds.slice(0, 3);
 const remoteTargetById = new Map<string, RemoteTarget>(
@@ -77,7 +78,10 @@ function catalogRpc<T>(method: string, args: unknown = {}): Promise<T> {
 }
 
 function worktreeRpc<T>(targetId: string, method: string, args: unknown = {}): Promise<T> {
-  return post<T>(`/__project-sidebar/rpc/worktree/${method}`, { targetId, ...((args ?? {}) as object) });
+  return post<T>(`/__project-sidebar/rpc/worktree/${method}`, {
+    targetId,
+    ...((args ?? {}) as object),
+  });
 }
 
 function createTargetServices(targetId: string): IServiceAccessor {
@@ -99,7 +103,10 @@ function createTargetServices(targetId: string): IServiceAccessor {
     async getDirectory() {
       const response = await fetch(`/__project-sidebar/rpc/directory/${targetId}`);
       const result = (await response.json()) as HarnessDirectorySnapshot | { error: string };
-      if (!response.ok) throw new Error("error" in result ? result.error : `Directory request failed: ${response.status}`);
+      if (!response.ok)
+        throw new Error(
+          "error" in result ? result.error : `Directory request failed: ${response.status}`,
+        );
       return result as HarnessDirectorySnapshot;
     },
     listSessionSummaries(workspaceIdentity: string, worktreePath: string) {
@@ -123,7 +130,11 @@ function createTargetServices(targetId: string): IServiceAccessor {
       return this.read();
     },
   };
-  const zcodeTaskService = { async listTasks() { return []; } };
+  const zcodeTaskService = {
+    async listTasks() {
+      return [];
+    },
+  };
   return {
     worktreeService,
     agentHostService,
@@ -140,8 +151,11 @@ const profileServices = {
       catalogRpc("readWorkspaceCatalog", { targetConnections }),
     createProject: (input: unknown) => catalogRpc("createProject", { input }),
     updateProject: (id: string, patch: unknown) => catalogRpc("updateProject", { id, patch }),
-    setWorkspaceRefs: (id: string, workspaceIds: readonly string[], defaultWorkspaceId?: string | null) =>
-      catalogRpc("setWorkspaceRefs", { id, workspaceIds, defaultWorkspaceId }),
+    setWorkspaceRefs: (
+      id: string,
+      workspaceIds: readonly string[],
+      defaultWorkspaceId?: string | null,
+    ) => catalogRpc("setWorkspaceRefs", { id, workspaceIds, defaultWorkspaceId }),
     setDefaultWorkspaceRef: (id: string, reference: unknown) =>
       catalogRpc("setDefaultWorkspaceRef", { id, reference }),
     ingestTargetSnapshot: (snapshot: unknown) => catalogRpc("ingestTargetSnapshot", { snapshot }),
@@ -150,7 +164,9 @@ const profileServices = {
   } as unknown as IProjectCatalogService,
 } as unknown as IServiceAccessor;
 
-const targetServices = new Map(driverHealth.targetIds.map((targetId) => [targetId, createTargetServices(targetId)]));
+const targetServices = new Map(
+  driverHealth.targetIds.map((targetId) => [targetId, createTargetServices(targetId)]),
+);
 let generationByTarget = new Map<string, number>();
 
 function remoteSessionId(targetId: string): string {
@@ -217,7 +233,8 @@ function MultiTargetFixture() {
   }, [appServices]);
 
   useEffect(() => {
-    for (const [targetId, sessionId] of attachedSessionIdsRef.current) attachTarget(targetId, sessionId);
+    for (const [targetId, sessionId] of attachedSessionIdsRef.current)
+      attachTarget(targetId, sessionId);
     return () => {
       for (const sessionId of attachedSessionIdsRef.current.values()) {
         unregisterRemoteWorkspaceSession(sessionId);
@@ -229,10 +246,12 @@ function MultiTargetFixture() {
     const fixtureApi = {
       driverHealth,
       attachments() {
-        return Object.values(useRemoteWorkspaceSessionStore.getState().sessionsById).map((session) => ({
-          sessionId: session.sessionId,
-          generation: session.attachmentGeneration,
-        }));
+        return Object.values(useRemoteWorkspaceSessionStore.getState().sessionsById).map(
+          (session) => ({
+            sessionId: session.sessionId,
+            generation: session.attachmentGeneration,
+          }),
+        );
       },
       async state() {
         const response = await fetch("/__project-sidebar/state");
@@ -336,13 +355,28 @@ function MultiTargetFixture() {
                     fallback={
                       <div data-legacy-workspace>
                         <div data-legacy-history-session="non-git">Non-Git legacy task history</div>
-                        <div data-legacy-history-session="old-host">Old Host legacy task history</div>
+                        <div data-legacy-history-session="old-host">
+                          Old Host legacy task history
+                        </div>
                       </div>
                     }
-                    onSelectTask={(path, sessionId, identity, selectedRemoteSessionId, targetId) => {
+                    onSelectTask={(
+                      path,
+                      sessionId,
+                      identity,
+                      selectedRemoteSessionId,
+                      targetId,
+                    ) => {
                       setSelectedRoutes((routes) => [
                         ...routes,
-                        { kind: "native", path, sessionId, identity, selectedRemoteSessionId, targetId },
+                        {
+                          kind: "native",
+                          path,
+                          sessionId,
+                          identity,
+                          selectedRemoteSessionId,
+                          targetId,
+                        },
                       ]);
                     }}
                     onSelectExternalSession={(selection: AgentHostConversationAttachment) => {

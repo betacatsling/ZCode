@@ -1,7 +1,4 @@
-import type {
-  ProviderFamilyConnectionSelection,
-  ProviderFamilyDomain,
-} from "@zcode/shared";
+import type { ProviderFamilyConnectionSelection, ProviderFamilyDomain } from "@zcode/shared";
 import { getModelProviderFamilySpec } from "@zcode/shared";
 
 export type ModelProviderFamilyConnectionSelection = ProviderFamilyConnectionSelection;

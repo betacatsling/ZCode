@@ -16,9 +16,7 @@ import {
 } from "@/lib/providerSettingsFormTypes.js";
 import { useEffect, useMemo } from "react";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
-import {
-  type ModelProviderNavItem,
-} from "./constants.js";
+import { type ModelProviderNavItem } from "./constants.js";
 import { InlineEditableProviderCard } from "./InlineEditableProviderCard.js";
 import {
   ModelProviderLoadingCard,
@@ -336,7 +334,6 @@ export function ModelProviderSectionDetail({
     />
   );
 
-
   if (!selectedNavItem) {
     return <ModelProviderLoadingCard loadingLabel={loadingLabel} />;
   }
@@ -531,11 +528,7 @@ export function ModelProviderSectionDetail({
             }
             onTestModel={onTestModel}
             nameEditable={false}
-            statusSection={
-              <div className="space-y-3">
-                {statusPanel}
-              </div>
-            }
+            statusSection={<div className="space-y-3">{statusPanel}</div>}
             headerActionsVisible={false}
           />
         </ProviderFamilyDetailShell>
@@ -609,7 +602,7 @@ export function ModelProviderSectionDetail({
                 : undefined
             }
             disconnectLoading={codingPlanDisconnectProviderId === selectedNavItem.presetId}
-            />
+          />
           {hidePlanModels ? null : providerSettingsView && !dedicatedProvider ? (
             <PresetProviderPlaceholderCard
               displayName={selectedNavItem.providerName}

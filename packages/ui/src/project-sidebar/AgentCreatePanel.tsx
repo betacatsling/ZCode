@@ -1,7 +1,10 @@
 import { Button } from "@/components/ui/button.js";
 import { CompatibilityStatus } from "@/agent-host/CompatibilityStatus.js";
 import { HarnessSelector } from "@/agent-host/HarnessSelector.js";
-import { ModelBindingSelector, type ModelBindingOption } from "@/agent-host/ModelBindingSelector.js";
+import {
+  ModelBindingSelector,
+  type ModelBindingOption,
+} from "@/agent-host/ModelBindingSelector.js";
 import { admitsExecution, type CapabilityReport } from "@/agent-host/SessionCapabilities.js";
 import type { AgentCreationDraft } from "./sidebarViewStore.js";
 import type { OrcaSidebarChrome } from "./orcaSidebarChrome.js";

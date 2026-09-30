@@ -42,7 +42,12 @@ interface ConversationHeaderProps {
  * pane chrome：不占布局高度，只在右上角悬浮拆分/关闭入口。
  * 保留 title data 节点，供 E2E 读取投影但不恢复旧横条。
  */
-function ConversationHeaderImpl({ title, onClosePane, workspaceBadge, appearance }: ConversationHeaderProps) {
+function ConversationHeaderImpl({
+  title,
+  onClosePane,
+  workspaceBadge,
+  appearance,
+}: ConversationHeaderProps) {
   const { intl } = useZCodeIntl();
   const harnessId = useHarnessIdentity();
   const harnessEntry = useHarnessDirectoryEntry(harnessId);
@@ -52,7 +57,8 @@ function ConversationHeaderImpl({ title, onClosePane, workspaceBadge, appearance
       agentHostService ? agentHostService.getHarnessAsset(assetId) : Promise.resolve(null),
     [agentHostService],
   );
-  const hasFloatingActions = Boolean(harnessEntry) || Boolean(workspaceBadge) || Boolean(onClosePane);
+  const hasFloatingActions =
+    Boolean(harnessEntry) || Boolean(workspaceBadge) || Boolean(onClosePane);
 
   return (
     <>

@@ -576,11 +576,7 @@ export function ModelProviderSection({
         }
       })();
     }
-  }, [
-    presetCatalogProviderId,
-    providerSettingsView,
-    refreshProviderPanelAfterAuthChange,
-  ]);
+  }, [presetCatalogProviderId, providerSettingsView, refreshProviderPanelAfterAuthChange]);
 
   useEffect(() => {
     if (!presetCatalogProviderId) {

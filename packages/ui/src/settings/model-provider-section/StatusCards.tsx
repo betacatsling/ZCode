@@ -379,7 +379,12 @@ export function CodingPlanStatusPanel({
     isPurchased &&
     (isStartPlanProvider || hasDisplayableCodingPlanUsageLimits(quotaLimits));
   const trailingAction = retryVisible ? (
-    <Button type="button" size="lg" onClick={onRetry} disabled={effectiveViewState.statusSyncLoading}>
+    <Button
+      type="button"
+      size="lg"
+      onClick={onRetry}
+      disabled={effectiveViewState.statusSyncLoading}
+    >
       {intl.formatMessage({ id: "common.retry" })}
     </Button>
   ) : buyAction ? (
@@ -473,11 +478,7 @@ export function CodingPlanStatusPanel({
           />,
         ];
 
-  return (
-    <div className="space-y-3">
-      {planCards}
-    </div>
-  );
+  return <div className="space-y-3">{planCards}</div>;
 }
 
 function hasStartPlanEntitlementQuota(

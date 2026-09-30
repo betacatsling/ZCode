@@ -506,11 +506,7 @@ function V4ComposerModelControlsImpl({
             teamSelection: contextPlanConnection.selection,
           })
         : null,
-    [
-      contextAccountProviderAccess?.access,
-      contextPlanConnection,
-      entitlements,
-    ],
+    [contextAccountProviderAccess?.access, contextPlanConnection, entitlements],
   );
   useEffect(() => {
     if (!contextCodingPlanUsageTeamSource) {
