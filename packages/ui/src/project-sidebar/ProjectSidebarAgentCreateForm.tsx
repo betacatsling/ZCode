@@ -195,6 +195,7 @@ export function ProjectSidebarAgentCreateForm({
       <CapabilityProviderReconfigureNotice
         attention={capabilityState?.status === "ready" ? capabilityState.credentialAttention : null}
         providers={modelView?.providers}
+        target={targetOption.isLocal ? undefined : { kind: "remote", label: targetLabel }}
       />
 
       <label className="block space-y-1">

@@ -6,13 +6,16 @@ import {
   openProviderReconfigureSettings,
   resolveProviderReconfigureNotice,
   type ProviderReconfigureNoticeModel,
+  type ProviderReconfigureTarget,
 } from "@/v4/providerReconfigureNotice.js";
 
 export const PROVIDER_RECONFIGURE_NOTICE_TESTID = "v4-provider-reconfigure-notice";
 
 /**
  * "Reconfigure this Provider" hint. Shows only the Provider display name (never its id, key,
- * or endpoint) and one action that opens that Provider's settings.
+ * or endpoint) and one action that opens that Provider's settings. For a remote target there is
+ * no settings action (local settings would edit this device, not the target); the copy says to
+ * reconfigure on that target instead.
  */
 export const ProviderReconfigureNotice = memo(function ProviderReconfigureNotice({
   notice,
@@ -20,6 +23,7 @@ export const ProviderReconfigureNotice = memo(function ProviderReconfigureNotice
   onOpenSettings,
   onDismiss,
   className,
+  target,
 }: {
   notice: ProviderReconfigureNoticeModel;
   /** Display name; when absent the copy stays generic instead of showing a raw id. */
@@ -27,15 +31,19 @@ export const ProviderReconfigureNotice = memo(function ProviderReconfigureNotice
   onOpenSettings(providerId: string): void;
   onDismiss?(): void;
   className?: string;
+  /** Defaults to local (today's behaviour). */
+  target?: ProviderReconfigureTarget;
 }) {
   const { intl } = useZCodeIntl();
   const label = providerLabel?.trim();
+  const remote = target?.kind === "remote" ? target : null;
   return (
     <div
       role="alert"
       data-testid={PROVIDER_RECONFIGURE_NOTICE_TESTID}
       data-provider-id={notice.providerId}
       data-notice-source={notice.source}
+      data-notice-scope={remote ? "remote" : "local"}
       className={
         className ??
         "mb-3 flex w-full shrink-0 flex-wrap items-center gap-2 rounded-xl border border-border bg-surface px-3 py-2 text-ui-base text-foreground backdrop-blur-md"
@@ -53,14 +61,26 @@ export const ProviderReconfigureNotice = memo(function ProviderReconfigureNotice
               )
             : intl.formatMessage({ id: "chat.providerReconfigure.messageUnnamed" })}
         </p>
+        {remote ? (
+          <p className="text-foreground-subtle">
+            {remote.label
+              ? intl.formatMessage(
+                  { id: "chat.providerReconfigure.remoteNamed" },
+                  { target: remote.label },
+                )
+              : intl.formatMessage({ id: "chat.providerReconfigure.remoteUnnamed" })}
+          </p>
+        ) : null}
       </div>
-      <button
-        type="button"
-        className="shrink-0 rounded-md bg-primary px-2.5 py-1 text-primary-foreground hover:bg-primary/80"
-        onClick={() => onOpenSettings(notice.providerId)}
-      >
-        {intl.formatMessage({ id: "chat.providerReconfigure.open" })}
-      </button>
+      {remote ? null : (
+        <button
+          type="button"
+          className="shrink-0 rounded-md bg-primary px-2.5 py-1 text-primary-foreground hover:bg-primary/80"
+          onClick={() => onOpenSettings(notice.providerId)}
+        >
+          {intl.formatMessage({ id: "chat.providerReconfigure.open" })}
+        </button>
+      )}
       {onDismiss ? (
         <button
           type="button"
@@ -78,9 +98,12 @@ export const ProviderReconfigureNotice = memo(function ProviderReconfigureNotice
 export function CapabilityProviderReconfigureNotice({
   attention,
   providers,
+  target,
 }: {
   attention: AgentModelFailure | null | undefined;
   providers: readonly { providerId: string; providerName?: string | null }[] | undefined;
+  /** The create form's target; remote targets get no local settings action. */
+  target?: ProviderReconfigureTarget;
 }) {
   const openSettingsTab = useOptionalTabStore((state) => state.openSettingsTab);
   const notice = resolveProviderReconfigureNotice({
@@ -95,6 +118,7 @@ export function CapabilityProviderReconfigureNotice({
         providers?.find((provider) => provider.providerId === notice.providerId)?.providerName
       }
       onOpenSettings={(providerId) => openProviderReconfigureSettings(providerId, openSettingsTab)}
+      target={target}
       className="flex w-full flex-wrap items-center gap-2 rounded-lg border border-border bg-surface px-2.5 py-2 text-ui-xs text-foreground"
     />
   );

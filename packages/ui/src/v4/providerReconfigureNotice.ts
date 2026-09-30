@@ -110,6 +110,26 @@ export function resolveProviderReconfigureNotice(input: {
   return null;
 }
 
+/**
+ * Where the session's Provider lives. Settings → Model Provider always edits this device's
+ * local Host, so only a local target may deep-link there.
+ */
+export type ProviderReconfigureTarget = { kind: "local" } | { kind: "remote"; label?: string };
+
+/**
+ * Remote when the pane is attached to a remote workspace: the same facts the pane badge and
+ * SettingsPage use (workspaceIdentity or remoteSessionId). The label is display-only.
+ */
+export function providerReconfigureTarget(input: {
+  workspaceIdentity?: string | null;
+  remoteSessionId?: string | null;
+  remoteTargetLabel?: string | null;
+}): ProviderReconfigureTarget {
+  if (!input.workspaceIdentity?.trim() && !input.remoteSessionId?.trim()) return { kind: "local" };
+  const label = input.remoteTargetLabel?.trim();
+  return label ? { kind: "remote", label } : { kind: "remote" };
+}
+
 /** Open Settings → Model Provider focused on this Provider (existing deep-link intent). */
 export function openProviderReconfigureSettings(
   providerId: string,
