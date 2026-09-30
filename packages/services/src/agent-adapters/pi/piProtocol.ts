@@ -1,5 +1,10 @@
 import type { ModelRequest, ModelStreamEvent } from "@zcode/contracts";
-import type { AgentEvent, BackendBinding, BindingPlan, SessionSpec } from "@zcode/shared/agent-host";
+import type {
+  AgentEvent,
+  BackendBinding,
+  BindingPlan,
+  SessionSpec,
+} from "@zcode/shared/agent-host";
 
 export interface PiWorkerBoot {
   spec: SessionSpec;
@@ -35,7 +40,13 @@ export interface PiModelFailure {
 export type ToPiWorker =
   | { type: "send"; commandId: string; turnId: string; text: string }
   | { type: "cancel"; commandId: string; turnId: string }
-  | { type: "resolve"; commandId: string; turnId: string; interactionId: string; decision: "allow" | "deny" }
+  | {
+      type: "resolve";
+      commandId: string;
+      turnId: string;
+      interactionId: string;
+      decision: "allow" | "deny";
+    }
   | { type: "terminate"; commandId: string }
   | { type: "model.event"; requestId: string; event: ModelStreamEvent }
   | { type: "model.done"; requestId: string }
