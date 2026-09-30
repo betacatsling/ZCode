@@ -45,9 +45,15 @@ import {
   createHostCapabilityStore,
   createHostCapabilityUpgradeGate,
   HOST_CAPABILITY_WS_PATH,
+  hostBootstrapCredentialFingerprint,
+  type HostCapabilityBinding,
   type HostCapabilityStore,
 } from "./hostCapability.js";
-import { HOST_CAPABILITY_PATH, verifyHostBootstrapRequest } from "./hostBootstrapAuth.js";
+import {
+  HOST_CAPABILITY_PATH,
+  presentedHostBootstrapCredential,
+  verifyHostBootstrapRequest,
+} from "./hostBootstrapAuth.js";
 
 function wrapWebSocket(ws: WebSocket): ISocket {
   const onData = new Emitter<VSBuffer>();
@@ -331,14 +337,23 @@ export function createHttpServer(
   const app = new Hono();
   const { injectWebSocket, upgradeWebSocket, wss } = createNodeWebSocket({ app });
   const hostCapabilities = options.hostCapabilityStore ?? createHostCapabilityStore();
-  // ticket 只在 ws 接受握手（verifyClient，紧挨 101）时消费；普通请求、握手失败或路由不符都不会烧掉它。
-  const hostUpgradeGate = createHostCapabilityUpgradeGate(hostCapabilities);
-  hostUpgradeGate.attach(wss);
-
   const authToken = options.authToken?.trim();
   const hostBootstrapCredentials = [options.hostBootstrapToken?.trim(), authToken].filter(
     (token): token is string => Boolean(token),
   );
+  // ticket 绑定签发时出示的 bootstrap 凭据指纹；/ws/host 只接受当前已配置凭据的绑定，
+  // 因而凭据轮换（含 authToken 兼作凭据时）之前签发的 ticket 会被拒绝。未配置凭据时不绑定。
+  const acceptedHostCapabilityBindings: HostCapabilityBinding[] | undefined =
+    hostBootstrapCredentials.length > 0
+      ? hostBootstrapCredentials.map((credential) => ({
+          credentialFingerprint: hostBootstrapCredentialFingerprint(credential),
+        }))
+      : undefined;
+  // ticket 只在 ws 接受握手（verifyClient，紧挨 101）时消费；普通请求、握手失败或路由不符都不会烧掉它。
+  const hostUpgradeGate = createHostCapabilityUpgradeGate(hostCapabilities, {
+    acceptedBindings: () => acceptedHostCapabilityBindings,
+  });
+  hostUpgradeGate.attach(wss);
   if (authToken) {
     app.use("*", async (c, next) => {
       const pathname = new URL(c.req.url).pathname;
@@ -371,7 +386,13 @@ export function createHttpServer(
     );
     c.header("Cache-Control", "no-store");
     if (!verdict.ok) return c.json({ error: verdict.error }, verdict.status);
-    return c.json(hostCapabilities.issue());
+    // 校验已通过，出示的 Bearer 必然等于某个已配置凭据；只记录其指纹，绝不记录原文。
+    const presented = presentedHostBootstrapCredential(c.req.header("authorization")) ?? "";
+    return c.json(
+      hostUpgradeGate.issue({
+        credentialFingerprint: hostBootstrapCredentialFingerprint(presented),
+      }),
+    );
   });
 
   // 普通 `/ws` 永远是 terminal-client；浏览器/任意客户端设置旧 mode header

@@ -94,7 +94,7 @@ export async function runServerCore(
   // 每次 Core 启动生成新的 Host bootstrap secret，只经 fork IPC 交给 Supervisor；不进入 env，
   // 避免被 Core 派生的 Agent/工具进程继承。
   const hostBootstrapToken = createHostBootstrapToken();
-  const http = await createCoreHttpServer(services, { serverId, hostBootstrapToken });
+  const http = await createCoreHttpServer(services, { serverId, hostBootstrapToken, generation });
   // 版本错配兜底：pre-M2 Supervisor 的 ready schema 会丢弃 hostBootstrapToken，Core 另写 0600
   // run/core-host-bootstrap.json，由新 CLI 在 status 缺 secret 且 generation/pid/port 匹配时合并。
   // 必须在 ready 之前落盘，CLI 一旦看到 ready 就能读到本代记录；写失败不影响新 Supervisor 路径。
