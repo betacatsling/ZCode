@@ -291,10 +291,7 @@ async function sendRefusedByBrokenStream(root: string, worktree: string) {
 
 test(
   "a send reservation released after close() settled writes no activity sidecar",
-  {
-    timeout: TEST_TIMEOUT_MS,
-    todo: "repro: #releaseSendReservation writes the sidecar after close()",
-  },
+  { timeout: TEST_TIMEOUT_MS },
   async () => {
     await withRoot(async (root, worktree) => {
       const { harness, host, discard, dispatching } = await sendRefusedByBrokenStream(
@@ -320,10 +317,7 @@ test(
 
 test(
   "a send reservation release already writing when close() force-closes lands before close() settles",
-  {
-    timeout: TEST_TIMEOUT_MS,
-    todo: "repro: close() does not wait for an in-flight reservation release",
-  },
+  { timeout: TEST_TIMEOUT_MS },
   async () => {
     await withRoot(async (root, worktree) => {
       const { host, discard, dispatching } = await sendRefusedByBrokenStream(root, worktree);

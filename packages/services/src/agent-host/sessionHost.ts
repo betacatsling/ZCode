@@ -102,7 +102,7 @@ export class SessionHost {
   readonly #events: EventJournal;
   readonly #listeners = new Set<(event: AgentEvent) => void>();
   readonly #active = new Set<Promise<void>>();
-  /** Turn-settlement writes in flight (see #settleTurn); never rejects. */
+  /** Turn-settlement and send-reservation-release writes in flight (see #settleTurn); never rejects. */
   readonly #settlements = new Set<Promise<void>>();
   readonly #interactions = new Map<string, string>();
   readonly #unsettledTurns = new Set<string>();
@@ -916,7 +916,8 @@ export class SessionHost {
     const failure = this.#eventError;
     this.#closed = true;
     this.#unsubscribe();
-    // A run that settled before #closed may still be writing; let it land before the journals close.
+    // A turn settlement or send-reservation release that started before #closed may still be
+    // writing; let it land before the journals close (and before a force-close sidecar write).
     await Promise.all(this.#settlements);
     if (failure) await this.#persistForceClosedActivity(failure);
     await this.#commands.close();
@@ -1069,11 +1070,25 @@ export class SessionHost {
     }
   }
 
+  /**
+   * Undoes a send admission that never reached the adapter. Its sidecar write follows the same
+   * rule as turn settlements: close() waits for one already in flight (#settlements), and none
+   * starts once the host is closed, so a stale host never overwrites or resurrects the sidecar
+   * after close() settled (force-close has already persisted its own "unknown" state).
+   */
   async #releaseSendReservation(command: Extract<AgentCommand, { type: "send" }>): Promise<void> {
     this.#unsettledTurns.delete(command.turnId);
     if (this.#activeTurn === command.turnId) this.#activeTurn = undefined;
     if (this.#lastKnownStatus === "starting") this.#lastKnownStatus = "idle";
-    await this.#persistActivityIndex();
+    if (this.#closed) return;
+    const write = this.#persistActivityIndex();
+    const settled = write.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.#settlements.add(settled);
+    void settled.then(() => this.#settlements.delete(settled));
+    await write;
   }
   async #reject(
     command: AgentCommand,
