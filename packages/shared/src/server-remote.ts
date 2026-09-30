@@ -8,13 +8,18 @@ export const serverRemoteWorkspaceInfoSchema = z.object({
   workspaceIdentity: z.string().trim().min(1).optional(),
 });
 
+// `/api/server-info` is unauthenticated (docs/agent-host/HOST-CAPABILITY-BOOTSTRAP-AUTH.md, "Local
+// endpoints"), so servers publish only what real clients read: Server Core keeps `serverId` (the
+// Desktop Host checks the target identity before it sends the bootstrap secret) and omits
+// `workspaces`; the legacy server omits `serverId`/`name` and keeps `workspaces[].path` /
+// `workspaceIdentity` for its Web UI. Both fields stay in the schema, optional, for old servers.
 export const serverRemoteInfoSchema = z.object({
-  serverId: z.string().trim().min(1),
+  serverId: z.string().trim().min(1).optional(),
   name: z.string().trim().min(1).optional(),
   version: z.string(),
   protocolVersion: z.literal(SERVER_REMOTE_PROTOCOL_VERSION),
   authRequired: z.boolean(),
-  workspaces: z.array(serverRemoteWorkspaceInfoSchema),
+  workspaces: z.array(serverRemoteWorkspaceInfoSchema).optional(),
   capabilities: z.object({
     desktopContinuous: z.literal(true),
     websocketRpc: z.literal(true),

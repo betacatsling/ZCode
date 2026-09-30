@@ -107,6 +107,77 @@ export function verifyHostRequestHeaders(
   return undefined;
 }
 
+/**
+ * How an unauthenticated local endpoint (`/ws`, `/api/server-info`) treats `Origin`:
+ * - `"no-browser"`: every real client is a Node process, so any `Origin` → 403 (Server Core).
+ * - `"same-origin"`: the server also hosts its own Web UI, so an `Origin` is accepted only when it
+ *   is exactly `http(s)://<Host>`, i.e. the page this server served (legacy server).
+ */
+export type LocalEndpointOriginPolicy = "no-browser" | "same-origin";
+
+export interface LocalEndpointHeaderPolicy extends HostRequestHeaderOptions {
+  origin: LocalEndpointOriginPolicy;
+}
+
+export interface LocalEndpointHeaderRejection {
+  ok: false;
+  status: 403;
+  error: string;
+  reason: "browser-origin" | "cross-origin" | "non-loopback-host";
+}
+
+/** `Origin` is a serialized http(s) origin whose authority equals the `Host` header. */
+export function isSameOriginAsHost(origin: string, host: string | undefined): boolean {
+  if (!host) return false;
+  try {
+    const parsed = new URL(origin);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+    // Only an exact origin serialization (what browsers send): no path, userinfo or default port.
+    if (parsed.origin !== origin) return false;
+    // Normalise the Host header with the Origin's scheme so default ports compare equal.
+    return new URL(`${parsed.protocol}//${host.trim()}`).host === parsed.host;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Browser / DNS-rebinding guard for local endpoints that are not token-authenticated. Same Host
+ * rule as {@link verifyHostRequestHeaders}; the Origin rule depends on who the real clients are.
+ */
+export function verifyLocalEndpointHeaders(
+  request: HostRequestHeaders,
+  policy: LocalEndpointHeaderPolicy,
+): LocalEndpointHeaderRejection | undefined {
+  if (request.origin !== undefined) {
+    if (policy.origin === "no-browser") {
+      return {
+        ok: false,
+        status: 403,
+        error: "Requests from browser origins are not allowed",
+        reason: "browser-origin",
+      };
+    }
+    if (!isSameOriginAsHost(request.origin, request.host)) {
+      return {
+        ok: false,
+        status: 403,
+        error: "Cross-origin requests are not allowed",
+        reason: "cross-origin",
+      };
+    }
+  }
+  if (policy.requireLoopbackHost && !isLoopbackAuthority(request.host)) {
+    return {
+      ok: false,
+      status: 403,
+      error: "Requests must address a loopback authority",
+      reason: "non-loopback-host",
+    };
+  }
+  return undefined;
+}
+
 export function verifyHostBootstrapRequest(
   request: HostBootstrapRequest,
   expectedTokens: readonly string[],
