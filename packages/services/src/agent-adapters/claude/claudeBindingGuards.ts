@@ -10,15 +10,16 @@ const PLAN_EVIDENCE_REFUSAL =
   "Claude session requires exact pinned FakeModel Messages compatibility evidence";
 
 /**
- * A Claude plan or Gateway grant does not match the session's captured binding. Not a catalog
- * reconfigure (ModelBindingReconfigureRequiredError): the selection still exists, so the UI must
- * not prompt for a Provider. `code` matches the receipt reasonCode vocabulary.
+ * A Claude plan or Gateway grant does not match the session's captured binding, or the plan has
+ * no effective selection. Not a catalog reconfigure (ModelBindingReconfigureRequiredError): the
+ * selection still exists, so the UI must not prompt for a Provider. `code` matches the receipt
+ * reasonCode vocabulary.
  */
 export class ClaudeBindingMismatchError extends Error {
   readonly code: Extract<AgentErrorCode, "invalid-binding"> = "invalid-binding";
 
   constructor(
-    readonly mismatch: "plan-evidence" | "grant",
+    readonly mismatch: "plan-evidence" | "grant" | "missing-effective",
     message: string,
   ) {
     super(message);
@@ -44,7 +45,11 @@ export function validateClaudePlan(
   plan: BindingPlan,
 ): void {
   const selection = plan.effective;
-  if (!selection) throw new Error("Claude Model binding is missing its effective selection");
+  if (!selection)
+    throw new ClaudeBindingMismatchError(
+      "missing-effective",
+      "Claude Model binding is missing its effective selection",
+    );
   // Shutdown is adapter state, not a binding mismatch: same message, untyped.
   if (input.shuttingDown) throw new Error(PLAN_EVIDENCE_REFUSAL);
   const evidence = input.fakeEvidence?.(selection);
