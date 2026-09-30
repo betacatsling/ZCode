@@ -34,11 +34,12 @@ export function createClaudeHarnessFakeModel(input: {
   const trace: ClaudeHarnessFakeTrace[] = [];
   let abortCount = 0;
   const model: Model = {
-    providerId: "claude-fixture-provider",
-    modelId: "claude-fixture-model",
+    providerId: "claude-fixture-provider" as Model["providerId"],
+    modelId: "claude-fixture-model" as Model["modelId"],
     displayName: "Credential-free Claude Messages fixture",
-    properties: { contextWindow: 32_768 },
-    optionSpecs: { maxOutputTokens: { max: 32_768 } },
+    // Partial on purpose: the Claude path reads only these fields (unchanged fixture values).
+    properties: { contextWindow: 32_768 } as Model["properties"],
+    optionSpecs: { maxOutputTokens: { max: 32_768 } } as Model["optionSpecs"],
     options: { reasoningLevel: "low", maxOutputTokens: 32_768 },
     bind() {
       return this;
@@ -64,7 +65,7 @@ export function createClaudeHarnessFakeModel(input: {
         if (userText.includes("WAIT_FOR_UNKNOWN")) input.controls?.unknownStarted.resolve();
         try {
           await new Promise<void>((resolve) =>
-            request.abortSignal?.addEventListener("abort", resolve, { once: true }),
+            request.abortSignal?.addEventListener("abort", () => resolve(), { once: true }),
           );
         } finally {
           if (request.abortSignal?.aborted) {

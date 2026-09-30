@@ -15,7 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import type { AgentEvent, ExecutionTarget, Model, SessionSpec } from "@zcode/shared/agent-host";
+import type { AgentEvent, ExecutionTarget, SessionSpec } from "@zcode/shared/agent-host";
 import type { ProviderRegistryService } from "@zcode/provider";
 import { TargetModelGateway } from "../src/model-gateway/index.js";
 import { HarnessRegistry } from "../src/agent-host/harnessRegistry.js";
@@ -232,8 +232,11 @@ test(
             });
           const errors = hostA
             .eventsSince(0)
-            .filter((e) => e.kind === "session.error")
-            .map((e) => ("message" in e ? String(e.message).slice(0, 200) : e.kind));
+            .filter(
+              (e): e is Extract<AgentEvent, { kind: "session.error" }> =>
+                e.kind === "session.error",
+            )
+            .map((e) => String(e.message).slice(0, 200));
           const prompts = fakeV1.trace.map((e) => e.userText.slice(-40));
           const lastTool = fakeV1.trace.at(-1);
           reject(
