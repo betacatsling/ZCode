@@ -99,36 +99,8 @@ test("tool identity and input refusals each deny with their own reason", async (
   assert.equal(turn.requestedToolIds.size, 0, "no refused request is recorded as requested");
 });
 
-// Documented current behaviour (no source change): upsertToolCall replaces a streamed record
-// input with the hook's record input (claudeRuntimeEvents.ts:235) before sameJsonSubset runs
-// (claudeHostApproval.ts:46 on 044b5e0), so the subset check always passes for object inputs and
-// the Bash optional-key allow-list (claudeHostApproval.ts:149-156) is unreachable. What the user
-// approves is still the hook input Claude will execute, and only dangerouslyDisableSandbox is
-// refused. These cases would be denied if the streamed input were compared.
-test("documented: an object hook input replaces the streamed input and is admitted", async () => {
-  const cases: [string, string, Record<string, unknown>][] = [
-    ["Read", "different value", { file_path: "/b" }],
-    ["Read", "extra key", { file_path: "/a", x: 1 }],
-    ["Bash", "zero timeout", { command: "ls", timeout: 0 }],
-    ["Bash", "unlisted key", { command: "ls", cwd: "/" }],
-    ["Bash", "background", { command: "ls", run_in_background: true }],
-  ];
-  for (const [name, , hookInput] of cases) {
-    const unit = claudeUnitRuntime();
-    const turn = claudeUnitTurn(unit.runtime);
-    const streamed = name === "Read" ? { file_path: "/a" } : { command: "ls" };
-    const tool = upsertToolCall(unit.runtime, turn, "toolu_1", name, streamed);
-    const input = hook({ tool_name: name, tool_input: hookInput });
-    const decision = requestClaudeApproval(unit.runtime, input, never);
-    const [pending] = [...unit.runtime.pendingApprovals.values()];
-    assert.ok(pending, `${name} ${JSON.stringify(hookInput)} is admitted`);
-    assert.deepEqual(tool.input, hookInput);
-    assert.deepEqual(correlationMessages(unit.events), []);
-    denyPendingClaudeApprovals(unit.runtime);
-    assert.equal(await decision, "deny");
-  }
-});
-
+// Streamed-vs-hook input matching (the subset check and Bash extras) lives in
+// claudeApprovalInputMatch.test.ts.
 test("an admitted request is withdrawn as deny when the hook aborts", async () => {
   const unit = claudeUnitRuntime();
   const turn = claudeUnitTurn(unit.runtime);
