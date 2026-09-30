@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import type { Model } from "@zcode/contracts";
-import type { RegistryProviderConfig } from "@zcode/provider";
+import type { ProviderRegistryService, RegistryProviderConfig } from "@zcode/provider";
 import type { AgentModelFailure } from "@zcode/shared/agent-host";
+import type { ModelSelection } from "@zcode/shared/model-selection";
 
 /** Admission refusal for a Provider whose credential was rejected; key-free by construction. */
 export interface ProviderCredentialAttentionNotice {
@@ -36,7 +37,8 @@ export function providerCredentialFingerprint(
  * request is rejected with HTTP 401 (non-retryable auth_failed), or fails locally with
  * provider_not_configured before any request; a 403 (permission/region) never marks;
  * cleared automatically once the Provider's credential fingerprint changes (reconfigure) or the
- * Provider disappears. Lives as long as the Registry catalog of one Host process.
+ * Provider disappears. Host-level: one instance per Host process, shared by the warm target's
+ * Registry catalog and the lazy Host's cold capability reads.
  */
 export class ProviderCredentialAttention {
   readonly #marks = new Map<string, AttentionMark>();
@@ -116,6 +118,29 @@ export class ProviderCredentialAttention {
       this.#marks.set(providerId, { credential, reason });
     }
   }
+}
+
+/**
+ * Reads the attention for a selection against the Registry's current snapshot without starting
+ * it (no snapshot yet means nothing to report). Same auto-clear as admission.
+ */
+export function readRegistryCredentialAttention(
+  registry: Pick<ProviderRegistryService, "getSnapshot">,
+  attention: ProviderCredentialAttention,
+  selection: Pick<ModelSelection, "providerId" | "modelId">,
+): ProviderCredentialAttentionNotice | undefined {
+  const snapshot = registry.getSnapshot();
+  if (!snapshot) return undefined;
+  const provider = snapshot.registry.providers.find(
+    (candidate) => candidate.providerId === selection.providerId,
+  );
+  return attention.check(
+    selection.providerId,
+    selection.modelId,
+    provider
+      ? providerCredentialFingerprint(provider.config, snapshot.sourceRevisions.account)
+      : undefined,
+  );
 }
 
 async function* observeStream<T>(
