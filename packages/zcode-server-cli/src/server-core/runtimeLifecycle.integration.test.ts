@@ -342,7 +342,14 @@ test("forked Supervisor/Core keep Host work alive across client detach and fence
       (await rpc.call<{ status: string }>("queryCommand", uncertainSpec, "send-crash"))?.status,
       "execution-unknown",
     );
-    await assert.rejects(rpc.call("dispatch", uncertainSpec, uncertainSend), /not attached/);
+    // The restarted Core has not mounted the session: typed refusal, code survives the websocket.
+    await assert.rejects(rpc.call("dispatch", uncertainSpec, uncertainSend), (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /not attached/);
+      assert.equal(error.name, "SessionNotAttachedError");
+      assert.equal((error as Error & { code?: unknown }).code, "not-attached");
+      return true;
+    });
     const recoveredEvents = await rpc.call<AgentEvent[]>("eventsSince", uncertainSpec, 0);
     assert.equal(recoveredEvents.filter((event) => event.kind === "tool.finished").length, 0);
     const recoveredUpdateGate = (await requestControl(layout.controlEndpoint, {
