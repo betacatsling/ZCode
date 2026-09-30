@@ -729,7 +729,7 @@ test(
 for (const { kind, error: expected } of BREAKS) {
   test(
     `broken stream (${kind}), no open turn: force-close rewrites the stored activity to unknown`,
-    { timeout: TEST_TIMEOUT_MS, todo: "force-close leaves the pre-break idle sidecar" },
+    { timeout: TEST_TIMEOUT_MS },
     async () => {
       await withRoot("zcode-close-sidecar-idle-", async (root, worktree) => {
         const harness = new OpenTurnHarness();
@@ -750,7 +750,7 @@ for (const { kind, error: expected } of BREAKS) {
 
 test(
   "target close of a broken idle session: the next target owner lists it as unknown, not idle",
-  { timeout: TEST_TIMEOUT_MS, todo: "force-close leaves the pre-break idle sidecar" },
+  { timeout: TEST_TIMEOUT_MS },
   async () => {
     await withRoot("zcode-close-sidecar-target-", async (root, worktree) => {
       const harness = new OpenTurnHarness();
