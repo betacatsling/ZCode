@@ -16,8 +16,6 @@ interface AttentionMark {
   readonly statusCode?: number;
 }
 
-const RECONFIGURE_REASONS = new Set(["auth_failed", "provider_not_configured"]);
-
 /**
  * Hash of what a reconfigure changes: access (key/account kind), api (endpoint/type) and, for
  * account access, the account source revision (re-login). Model lists are excluded.
@@ -34,9 +32,9 @@ export function providerCredentialFingerprint(
 }
 
 /**
- * In-memory "credential needs attention" state per Provider. Set when a host-bound Model request
- * fails with the executor's non-retryable auth_failed (401/403) or provider_not_configured
- * classification (the reasons the Pi chain reports as provider-reconfigure-required);
+ * In-memory "credential needs attention" state per Provider. Set only when a host-bound Model
+ * request is rejected with HTTP 401 (non-retryable auth_failed), or fails locally with
+ * provider_not_configured before any request; a 403 (permission/region) never marks;
  * cleared automatically once the Provider's credential fingerprint changes (reconfigure) or the
  * Provider disappears. Lives as long as the Registry catalog of one Host process.
  */
@@ -109,18 +107,14 @@ export class ProviderCredentialAttention {
     const { context } = error as { context?: unknown };
     if (!context || typeof context !== "object") return;
     const { reason, statusCode, retryable } = context as Record<string, unknown>;
-    if (retryable === true || typeof reason !== "string" || !RECONFIGURE_REASONS.has(reason))
-      return;
-    this.#marks.set(providerId, {
-      credential,
-      reason,
-      ...(typeof statusCode === "number" &&
-      Number.isInteger(statusCode) &&
-      statusCode >= 100 &&
-      statusCode <= 599
-        ? { statusCode }
-        : {}),
-    });
+    if (retryable === true) return;
+    // Only a rejected credential (401) or a locally missing one is fixed by a new key; 403 may be
+    // permission/region and stays a per-turn typed failure without blocking admission.
+    if (reason === "auth_failed" && statusCode === 401) {
+      this.#marks.set(providerId, { credential, reason, statusCode });
+    } else if (reason === "provider_not_configured" && statusCode === undefined) {
+      this.#marks.set(providerId, { credential, reason });
+    }
   }
 }
 

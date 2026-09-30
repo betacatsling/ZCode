@@ -4,10 +4,11 @@ import {
   workspaceSessionBindingCapabilityResultSchema,
   type WorkspaceSessionBindingCapabilityRequest,
   type WorkspaceSessionBindingCapabilityResult,
+  type AgentModelFailure,
   type ExecutionTarget,
 } from "@zcode/shared/agent-host";
 import type { HarnessRegistry } from "./harnessRegistry.js";
-import type { ModelCatalogPort } from "./modelBindingPlanner.js";
+import type { ModelCatalogPort, ModelCatalogSnapshotPort } from "./modelBindingPlanner.js";
 
 export function createWorkspaceSessionCapabilityReader(input: {
   target: ExecutionTarget;
@@ -19,10 +20,12 @@ export function createWorkspaceSessionCapabilityReader(input: {
 ) => Promise<WorkspaceSessionBindingCapabilityResult> {
   return async (raw) => {
     const request = workspaceSessionBindingCapabilityRequestSchema.parse(raw);
+    let credentialAttention: AgentModelFailure | undefined;
     const report = (support: "supported" | "unsupported" | "experimental" | "unknown", reason?: string) =>
       workspaceSessionBindingCapabilityResultSchema.parse({
         targetId: input.target.id,
         report: capabilityReportSchema.parse({ support, ...(reason ? { reason } : {}) }),
+        ...(credentialAttention ? { credentialAttention } : {}),
       });
     if (!input.target.available) return report("unsupported", "target-unavailable");
 
@@ -69,9 +72,11 @@ export function createWorkspaceSessionCapabilityReader(input: {
         return report("supported");
       }
 
-      const catalog = input.catalog.capture?.() ?? input.catalog;
+      const catalog: ModelCatalogSnapshotPort = input.catalog.capture?.() ?? input.catalog;
       const selection = request.modelBinding.selection;
       if (!catalog.validateSelection(selection).ok) return report("unsupported", "model-unavailable");
+      // Same auto-clearing check as turn admission; informational only, open/create stay allowed.
+      credentialAttention = catalog.credentialAttention?.(selection)?.failure;
       const support = await harness.hostManagedSupport(input.target, selection);
       if (support.support !== "supported") {
         return report(

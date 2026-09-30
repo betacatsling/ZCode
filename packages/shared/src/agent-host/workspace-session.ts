@@ -2,6 +2,7 @@ import { z } from "zod";
 import { modelBindingRequestSchema } from "./session-spec.js";
 import { modelSelectionSchema } from "../model-selection.js";
 import { capabilityReportSchema } from "./capabilities.js";
+import { agentModelFailureSchema } from "./events.js";
 
 const stableId = z.string().trim().min(1).max(256);
 
@@ -35,6 +36,8 @@ export type WorkspaceSessionBindingCapabilityRequest = z.infer<
 export const workspaceSessionBindingCapabilityResultSchema = z.strictObject({
   targetId: stableId,
   report: capabilityReportSchema,
+  /** Key-free: the Provider's current credential was rejected (401); turns will be refused. */
+  credentialAttention: agentModelFailureSchema.optional(),
 });
 export type WorkspaceSessionBindingCapabilityResult = z.infer<
   typeof workspaceSessionBindingCapabilityResultSchema
