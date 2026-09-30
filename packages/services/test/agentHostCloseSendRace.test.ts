@@ -338,7 +338,7 @@ async function finishRunThenClose(
 
 test(
   "a send that starts its run while close() waits for the event queue makes close() refuse",
-  { timeout: TEST_TIMEOUT_MS, todo: "close() closes the journals under a run it did not wait for" },
+  { timeout: TEST_TIMEOUT_MS },
   async () => {
     await withHost(async (context) => {
       const { root, host, harness } = context;
@@ -367,7 +367,7 @@ test(
 
 test(
   "a send accepted after close() started waiting, but before it marked the host closed, makes close() refuse",
-  { timeout: TEST_TIMEOUT_MS, todo: "close() closes the journals under a run it did not wait for" },
+  { timeout: TEST_TIMEOUT_MS },
   async () => {
     await withHost(async (context) => {
       const { root, host, harness } = context;
@@ -395,7 +395,7 @@ test(
 
 test(
   "a send reserved but not yet started when close() would mark the host closed makes close() refuse",
-  { timeout: TEST_TIMEOUT_MS, todo: "close() closes under a reserved send, leaving it uncertain" },
+  { timeout: TEST_TIMEOUT_MS },
   async () => {
     await withHost(async (context) => {
       const { root, host } = context;
