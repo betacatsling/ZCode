@@ -37,6 +37,9 @@ export async function requestClaudeApproval(
   if (turn.requestedToolIds.has(input.tool_use_id)) return deny(`repeat-tool ${input.tool_use_id}`);
 
   // Claude blocks on PreToolUse before stdout may register the same tool_use — seed from hook.
+  // Snapshot a complete streamed input first: upsertToolCall replaces it with the hook's input,
+  // and the subset check below must compare the hook against what Claude streamed.
+  const streamedInput = runtime.toolCalls.get(input.tool_use_id)?.input;
   let tool;
   try {
     tool = upsertToolCall(runtime, turn, input.tool_use_id, input.tool_name, input.tool_input);
@@ -47,9 +50,11 @@ export async function requestClaudeApproval(
   if (!tool) return deny("no-tool-after-upsert");
   if (tool.name !== input.tool_name) return deny(`name ${tool.name}!=${input.tool_name}`);
   if (!tool.input) return deny(`no-input typeof_hook=${typeof input.tool_input}`);
-  if (!sameJsonSubset(tool.name, tool.input, input.tool_input)) {
+  const expected = streamedInput ?? tool.input;
+  if (!sameJsonSubset(tool.name, expected, input.tool_input)) {
+    tool.input = expected; // a refused hook must not replace what Claude streamed
     return deny(
-      `subset toolKeys=${JSON.stringify(isRecord(tool.input) ? Object.keys(tool.input) : tool.input)} hookKeys=${JSON.stringify(isRecord(input.tool_input) ? Object.keys(input.tool_input) : input.tool_input)}`,
+      `subset toolKeys=${JSON.stringify(Object.keys(expected))} hookKeys=${JSON.stringify(isRecord(input.tool_input) ? Object.keys(input.tool_input) : input.tool_input)}`,
     );
   }
   if (
