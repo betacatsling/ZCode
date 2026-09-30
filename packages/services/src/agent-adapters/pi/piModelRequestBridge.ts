@@ -1,5 +1,6 @@
 import type { Model } from "@zcode/contracts";
 import type { Worker } from "node:worker_threads";
+import { extractModelFailure } from "../../agent-host/modelFailureClassification.js";
 import type { PiModelFailure, ToPiWorker } from "./piProtocol.js";
 
 export interface PiModelRuntimePort {
@@ -39,25 +40,10 @@ export async function runPiModelRequest(
   }
 }
 
-const SAFE_TOKEN = /^[a-z][a-z0-9_-]{0,63}$/;
-
 /**
- * Copies only whitelisted scalar fields from the executor's typed error (AiSdkModelAdapterError
- * code + runner context). Messages, causes, headers and URLs never cross into the worker.
- * Provider/model identity comes from the admitted turn Model, not from the error.
+ * Pi name for the shared, harness-neutral extraction (see agent-host/modelFailureClassification).
+ * Whitelisted scalars only; identity comes from the admitted turn Model.
  */
-function classifyPiModelFailure(error: unknown, model: Model): PiModelFailure | undefined {
-  if (!(error instanceof Error)) return undefined;
-  const { code, context } = error as { code?: unknown; context?: unknown };
-  if (!context || typeof context !== "object") return undefined;
-  const { reason, statusCode, retryable } = context as Record<string, unknown>;
-  if (typeof reason !== "string" || !SAFE_TOKEN.test(reason)) return undefined;
-  return {
-    reason,
-    ...(typeof code === "string" && SAFE_TOKEN.test(code) ? { code } : {}),
-    providerId: model.providerId,
-    modelId: model.modelId,
-    ...(typeof statusCode === "number" && Number.isInteger(statusCode) ? { statusCode } : {}),
-    retryable: retryable === true,
-  };
+export function classifyPiModelFailure(error: unknown, model: Model): PiModelFailure | undefined {
+  return extractModelFailure(error, model);
 }
