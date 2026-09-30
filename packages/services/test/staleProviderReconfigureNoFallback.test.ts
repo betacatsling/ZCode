@@ -451,10 +451,10 @@ test(
       assert.equal(typedErrors[0]?.message.includes("401"), true);
       assert.equal(JSON.stringify(afterExpiry).includes("stale-key"), false);
       assert.equal(JSON.stringify(afterExpiry).includes("127.0.0.1"), false);
-      assert.equal(
-        (await target.snapshot(spec)).control.lastError?.code,
-        "provider-reconfigure-required",
-      );
+      const liveError = (await target.snapshot(spec)).control.lastError;
+      assert.equal(liveError?.code, "provider-reconfigure-required");
+      // The V4 snapshot lastError carries the same typed failure (optional field).
+      assert.deepEqual(liveError?.failure, expectedFailure);
       const failures = env.statuses.filter(
         (event): event is Extract<ModelNetworkStatusEvent, { type: "model_request_failed" }> =>
           event.type === "model_request_failed",
@@ -471,6 +471,8 @@ test(
       await target.close();
       target = env.makeTarget();
       await target.attach(spec);
+      // Cold read after reopen: lastError (with its typed failure) is rebuilt from the journal.
+      assert.deepEqual((await target.snapshot(spec)).control.lastError, liveError);
       assert.equal((await send(target, spec, "turn-3", "resume after expiry")).status, "accepted");
       await target.waitForIdle(spec);
       const afterResume = await target.eventsSince(spec, 0);
@@ -743,6 +745,11 @@ test(
         statusCode: 403,
         retryable: false,
       });
+      // The 403 typed failure reaches snapshot lastError unchanged (no 401-only filter).
+      assert.deepEqual(
+        (await target.snapshot(spec)).control.lastError?.failure,
+        (errors[0] as Record<string, unknown> | undefined)?.failure,
+      );
       assert.equal(fakes.count("stale"), 1);
       const capability = await capabilityOf(target, selection);
       assert.equal(capability.report.support, "supported");
