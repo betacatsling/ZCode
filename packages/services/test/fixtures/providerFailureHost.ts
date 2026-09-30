@@ -108,7 +108,11 @@ export async function startFailingProvider() {
   };
 }
 
-export async function createProviderFailureHost(root: string, origin: string) {
+export async function createProviderFailureHost(
+  root: string,
+  origin: string,
+  retry?: ConstructorParameters<typeof AiSdkModelAdapter>[0]["retry"],
+) {
   const worktree = join(root, "worktree");
   await mkdir(worktree, { recursive: true });
   const runtime = createNodeProviderRegistryRuntime({
@@ -127,7 +131,10 @@ export async function createProviderFailureHost(root: string, origin: string) {
   });
   await runtime.configService.addPersonalModel(provider.providerId, "failing-model", modelConfig());
   await runtime.registryService.refresh("provider-failure-fixture");
-  const adapter = new AiSdkModelAdapter({ streamIdleTimeoutMs: 5_000 });
+  const adapter = new AiSdkModelAdapter({
+    streamIdleTimeoutMs: 5_000,
+    ...(retry ? { retry } : {}),
+  });
   const targetId = "remote-typed-failure";
   const target = new AgentHostTargetService({
     root: join(root, "host"),
