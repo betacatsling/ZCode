@@ -36,7 +36,7 @@ export type WorkspaceSessionBindingCapabilityRequest = z.infer<
 export const workspaceSessionBindingCapabilityResultSchema = z.strictObject({
   targetId: stableId,
   report: capabilityReportSchema,
-  /** Key-free: the Provider's current credential was rejected (401); turns will be refused. */
+  /** Key-free: the Provider's current credential was rejected (401); host-managed turns are refused. */
   credentialAttention: agentModelFailureSchema.optional(),
 });
 export type WorkspaceSessionBindingCapabilityResult = z.infer<

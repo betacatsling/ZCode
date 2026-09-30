@@ -9,12 +9,17 @@ import {
   workspaceSessionBindingCapabilityResultSchema,
   type SessionSpec,
   type WorkspaceSessionBindingCapabilityRequest,
+  type WorkspaceSessionBindingCapabilityResult,
 } from "@zcode/shared/agent-host";
 import { TargetModelGateway } from "@zcode/services/model-gateway";
 import type { IWorktreeService } from "../projectWorkspaceServices.js";
 import { HarnessRegistry, type HarnessAdapter } from "./harnessRegistry.js";
 import { createAgentHostConversationBridge } from "./conversationBridge.js";
 import { createRegistryModelCatalog } from "./registryCatalog.js";
+import {
+  ProviderCredentialAttention,
+  readRegistryCredentialAttention,
+} from "./providerCredentialAttention.js";
 import { createRpcAgentHostService } from "./rpcTargetService.js";
 import type { IAgentHostService } from "./serviceContract.js";
 import { readHarnessStaticAsset } from "./harnessAssets.js";
@@ -44,6 +49,8 @@ export function createLazyTargetAgentHostService(input: {
   ownerGeneration?: number;
   /** 只读观察已注册 harness，不改变准入，也不另建 Gateway。 */
   observeRegisteredHarness?: (harness: HarnessAdapter) => void;
+  /** Host-level credential attention; defaults to one owned by this lazy Host. */
+  credentialAttention?: ProviderCredentialAttention;
 }): {
   service: IAgentHostService;
   /**
@@ -64,6 +71,25 @@ export function createLazyTargetAgentHostService(input: {
   let disposing: Promise<void> | undefined;
   const events = new Emitter<TargetHostEvent>();
   const conversationFrames = new Emitter<AgentHostConversationFrame>();
+  const credentialAttention = input.credentialAttention ?? new ProviderCredentialAttention();
+  // Cold capability reads report the Host-level mark without warming the target.
+  const withCredentialAttention = (
+    request: WorkspaceSessionBindingCapabilityRequest,
+    result: WorkspaceSessionBindingCapabilityResult,
+  ): WorkspaceSessionBindingCapabilityResult => {
+    if (request.modelBinding.kind === "harness-managed") return result;
+    const failure = readRegistryCredentialAttention(
+      input.registry,
+      credentialAttention,
+      request.modelBinding.selection,
+    )?.failure;
+    return failure
+      ? workspaceSessionBindingCapabilityResultSchema.parse({
+          ...result,
+          credentialAttention: failure,
+        })
+      : result;
+  };
   const authorizeWorktree = async (spec: SessionSpec, realPath: string) =>
     authorizeLazyWorktreeAdmission({
       worktrees: input.worktrees,
@@ -135,7 +161,7 @@ export function createLazyTargetAgentHostService(input: {
         const instance = new AgentHostTargetService({
           root: join(input.root, "sessions"),
           target: input.target,
-          catalog: createRegistryModelCatalog(input.registry, modelAdapter),
+          catalog: createRegistryModelCatalog(input.registry, modelAdapter, credentialAttention),
           registry: harnesses,
           // Trusted target channel only; reject symlink aliases in this environment.
           authorizeWorktree,
@@ -261,16 +287,22 @@ export function createLazyTargetAgentHostService(input: {
     },
     async getWorkspaceSessionCapability(request: WorkspaceSessionBindingCapabilityRequest) {
       if (request.harnessId === "zcode") {
-        return historyOnly.getWorkspaceSessionCapability(request);
+        return withCredentialAttention(
+          request,
+          await historyOnly.getWorkspaceSessionCapability(request),
+        );
       }
       if (!input.target.available || !input.allowNewSessions()) {
-        return workspaceSessionBindingCapabilityResultSchema.parse({
-          targetId: input.target.id,
-          report: {
-            support: "unsupported",
-            reason: input.target.available ? "admission-disabled" : "target-unavailable",
-          },
-        });
+        return withCredentialAttention(
+          request,
+          workspaceSessionBindingCapabilityResultSchema.parse({
+            targetId: input.target.id,
+            report: {
+              support: "unsupported",
+              reason: input.target.available ? "admission-disabled" : "target-unavailable",
+            },
+          }),
+        );
       }
       return (await getTarget()).getWorkspaceSessionCapability(request);
     },

@@ -11,9 +11,9 @@ import {
 export function createRegistryModelCatalog(
   registry: ProviderRegistryService,
   adapter?: AiSdkModelAdapter,
+  // Host-level "credential needs attention" state, shared by every session of this Host.
+  attention: ProviderCredentialAttention = new ProviderCredentialAttention(),
 ): ModelCatalogPort {
-  // One "credential needs attention" state per catalog, shared by every session of this Host.
-  const attention = new ProviderCredentialAttention();
   const capture = (): ModelCatalogSnapshotPort => {
     const snapshot = registry.getSnapshot();
     if (!snapshot) throw new Error("Provider Registry not started");
