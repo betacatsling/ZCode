@@ -287,40 +287,32 @@ test("translateClaudeRuntimeMessage fails the runtime on a protocol violation", 
   await assert.rejects(turn.completion.promise);
 });
 
-test(
-  "a protocol failure with an oversized detail still settles the active turn as unknown",
-  { todo: "bug: oversized session.error message throws ZodError; fixed in next commit" },
-  async () => {
-    const { runtime, events, revoked } = claudeUnitRuntime();
-    const turn = claudeUnitTurn(runtime);
-    // translateSystem interpolates a non-string subtype verbatim (claudeRuntimeEvents.ts:65-68).
-    const message = { type: "system", subtype: { detail: "x".repeat(2_000) } };
-    assert.doesNotThrow(() => translateClaudeRuntimeMessage(runtime, message));
-    assert.deepEqual(eventKinds(events), [
-      "session.error:execution-unknown",
-      "turn.finished:unknown",
-    ]);
-    const error = events[0];
-    assert.ok(error?.kind === "session.error" && error.message.length <= 1024);
-    assert.equal(runtime.activeTurn, undefined);
-    assert.deepEqual(revoked, ["grant-claude-unit"]);
-    await assert.rejects(turn.completion.promise, /may have executed/);
-  },
-);
+test("a protocol failure with an oversized detail still settles the active turn as unknown", async () => {
+  const { runtime, events, revoked } = claudeUnitRuntime();
+  const turn = claudeUnitTurn(runtime);
+  // translateSystem interpolates a non-string subtype verbatim (claudeRuntimeEvents.ts:65-68).
+  const message = { type: "system", subtype: { detail: "x".repeat(2_000) } };
+  assert.doesNotThrow(() => translateClaudeRuntimeMessage(runtime, message));
+  assert.deepEqual(eventKinds(events), [
+    "session.error:execution-unknown",
+    "turn.finished:unknown",
+  ]);
+  const error = events[0];
+  assert.ok(error?.kind === "session.error" && error.message.length <= 1024);
+  assert.equal(runtime.activeTurn, undefined);
+  assert.deepEqual(revoked, ["grant-claude-unit"]);
+  await assert.rejects(turn.completion.promise, /may have executed/);
+});
 
-test(
-  "markClaudeTurnUnknown bounds its session.error message to the event schema limit",
-  { todo: "bug: oversized session.error message throws ZodError; fixed in next commit" },
-  async () => {
-    const { runtime, events } = claudeUnitRuntime();
-    const turn = claudeUnitTurn(runtime);
-    assert.doesNotThrow(() => markClaudeTurnUnknown(runtime, turn, "y".repeat(5_000)));
-    assert.deepEqual(eventKinds(events), [
-      "session.error:execution-unknown",
-      "turn.finished:unknown",
-    ]);
-    const error = events[0];
-    assert.equal(error?.kind === "session.error" && error.message, "y".repeat(1024));
-    await assert.rejects(turn.completion.promise);
-  },
-);
+test("markClaudeTurnUnknown bounds its session.error message to the event schema limit", async () => {
+  const { runtime, events } = claudeUnitRuntime();
+  const turn = claudeUnitTurn(runtime);
+  assert.doesNotThrow(() => markClaudeTurnUnknown(runtime, turn, "y".repeat(5_000)));
+  assert.deepEqual(eventKinds(events), [
+    "session.error:execution-unknown",
+    "turn.finished:unknown",
+  ]);
+  const error = events[0];
+  assert.equal(error?.kind === "session.error" && error.message, "y".repeat(1024));
+  await assert.rejects(turn.completion.promise);
+});
