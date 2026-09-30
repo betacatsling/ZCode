@@ -36,7 +36,9 @@ function capabilityReasonId(reason: string | undefined): string {
     : "projectSidebar.agentCreateCapabilityUnknown";
 }
 
-function buildModelGroups(view: ModelSelectionView) {
+function buildModelGroups(
+  view: ModelSelectionView,
+) {
   const selectionByValue = new Map<string, ModelSelection>();
   const groups: ModelSelectGroup[] = view.providers.map((provider) => ({
     key: `agent-provider:${provider.providerId}`,
@@ -73,10 +75,7 @@ export function ProjectSidebarAgentCreateForm({
   targetLabel: string;
   onCancel(): void;
   onCreateAgent(
-    request: Pick<
-      WorkspaceSessionCreateRequest,
-      "requestId" | "harnessId" | "modelBinding" | "title"
-    >,
+    request: Pick<WorkspaceSessionCreateRequest, "requestId" | "harnessId" | "modelBinding" | "title">,
   ): Promise<void>;
   loadAsset?: HarnessAssetLoader;
 }) {
@@ -157,8 +156,7 @@ export function ProjectSidebarAgentCreateForm({
     };
   }, [agentHostService, targetOption.targetId, targetOption.attachmentGeneration]);
 
-  const modelView =
-    modelSelectionRead.state.status === "ready" ? modelSelectionRead.state.view : null;
+  const modelView = modelSelectionRead.state.status === "ready" ? modelSelectionRead.state.view : null;
   const { groups: modelGroups, selectionByValue } = useMemo(
     () => (modelView ? buildModelGroups(modelView) : { groups: [], selectionByValue: new Map() }),
     [modelView],
@@ -170,8 +168,7 @@ export function ProjectSidebarAgentCreateForm({
     const previousHarness = [...workspace.sessions]
       .sort((left, right) => right.updatedAt - left.updatedAt)
       .find((session) => availableIds.has(session.harnessId))?.harnessId;
-    const defaultHarness =
-      previousHarness ?? (available.length === 1 ? available[0]?.manifest.id : null);
+    const defaultHarness = previousHarness ?? (available.length === 1 ? available[0]?.manifest.id : null);
     if (defaultHarness) setHarnessId(defaultHarness);
     selectedHarnessRef.current = true;
   }, [directoryState, workspace.sessions]);
@@ -196,13 +193,7 @@ export function ProjectSidebarAgentCreateForm({
   const bindingKey = selectedBinding ? JSON.stringify([harnessId, selectedBinding]) : "";
 
   useEffect(() => {
-    if (
-      !agentHostService ||
-      !selectedBinding ||
-      !harnessId ||
-      !targetIsLive ||
-      !workspaceIsCurrent
-    ) {
+    if (!agentHostService || !selectedBinding || !harnessId || !targetIsLive || !workspaceIsCurrent) {
       setCapabilityState(null);
       return;
     }
@@ -240,8 +231,7 @@ export function ProjectSidebarAgentCreateForm({
   const selectedProviderName =
     modelView?.providers.find((provider) => provider.providerId === selectedModel?.providerId)
       ?.providerName ?? selectedModel?.providerId;
-  const modelLabel =
-    selectedModel?.modelId ?? intl.formatMessage({ id: "projectSidebar.chooseModel" });
+  const modelLabel = selectedModel?.modelId ?? intl.formatMessage({ id: "projectSidebar.chooseModel" });
   const registeredHarness =
     directoryState.status === "ready" &&
     directoryState.entries.some(
@@ -252,16 +242,16 @@ export function ProjectSidebarAgentCreateForm({
   const canSubmit =
     Boolean(
       agentHostService &&
-      targetIsLive &&
-      workspaceIsCurrent &&
-      !workspaceGenerationChanged &&
-      directoryState.status === "ready" &&
-      directoryState.targetAvailable &&
-      directoryState.admissionEnabled &&
-      directoryState.targetId === targetOption.targetId &&
-      registeredHarness &&
-      selectedBinding &&
-      capability?.support === "supported",
+        targetIsLive &&
+        workspaceIsCurrent &&
+        !workspaceGenerationChanged &&
+        directoryState.status === "ready" &&
+        directoryState.targetAvailable &&
+        directoryState.admissionEnabled &&
+        directoryState.targetId === targetOption.targetId &&
+        registeredHarness &&
+        selectedBinding &&
+        capability?.support === "supported",
     ) && !isSubmitting;
 
   const handleSubmit = useCallback(
@@ -316,8 +306,7 @@ export function ProjectSidebarAgentCreateForm({
 
   const submitDisabledReason = workspaceGenerationChanged
     ? intl.formatMessage({ id: "projectSidebar.agentCreateWorkspaceChanged" })
-    : !targetIsLive ||
-        !workspaceIsCurrent ||
+    : !targetIsLive || !workspaceIsCurrent ||
         (directoryState.status === "ready" && !directoryState.targetAvailable)
       ? intl.formatMessage({ id: "projectSidebar.cachedReadOnly" })
       : null;
@@ -428,9 +417,7 @@ export function ProjectSidebarAgentCreateForm({
             })}
           </span>
           {capability.reason ? (
-            <span className="ml-1">
-              {intl.formatMessage({ id: capabilityReasonId(capability.reason) })}
-            </span>
+            <span className="ml-1">{intl.formatMessage({ id: capabilityReasonId(capability.reason) })}</span>
           ) : null}
         </div>
       ) : capabilityState?.status === "unavailable" || directoryState.status === "unavailable" ? (
