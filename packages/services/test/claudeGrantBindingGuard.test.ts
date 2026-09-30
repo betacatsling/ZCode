@@ -34,38 +34,30 @@ const GRANT_CASES: readonly {
 ];
 
 for (const current of GRANT_CASES) {
-  test(
-    `create revokes and refuses a Gateway grant whose ${current.name} differs`,
-    { todo: "A14" },
-    async (t) => {
-      const h = await claudeAdapterHarness(t);
-      const servers = await listeningServers();
-      const gateway = h.targetModelGateway.get(h.spec.execution.targetId);
-      const recordingCreate = gateway.createGrant;
-      gateway.createGrant = (input) => current.mutate(recordingCreate(input));
+  test(`create revokes and refuses a Gateway grant whose ${current.name} differs`, async (t) => {
+    const h = await claudeAdapterHarness(t);
+    const servers = await listeningServers();
+    const gateway = h.targetModelGateway.get(h.spec.execution.targetId);
+    const recordingCreate = gateway.createGrant;
+    gateway.createGrant = (input) => current.mutate(recordingCreate(input));
 
-      await assert.rejects(h.adapter.create(h.spec, h.plan), (error: unknown) => {
-        assert.ok(error instanceof ClaudeBindingMismatchError);
-        assert.equal(error.code, "invalid-binding");
-        assert.equal(error.mismatch, "grant");
-        assert.match(error.message, /Claude Gateway grant differs from the captured binding/);
-        return true;
-      });
-      assert.equal(h.grants.created.length, 1);
-      assert.deepEqual(h.grants.revoked, h.grants.created, "the mismatched grant is revoked");
-      assert.equal(h.launches.length, 0, "no process is launched");
-      assert.equal(
-        await listeningServers(),
-        servers + 1,
-        "only the Gateway listens; no hook server",
-      );
+    await assert.rejects(h.adapter.create(h.spec, h.plan), (error: unknown) => {
+      assert.ok(error instanceof ClaudeBindingMismatchError);
+      assert.equal(error.code, "invalid-binding");
+      assert.equal(error.mismatch, "grant");
+      assert.match(error.message, /Claude Gateway grant differs from the captured binding/);
+      return true;
+    });
+    assert.equal(h.grants.created.length, 1);
+    assert.deepEqual(h.grants.revoked, h.grants.created, "the mismatched grant is revoked");
+    assert.equal(h.launches.length, 0, "no process is launched");
+    assert.equal(await listeningServers(), servers + 1, "only the Gateway listens; no hook server");
 
-      gateway.createGrant = recordingCreate;
-      await h.adapter.create(h.spec, h.plan);
-      assert.equal(h.grants.created.length, 2);
-      assert.equal(h.launches.length, 1, "a matching grant still starts the session");
-    },
-  );
+    gateway.createGrant = recordingCreate;
+    await h.adapter.create(h.spec, h.plan);
+    assert.equal(h.grants.created.length, 2);
+    assert.equal(h.launches.length, 1, "a matching grant still starts the session");
+  });
 }
 
 test("the grant guard covers every binding field of ModelGatewayGrant", () => {

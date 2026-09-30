@@ -1,6 +1,7 @@
 import type { Model } from "@zcode/contracts";
 import type { ModelSelection } from "@zcode/shared/model-selection";
 import type { AgentErrorCode, BindingPlan, SessionSpec } from "@zcode/shared/agent-host";
+import type { ModelGatewayGrant } from "@zcode/services/model-gateway";
 import type { ClaudeFakeModelCompatibilityEvidence } from "./claudeCapabilities.js";
 
 // Binding checks for ClaudeHarnessAdapter (moved verbatim from the adapter class).
@@ -68,6 +69,28 @@ export function validateClaudePlan(
     plan.support.constraints.fixtureModelId !== selection.modelId
   ) {
     throw new ClaudeBindingMismatchError("plan-evidence", PLAN_EVIDENCE_REFUSAL);
+  }
+}
+
+/** The Gateway grant must carry exactly the session's captured Messages binding. */
+export function assertClaudeGrantMatchesBinding(
+  grant: ModelGatewayGrant,
+  spec: SessionSpec,
+  plan: BindingPlan,
+  publicModelId: string,
+): void {
+  if (
+    grant.protocol !== "anthropic-messages" ||
+    grant.sessionId !== spec.hostSessionId ||
+    grant.modelBindingFingerprint !== plan.catalogFingerprint ||
+    grant.publicModelId !== publicModelId ||
+    grant.actualModel.providerId !== plan.effective?.providerId ||
+    grant.actualModel.modelId !== plan.effective?.modelId
+  ) {
+    throw new ClaudeBindingMismatchError(
+      "grant",
+      "Claude Gateway grant differs from the captured binding",
+    );
   }
 }
 
