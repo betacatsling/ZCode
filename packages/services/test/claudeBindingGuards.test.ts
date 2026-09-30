@@ -213,16 +213,31 @@ test("validateClaudePlan refuses a plan without an effective selection before ev
   assert.equal(lookedUp, false);
 });
 
-test("validateClaudeModel accepts every supported effort that matches the binding", () => {
+test("validateClaudeModel accepts every supported effort and returns it for the profile", () => {
   for (const effort of ["low", "medium", "high", "xhigh", "max"]) {
     const spec = claudeUnitSpec();
     const plan = claudeUnitPlan(spec);
     plan.effective = { ...plan.effective!, options: { reasoningLevel: effort as never } };
-    assert.doesNotThrow(
-      () => validateClaudeModel(plan, fakeClaudeModel({ reasoningLevel: effort })),
-      effort,
-    );
+    // startClaudeSession passes this to the profile; it has no separate effort check.
+    assert.equal(validateClaudeModel(plan, fakeClaudeModel({ reasoningLevel: effort })), effort);
   }
+});
+
+test("validateClaudeModel refuses an effort missing on both sides or outside the pinned set", () => {
+  const plan = claudeUnitPlan();
+  const noEffort: BindingPlan = { ...plan, effective: { ...plan.effective!, options: {} } };
+  assert.throws(
+    () => validateClaudeModel(noEffort, { ...fakeClaudeModel(), options: {} }),
+    MODEL_REFUSAL,
+  );
+  const turbo: BindingPlan = {
+    ...plan,
+    effective: { ...plan.effective!, options: { reasoningLevel: "turbo" as never } },
+  };
+  assert.throws(
+    () => validateClaudeModel(turbo, fakeClaudeModel({ reasoningLevel: "turbo" })),
+    MODEL_REFUSAL,
+  );
 });
 
 test("validateClaudeModel refuses provider, model and effort drift and unsupported efforts", () => {
