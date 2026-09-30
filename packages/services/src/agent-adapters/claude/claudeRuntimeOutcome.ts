@@ -2,6 +2,7 @@ import { denyPendingClaudeApprovals } from "./claudeHostApproval.js";
 import { type ClaudeActiveTurn, type ClaudeSessionRuntime } from "./claudeRuntime.js";
 import { translateClaudeStructuredMessage } from "./claudeRuntimeEvents.js";
 import type { ClaudeStructuredMessage } from "./claudeStreamProcess.js";
+import { SESSION_ERROR_MESSAGE_MAX, truncateCodePointSafe } from "./claudeText.js";
 
 // Turn/runtime outcome handling for ClaudeHarnessAdapter (moved verbatim from the adapter class).
 
@@ -76,7 +77,10 @@ export function markClaudeTurnUnknown(
     runtime.emit("turn.started", { turnId: turn.hostTurnId });
   }
   // The session.error schema caps message at 1024; an unbounded detail would throw before turn.finished.
-  runtime.emit("session.error", { code: "execution-unknown", message: message.slice(0, 1024) });
+  runtime.emit("session.error", {
+    code: "execution-unknown",
+    message: truncateCodePointSafe(message, SESSION_ERROR_MESSAGE_MAX),
+  });
   runtime.emit("turn.finished", { turnId: turn.hostTurnId, outcome: "unknown" });
   denyPendingClaudeApprovals(runtime);
   runtime.activeTurn = undefined;
