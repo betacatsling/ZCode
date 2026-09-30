@@ -21,8 +21,8 @@ import {
 } from "@zcode/shared/zcode-protocol-v4";
 import { HarnessRegistry } from "./harnessRegistry.js";
 import { createHostHarnessDirectory, type HarnessDirectory } from "./harnessDirectory.js";
-import { EventStreamFailure, SessionHost, SessionHostClosedError } from "./sessionHost.js";
-import { SessionNotAttachedError } from "./targetErrors.js";
+import { SessionHost, SessionHostClosedError } from "./sessionHost.js";
+import { SessionNotAttachedError, TargetHostsCloseError } from "./targetErrors.js";
 import { createFileWorkspaceSessionReceiptStore } from "./workspaceSessionReceipts.js";
 import type { ModelCatalogPort } from "./modelBindingPlanner.js";
 import type { AgentHostActivityIndex } from "./activityIndex.js";
@@ -35,6 +35,7 @@ import {
 } from "./workspaceSessionService.js";
 import { createTargetSessionIndex } from "./targetSessionIndex.js";
 import { admitOwnedSession } from "./runtime/admissionLane.js";
+import { closeSessionHosts } from "./runtime/hostClose.js";
 import { createTargetOwnerGate } from "./runtime/ownerFence.js";
 
 export type {
@@ -356,28 +357,15 @@ export class AgentHostTargetService {
     // A create/attach that already acquired its lane must finish before adapter shutdown.
     while (this.#admissionTails.size) await Promise.all(this.#admissionTails.values());
     for (const harness of this.#registry.list()) await harness.shutdown?.();
-    let failure: unknown;
-    for (const host of this.#hosts.values()) {
-      // whenIdle() stops waiting once a host's event stream is broken and close() then force-closes
-      // it with EventStreamFailure; keep tearing down the other hosts and the owner fence first.
-      const idle = await host.whenIdle().then(
-        () => undefined,
-        (error: unknown) => error ?? new Error("host failed to settle"),
-      );
-      try {
-        await host.close();
-      } catch (error) {
-        if (!(error instanceof EventStreamFailure)) throw idle ?? error;
-        failure ??= error;
-        continue;
-      }
-      failure ??= idle;
-    }
+    // Every host is closed even if some fail; the owner fence is released after all of them.
+    const failures = await closeSessionHosts([...this.#hosts.values()]);
     this.#hosts.clear();
     this.#owners.clear();
     this.#listeners.clear();
     await this.#owner.releaseAll();
-    if (failure !== undefined) throw failure;
+    // One failure stays unwrapped so typed errors (EventStreamFailure...) remain matchable.
+    if (failures.length === 1) throw failures[0]!.error;
+    if (failures.length > 1) throw new TargetHostsCloseError(failures);
   }
 
   async #verify(spec: SessionSpec): Promise<string> {

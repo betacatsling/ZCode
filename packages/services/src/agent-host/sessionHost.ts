@@ -110,7 +110,7 @@ export class SessionHost {
   readonly #unsettledTurns = new Set<string>();
   readonly #preparedTurns = new Map<string, PreparedHostBinding>();
   /** Sends reserved by admission whose run has not started (or been refused) yet; see close(). */
-  readonly #startingSends = new Set<string>();
+  readonly #startingSends = new Map<string, { settled: Promise<void>; settle: () => void }>();
   #activeTurn?: string;
   #lastKnownStatus: AgentHostSessionSummary["lastKnownStatus"] = "idle";
   #recentOutcome: AgentHostSessionSummary["recentOutcome"] = "none";
@@ -671,7 +671,7 @@ export class SessionHost {
               // 的冻结 binding 才能先落 busy、再 accepted，避免无副作用失败变成 uncertain。
               this.#activeTurn = command.turnId;
               this.#unsettledTurns.add(command.turnId);
-              this.#startingSends.add(command.commandId);
+              this.#startingSends.set(command.commandId, startingSend());
               this.#lastKnownStatus = "starting";
               try {
                 await this.#persistActivityWhileOpen();
@@ -728,7 +728,7 @@ export class SessionHost {
       this.#preparedTurns.delete(command.commandId);
       // Synchronous with the #closed check above and with #track: close() sees it as starting
       // or active, never neither.
-      this.#startingSends.delete(command.commandId);
+      this.#sendStartSettled(command.commandId);
       if (!prepared)
         return this.#reject(command, "backend-failure", "accepted send lost its prepared binding");
       try {
@@ -904,6 +904,13 @@ export class SessionHost {
     await this.#eventTail;
     if (this.#eventError) throw this.#eventError;
   }
+  /**
+   * Resolves once every send that is starting now (reserved, see close()) has started its run or
+   * been refused. A close() refused with reason "starting-send" can be retried after it.
+   */
+  async whenStartingSendsSettled(): Promise<void> {
+    await Promise.all([...this.#startingSends.values()].map((send) => send.settled));
+  }
   async whenIdle(): Promise<void> {
     // A broken stream can no longer settle an open turn (see #eventError): stop waiting and
     // report the stream error instead of awaiting an adapter run that nothing can end.
@@ -919,7 +926,7 @@ export class SessionHost {
    */
   async close(): Promise<void> {
     if (this.#closed) return;
-    if (this.#active.size && !this.#eventError) throw new Error(ACTIVE_TURN_MESSAGE);
+    if (this.#active.size && !this.#eventError) throw new SessionHostBusyError("active-turn");
     try {
       await this.whenIdle();
     } catch (error) {
@@ -930,7 +937,7 @@ export class SessionHost {
     // #closed may have started its run (dispatch checks #closed, then starts), or be reserved and
     // about to start. Closing the journals under it would leave it execution-unknown.
     if (!failure && (this.#active.size > 0 || this.#startingSends.size > 0))
-      throw new Error(ACTIVE_TURN_MESSAGE);
+      throw new SessionHostBusyError(this.#active.size > 0 ? "active-turn" : "starting-send");
     this.#closed = true;
     this.#unsubscribe();
     // Events delivered before unsubscribe may still be journaling (bounded local I/O): let their
@@ -1097,8 +1104,12 @@ export class SessionHost {
    * rule as turn settlements (#persistActivityWhileOpen), so a stale host never overwrites or
    * resurrects the sidecar after close() settled (force-close persisted its own "unknown").
    */
+  #sendStartSettled(commandId: string): void {
+    this.#startingSends.get(commandId)?.settle();
+    this.#startingSends.delete(commandId);
+  }
   async #releaseSendReservation(command: Extract<AgentCommand, { type: "send" }>): Promise<void> {
-    this.#startingSends.delete(command.commandId);
+    this.#sendStartSettled(command.commandId);
     this.#unsettledTurns.delete(command.turnId);
     if (this.#activeTurn === command.turnId) this.#activeTurn = undefined;
     if (this.#lastKnownStatus === "starting") this.#lastKnownStatus = "idle";
@@ -1171,6 +1182,27 @@ export class SessionHostClosedError extends Error {
     );
     this.name = "SessionHostClosedError";
   }
+}
+
+/**
+ * Healthy close() refused: a turn is running ("active-turn"), or a reserved send has yet to start
+ * its run or be refused ("starting-send"; retry after whenStartingSendsSettled()). One message for
+ * both, the wording existing callers match on.
+ */
+export class SessionHostBusyError extends Error {
+  readonly code = "host-busy" as const;
+  readonly reason: "active-turn" | "starting-send";
+  constructor(reason: "active-turn" | "starting-send") {
+    super(ACTIVE_TURN_MESSAGE);
+    this.name = "SessionHostBusyError";
+    this.reason = reason;
+  }
+}
+
+function startingSend(): { settled: Promise<void>; settle: () => void } {
+  let settle!: () => void;
+  const settled = new Promise<void>((resolve) => (settle = resolve));
+  return { settled, settle };
 }
 
 function closedMessage(subject: string, detail: string | undefined): string {
