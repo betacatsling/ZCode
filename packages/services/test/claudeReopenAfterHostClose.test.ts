@@ -1,175 +1,47 @@
 /**
- * C4 step 1 repro (characterization only; nothing is fixed here).
- *
- * The question: after SessionHost.close(), does reopening the same Claude session reuse the old
- * adapter's still-running runtime and so skip the binding checks of startClaudeSession
+ * C4: reopening a Claude session after SessionHost.close() must not skip the startup binding checks
  * (validateClaudePlan, assertClaudeGrantMatchesBinding -> ClaudeBindingMismatchError
- * "invalid-binding")?
+ * "invalid-binding") by adopting the old adapter's still-running runtime.
  *
- * What these tests pin:
+ * Why it can happen:
  * - SessionHost.close() closes the journals and unsubscribes. It never calls adapter.terminate(), so
  *   the Claude runtime (process, Gateway grant, hook server) stays registered and running.
- * - ClaudeHarnessAdapter.attach() returns early for a registered runtime whose binding matches, whose
- *   process runs and which has not failed. SessionHost.open() therefore mounts that runtime without
- *   startClaudeSession: no plan or grant check, no new grant, even when the plan changed. A forced
- *   close (broken event stream) mid-turn leaves the turn itself live in the reused runtime too.
+ * - ClaudeHarnessAdapter.attach() reuses a registered runtime whose binding matches, whose process
+ *   runs and which has not failed, without startClaudeSession. A forced close (broken event stream)
+ *   mid-turn leaves the turn itself live in that runtime too.
  * - AgentHostTargetService.close() shuts the harnesses down before closing hosts, so the normal
  *   close -> reopen path cannot reuse a runtime. It is still reachable through the target: a
  *   SessionHost.create() whose first sidecar write fails closes its host after adapter.create(), and
- *   the next TargetService.attach() reuses the runtime without a grant check.
- * - Mitigation: the first send re-plans; a changed plan rebinds through startClaudeSession, where
- *   the grant check refuses it as invalid-binding.
+ *   the next TargetService.attach() finds the runtime.
+ * - The first send re-plans; a changed plan rebinds through startClaudeSession and its grant check.
  *
- * Tests named "CURRENT" pin today's behavior. "EXPECTED" tests assert the correct behavior and are
- * todo until C4 fixes it, so CI stays green.
+ * "CURRENT" tests pin the bypass as it is on the base; "EXPECTED" tests assert the fixed behaviour
+ * and fail until the attach revalidation lands.
  *
- * Grant tampering (a Gateway that returns a grant for another catalog fingerprint) is the probe for
- * "reaches assertClaudeGrantMatchesBinding": a fresh start refuses it, a reused runtime never asks.
+ * Binding B = a new catalog fingerprint plus a Gateway that tampers grants: a fresh start refuses it.
  */
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import test from "node:test";
-import {
-  agentEventSchema,
-  type AgentEvent,
-  type ExecutionTarget,
-  type SessionSpec,
-} from "@zcode/shared/agent-host";
 import { HarnessRegistry } from "../src/agent-host/harnessRegistry.js";
-import type { ModelCatalogPort } from "../src/agent-host/modelBindingPlanner.js";
 import { EventStreamFailure, SessionHost } from "../src/agent-host/sessionHost.js";
-import { AgentHostTargetService } from "../src/agent-host/targetService.js";
-import { ClaudeBindingMismatchError } from "../src/agent-adapters/claude/claudeBindingGuards.js";
 import { ClaudeHarnessAdapter } from "../src/agent-adapters/claude/claudeHarnessAdapter.js";
-import { claudeAdapterHarness } from "./fixtures/claudeAdapterHarness.js";
+import { eventsOf } from "./fixtures/claudeAdapterHarness.js";
 import { fakeClaudeLauncher } from "./fixtures/claudeFakeProcess.js";
+import {
+  breakHostStream,
+  fingerprintA,
+  FINGERPRINT_B,
+  isGrantMismatch,
+  mismatchBindingB,
+  occupySidecar,
+  reopenHarness,
+  sendCommand,
+  withTargetService,
+  type ReopenHarness,
+} from "./fixtures/claudeReopenHarness.js";
 import { CLAUDE_UNIT, fakeClaudeModel } from "./fixtures/claudeUnitFixtures.js";
 
 const TEST_TIMEOUT_MS = 20_000;
-const FINGERPRINT_B = "catalog-claude-unit-b";
-
-async function pinnedClaudeScript(t: test.TestContext): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "zcode-claude-reopen-pinned-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
-  const path = join(dir, "claude");
-  await writeFile(
-    path,
-    '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "2.1.263 (Claude Code)"; exit 0; fi\nexec cat >/dev/null\n',
-    { mode: 0o700 },
-  );
-  return path;
-}
-
-/** Claude adapter over the fake launcher, a mutable catalog and a Gateway that can tamper grants. */
-async function reopenHarness(t: test.TestContext) {
-  const executablePath = await pinnedClaudeScript(t);
-  const h = await claudeAdapterHarness(t, { adapter: { executablePath } });
-  const root = join(h.root, "host");
-  await mkdir(root, { mode: 0o700 });
-  const registry = new HarnessRegistry();
-  registry.register(h.adapter);
-  const target: ExecutionTarget = {
-    id: h.spec.execution.targetId,
-    kind: "local",
-    platform: process.platform as ExecutionTarget["platform"],
-    available: true,
-  };
-  const state = { fingerprint: h.plan.catalogFingerprint, tamper: false };
-  const catalog: ModelCatalogPort = {
-    get fingerprint() {
-      return state.fingerprint;
-    },
-    validateSelection: () => ({ ok: true }),
-  };
-  const gateway = h.targetModelGateway.get(h.spec.execution.targetId);
-  const recordingCreate = gateway.createGrant;
-  /** Fingerprint of every grant the Gateway was asked for (i.e. every startClaudeSession). */
-  const grantFingerprints: string[] = [];
-  gateway.createGrant = (input) => {
-    grantFingerprints.push(input.modelBindingFingerprint);
-    const grant = recordingCreate(input);
-    return state.tamper ? { ...grant, modelBindingFingerprint: "tampered-fingerprint" } : grant;
-  };
-  // SessionHost's adapter subscriptions, so a test can feed one an event that breaks its stream.
-  const listeners: ((event: AgentEvent) => void)[] = [];
-  const subscribe = h.adapter.subscribe.bind(h.adapter);
-  h.adapter.subscribe = (hostSessionId, listener) => {
-    listeners.push(listener);
-    return subscribe(hostSessionId, listener);
-  };
-  const options = { root, spec: h.spec, target, catalog, registry };
-  return {
-    h,
-    executablePath,
-    root,
-    registry,
-    target,
-    catalog,
-    state,
-    grantFingerprints,
-    listeners,
-    options,
-  };
-}
-
-type ReopenHarness = Awaited<ReturnType<typeof reopenHarness>>;
-
-/** Changes the captured binding (new catalog fingerprint) and makes the Gateway tamper grants. */
-function mismatchBindingB(r: ReopenHarness): void {
-  r.state.fingerprint = FINGERPRINT_B;
-  r.state.tamper = true;
-}
-
-function isGrantMismatch(error: unknown): boolean {
-  return (
-    error instanceof ClaudeBindingMismatchError &&
-    error.code === "invalid-binding" &&
-    error.mismatch === "grant"
-  );
-}
-
-function sendCommand(spec: SessionSpec, turnId: string) {
-  return {
-    type: "send" as const,
-    commandId: `send-${turnId}`,
-    hostSessionId: spec.hostSessionId,
-    turnId,
-    text: `run ${turnId}`,
-  };
-}
-
-function sidecarPathFor(root: string, spec: SessionSpec): string {
-  const identity = [
-    spec.execution.targetId,
-    spec.execution.workspaceIdentity,
-    spec.harness.id,
-    spec.hostSessionId,
-  ];
-  const digest = createHash("sha256").update(JSON.stringify(identity)).digest("hex");
-  return join(root, `${digest}.activity.json`);
-}
-
-/** Runs with a TargetService closed before the fixture's t.after hooks remove the root. */
-async function withTargetService(
-  r: ReopenHarness,
-  run: (service: AgentHostTargetService) => Promise<void>,
-): Promise<void> {
-  const service = new AgentHostTargetService({
-    root: r.root,
-    target: r.target,
-    catalog: r.catalog,
-    registry: r.registry,
-    authorizeWorktree: async () => true,
-  });
-  try {
-    await run(service);
-  } finally {
-    await service.close();
-  }
-}
 
 /** Opens and, if it opened, closes again; returns "reopened" or the rejection. */
 async function reopenOutcome(r: ReopenHarness): Promise<unknown> {
@@ -180,6 +52,23 @@ async function reopenOutcome(r: ReopenHarness): Promise<unknown> {
     },
     (error: unknown) => error,
   );
+}
+
+function restoreBindingA(r: ReopenHarness): void {
+  r.state.fingerprint = fingerprintA(r);
+  r.state.tamper = false;
+}
+
+/** Creates the session and leaves one accepted turn open, then force-closes its host. */
+async function forceCloseMidTurn(r: ReopenHarness, turnId: string): Promise<SessionHost> {
+  const created = await SessionHost.create(r.options);
+  const receipt = await created.dispatch(sendCommand(r.h.spec, turnId));
+  assert.equal(receipt.status, "accepted", JSON.stringify(receipt));
+  await assert.rejects(created.close(), /active turn/, "a healthy close refuses the open turn");
+  breakHostStream(r, created);
+  await assert.rejects(created.whenEventsSettled(), /foreign event identity/);
+  await assert.rejects(created.close(), EventStreamFailure);
+  return created;
 }
 
 test(
@@ -233,11 +122,7 @@ test(
     const reopened = await SessionHost.open(r.options);
     try {
       assert.equal(reopened.plan.catalogFingerprint, FINGERPRINT_B, "the host now holds binding B");
-      assert.deepEqual(
-        r.grantFingerprints,
-        [fingerprintA(r)],
-        "no grant was requested for B, so assertClaudeGrantMatchesBinding never ran",
-      );
+      assert.deepEqual(r.grantFingerprints, [fingerprintA(r)], "no grant check for binding B");
       assert.equal(r.h.launches.length, 1, "no new process: the old one was adopted");
       assert.equal(reopened.binding.runtimeEpoch, created.binding.runtimeEpoch);
       assert.equal(process!.isRunning, true);
@@ -248,14 +133,12 @@ test(
 );
 
 test(
-  "EXPECTED: reopen after SessionHost.close() reaches the grant check and refuses binding B",
-  {
-    timeout: TEST_TIMEOUT_MS,
-    todo: "C4: reopen reuses the live Claude runtime (attach early return)",
-  },
+  "EXPECTED: reopen after SessionHost.close() with binding B is refused as invalid-binding and stops the old runtime",
+  { timeout: TEST_TIMEOUT_MS },
   async (t) => {
     const r = await reopenHarness(t);
     const created = await SessionHost.create(r.options);
+    const [process] = r.h.launches;
     await created.close();
 
     mismatchBindingB(r);
@@ -264,7 +147,18 @@ test(
       isGrantMismatch(outcome),
       `expected ClaudeBindingMismatchError, got ${String(outcome)}`,
     );
-    assert.deepEqual(r.grantFingerprints, [fingerprintA(r), FINGERPRINT_B]);
+    assert.equal(process!.isRunning, false, "the refused reopen stops the old process");
+    assert.ok(r.h.grants.revoked.includes(r.h.grants.created[0]!), "and revokes its grant");
+    assert.equal(r.h.launches.length, 1, "nothing is launched for binding B");
+
+    restoreBindingA(r);
+    const again = await SessionHost.open(r.options);
+    try {
+      assert.equal(r.h.launches.length, 2, "a matching reopen then resumes on a new process");
+      assert.equal(r.h.launches[1]!.resumed, true);
+    } finally {
+      await again.close();
+    }
   },
 );
 
@@ -273,26 +167,8 @@ test(
   { timeout: TEST_TIMEOUT_MS },
   async (t) => {
     const r = await reopenHarness(t);
-    const created = await SessionHost.create(r.options);
     const turnId = "turn-open-at-close";
-    const receipt = await created.dispatch(sendCommand(r.h.spec, turnId));
-    assert.equal(receipt.status, "accepted", JSON.stringify(receipt));
-    await assert.rejects(created.close(), /active turn/, "a healthy close refuses the open turn");
-
-    // A foreign event on the host's subscription breaks its stream; close() then force-closes.
-    r.listeners.at(-1)!(
-      agentEventSchema.parse({
-        hostSessionId: "claude-foreign-session",
-        runtimeEpoch: created.binding.runtimeEpoch,
-        sequence: 1_000,
-        eventId: "claude-foreign-1000",
-        at: 1_000,
-        kind: "session.status",
-        state: "running",
-      }),
-    );
-    await assert.rejects(created.whenEventsSettled(), /foreign event identity/);
-    await assert.rejects(created.close(), EventStreamFailure);
+    const created = await forceCloseMidTurn(r, turnId);
     const [process] = r.h.launches;
     assert.equal(process!.isRunning, true, "the force-close leaves the process running");
     assert.ok(r.h.adapter.renewTurnLease(r.h.spec.hostSessionId, turnId).expiresAt > 0);
@@ -300,7 +176,7 @@ test(
     mismatchBindingB(r);
     const reopened = await SessionHost.open(r.options);
     try {
-      assert.deepEqual(r.grantFingerprints, [fingerprintA(r)], "no grant check for B");
+      assert.deepEqual(r.grantFingerprints, [fingerprintA(r)], "no grant check for binding B");
       assert.equal(r.h.launches.length, 1);
       assert.equal(reopened.binding.runtimeEpoch, created.binding.runtimeEpoch);
       assert.ok(
@@ -314,32 +190,31 @@ test(
 );
 
 test(
-  "EXPECTED: after a forced close mid-turn, reopen reaches the grant check and refuses binding B",
-  { timeout: TEST_TIMEOUT_MS, todo: "C4: forced close leaves the Claude runtime and turn live" },
+  "EXPECTED: after a forced close mid-turn, reopen with binding B is refused and the live turn is terminated, not adopted",
+  { timeout: TEST_TIMEOUT_MS },
   async (t) => {
     const r = await reopenHarness(t);
-    const created = await SessionHost.create(r.options);
-    const receipt = await created.dispatch(sendCommand(r.h.spec, "turn-open-at-close"));
-    assert.equal(receipt.status, "accepted", JSON.stringify(receipt));
-    r.listeners.at(-1)!(
-      agentEventSchema.parse({
-        hostSessionId: "claude-foreign-session",
-        runtimeEpoch: created.binding.runtimeEpoch,
-        sequence: 1_000,
-        eventId: "claude-foreign-1000",
-        at: 1_000,
-        kind: "session.status",
-        state: "running",
-      }),
-    );
-    await assert.rejects(created.whenEventsSettled(), /foreign event identity/);
-    await assert.rejects(created.close(), EventStreamFailure);
+    const turnId = "turn-open-at-close";
+    await forceCloseMidTurn(r, turnId);
+    const [process] = r.h.launches;
 
     mismatchBindingB(r);
     const outcome = await reopenOutcome(r);
     assert.ok(
       isGrantMismatch(outcome),
       `expected ClaudeBindingMismatchError, got ${String(outcome)}`,
+    );
+    assert.equal(process!.isRunning, false, "the old process is terminated");
+    assert.ok(r.h.grants.revoked.includes(r.h.grants.created[0]!), "its grant is revoked");
+    assert.throws(
+      () => r.h.adapter.renewTurnLease(r.h.spec.hostSessionId, turnId),
+      /Claude Host session is not attached/,
+      "the runtime left the registry",
+    );
+    assert.deepEqual(
+      eventsOf(r.h.events, "turn.finished").map((event) => [event.turnId, event.outcome]),
+      [[turnId, "unknown"]],
+      "the live turn settles as unknown instead of being adopted",
     );
   },
 );
@@ -376,38 +251,31 @@ test(
   async (t) => {
     const r = await reopenHarness(t);
     await withTargetService(r, async (service) => {
-      // A non-empty directory where the first activity sidecar goes: its atomic rename fails.
-      const sidecar = sidecarPathFor(r.root, r.h.spec);
-      await mkdir(sidecar, { recursive: true });
-      await writeFile(join(sidecar, "occupied"), "");
+      const free = await occupySidecar(r);
       await assert.rejects(service.create(r.h.spec), { syscall: "rename" });
       const [process] = r.h.launches;
       assert.equal(process!.isRunning, true, "the failed create closed its host, not the runtime");
 
-      await rm(sidecar, { recursive: true });
+      await free();
       mismatchBindingB(r);
       await service.attach(r.h.spec);
-      assert.deepEqual(r.grantFingerprints, [fingerprintA(r)], "no grant check for B");
+      assert.deepEqual(r.grantFingerprints, [fingerprintA(r)], "no grant check for binding B");
       assert.equal(r.h.launches.length, 1, "the attach adopted the orphaned process");
     });
   },
 );
 
 test(
-  "EXPECTED: TargetService.attach after that failed create reaches the grant check and refuses binding B",
-  {
-    timeout: TEST_TIMEOUT_MS,
-    todo: "C4: a failed SessionHost.create leaves the Claude runtime for the next attach",
-  },
+  "EXPECTED: TargetService.attach after that failed create refuses binding B and stops the orphaned runtime",
+  { timeout: TEST_TIMEOUT_MS },
   async (t) => {
     const r = await reopenHarness(t);
     await withTargetService(r, async (service) => {
-      const sidecar = sidecarPathFor(r.root, r.h.spec);
-      await mkdir(sidecar, { recursive: true });
-      await writeFile(join(sidecar, "occupied"), "");
+      const free = await occupySidecar(r);
       await assert.rejects(service.create(r.h.spec), { syscall: "rename" });
+      const [process] = r.h.launches;
 
-      await rm(sidecar, { recursive: true });
+      await free();
       mismatchBindingB(r);
       const outcome = await service.attach(r.h.spec).then(
         () => "attached",
@@ -417,6 +285,11 @@ test(
         isGrantMismatch(outcome),
         `expected ClaudeBindingMismatchError, got ${String(outcome)}`,
       );
+      assert.equal(process!.isRunning, false, "the orphaned runtime is stopped");
+
+      restoreBindingA(r);
+      await service.attach(r.h.spec);
+      assert.equal(r.h.launches.length, 2, "a matching attach then resumes on a new process");
     });
   },
 );
@@ -440,7 +313,3 @@ test(
     assert.equal(r.h.launches.length, 1);
   },
 );
-
-function fingerprintA(r: ReopenHarness): string {
-  return r.h.plan.catalogFingerprint;
-}
