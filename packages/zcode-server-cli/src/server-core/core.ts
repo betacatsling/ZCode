@@ -1,5 +1,6 @@
 import {
   createLocalServices,
+  createServiceLogger,
   disposeServiceResourcesAndWait,
   materializeZCodeBuiltinProviderConfig,
   getAppConfigDir,
@@ -15,10 +16,17 @@ import { resolveCoreServerId } from "./serverIdentity.js";
 import { createTaskActivityTracker } from "./taskActivityTracker.js";
 import type { ExternalTaskActivitySource } from "./taskActivityTracker.js";
 import { mkdir } from "node:fs/promises";
+import {
+  removeCoreHostBootstrapFile,
+  writeCoreHostBootstrapFile,
+} from "../runtime/coreHostBootstrap.js";
+import { resolveServerLayout } from "../runtime/paths.js";
 
 declare const __ZCODE_BUILTIN_PROVIDER_CONFIG_JSON__: string | undefined;
 
 type CoreServices = ReturnType<typeof createLocalServices>;
+
+const log = createServiceLogger("server-core");
 
 /** Internal lifecycle ports for packaged and embedded Server Core runners. */
 export interface ServerCoreRuntimePorts {
@@ -87,6 +95,22 @@ export async function runServerCore(
   // 避免被 Core 派生的 Agent/工具进程继承。
   const hostBootstrapToken = createHostBootstrapToken();
   const http = await createCoreHttpServer(services, { serverId, hostBootstrapToken });
+  // 版本错配兜底：pre-M2 Supervisor 的 ready schema 会丢弃 hostBootstrapToken，Core 另写 0600
+  // run/core-host-bootstrap.json，由新 CLI 在 status 缺 secret 且 generation/pid/port 匹配时合并。
+  // 必须在 ready 之前落盘，CLI 一旦看到 ready 就能读到本代记录；写失败不影响新 Supervisor 路径。
+  const serverRoot = process.env.ZCODE_SERVER_ROOT?.trim();
+  const bootstrapFileLayout = serverRoot ? resolveServerLayout(serverRoot) : undefined;
+  const bootstrapFileOwner = { generation, pid: process.pid };
+  if (bootstrapFileLayout) {
+    await writeCoreHostBootstrapFile(bootstrapFileLayout, {
+      ...bootstrapFileOwner,
+      host: http.host,
+      port: http.port,
+      hostBootstrapToken: http.hostBootstrapToken,
+    }).catch((error: unknown) => {
+      log.warn("failed to write Core Host bootstrap file", error);
+    });
+  }
   const send = (message: unknown): Promise<void> => {
     if (typeof process.send !== "function" || process.connected === false) return Promise.resolve();
     return new Promise((resolve) => {
@@ -146,6 +170,11 @@ export async function runServerCore(
     activitySubscription.dispose();
     taskActivityTracker.dispose();
     await http.close().catch(() => undefined);
+    if (bootstrapFileLayout) {
+      await removeCoreHostBootstrapFile(bootstrapFileLayout, bootstrapFileOwner).catch(
+        () => undefined,
+      );
+    }
     await (ports.disposeServices ?? disposeServiceResourcesAndWait)(services).catch(
       () => undefined,
     );
