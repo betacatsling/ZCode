@@ -92,6 +92,7 @@
     }
   },
   "scripts": {
+    "prebuild": "node ../../../../scripts/ensure-cli-deps.mjs @zcode/adapters^...",
     "build": "tsc",
     "clean": "node ../../scripts/clean-dist.mjs",
     "typecheck": "tsc --noEmit",
