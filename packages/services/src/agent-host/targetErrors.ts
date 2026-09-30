@@ -10,3 +10,27 @@ export class SessionNotAttachedError extends Error {
     this.name = "SessionNotAttachedError";
   }
 }
+
+/**
+ * AgentHostTargetService.close() after closing every mounted host, when more than one failed
+ * (a single failure is rethrown unchanged). `errors` / `failures` keep close order; each cause
+ * keeps its own type (EventStreamFailure, SessionHostBusyError, I/O errors...).
+ */
+export class TargetHostsCloseError extends AggregateError {
+  readonly code = "target-close-failed" as const;
+  readonly failures: readonly { hostSessionId: string; error: unknown }[];
+  constructor(failures: readonly { hostSessionId: string; error: unknown }[]) {
+    super(
+      failures.map((failure) => failure.error),
+      `${failures.length} session hosts failed to close: ${failures
+        .map(({ hostSessionId, error }) => `${hostSessionId}: ${messageOf(error)}`)
+        .join("; ")}`,
+    );
+    this.name = "TargetHostsCloseError";
+    this.failures = failures;
+  }
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}

@@ -312,7 +312,7 @@ function holdNextSidecarRename(root: string) {
 
 test(
   "one host failing to close: the others are still closed and its error is rethrown unchanged",
-  { timeout: TEST_TIMEOUT_MS, todo: "the first failing host stops #finishClose" },
+  { timeout: TEST_TIMEOUT_MS },
   async () => {
     await withTarget(["host-a", "host-b"], async (context) => {
       breakJournalClose(context, "host-a");
@@ -325,7 +325,7 @@ test(
 
 test(
   "several hosts failing to close are aggregated with per-session causes; the rest still close",
-  { timeout: TEST_TIMEOUT_MS, todo: "the first failing host stops #finishClose" },
+  { timeout: TEST_TIMEOUT_MS },
   async () => {
     await withTarget(["host-a", "host-b", "host-c", "host-d"], async (context) => {
       const { harness, service } = context;
@@ -359,7 +359,7 @@ test(
 
 test(
   "a send still starting at target close that the shut-down adapter refuses: that host is retried and closes",
-  { timeout: TEST_TIMEOUT_MS, todo: "a starting send makes #finishClose fail with active turn" },
+  { timeout: TEST_TIMEOUT_MS },
   async () => {
     await withTarget(["host-a", "host-b"], async (context) => {
       const { root, harness, service, specs } = context;
@@ -393,7 +393,7 @@ test(
 
 test(
   "a send still starting at target close whose admission then fails: that host is retried and closes",
-  { timeout: TEST_TIMEOUT_MS, todo: "a starting send makes #finishClose fail with active turn" },
+  { timeout: TEST_TIMEOUT_MS },
   async () => {
     await withTarget(["host-a", "host-b"], async (context) => {
       const { root, harness, service, specs } = context;
@@ -426,7 +426,7 @@ test(
 
 test(
   "a send still starting at target close that starts running: the retry refuses with active turn, the others close",
-  { timeout: TEST_TIMEOUT_MS, todo: "a starting send stops #finishClose before the other hosts" },
+  { timeout: TEST_TIMEOUT_MS },
   async () => {
     await withTarget(["host-a", "host-b"], async (context) => {
       const { root, harness, service, specs } = context;
