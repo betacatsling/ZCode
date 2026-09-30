@@ -1,6 +1,6 @@
 import type { Model } from "@zcode/contracts";
 import type { Worker } from "node:worker_threads";
-import type { ToPiWorker } from "./piProtocol.js";
+import type { PiModelFailure, ToPiWorker } from "./piProtocol.js";
 
 export interface PiModelRuntimePort {
   readonly worker: Worker;
@@ -27,9 +27,37 @@ export async function runPiModelRequest(
       runtime.worker.postMessage({ type: "model.event", requestId, event } satisfies ToPiWorker);
     }
     runtime.worker.postMessage({ type: "model.done", requestId } satisfies ToPiWorker);
-  } catch {
-    runtime.worker.postMessage({ type: "model.failure", requestId } satisfies ToPiWorker);
+  } catch (error) {
+    const failure = classifyPiModelFailure(error, runtime.activeModel ?? runtime.model);
+    runtime.worker.postMessage({
+      type: "model.failure",
+      requestId,
+      ...(failure ? { failure } : {}),
+    } satisfies ToPiWorker);
   } finally {
     runtime.modelAborts.delete(requestId);
   }
+}
+
+const SAFE_TOKEN = /^[a-z][a-z0-9_-]{0,63}$/;
+
+/**
+ * Copies only whitelisted scalar fields from the executor's typed error (AiSdkModelAdapterError
+ * code + runner context). Messages, causes, headers and URLs never cross into the worker.
+ * Provider/model identity comes from the admitted turn Model, not from the error.
+ */
+function classifyPiModelFailure(error: unknown, model: Model): PiModelFailure | undefined {
+  if (!(error instanceof Error)) return undefined;
+  const { code, context } = error as { code?: unknown; context?: unknown };
+  if (!context || typeof context !== "object") return undefined;
+  const { reason, statusCode, retryable } = context as Record<string, unknown>;
+  if (typeof reason !== "string" || !SAFE_TOKEN.test(reason)) return undefined;
+  return {
+    reason,
+    ...(typeof code === "string" && SAFE_TOKEN.test(code) ? { code } : {}),
+    providerId: model.providerId,
+    modelId: model.modelId,
+    ...(typeof statusCode === "number" && Number.isInteger(statusCode) ? { statusCode } : {}),
+    retryable: retryable === true,
+  };
 }

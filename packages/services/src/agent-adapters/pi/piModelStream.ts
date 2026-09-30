@@ -10,6 +10,7 @@ import {
   type Provider,
 } from "@earendil-works/pi-ai";
 import type { Model as ZCodeModel, ModelInputMessage, ModelMessageContentBlock, ModelStreamEvent } from "@zcode/contracts";
+import type { PiModelFailure } from "./piProtocol.js";
 
 const HOST_PROVIDER_ID = "zcode-host";
 const HOST_API = "zcode-model-executor";
@@ -67,6 +68,20 @@ function toUsage(usage: { inputTokens?: number; outputTokens?: number; cacheRead
   return { input, output, cacheRead, cacheWrite, totalTokens: input + output, cost: { ...EMPTY_COST } };
 }
 
+/** Assistant diagnostic type carrying a {@link PiModelFailure}; read by the Pi worker at message_end. */
+export const PI_MODEL_FAILURE_DIAGNOSTIC = "zcode-model-failure";
+
+function typedExecutorFailure(error: unknown): PiModelFailure | undefined {
+  const raw = (error as { zcodeModelFailure?: Partial<PiModelFailure> } | undefined)?.zcodeModelFailure;
+  if (!raw || typeof raw.reason !== "string" || typeof raw.providerId !== "string" || typeof raw.modelId !== "string") return undefined;
+  return {
+    reason: raw.reason, ...(typeof raw.code === "string" ? { code: raw.code } : {}),
+    providerId: raw.providerId, modelId: raw.modelId,
+    ...(typeof raw.statusCode === "number" ? { statusCode: raw.statusCode } : {}),
+    retryable: raw.retryable === true,
+  };
+}
+
 export function createPiHostProvider(model: ZCodeModel): Provider {
   const modelId = `${model.providerId}/${model.modelId}`;
   const piModel: PiModel<typeof HOST_API> = {
@@ -118,9 +133,12 @@ export function createPiHostProvider(model: ZCodeModel): Provider {
           if (finished) break;
         }
         if (!finished) throw new Error("ZCode model stream ended without a finish event");
-      } catch {
+      } catch (error) {
         response.stopReason = options?.signal?.aborted ? "aborted" : "error";
         response.errorMessage = `ZCode model bridge failed at ${failureStage}; inspect target-host diagnostics`;
+        // Keep the executor's key-free typed failure (e.g. 401 auth_failed) as a structured diagnostic.
+        const failure = failureStage === "executor-stream" ? typedExecutorFailure(error) : undefined;
+        if (failure) (response.diagnostics ??= []).push({ type: PI_MODEL_FAILURE_DIAGNOSTIC, timestamp: Date.now(), details: { ...failure } });
         stream.push({ type: "error", reason: response.stopReason, error: response });
       }
       function convertEvent(event: ModelStreamEvent): void {

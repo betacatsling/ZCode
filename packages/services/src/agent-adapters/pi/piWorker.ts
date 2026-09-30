@@ -8,7 +8,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { AgentEvent } from "@zcode/shared/agent-host";
 import type { Model, ModelRequest, ModelStreamEvent } from "@zcode/contracts";
-import type { FromPiWorker, PiWorkerBoot, ToPiWorker } from "./piProtocol.js";
+import type { FromPiWorker, PiModelFailure, PiWorkerBoot, ToPiWorker } from "./piProtocol.js";
 
 const boot = workerData as PiWorkerBoot;
 if (!parentPort) throw new Error("Pi worker must have a parent host");
@@ -23,6 +23,7 @@ const modelStreams = new Map<string, {
   waiting?: () => void;
   done: boolean;
   failed: boolean;
+  failure?: PiModelFailure;
 }>();
 
 function post(value: FromPiWorker): void { port.postMessage(value); }
@@ -34,13 +35,21 @@ function emit(kind: AgentEvent["kind"], payload: Record<string, unknown>): void 
   post({ type: "event", event });
 }
 function reply(commandId: string, outcome: "completed" | "failed"): void { post({ type: "ack", commandId, outcome }); }
+/** Credential/configuration failures the user must fix; never retried or rerouted to another model. */
+function reconfigureFailure(failure: PiModelFailure | undefined) {
+  if (!failure || failure.retryable || (failure.reason !== "auth_failed" && failure.reason !== "provider_not_configured" && failure.code !== "provider_not_configured")) return undefined;
+  return {
+    reason: failure.reason, action: "reconfigure-provider" as const, providerId: failure.providerId, modelId: failure.modelId,
+    ...(failure.statusCode === undefined ? {} : { statusCode: failure.statusCode }), retryable: false,
+  };
+}
 
 function modelProxy(): Model {
   return {
     ...boot.model,
     async *streamText(request: ModelRequest) {
       const requestId = randomUUID();
-      const state = { values: [] as ModelStreamEvent[], waiting: undefined as (() => void) | undefined, done: false, failed: false };
+      const state = { values: [] as ModelStreamEvent[], waiting: undefined as (() => void) | undefined, done: false, failed: false, failure: undefined as PiModelFailure | undefined };
       modelStreams.set(requestId, state);
       const onAbort = () => post({ type: "model.abort", requestId });
       request.abortSignal?.addEventListener("abort", onAbort, { once: true });
@@ -55,7 +64,7 @@ function modelProxy(): Model {
           }
           yield state.values.shift()!;
         }
-        if (state.failed) throw new Error("ZCode model executor failed");
+        if (state.failed) throw Object.assign(new Error("ZCode model executor failed"), state.failure ? { zcodeModelFailure: state.failure } : {});
       } finally {
         request.abortSignal?.removeEventListener("abort", onAbort);
         modelStreams.delete(requestId);
@@ -149,7 +158,17 @@ async function main(): Promise<void> {
         if (message.stopReason === "error") {
           lastAssistantOutcome = "failed";
           const stage = message.errorMessage?.match(/ZCode model bridge failed at ([a-z-]+)/)?.[1] ?? "unknown";
-          emit("session.error", { code: `pi-model-${stage}`, message: "Pi model request failed; inspect target-host diagnostics" });
+          // "zcode-model-failure" = PI_MODEL_FAILURE_DIAGNOSTIC in piModelStream (dynamically imported here).
+          const failure = reconfigureFailure(message.diagnostics?.find((entry) => entry.type === "zcode-model-failure")?.details as PiModelFailure | undefined);
+          if (failure) {
+            const status = failure.statusCode === undefined ? "" : ` (HTTP ${failure.statusCode})`;
+            emit("session.error", {
+              code: "provider-reconfigure-required", failure,
+              message: `Provider ${failure.providerId} rejected the credentials for ${failure.modelId}${status}: ${failure.reason}. Reconfigure this Provider or explicitly choose another model; no other Provider was used.`.slice(0, 1024),
+            });
+          } else {
+            emit("session.error", { code: `pi-model-${stage}`, message: "Pi model request failed; inspect target-host diagnostics" });
+          }
         }
         if (message.stopReason === "aborted") lastAssistantOutcome = "cancelled";
       }
@@ -172,7 +191,7 @@ async function main(): Promise<void> {
       const state = modelStreams.get(raw.requestId);
       if (!state) return;
       if (raw.type === "model.event") state.values.push(raw.event);
-      else { state.done = true; state.failed = raw.type === "model.failure"; }
+      else { state.done = true; state.failed = raw.type === "model.failure"; if (raw.type === "model.failure" && raw.failure) state.failure = raw.failure; }
       state.waiting?.();
       state.waiting = undefined;
       return;
