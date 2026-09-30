@@ -117,7 +117,7 @@ export class FakeClaudeProcess {
     }
   }
 
-  /** Calls the Gateway Messages route with the helper token; 401 means the grant is gone. */
+  /** Calls the Gateway Messages route with the helper token: 400 (empty body) while granted, 401 once revoked. */
   async gatewayStatus(): Promise<number | "unreachable"> {
     const env = this.options.env;
     const token = (
@@ -129,6 +129,8 @@ export class FakeClaudeProcess {
         headers: {
           "content-type": "application/json",
           "anthropic-version": "2023-06-01",
+          "anthropic-beta": "claude-code-20250219",
+          "anthropic-dangerous-direct-browser-access": "true",
           "x-api-key": token,
         },
         body: "{}",
