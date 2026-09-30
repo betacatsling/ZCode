@@ -1,4 +1,5 @@
 import { sessionSpecSchema, type SessionSpec } from "@zcode/shared/agent-host";
+import { SessionHostClosedError } from "../sessionHost.js";
 import { runUnderOwnerFence } from "./ownerFence.js";
 
 type OwnerGate = Parameters<typeof runUnderOwnerFence>[0];
@@ -10,10 +11,10 @@ export function enqueueAdmission<T>(
   isClosing: () => boolean,
   operation: () => Promise<T>,
 ): Promise<T> {
-  if (isClosing()) throw new Error("target host is closing");
+  if (isClosing()) throw new SessionHostClosedError(undefined, { owner: "target" });
   const previous = tails.get(hostSessionId);
   const runOperation = async (): Promise<T> => {
-    if (isClosing()) throw new Error("target host is closing");
+    if (isClosing()) throw new SessionHostClosedError(undefined, { owner: "target" });
     return operation();
   };
   const run = previous ? previous.then(runOperation, runOperation) : runOperation();
