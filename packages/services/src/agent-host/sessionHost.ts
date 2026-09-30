@@ -1,6 +1,6 @@
 /* eslint-disable max-lines -- Host lifecycle, history projection and journal ownership stay one state machine. */
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, open, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import type { Model } from "@zcode/contracts";
@@ -913,12 +913,25 @@ export class SessionHost {
     const tempPath = `${this.#activityIndexPath}.${process.pid}.${randomUUID()}.tmp`;
     const file = await open(tempPath, "wx", 0o600);
     try {
-      await file.writeFile(JSON.stringify(entry));
-      await file.sync();
-    } finally {
-      await file.close();
+      try {
+        await file.writeFile(JSON.stringify(entry));
+        await file.sync();
+      } finally {
+        await file.close();
+      }
+      await rename(tempPath, this.#activityIndexPath);
+    } catch (error) {
+      // The temp file is ours ("wx" + uuid); never leave it next to the sidecar. Cleanup is
+      // best-effort so callers keep seeing the write/rename error, not the unlink one.
+      await unlink(tempPath).catch((cleanup: unknown) => {
+        if ((cleanup as NodeJS.ErrnoException).code === "ENOENT") return;
+        logger.warn(undefined, "activity sidecar temp file not removed", {
+          hostSessionId: this.spec.hostSessionId,
+          error: cleanup,
+        });
+      });
+      throw error;
     }
-    await rename(tempPath, this.#activityIndexPath);
   }
 
   #track(commandId: string, turnId: string, run: Promise<void>): void {

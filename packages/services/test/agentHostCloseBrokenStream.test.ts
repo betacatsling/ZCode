@@ -15,6 +15,7 @@
  * - AgentHostTargetService.close() 照样关闭其余 Host、释放 owner fence，最后抛出该类型错误。
  * - 强制关闭把 activity sidecar 改写为 "unknown"（best-effort，写失败仍抛 EventStreamFailure），
  *   卸载后的会话不会一直显示损坏前存下的 "idle"。健康 close 不写 sidecar。
+ * - sidecar 原子写（临时文件 + rename）失败时删掉自己的临时文件，调用方仍收到原始写/rename 错误。
  *
  * 每个可能挂住的等待都用 settle() 限时观察，每个 test 也有 timeout，回归时快速失败而不是挂住 CI。
  */
@@ -741,10 +742,7 @@ async function occupySidecar(root: string): Promise<void> {
 
 test(
   "a sidecar write whose rename fails removes its temp file and still surfaces the rename error",
-  {
-    timeout: TEST_TIMEOUT_MS,
-    todo: "repro: #persistActivityIndex leaves its .tmp file behind when rename fails",
-  },
+  { timeout: TEST_TIMEOUT_MS },
   async () => {
     await withRoot("zcode-sidecar-temp-", async (root, worktree) => {
       const harness = new OpenTurnHarness();
