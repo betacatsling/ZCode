@@ -9,7 +9,11 @@ const dummy = { create: async () => undefined } as unknown as IAgentHostService;
 test("untrusted generic RPC scope does not register the agent host channel", () => {
   const collection = new ServiceCollection().register(IAgentHostService, dummy);
   const registered: string[] = [];
-  const server: IChannelServer = { registerChannel(name) { registered.push(name); } };
+  const server: IChannelServer = {
+    registerChannel(name) {
+      registered.push(name);
+    },
+  };
   collection.exposeOnChannelServer(server, new Map(), new Set([IAgentHostService.channelName]));
   assert.deepEqual(registered, []);
   collection.exposeOnChannelServer(server);

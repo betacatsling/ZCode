@@ -51,7 +51,8 @@ export class AcpHarnessAdapter implements HarnessAdapter {
   }
 
   async probe(target: ExecutionTarget): Promise<CapabilityReport> {
-    if (!target.available) return { support: "unsupported", reason: target.reason ?? "target unavailable" };
+    if (!target.available)
+      return { support: "unsupported", reason: target.reason ?? "target unavailable" };
     const machine = this.#connect(`probe:${target.id}`, target.id);
     try {
       const negotiation = await machine.initialize();
@@ -76,7 +77,8 @@ export class AcpHarnessAdapter implements HarnessAdapter {
 
   async harnessManagedSupport(target: ExecutionTarget): Promise<CapabilityReport> {
     const negotiation = this.#probes.get(target.id);
-    if (!negotiation) return { support: "unknown", reason: "ACP initialize has not run for this target" };
+    if (!negotiation)
+      return { support: "unknown", reason: "ACP initialize has not run for this target" };
     return acpProbeReport(negotiation);
   }
 
@@ -120,7 +122,10 @@ export class AcpHarnessAdapter implements HarnessAdapter {
     try {
       const negotiation = await machine.initialize();
       this.#logNegotiation(negotiation);
-      if (negotiation.stability !== "stable" || (!negotiation.loadSession && !negotiation.resumeSession)) {
+      if (
+        negotiation.stability !== "stable" ||
+        (!negotiation.loadSession && !negotiation.resumeSession)
+      ) {
         throw new Error(
           negotiation.stability === "stable"
             ? "unsupported: ACP session resume was not negotiated"
@@ -144,7 +149,9 @@ export class AcpHarnessAdapter implements HarnessAdapter {
     await this.#require(command.hostSessionId).cancelTurn(command.turnId, command.runtimeEpoch);
   }
 
-  async resolveInteraction(command: Extract<AgentCommand, { type: "resolveInteraction" }>): Promise<void> {
+  async resolveInteraction(
+    command: Extract<AgentCommand, { type: "resolveInteraction" }>,
+  ): Promise<void> {
     await this.#require(command.hostSessionId).resolveInteraction(command);
   }
 
@@ -176,7 +183,9 @@ export class AcpHarnessAdapter implements HarnessAdapter {
   }
 
   viewHistory(hostSessionId: string): readonly AgentEvent[] {
-    return this.#sessions.get(hostSessionId)?.history() ?? this.#retainedHistory.get(hostSessionId) ?? [];
+    return (
+      this.#sessions.get(hostSessionId)?.history() ?? this.#retainedHistory.get(hostSessionId) ?? []
+    );
   }
 
   resumeExecution(
@@ -209,7 +218,11 @@ export class AcpHarnessAdapter implements HarnessAdapter {
     if (spec.harness.id !== this.id || spec.harness.adapterVersion !== this.version) {
       throw new Error("harness identity or adapter version mismatch");
     }
-    if (plan.harnessId !== this.id || plan.adapterVersion !== this.version || plan.route !== "harness-managed") {
+    if (
+      plan.harnessId !== this.id ||
+      plan.adapterVersion !== this.version ||
+      plan.route !== "harness-managed"
+    ) {
       throw new Error("unsupported: ACP adapter only admits harness-managed bindings");
     }
     if (spec.modelBinding.kind !== "harness-managed") {

@@ -8,7 +8,11 @@ import { parsePorcelainZ } from "./porcelain.js";
 import { resolveRepositoryBinding } from "./repositoryBindingResolver.js";
 import { sameWorkspaceIdentity, workspaceIdentityKey } from "./identity.js";
 import { createFileCatalogStore, createMemoryCatalogStore } from "./store.js";
-import { assertCode, createWorkspaceWorld, encodePorcelain } from "./projectWorkspaces.test-support.js";
+import {
+  assertCode,
+  createWorkspaceWorld,
+  encodePorcelain,
+} from "./projectWorkspaces.test-support.js";
 import type { CreateAgentSessionInput } from "./sessions.js";
 
 function repoWorld() {
@@ -44,8 +48,14 @@ function runtimeFor(world: ReturnType<typeof repoWorld>, executionTargetId = "ho
 }
 
 test("身份键裁剪 workspaceIdentity，路径不裁剪，且不能只按路径跨目标匹配", () => {
-  assert.equal(workspaceIdentityKey({ workspaceIdentity: "  remote-1  ", workspacePath: "/repo" }), "remote-1");
-  assert.equal(workspaceIdentityKey({ workspaceIdentity: "   ", workspacePath: " /repo" }), " /repo");
+  assert.equal(
+    workspaceIdentityKey({ workspaceIdentity: "  remote-1  ", workspacePath: "/repo" }),
+    "remote-1",
+  );
+  assert.equal(
+    workspaceIdentityKey({ workspaceIdentity: "   ", workspacePath: " /repo" }),
+    " /repo",
+  );
   assert.equal(
     sameWorkspaceIdentity(
       { executionTargetId: "host-a", workspacePath: "/repo", workspaceIdentity: "remote-1" },
@@ -68,10 +78,7 @@ test("身份键裁剪 workspaceIdentity，路径不裁剪，且不能只按路�
     true,
   );
   assert.equal(
-    sameWorkspaceIdentity(
-      { workspacePath: "/repo" },
-      { workspacePath: "/repo" },
-    ),
+    sameWorkspaceIdentity({ workspacePath: "/repo" }, { workspacePath: "/repo" }),
     false,
   );
 });
@@ -141,12 +148,18 @@ test("一个项目接管主检出和两个 linked worktree，branch 名不是 id
   assert.equal(discovered.kind, "git");
   if (discovered.kind !== "git") return;
   assert.equal(discovered.candidates.length, 3);
-  assert.equal(world.calls.slice(before).some((args) => args.includes("init")), false);
+  assert.equal(
+    world.calls.slice(before).some((args) => args.includes("init")),
+    false,
+  );
   assert.equal(world.mutatingCalls().length, 0);
   const adopted = [];
   for (const candidate of discovered.candidates) {
     adopted.push(
-      await runtime.worktrees.adopt({ projectId: project.id, worktreePath: candidate.worktreePath }),
+      await runtime.worktrees.adopt({
+        projectId: project.id,
+        worktreePath: candidate.worktreePath,
+      }),
     );
   }
   const workspaces = await runtime.worktrees.listWorkspaces(project.id);
@@ -160,12 +173,18 @@ test("一个项目接管主检出和两个 linked worktree，branch 名不是 id
     assert.notEqual(workspace.id, workspace.head.kind === "branch" ? workspace.head.ref : "");
   }
   const bindings = new Set(
-    (await runtime.store.read()).bindings.filter((binding) => binding.projectId === project.id).map((binding) => binding.id),
+    (await runtime.store.read()).bindings
+      .filter((binding) => binding.projectId === project.id)
+      .map((binding) => binding.id),
   );
   assert.equal(bindings.size, 1);
   const updated = await runtime.catalog.setDefaultWorkspace(project.id, linkedNamedMain?.id);
   assert.equal(updated.defaultWorkspaceId, linkedNamedMain?.id);
-  assert.equal((await runtime.worktrees.listWorkspaces(project.id)).find((item) => item.id === main?.id)?.isMainWorktree, true);
+  assert.equal(
+    (await runtime.worktrees.listWorkspaces(project.id)).find((item) => item.id === main?.id)
+      ?.isMainWorktree,
+    true,
+  );
 });
 
 test("同一工作区新建三个会话不创建 worktree，也不改已有会话", async () => {
@@ -206,7 +225,12 @@ test("同一工作区新建三个会话不创建 worktree，也不改已有会�
   assert.equal(runtime.worktrees.describeSharedWorkspace().gitDiffLabel, "工作区变更");
   const stopped = await runtime.worktrees.stopAgentSession(first.session.id);
   assert.deepEqual(stopped.stoppedSessionIds, [first.session.id]);
-  assert.equal((await runtime.worktrees.listSessions(adopted.workspace.id)).some((session) => session.id === second.session.id), true);
+  assert.equal(
+    (await runtime.worktrees.listSessions(adopted.workspace.id)).some(
+      (session) => session.id === second.session.id,
+    ),
+    true,
+  );
   const detached = await runtime.worktrees.noteViewDetached(third.session.id);
   assert.equal(detached.sessionRetained, true);
   assert.equal((await runtime.worktrees.listWorkspaces()).length, 1);
@@ -235,9 +259,7 @@ test("新建工作区使用独立 argv，目录写入失败时保留未登记候
   let failWrites = 0;
   const store = {
     read: () => memory.read(),
-    update: async <T,>(
-      mutator: Parameters<typeof memory.update<T>>[0],
-    ) => {
+    update: async <T>(mutator: Parameters<typeof memory.update<T>>[0]) => {
       if (failWrites > 0) {
         failWrites -= 1;
         throw new Error("catalog-write-failed");
@@ -288,8 +310,16 @@ test("新建工作区使用独立 argv，目录写入失败时保留未登记候
   assert.equal(addCalls[0]?.includes("--force"), false);
   assert.equal(addCalls[0]?.includes("core.hooksPath=/dev/null"), true);
   assert.equal(addCalls[0]?.includes("feature/a"), true);
-  assert.equal(world.calls.some((args) => args.includes("remove")), false);
-  assert.equal((await runtime.worktrees.listWorkspaces()).some((workspace) => workspace.worktreePath === "/repo/feature"), false);
+  assert.equal(
+    world.calls.some((args) => args.includes("remove")),
+    false,
+  );
+  assert.equal(
+    (await runtime.worktrees.listWorkspaces()).some(
+      (workspace) => workspace.worktreePath === "/repo/feature",
+    ),
+    false,
+  );
   const retry = await runtime.worktrees.createWorkspace({
     requestId: "req-2",
     projectId: project.id,
@@ -325,7 +355,10 @@ test("删除期间拒绝新会话，拒绝路径不先停止会话", async () =>
   });
   assert.equal(rejected.status, "rejected");
   assert.equal(world.stopped.length, 0);
-  assert.equal(world.calls.some((args) => args.includes("remove")), false);
+  assert.equal(
+    world.calls.some((args) => args.includes("remove")),
+    false,
+  );
   assert.equal((await runtime.worktrees.listSessions(adopted.workspace.id)).length, 1);
 
   const main = await runtime.worktrees.adopt({ projectId: project.id, worktreePath: "/repo" });
@@ -338,7 +371,8 @@ test("删除期间拒绝新会话，拒绝路径不先停止会话", async () =>
     stopConfirmed: true,
   });
   assert.equal(mainRejected.status, "rejected");
-  if (mainRejected.status === "rejected") assert.equal(mainRejected.reasons.includes("main-worktree"), true);
+  if (mainRejected.status === "rejected")
+    assert.equal(mainRejected.reasons.includes("main-worktree"), true);
 
   world.setActivity("idle");
   const started = world.holdRemove();
@@ -361,7 +395,10 @@ test("删除期间拒绝新会话，拒绝路径不先停止会话", async () =>
   world.releaseRemove();
   const removed = await removal;
   assert.equal(removed.status, "removed");
-  assert.equal((await runtime.worktrees.listSessions(adopted.workspace.id))[0]?.id, session.session.id);
+  assert.equal(
+    (await runtime.worktrees.listSessions(adopted.workspace.id))[0]?.id,
+    session.session.id,
+  );
   await assert.rejects(
     runtime.worktrees.createAgentSession({
       workspaceId: adopted.workspace.id,
@@ -376,7 +413,10 @@ test("删除期间拒绝新会话，拒绝路径不先停止会话", async () =>
   assert.equal(retaken.status, "adopted");
   if (retaken.status !== "adopted") return;
   assert.notEqual(retaken.workspace.id, adopted.workspace.id);
-  assert.equal((await runtime.worktrees.readExecution(session.session.id)).workspaceId, adopted.workspace.id);
+  assert.equal(
+    (await runtime.worktrees.readExecution(session.session.id)).workspaceId,
+    adopted.workspace.id,
+  );
 });
 
 test("扫描失败不清空目录；同实例改名更新，路径重建则待核实", async () => {
@@ -407,7 +447,10 @@ test("扫描失败不清空目录；同实例改名更新，路径重建则待�
   const afterRename = await runtime.worktrees.listWorkspaces();
   assert.equal(afterRename[0]?.id, adopted.workspace.id);
   assert.equal(afterRename[0]?.head.kind === "branch" && afterRename[0].head.ref, "renamed");
-  assert.equal((await runtime.worktrees.readExecution(session.session.id)).workspaceId, adopted.workspace.id);
+  assert.equal(
+    (await runtime.worktrees.readExecution(session.session.id)).workspaceId,
+    adopted.workspace.id,
+  );
 
   world.entries["/repo-b"] = { device: 1, inode: 99 };
   const rebuilt = await runtime.reconciler.refresh("/repo-b");
@@ -420,11 +463,18 @@ test("扫描失败不清空目录；同实例改名更新，路径重建则待�
     }),
     (error) => assertCode(error, "needs-verification"),
   );
-  const explicit = await runtime.worktrees.adopt({ projectId: project.id, worktreePath: "/repo-b", title: "重建" });
+  const explicit = await runtime.worktrees.adopt({
+    projectId: project.id,
+    worktreePath: "/repo-b",
+    title: "重建",
+  });
   assert.equal(explicit.status, "adopted");
   if (explicit.status !== "adopted") return;
   assert.notEqual(explicit.workspace.id, adopted.workspace.id);
-  assert.equal((await runtime.worktrees.readExecution(session.session.id)).workspaceId, adopted.workspace.id);
+  assert.equal(
+    (await runtime.worktrees.readExecution(session.session.id)).workspaceId,
+    adopted.workspace.id,
+  );
 });
 
 test("非 Git 与 bare 仓库不制造可执行主检出", async () => {
@@ -434,7 +484,10 @@ test("非 Git 与 bare 仓库不制造可执行主检出", async () => {
   const folder = await runtime.worktrees.discover("/repo");
   assert.equal(folder.kind, "folder");
   if (folder.kind === "folder") assert.equal(folder.plainFolder, true);
-  assert.equal(world.calls.some((args) => args.includes("init")), false);
+  assert.equal(
+    world.calls.some((args) => args.includes("init")),
+    false,
+  );
 
   const bareWorld = createWorkspaceWorld({
     "/repos/app.git": { device: 2, inode: 1 },
@@ -449,7 +502,10 @@ test("非 Git 与 bare 仓库不制造可执行主检出", async () => {
   assert.equal(bare.needsWorkspace, true);
   assert.equal(bare.candidates.length, 0);
   const project = await bareRuntime.catalog.createProject({ name: "Bare" });
-  const binding = await bareRuntime.worktrees.adoptBare({ projectId: project.id, inputPath: "/repos/app.git" });
+  const binding = await bareRuntime.worktrees.adoptBare({
+    projectId: project.id,
+    inputPath: "/repos/app.git",
+  });
   assert.equal(binding.gitCommonDir, "/repos/app.git");
   assert.equal((await bareRuntime.worktrees.listWorkspaces()).length, 0);
 });

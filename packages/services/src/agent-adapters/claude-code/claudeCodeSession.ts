@@ -40,8 +40,12 @@ export class ClaudeCodeSessionRunner {
     private readonly listeners: Map<string, Set<(event: AgentEvent) => void>>,
   ) {}
 
-  async runTurn(session: ClaudeCodeSessionState, command: Extract<AgentCommand, { type: "send" }>): Promise<void> {
-    if (session.closed) throw new ClaudeCodeAdapterError("backend-failure", "Claude Code session is closed");
+  async runTurn(
+    session: ClaudeCodeSessionState,
+    command: Extract<AgentCommand, { type: "send" }>,
+  ): Promise<void> {
+    if (session.closed)
+      throw new ClaudeCodeAdapterError("backend-failure", "Claude Code session is closed");
     if (session.activeTurnId) {
       throw new ClaudeCodeAdapterError("backend-failure", "Concurrent Claude Code turn rejected");
     }
@@ -72,7 +76,11 @@ export class ClaudeCodeSessionRunner {
         });
         this.#closePending(session, command.turnId, "deny");
         if (!session.turnFinished) {
-          this.#emit(session, { kind: "turn.finished", turnId: command.turnId, outcome: "cancelled" });
+          this.#emit(session, {
+            kind: "turn.finished",
+            turnId: command.turnId,
+            outcome: "cancelled",
+          });
           session.turnFinished = true;
         }
       } else if (!session.turnFinished) {
@@ -100,7 +108,10 @@ export class ClaudeCodeSessionRunner {
     });
   }
 
-  resolve(session: ClaudeCodeSessionState, command: Extract<AgentCommand, { type: "resolveInteraction" }>): void {
+  resolve(
+    session: ClaudeCodeSessionState,
+    command: Extract<AgentCommand, { type: "resolveInteraction" }>,
+  ): void {
     this.#assertLiveTurn(session, command.runtimeEpoch, command.turnId);
     const pending = session.pending;
     if (!pending || pending.interactionId !== command.interactionId) {
@@ -174,7 +185,11 @@ export class ClaudeCodeSessionRunner {
     return "continue";
   }
 
-  #waitDecision(session: ClaudeCodeSessionState, turnId: string, interactionId: string): Promise<"allow" | "deny"> {
+  #waitDecision(
+    session: ClaudeCodeSessionState,
+    turnId: string,
+    interactionId: string,
+  ): Promise<"allow" | "deny"> {
     return new Promise((resolve) => {
       session.pending = { turnId, interactionId, resolve };
     });

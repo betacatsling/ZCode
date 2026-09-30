@@ -112,9 +112,7 @@ export async function* streamGatewayMessagesResponse(input: {
   } catch (error) {
     if (!signal.aborted) {
       const message =
-        error instanceof ModelGatewayProtocolError
-          ? error.message
-          : "Bound Model execution failed";
+        error instanceof ModelGatewayProtocolError ? error.message : "Bound Model execution failed";
       localAbort.abort();
       yield encodeMessagesError(message);
     }

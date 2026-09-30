@@ -56,7 +56,9 @@ function failureReason(result: GitExecResult): "timeout" | "permission" | "disco
 }
 
 function isNotGit(result: GitExecResult): boolean {
-  return result.exitCode !== 0 && /not a git repository|no such file or directory/i.test(result.stderr);
+  return (
+    result.exitCode !== 0 && /not a git repository|no such file or directory/i.test(result.stderr)
+  );
 }
 
 function trimBreak(value: string): string {
@@ -85,7 +87,13 @@ export async function discoverRepository(
     await deps.filesystem.identity(inputPath);
   } catch (error) {
     if (isErrno(error, "ENOENT") || isErrno(error, "ENOTDIR")) {
-      return { kind: "folder", executionTargetId, inputPath, reason: "missing-path", plainFolder: true };
+      return {
+        kind: "folder",
+        executionTargetId,
+        inputPath,
+        reason: "missing-path",
+        plainFolder: true,
+      };
     }
     return { kind: "scan-failed", executionTargetId, inputPath, reason: "permission" };
   }
@@ -132,7 +140,9 @@ export async function discoverRepository(
     return { kind: "scan-failed", executionTargetId, inputPath, reason: failureReason(listed) };
   }
   const records = parsePorcelainZ(listed.stdout).filter((record) => !record.bare);
-  const mainRoot = gitCommonDir.endsWith(`${sep}.git`) ? gitCommonDir.slice(0, -`${sep}.git`.length) : null;
+  const mainRoot = gitCommonDir.endsWith(`${sep}.git`)
+    ? gitCommonDir.slice(0, -`${sep}.git`.length)
+    : null;
   const candidates: DiscoveredWorktree[] = [];
   for (const record of records) {
     try {

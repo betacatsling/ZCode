@@ -35,9 +35,13 @@ test("control plane stays experimental until a model execution trace exists", as
   const root = await mkdtemp(join(tmpdir(), "zcode-codex-capability-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const executable = join(root, "codex");
-  await writeFile(executable, "#!/usr/bin/env node\nprocess.stdout.write('codex-cli 0.157.1\\n');\n", {
-    mode: 0o700,
-  });
+  await writeFile(
+    executable,
+    "#!/usr/bin/env node\nprocess.stdout.write('codex-cli 0.157.1\\n');\n",
+    {
+      mode: 0o700,
+    },
+  );
   const target: ExecutionTarget = {
     id: "target-1",
     kind: "local",
@@ -62,7 +66,13 @@ test("control plane stays experimental until a model execution trace exists", as
   const capabilities = await adapter.capabilities(target);
   assert.equal(capabilities.hostManagedModel?.support, "experimental");
   assert.match(capabilities.hostManagedModel?.reason ?? "", /model execution/);
-  for (const key of ["images", "modelSwitch", "resumeExecution", "viewHistory", "detach"] as const) {
+  for (const key of [
+    "images",
+    "modelSwitch",
+    "resumeExecution",
+    "viewHistory",
+    "detach",
+  ] as const) {
     assert.equal(capabilities[key]?.support, "unsupported");
     assert.equal((capabilities[key]?.reason ?? "").length > 0, true);
   }
@@ -73,7 +83,10 @@ test("control plane stays experimental until a model execution trace exists", as
   const open = await adapter.hostManagedSupport(target, SELECTION);
   assert.equal(open.support, "experimental");
   assert.equal(open.constraints?.unifiedModelRoute, "experimental");
-  const admitted = await adapter.hostManagedSupport(target, { ...SELECTION, modelId: "with-fixture" });
+  const admitted = await adapter.hostManagedSupport(target, {
+    ...SELECTION,
+    modelId: "with-fixture",
+  });
   assert.equal(admitted.support, "supported");
   assert.equal(admitted.constraints?.unifiedModelRoute, "experimental");
   assert.match(admitted.reason ?? "", /Fake Model fixture evidence/);
@@ -135,10 +148,9 @@ test("fake app-server covers events, isolation, and refuses global Codex config"
   assert.equal(finished.length, 1);
   assert.equal(finished[0]?.kind === "message.finished" ? finished[0].text : "", "Hello");
   assert.deepEqual(
-    eventsA.filter((event) => event.kind === "usage.reported").map((event) => [
-      event.inputTokens,
-      event.outputTokens,
-    ]),
+    eventsA
+      .filter((event) => event.kind === "usage.reported")
+      .map((event) => [event.inputTokens, event.outputTokens]),
     [
       [3, 1],
       [10, 4],
@@ -152,17 +164,32 @@ test("fake app-server covers events, isolation, and refuses global Codex config"
     eventsA.some((event) => event.kind === "tool.finished" && event.outcome === "success"),
     true,
   );
-  assert.equal(eventsA.some((event) => event.kind === "turn.finished" && event.outcome === "success"), true);
+  assert.equal(
+    eventsA.some((event) => event.kind === "turn.finished" && event.outcome === "success"),
+    true,
+  );
   assert.deepEqual(modelCalls, []);
-  assert.equal(fakes[0]?.calls.some((call) => call.method === "initialize"), true);
-  assert.equal(fakes[0]?.calls.some((call) => call.method === "thread/start"), true);
+  assert.equal(
+    fakes[0]?.calls.some((call) => call.method === "initialize"),
+    true,
+  );
+  assert.equal(
+    fakes[0]?.calls.some((call) => call.method === "thread/start"),
+    true,
+  );
   assert.equal(
     fakes[0]?.calls.some((call) => JSON.stringify(call.params).includes("tui")),
     false,
   );
 
-  const configA = await readFile(join(codexSessionProfileRoot(join(root, "adapter"), specA), "codex-home", "config.toml"), "utf8");
-  const configB = await readFile(join(codexSessionProfileRoot(join(root, "adapter"), specB), "codex-home", "config.toml"), "utf8");
+  const configA = await readFile(
+    join(codexSessionProfileRoot(join(root, "adapter"), specA), "codex-home", "config.toml"),
+    "utf8",
+  );
+  const configB = await readFile(
+    join(codexSessionProfileRoot(join(root, "adapter"), specB), "codex-home", "config.toml"),
+    "utf8",
+  );
   for (const config of [configA, configB]) {
     assert.match(config, /model_provider = "zcode"/);
     assert.match(config, /wire_api = "responses"/);
@@ -182,7 +209,9 @@ test("fake app-server covers events, isolation, and refuses global Codex config"
   await fakes[0]?.pushServerRequest({ id: 7, method: "fs/read", params: {} });
   assert.equal(fakes[0]?.rejections[0]?.code, -32601);
   assert.equal(
-    eventsA.some((event) => event.kind === "session.error" && event.code === "unsupported-codex-request"),
+    eventsA.some(
+      (event) => event.kind === "session.error" && event.code === "unsupported-codex-request",
+    ),
     true,
   );
 
@@ -370,7 +399,8 @@ class FakeCodexAppServer {
   async request(method: string, params: unknown): Promise<unknown> {
     this.calls.push({ method, params });
     if (method === "initialize") return {};
-    if (method === "thread/start" || method === "thread/resume") return { thread: { id: this.threadId } };
+    if (method === "thread/start" || method === "thread/resume")
+      return { thread: { id: this.threadId } };
     if (method === "turn/start") {
       this.#turnId = `${this.threadId}-turn`;
       this.#afterAccepted(() => {
@@ -416,8 +446,16 @@ class FakeCodexAppServer {
 
   #playText(turnId: string): void {
     const base = { threadId: this.threadId, turnId };
-    this.#options?.onNotification("item/agentMessage/delta", { ...base, itemId: "msg-1", delta: "Hel" });
-    this.#options?.onNotification("item/agentMessage/delta", { ...base, itemId: "msg-1", delta: "lo" });
+    this.#options?.onNotification("item/agentMessage/delta", {
+      ...base,
+      itemId: "msg-1",
+      delta: "Hel",
+    });
+    this.#options?.onNotification("item/agentMessage/delta", {
+      ...base,
+      itemId: "msg-1",
+      delta: "lo",
+    });
     this.#options?.onNotification("item/completed", {
       ...base,
       item: { type: "agentMessage", id: "msg-1", text: "Hello" },
@@ -439,11 +477,17 @@ class FakeCodexAppServer {
     });
     this.#options?.onNotification("thread/tokenUsage/updated", {
       ...base,
-      tokenUsage: { last: { inputTokens: 3, outputTokens: 1 }, total: { inputTokens: 100, outputTokens: 80 } },
+      tokenUsage: {
+        last: { inputTokens: 3, outputTokens: 1 },
+        total: { inputTokens: 100, outputTokens: 80 },
+      },
     });
     this.#options?.onNotification("thread/tokenUsage/updated", {
       ...base,
-      tokenUsage: { last: { inputTokens: 10, outputTokens: 4 }, total: { inputTokens: 100, outputTokens: 80 } },
+      tokenUsage: {
+        last: { inputTokens: 10, outputTokens: 4 },
+        total: { inputTokens: 100, outputTokens: 80 },
+      },
     });
     this.finish("completed", turnId);
   }

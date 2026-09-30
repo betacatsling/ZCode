@@ -47,7 +47,10 @@ function replaceProject(snapshot: CatalogSnapshot, project: Project): CatalogSna
   };
 }
 
-export function createProjectCatalog(deps: { store: CatalogStore; idFactory: () => string }): ProjectCatalog {
+export function createProjectCatalog(deps: {
+  store: CatalogStore;
+  idFactory: () => string;
+}): ProjectCatalog {
   return {
     async listProjects() {
       return visibleProjects(await deps.store.read());
@@ -69,7 +72,10 @@ export function createProjectCatalog(deps: { store: CatalogStore; idFactory: () 
         if (snapshot.projects.some((item) => item.id === created.id)) {
           throw new ProjectWorkspaceError("duplicate-project");
         }
-        return { snapshot: { ...snapshot, projects: [...snapshot.projects, created] }, result: created };
+        return {
+          snapshot: { ...snapshot, projects: [...snapshot.projects, created] },
+          result: created,
+        };
       });
       logger.info(undefined, "project-created", { projectId: project.id });
       return project;

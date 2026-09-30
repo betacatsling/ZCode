@@ -76,7 +76,8 @@ export function projectConversationDelivery(input: {
   now?: number;
 }): ConversationDelivery {
   const projected = tryProject(input);
-  if (!projected.ok) return { clientMode: input.clientMode, mode: "resync", reason: projected.reason };
+  if (!projected.ok)
+    return { clientMode: input.clientMode, mode: "resync", reason: projected.reason };
   const head = projected.snapshot;
   const sentAt = input.now ?? Date.now();
   const snapshot = (reason: "initial" | "epoch-changed" | "cursor-gap" | "not-expressible") => ({
@@ -92,8 +93,10 @@ export function projectConversationDelivery(input: {
   const base = input.base;
   if (!base) return snapshot("initial");
   if (base.logEpoch !== input.runtimeEpoch) return snapshot("epoch-changed");
-  if (!Number.isSafeInteger(base.seq) || base.seq < 0 || base.seq > head.seq) return snapshot("cursor-gap");
-  if (base.seq === head.seq) return { clientMode: input.clientMode, mode: "resume", reason: "caught-up" };
+  if (!Number.isSafeInteger(base.seq) || base.seq < 0 || base.seq > head.seq)
+    return snapshot("cursor-gap");
+  if (base.seq === head.seq)
+    return { clientMode: input.clientMode, mode: "resume", reason: "caught-up" };
   const prefix = projectHostConversation({
     spec: input.spec,
     runtimeEpoch: input.runtimeEpoch,
@@ -167,7 +170,11 @@ function diffConversationSnapshots(
     const firstRemoved = beforeRows.findIndex((row) => !afterIds.has(row.rowId));
     const suffix = beforeRows.slice(firstRemoved);
     const fromRow = suffix[0];
-    if (!fromRow || suffix.some((row) => afterIds.has(row.rowId)) || suffix.length !== removed.length) {
+    if (
+      !fromRow ||
+      suffix.some((row) => afterIds.has(row.rowId)) ||
+      suffix.length !== removed.length
+    ) {
       return null;
     }
     deltas.push({ op: "row.removed", fromRowId: fromRow.rowId });
@@ -186,7 +193,12 @@ function diffConversationSnapshots(
     if (!beforeRow || isDeepStrictEqual(beforeRow, afterRow)) continue;
     const streamed = streamAppend(beforeRow, afterRow);
     if (streamed) {
-      deltas.push({ op: "row.delta", rowId: afterRow.rowId, path: streamed.path, append: streamed.append });
+      deltas.push({
+        op: "row.delta",
+        rowId: afterRow.rowId,
+        path: streamed.path,
+        append: streamed.append,
+      });
     } else {
       deltas.push({ op: "row.upserted", row: afterRow });
     }
@@ -199,7 +211,8 @@ function diffConversationSnapshots(
     patched = true;
   }
   if (patched) deltas.push({ op: "state.updated", patch });
-  if (deltas.length === 0) return isDeepStrictEqual({ ...before, seq: after.seq }, after) ? [] : null;
+  if (deltas.length === 0)
+    return isDeepStrictEqual({ ...before, seq: after.seq }, after) ? [] : null;
   const applied = applyConversationDeltas(before, deltas);
   return isDeepStrictEqual({ ...applied, seq: after.seq }, after) ? deltas : null;
 }

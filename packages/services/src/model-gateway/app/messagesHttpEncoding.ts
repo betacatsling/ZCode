@@ -8,7 +8,9 @@ export function parseMessagesJson(body: string): unknown {
   }
 }
 
-export function encodeMessagesSse(event: Record<string, unknown> & { readonly type: string }): Uint8Array {
+export function encodeMessagesSse(
+  event: Record<string, unknown> & { readonly type: string },
+): Uint8Array {
   return new TextEncoder().encode(
     "event: " + event.type + "\ndata: " + JSON.stringify(event) + "\n\n",
   );

@@ -2,10 +2,7 @@ import type { Model } from "@zcode/contracts";
 import type { ModelSelection } from "@zcode/shared/model-selection";
 import type { BindingPlan, SessionSpec } from "@zcode/shared/agent-host";
 import type { ModelGateway } from "@zcode/services/model-gateway";
-import type {
-  CodexAppServerLauncher,
-  CodexAppServerProcess,
-} from "./codexAppServerProcess.js";
+import type { CodexAppServerLauncher, CodexAppServerProcess } from "./codexAppServerProcess.js";
 import {
   resolveCodexExecutable,
   type CodexApprovalPolicy,

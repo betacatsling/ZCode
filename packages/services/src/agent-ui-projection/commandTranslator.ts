@@ -30,11 +30,21 @@ export function translateV4Command(input: {
 }): TranslateV4CommandResult {
   const parsed = parseCommandEnvelope(input.envelope);
   if (!parsed.ok) {
-    return reject(commandIdOf(input.envelope), input.revision, "invalid-command", parsed.error.message);
+    return reject(
+      commandIdOf(input.envelope),
+      input.revision,
+      "invalid-command",
+      parsed.error.message,
+    );
   }
   const envelope = parsed.envelope;
   if (envelope.sessionId !== null && envelope.sessionId !== input.spec.hostSessionId) {
-    return reject(envelope.commandId, input.revision, "session-mismatch", "sessionId does not match host session");
+    return reject(
+      envelope.commandId,
+      input.revision,
+      "session-mismatch",
+      "sessionId does not match host session",
+    );
   }
   switch (envelope.type) {
     case "createSession":
@@ -51,7 +61,11 @@ export function translateV4Command(input: {
         envelope.payload as CommandPayloadMap["sendText"],
       );
     case "stop":
-      return translateStop(envelope.commandId, input, envelope.payload as CommandPayloadMap["stop"]);
+      return translateStop(
+        envelope.commandId,
+        input,
+        envelope.payload as CommandPayloadMap["stop"],
+      );
     case "resolveInteraction":
       return translateInteraction(
         envelope.commandId,
@@ -110,7 +124,8 @@ function translateSend(
   },
 ): TranslateV4CommandResult {
   const blocked = blockedSendField(payload);
-  if (blocked) return reject(commandId, input.revision, UNAVAILABLE, `unsupported field: ${blocked}`);
+  if (blocked)
+    return reject(commandId, input.revision, UNAVAILABLE, `unsupported field: ${blocked}`);
   if (!input.nextTurnId) {
     return reject(commandId, input.revision, UNAVAILABLE, "unsupported field: turnId");
   }
@@ -130,7 +145,12 @@ function translateStop(
 ): TranslateV4CommandResult {
   const turnId = payload.expectedForegroundExecutionId;
   if (!turnId) {
-    return reject(commandId, input.revision, "stale-turn", "stop requires expectedForegroundExecutionId");
+    return reject(
+      commandId,
+      input.revision,
+      "stale-turn",
+      "stop requires expectedForegroundExecutionId",
+    );
   }
   return accept({
     type: "cancelTurn",
@@ -167,7 +187,9 @@ function translateInteraction(
   if (optionId !== "allow" && optionId !== "deny") {
     return reject(commandId, input.revision, UNAVAILABLE, "unsupported field: optionId");
   }
-  const pending = input.pendingInteractions?.find((item) => item.interactionId === payload.interactionId);
+  const pending = input.pendingInteractions?.find(
+    (item) => item.interactionId === payload.interactionId,
+  );
   const anchorId = pending?.anchorRowId;
   const row = anchorId == null ? undefined : input.rows?.find((item) => item.rowId === anchorId);
   if (!pending || !row) {

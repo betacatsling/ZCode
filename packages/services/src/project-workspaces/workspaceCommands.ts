@@ -15,7 +15,11 @@ import type { CatalogSnapshot } from "./snapshot.js";
 const logger = createServiceLogger("project-workspaces");
 
 export type AdoptResult =
-  | { status: "adopted" | "already-present"; binding: RepositoryBinding; workspace: WorktreeWorkspace }
+  | {
+      status: "adopted" | "already-present";
+      binding: RepositoryBinding;
+      workspace: WorktreeWorkspace;
+    }
   | { status: "needs-verification"; workspaceId: string; binding: RepositoryBinding };
 
 function withBinding(snapshot: CatalogSnapshot, binding: RepositoryBinding): CatalogSnapshot {
@@ -81,7 +85,9 @@ export function createWorkspaceCommands(deps: ProjectWorkspaceDeps) {
           return {
             snapshot: {
               ...withBinding(snapshot, resolved.binding),
-              workspaces: snapshot.workspaces.map((item) => (item.id === workspace.id ? workspace : item)),
+              workspaces: snapshot.workspaces.map((item) =>
+                item.id === workspace.id ? workspace : item,
+              ),
               verificationByWorkspaceId: {
                 ...snapshot.verificationByWorkspaceId,
                 [workspace.id]: "verified",
@@ -132,7 +138,11 @@ export function createWorkspaceCommands(deps: ProjectWorkspaceDeps) {
               ...created.snapshotPatch.workspaceIdentityById,
             },
           },
-          result: { status: "adopted" as const, binding: resolved.binding, workspace: created.workspace },
+          result: {
+            status: "adopted" as const,
+            binding: resolved.binding,
+            workspace: created.workspace,
+          },
         };
       });
       logger.info(undefined, "worktree-adopted", {

@@ -132,10 +132,7 @@ test("P4: feedback list does not read zcodejwttoken or call the feedback API", a
 });
 
 test("P4: Start Plan product JWT resolver file is absent", () => {
-  assert.equal(
-    existsSync(join(here, "../src/model-provider/bigmodelStartPlanZcodeJwt.ts")),
-    false,
-  );
+  assert.equal(existsSync(join(here, "../src/model-provider/bigmodelStartPlanZcodeJwt.ts")), false);
 });
 
 test("P4: quota reset and team quota do not read oauth keys or fire auth", async () => {

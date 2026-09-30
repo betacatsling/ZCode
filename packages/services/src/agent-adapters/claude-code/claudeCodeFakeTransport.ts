@@ -134,7 +134,9 @@ export class FakeClaudeCodeTransport implements ClaudeCodeTransport {
 
   async shutdown(): Promise<void> {
     if (this.#refs.size > 0) {
-      throw new Error("Refusing to shut down the shared Claude Code transport while sessions remain");
+      throw new Error(
+        "Refusing to shut down the shared Claude Code transport while sessions remain",
+      );
     }
     this.#shutDown = true;
   }
@@ -179,7 +181,10 @@ export class AcpMarkingTransport implements ClaudeCodeTransport {
     return this.inner.cancel(input);
   }
 
-  close(input: { readonly hostSessionId: string; readonly nativeSessionId: string }): Promise<void> {
+  close(input: {
+    readonly hostSessionId: string;
+    readonly nativeSessionId: string;
+  }): Promise<void> {
     return this.inner.close(input);
   }
 

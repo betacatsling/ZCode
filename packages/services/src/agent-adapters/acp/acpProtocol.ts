@@ -42,7 +42,11 @@ export function negotiateAcpInitialize(result: unknown): AcpNegotiation {
     throw new Error("ACP initialize response is missing protocolVersion");
   }
   const version = result.protocolVersion;
-  const info = isRecord(result.agentInfo) ? result.agentInfo : isRecord(result.info) ? result.info : undefined;
+  const info = isRecord(result.agentInfo)
+    ? result.agentInfo
+    : isRecord(result.info)
+      ? result.info
+      : undefined;
   const base = {
     protocolVersion: version,
     authMethods: readAuthMethods(result.authMethods),
@@ -52,9 +56,12 @@ export function negotiateAcpInitialize(result: unknown): AcpNegotiation {
   if (version === ACP_STABLE_PROTOCOL_VERSION) {
     const capabilities = isRecord(result.agentCapabilities) ? result.agentCapabilities : {};
     const prompt = isRecord(capabilities.promptCapabilities) ? capabilities.promptCapabilities : {};
-    const session = isRecord(capabilities.sessionCapabilities) ? capabilities.sessionCapabilities : {};
+    const session = isRecord(capabilities.sessionCapabilities)
+      ? capabilities.sessionCapabilities
+      : {};
     const loadSession = capabilities.loadSession === true;
-    const resumeSession = session.resume !== undefined && session.resume !== null && session.resume !== false;
+    const resumeSession =
+      session.resume !== undefined && session.resume !== null && session.resume !== false;
     return {
       ...base,
       stability: "stable",
@@ -71,7 +78,8 @@ export function negotiateAcpInitialize(result: unknown): AcpNegotiation {
     return {
       ...base,
       stability: "experimental",
-      stabilityReason: "ACP protocol version 2 changes session resume and prompt completion semantics",
+      stabilityReason:
+        "ACP protocol version 2 changes session resume and prompt completion semantics",
       loadSession: false,
       resumeSession: session !== undefined,
       resumeReplaysHistory: false,
@@ -98,7 +106,12 @@ function readAuthMethods(value: unknown): AcpAuthMethod[] {
   const methods: AcpAuthMethod[] = [];
   for (const entry of value) {
     if (!isRecord(entry)) continue;
-    const methodId = typeof entry.methodId === "string" ? entry.methodId : typeof entry.id === "string" ? entry.id : "";
+    const methodId =
+      typeof entry.methodId === "string"
+        ? entry.methodId
+        : typeof entry.id === "string"
+          ? entry.id
+          : "";
     if (!methodId.trim()) continue;
     const method: AcpAuthMethod = { methodId: methodId.trim() };
     methods.push(typeof entry.type === "string" ? { ...method, type: entry.type } : method);
