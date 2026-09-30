@@ -23,6 +23,7 @@ import {
 import { createNodeProviderRegistryRuntime } from "@zcode/provider-node";
 import {
   agentCommandReceiptSchema,
+  workspaceSessionBindingCapabilityResultSchema,
   type AgentEvent,
   type SessionSpec,
 } from "@zcode/shared/agent-host";
@@ -84,12 +85,26 @@ interface CapturedRequest {
 async function startFakes() {
   const requests: CapturedRequest[] = [];
   const expiredKeys = new Set<string>();
+  /** Per-key non-401 failure: an HTTP status, or "network" to drop the connection. */
+  const failures = new Map<string, number | "network">();
   const server = createServer((request, response) => {
     request.resume();
     request.on("end", () => {
       const route = request.url?.split("/")[1] ?? "unknown";
       const authorization = request.headers.authorization;
       requests.push({ route, authorization });
+      const failure = authorization
+        ? failures.get(authorization.replace(/^Bearer /, ""))
+        : undefined;
+      if (failure === "network") {
+        request.socket.destroy();
+        return;
+      }
+      if (failure !== undefined) {
+        response.writeHead(failure, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: { message: `fake ${failure}`, type: "fake_error" } }));
+        return;
+      }
       if (authorization && expiredKeys.has(authorization.replace(/^Bearer /, ""))) {
         response.writeHead(401, { "content-type": "application/json" });
         response.end(
@@ -114,6 +129,7 @@ async function startFakes() {
     origin,
     requests,
     expiredKeys,
+    failures,
     count: (route: string) => requests.filter((request) => request.route === route).length,
     close: async () => {
       server.close();
@@ -123,7 +139,11 @@ async function startFakes() {
 }
 
 /** Real Registry + real AiSdkModelAdapter + real Pi harness, wired like lazyTargetService. */
-async function createHostEnvironment(root: string, origin: string) {
+async function createHostEnvironment(
+  root: string,
+  origin: string,
+  retry?: ConstructorParameters<typeof AiSdkModelAdapter>[0]["retry"],
+) {
   const worktree = join(root, "worktree");
   await mkdir(worktree, { recursive: true });
   const runtime = createNodeProviderRegistryRuntime({
@@ -155,6 +175,7 @@ async function createHostEnvironment(root: string, origin: string) {
   }
   const adapter = new RecordingModelAdapter({
     streamIdleTimeoutMs: 5_000,
+    ...(retry ? { retry } : {}),
     statusSink: {
       publish: (event) => {
         statuses.push(event);
@@ -167,7 +188,8 @@ async function createHostEnvironment(root: string, origin: string) {
     platform: process.platform as "darwin" | "linux",
     available: true,
   };
-  const makeTarget = () => {
+  const makeCatalog = () => createRegistryModelCatalog(runtime.registryService, adapter);
+  const makeTarget = (catalog = makeCatalog()) => {
     const harnesses = new HarnessRegistry();
     harnesses.register(
       createRegistryPiHarness({
@@ -179,7 +201,7 @@ async function createHostEnvironment(root: string, origin: string) {
     return new AgentHostTargetService({
       root: join(root, "host"),
       target,
-      catalog: createRegistryModelCatalog(runtime.registryService, adapter),
+      catalog,
       registry: harnesses,
       authorizeWorktree: async () => true,
     });
@@ -208,6 +230,7 @@ async function createHostEnvironment(root: string, origin: string) {
     otherId: other.providerId,
     createdModels,
     statuses,
+    makeCatalog,
     makeTarget,
     specFor,
   };
@@ -671,4 +694,253 @@ test("send receipt accepts an optional key-free reconfigure failure and stays st
     agentCommandReceiptSchema.parse({ ...receipt, failure: { ...failure, apiKey: "k" } }),
   );
   assert.throws(() => agentCommandReceiptSchema.parse({ ...receipt, providerKey: "k" }));
+});
+
+function capabilityOf(
+  target: AgentHostTargetService,
+  selection: { providerId: string; modelId: string },
+) {
+  return target.getWorkspaceSessionCapability({
+    harnessId: "pi",
+    modelBinding: {
+      kind: "host-managed",
+      selection: { ...selection, options: { reasoningLevel: "off" } },
+    },
+  });
+}
+
+/** session.error is session-scoped (no turnId). */
+function sessionErrors(events: readonly AgentEvent[]) {
+  return events.filter(
+    (event): event is Extract<AgentEvent, { kind: "session.error" }> =>
+      event.kind === "session.error",
+  );
+}
+
+test(
+  "403 keeps the typed turn failure but does not mark the Provider: the next turn is admitted and reaches it",
+  { timeout: 60_000 },
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "zcode-stale-provider-403-"));
+    const fakes = await startFakes();
+    const env = await createHostEnvironment(root, fakes.origin);
+    const target = env.makeTarget();
+    try {
+      const selection = { providerId: env.staleId, modelId: "stale-model" };
+      const spec = env.specFor("forbidden-session", selection);
+      await target.create(spec);
+      fakes.failures.set("stale-key-v1", 403);
+      assert.equal((await send(target, spec, "turn-1", "forbidden")).status, "accepted");
+      await target.waitForIdle(spec);
+      const errors = sessionErrors(await target.eventsSince(spec, 0));
+      assert.equal(errors.length, 1);
+      assert.equal(errors[0]?.code, "provider-reconfigure-required");
+      assert.deepEqual((errors[0] as Record<string, unknown> | undefined)?.failure, {
+        reason: "auth_failed",
+        action: "reconfigure-provider",
+        providerId: env.staleId,
+        modelId: "stale-model",
+        statusCode: 403,
+        retryable: false,
+      });
+      assert.equal(fakes.count("stale"), 1);
+      const capability = await capabilityOf(target, selection);
+      assert.equal(capability.report.support, "supported");
+      assert.equal("credentialAttention" in capability, false);
+
+      // Not marked: the next turn is admitted and reaches the Provider (still 403 there).
+      assert.equal((await send(target, spec, "turn-2", "again")).status, "accepted");
+      await target.waitForIdle(spec);
+      assert.equal(fakes.count("stale"), 2);
+      fakes.failures.delete("stale-key-v1");
+      assert.equal((await send(target, spec, "turn-3", "permission fixed")).status, "accepted");
+      await target.waitForIdle(spec);
+      assert.deepEqual(assistantTexts(await target.eventsSince(spec, 0), "turn-3"), [
+        "answer-from-stale",
+      ]);
+      assert.equal(fakes.count("stale"), 3);
+    } finally {
+      await target.close().catch(() => undefined);
+      env.runtime.dispose();
+      await fakes.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "retryable failures (429, 5xx, network) never mark the Provider",
+  { timeout: 60_000 },
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "zcode-stale-provider-retryable-"));
+    const fakes = await startFakes();
+    const env = await createHostEnvironment(root, fakes.origin, {
+      maxAttempts: 2,
+      baseDelayMs: 0,
+      maxDelayMs: 0,
+      jitter: false,
+    });
+    const target = env.makeTarget();
+    try {
+      const selection = { providerId: env.staleId, modelId: "stale-model" };
+      const spec = env.specFor("retryable-session", selection);
+      await target.create(spec);
+      let seen = fakes.count("stale");
+      for (const [index, failure] of ([429, 500, 503, "network"] as const).entries()) {
+        fakes.failures.set("stale-key-v1", failure);
+        const turn = `turn-${index + 1}`;
+        assert.equal((await send(target, spec, turn, `fail ${failure}`)).status, "accepted");
+        await target.waitForIdle(spec);
+        assert.deepEqual(assistantTexts(await target.eventsSince(spec, 0), turn), []);
+        assert.ok(fakes.count("stale") > seen, `${failure} reached the Provider`);
+        seen = fakes.count("stale");
+        const capability = await capabilityOf(target, selection);
+        assert.equal("credentialAttention" in capability, false, `${failure} set no attention`);
+      }
+      fakes.failures.delete("stale-key-v1");
+      assert.equal((await send(target, spec, "turn-ok", "recovered")).status, "accepted");
+      await target.waitForIdle(spec);
+      assert.deepEqual(assistantTexts(await target.eventsSince(spec, 0), "turn-ok"), [
+        "answer-from-stale",
+      ]);
+      assert.equal(fakes.count("stale"), seen + 1);
+      assert.equal(fakes.count("other"), 0);
+    } finally {
+      await target.close().catch(() => undefined);
+      env.runtime.dispose();
+      await fakes.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "401 marks only that Provider; capability reports it early, attach/create still work, and it clears on reconfigure before any turn",
+  { timeout: 60_000 },
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "zcode-stale-provider-capability-"));
+    const fakes = await startFakes();
+    const env = await createHostEnvironment(root, fakes.origin);
+    const catalog = env.makeCatalog();
+    let target = env.makeTarget(catalog);
+    try {
+      const staleSelection = { providerId: env.staleId, modelId: "stale-model" };
+      const otherSelection = { providerId: env.otherId, modelId: "other-model" };
+      const spec = env.specFor("capability-session", staleSelection);
+      const other = env.specFor("capability-other-session", otherSelection);
+      await target.create(spec);
+      await target.create(other);
+      assert.equal("credentialAttention" in (await capabilityOf(target, staleSelection)), false);
+
+      fakes.expiredKeys.add("stale-key-v1");
+      assert.equal((await send(target, spec, "turn-1", "expired")).status, "accepted");
+      await target.waitForIdle(spec);
+      assert.equal(fakes.count("stale"), 1);
+      const attention = {
+        reason: "auth_failed",
+        action: "reconfigure-provider",
+        providerId: env.staleId,
+        modelId: "stale-model",
+        statusCode: 401,
+        retryable: false,
+      };
+
+      // Capability exposes the mark for A (still "supported": opening/creating stays allowed).
+      const staleCapability = await capabilityOf(target, staleSelection);
+      assert.equal(staleCapability.report.support, "supported");
+      assert.deepEqual((staleCapability as Record<string, unknown>).credentialAttention, attention);
+      const serialized = JSON.stringify(staleCapability);
+      for (const secret of ["stale-key", "127.0.0.1", "http"])
+        assert.equal(serialized.includes(secret), false, secret);
+      assert.equal(/[0-9a-f]{64}/.test(serialized), false, "no credential fingerprint");
+      assert.deepEqual(
+        workspaceSessionBindingCapabilityResultSchema.parse(staleCapability),
+        staleCapability,
+      );
+
+      // B is not marked: no attention and its turn is admitted and reaches B.
+      assert.equal("credentialAttention" in (await capabilityOf(target, otherSelection)), false);
+      assert.equal((await send(target, other, "other-1", "use B")).status, "accepted");
+      await target.waitForIdle(other);
+      assert.deepEqual(assistantTexts(await target.eventsSince(other, 0), "other-1"), [
+        "answer-from-other",
+      ]);
+      assert.equal(fakes.count("other"), 1);
+
+      // Positive case kept: A's next turn is refused with statusCode 401 and no request.
+      const refused = await send(target, spec, "turn-2", "still expired");
+      assert.equal(refused.status, "rejected");
+      assert.equal(refused.reasonCode, "provider-reconfigure-required");
+      assert.deepEqual((refused as Record<string, unknown>).failure, attention);
+      assert.equal(fakes.count("stale"), 1);
+
+      // attach (fresh SessionHost.open on the same Host catalog) and create still succeed.
+      await target.close();
+      target = env.makeTarget(catalog);
+      await target.attach(spec);
+      const created = env.specFor("capability-created-while-marked", staleSelection);
+      await target.create(created);
+      assert.deepEqual(
+        ((await capabilityOf(target, staleSelection)) as Record<string, unknown>)
+          .credentialAttention,
+        attention,
+      );
+      assert.equal(
+        (await send(target, created, "created-1", "try")).reasonCode,
+        "provider-reconfigure-required",
+      );
+      assert.equal(fakes.count("stale"), 1);
+
+      // Reconfigure: the capability read alone reports no attention, before any turn.
+      await env.runtime.configService.savePersonalProviderOverlay(
+        env.staleId,
+        providerConfig(`${fakes.origin}/stale/v1`, "stale-key-v2"),
+      );
+      await env.runtime.registryService.refresh("user-rotated-key");
+      const cleared = await capabilityOf(target, staleSelection);
+      assert.equal(cleared.report.support, "supported");
+      assert.equal("credentialAttention" in cleared, false);
+      assert.equal(fakes.count("stale"), 1);
+      assert.equal((await send(target, spec, "turn-3", "new key")).status, "accepted");
+      await target.waitForIdle(spec);
+      assert.deepEqual(assistantTexts(await target.eventsSince(spec, 0), "turn-3"), [
+        "answer-from-stale",
+      ]);
+      assert.deepEqual(fakes.requests.at(-1), {
+        route: "stale",
+        authorization: "Bearer stale-key-v2",
+      });
+    } finally {
+      await target.close().catch(() => undefined);
+      env.runtime.dispose();
+      await fakes.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test("capability result accepts an optional key-free credentialAttention and stays strict", () => {
+  const credentialAttention = {
+    reason: "auth_failed",
+    action: "reconfigure-provider",
+    providerId: "p",
+    modelId: "m",
+    statusCode: 401,
+    retryable: false,
+  };
+  const result = { targetId: "local", report: { support: "supported" }, credentialAttention };
+  assert.deepEqual(workspaceSessionBindingCapabilityResultSchema.parse(result), result);
+  assert.deepEqual(
+    workspaceSessionBindingCapabilityResultSchema.parse({
+      targetId: "local",
+      report: { support: "supported" },
+    }),
+    { targetId: "local", report: { support: "supported" } },
+  );
+  assert.throws(() =>
+    workspaceSessionBindingCapabilityResultSchema.parse({
+      ...result,
+      credentialAttention: { ...credentialAttention, fingerprint: "abc" },
+    }),
+  );
 });
