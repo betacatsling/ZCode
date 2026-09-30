@@ -1107,16 +1107,29 @@ export class EventStreamFailure extends Error {
 
 /**
  * dispatch() on a host that close() has closed (healthy or force-closed), or whose close() landed
- * while the command was in flight. `code` is host-local, not a receipt reasonCode: an in-flight
- * command keeps its durable "accepted" record (execution-unknown after restart, never replayed).
- * Over RPC only `name` and `message` cross the wire.
+ * while the command was in flight; with `owner: "target"`, a call on a target owner
+ * (AgentHostTargetService) that is closing or closed, where no host accepts work any more.
+ * `code` is host-local, not a receipt reasonCode: an in-flight command keeps its durable
+ * "accepted" record (execution-unknown after restart, never replayed). The @zcode/rpc channel
+ * carries `name`, `message` and `code` to the client (not the class, so match on name/code).
  */
 export class SessionHostClosedError extends Error {
   readonly code = "host-closed" as const;
-  constructor(detail?: string, options?: ErrorOptions) {
-    super(detail ? `session host closed: ${detail}` : "session host closed", options);
+  constructor(detail?: string, options?: ErrorOptions & { owner?: "session" | "target" }) {
+    // Message prefixes are what existing callers match on: keep both wordings.
+    super(
+      closedMessage(
+        options?.owner === "target" ? "target host is closing" : "session host closed",
+        detail,
+      ),
+      options,
+    );
     this.name = "SessionHostClosedError";
   }
+}
+
+function closedMessage(subject: string, detail: string | undefined): string {
+  return detail ? `${subject}: ${detail}` : subject;
 }
 
 class BindingPreparationFailure extends Error {

@@ -21,7 +21,8 @@ import {
 } from "@zcode/shared/zcode-protocol-v4";
 import { HarnessRegistry } from "./harnessRegistry.js";
 import { createHostHarnessDirectory, type HarnessDirectory } from "./harnessDirectory.js";
-import { EventStreamFailure, SessionHost } from "./sessionHost.js";
+import { EventStreamFailure, SessionHost, SessionHostClosedError } from "./sessionHost.js";
+import { SessionNotAttachedError } from "./targetErrors.js";
 import { createFileWorkspaceSessionReceiptStore } from "./workspaceSessionReceipts.js";
 import type { ModelCatalogPort } from "./modelBindingPlanner.js";
 import type { AgentHostActivityIndex } from "./activityIndex.js";
@@ -188,7 +189,7 @@ export class AgentHostTargetService {
       (command.type === "resolveInteraction" && command.decision === "allow");
     const run = async () => {
       const key = admitted ? await this.#verify(spec) : this.#verifyHistory(spec);
-      if (this.#closing) throw new Error("target host is closing");
+      if (this.#closing) throw new SessionHostClosedError(undefined, { owner: "target" });
       await this.#owner.assertIfHeld(spec.hostSessionId);
       return this.#require(key).dispatch(command);
     };
@@ -255,6 +256,8 @@ export class AgentHostTargetService {
   }
   async waitForIdle(spec: SessionSpec): Promise<ConversationSnapshot> {
     const key = await this.#verify(spec);
+    // close() clears the mounted hosts; say "closed", not "not attached".
+    if (this.#closing) throw new SessionHostClosedError(undefined, { owner: "target" });
     const host = this.#require(key);
     await host.whenIdle();
     return host.snapshot();
@@ -327,8 +330,7 @@ export class AgentHostTargetService {
   }
   #require(key: string): SessionHost {
     const host = this.#hosts.get(key);
-    if (!host)
-      throw new Error("external session is not attached; query history or explicitly attach first");
+    if (!host) throw new SessionNotAttachedError();
     return host;
   }
 
