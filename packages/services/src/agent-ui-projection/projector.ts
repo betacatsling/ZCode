@@ -6,7 +6,11 @@ import {
   type ToolCallRow,
   type TurnHeaderRow,
 } from "@zcode/shared/zcode-protocol-v4";
-import type { AgentEvent, CompatibleSessionSpec } from "@zcode/shared/agent-host";
+import type {
+  AgentEvent,
+  AgentModelFailure,
+  CompatibleSessionSpec,
+} from "@zcode/shared/agent-host";
 import { createExternalEventProjection } from "./externalEventProjection.js";
 
 const unavailable = { allowed: false as const, reasonCode: "externalHarnessUnsupported" };
@@ -42,6 +46,7 @@ export function projectHostConversation(input: {
   let errorCode: string | undefined;
   let errorMessage = "";
   let lastErrorAt = 0;
+  let errorFailure: AgentModelFailure | undefined;
   const external = createExternalEventProjection();
   let inputTokens = 0;
   let outputTokens = 0;
@@ -285,6 +290,7 @@ export function projectHostConversation(input: {
         errorCode = event.code;
         errorMessage = event.message;
         lastErrorAt = event.at;
+        errorFailure = event.failure;
         phase = "error";
         break;
       case "plan.updated":
@@ -307,6 +313,7 @@ export function projectHostConversation(input: {
         recoverable: false,
         at: lastErrorAt,
         source: "runtime" as const,
+        ...(errorFailure ? { failure: errorFailure } : {}),
       }
     : null;
   const eligibleRows =

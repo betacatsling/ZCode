@@ -79,3 +79,12 @@ and authoritative sequence; they do not create a second transcript owner.
 Offline or stale state is never converted into completed state. Capability and
 target checks are performed by the Host before admission; the transport only
 routes typed results.
+
+A `session.error` or `send` receipt may carry the key-free `AgentModelFailure`
+(for example `provider-reconfigure-required` after a 401). The projection copies
+it into `control.lastError.failure`, and the V4 `CommandAck` has the same
+optional `failure` field for the receipt. Both reuse the shared strict schema;
+older servers omit the field and older clients drop it. An untyped error leaves
+`lastError` unchanged with no `failure` key, and a later untyped error replaces
+an earlier typed one. Because the projection is rebuilt from the journal, cold
+reads return the same `failure` as live reads.

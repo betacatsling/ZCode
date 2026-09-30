@@ -2,6 +2,7 @@
 // ConversationSnapshot A 区。
 // A 区更新语义 = 字段级整体替换（state.updated），绝不深合并——深合并是错乱之母。
 import { z } from "zod";
+import { agentModelFailureSchema } from "../agent-host/events.js";
 import { agentHostSessionMetadataSchema } from "../agent-host/metadata.js";
 import { sharedContextImportStateSchema } from "./shared-context-import.js";
 export { sharedContextImportStateSchema } from "./shared-context-import.js";
@@ -115,6 +116,8 @@ export const sessionErrorInfoSchema = z.object({
   underlyingErrorMessage: z.string().optional(),
   underlyingErrorDetail: z.string().optional(),
   attribution: errorAttributionSchema.optional(),
+  /** Key-free typed cause (agent-host session.error failure); older servers omit it. */
+  failure: agentModelFailureSchema.optional(),
 });
 export type SessionErrorInfo = z.infer<typeof sessionErrorInfoSchema>;
 
