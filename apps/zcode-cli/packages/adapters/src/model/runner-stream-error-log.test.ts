@@ -93,7 +93,7 @@ async function failStream(status: number, logger: Logger | undefined) {
   let failure: unknown;
   try {
     for await (const _event of runStreamText({
-      env: {},
+      env: { ZCODE_RUNTIME_ENV: "test" },
       ...(logger ? { logger } : {}),
       request: { messages: [{ role: "user", content: "prompt-text" }] } as never,
       resolveModel: () => resolved,
