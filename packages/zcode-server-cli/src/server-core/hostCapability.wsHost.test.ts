@@ -313,55 +313,179 @@ test("ws/host: two simultaneous upgrades with one ticket admit exactly one", asy
   });
 });
 
-test("ws/host: a request that passes the ticket check but fails to upgrade still burns it", async () => {
-  const store = createHostCapabilityStore({
-    now: createClock().now,
-    createCapability: sequentialCapabilities(),
+// ---------------------------------------------------------------------------
+// Consume-on-upgrade：ticket 只在 WebSocket 握手真正被接受时消费（见
+// docs/agent-host/HOST-CAPABILITY-BOOTSTRAP-AUTH.md）。未完成 upgrade 的请求不得烧掉它。
+// ---------------------------------------------------------------------------
+
+/** 原始 HTTP/1.1 请求：fetch 不能设置 Connection/Upgrade，也无法发出非法握手。返回状态码。 */
+async function rawRequest(hostUrl: string, lines: readonly string[]): Promise<number> {
+  const url = new URL(hostUrl);
+  const raw = connect(Number(url.port), url.hostname);
+  await once(raw, "connect");
+  let reply = "";
+  raw.setEncoding("utf8");
+  raw.on("data", (chunk: string) => {
+    reply += chunk;
   });
+  const closed = once(raw, "close");
+  raw.write([...lines, `Host: ${url.host}`, "", ""].join("\r\n"));
+  await closed;
+  const status = /^HTTP\/1\.1 (\d{3}) /u.exec(reply);
+  assert.ok(
+    status,
+    `server answered with an HTTP status line: ${JSON.stringify(reply.slice(0, 80))}`,
+  );
+  return Number(status[1]);
+}
+
+const WS_KEY = "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==";
+
+test("ws/host: plain GET/POST with a valid ticket get 426 and do not burn it", async () => {
+  const store = createHostCapabilityStore({ now: createClock().now });
   await withCoreServer(store, async ({ baseHttp, hostUrl }) => {
-    // 1) 非 upgrade 的普通 GET/POST：middleware 先消费，再落到 404。
-    for (const method of ["GET", "POST"] as const) {
-      const { capability } = store.issue();
+    const { capability } = store.issue();
+    for (const method of ["GET", "POST", "PUT", "DELETE"] as const) {
       const response = await fetch(`${baseHttp}/ws/host`, {
         method,
         headers: hostHeaders(capability),
       });
       await response.body?.cancel();
-      assert.equal(response.status, 404, `${method} passes the ticket gate but has no route`);
-      await expectRejected(
-        attemptUpgrade(hostUrl, hostHeaders(capability)),
-        `${method} attempt consumed the ticket`,
-      );
+      assert.equal(response.status, 426, `${method} without an upgrade is refused`);
     }
+    await expectOpen(attemptUpgrade(hostUrl, hostHeaders(capability)), "ticket is still live");
+    await expectRejected(attemptUpgrade(hostUrl, hostHeaders(capability)), "then single-use");
+  });
+});
 
-    // 2) 握手非法（Sec-WebSocket-Version 不支持）：ticket 在 ws 拒绝握手之前已被消费。
+test("ws/host: an Upgrade header without Connection: Upgrade gets 426 and does not burn the ticket", async () => {
+  const store = createHostCapabilityStore({ now: createClock().now });
+  await withCoreServer(store, async ({ hostUrl }) => {
     const { capability } = store.issue();
-    const url = new URL(hostUrl);
-    const raw = connect(Number(url.port), url.hostname);
-    await once(raw, "connect");
-    raw.write(
+    // Node 只在 Connection: Upgrade 时走 'upgrade' 事件；否则这是普通请求，永远不会握手。
+    const status = await rawRequest(hostUrl, [
+      "GET /ws/host HTTP/1.1",
+      "Connection: close",
+      "Upgrade: websocket",
+      WS_KEY,
+      "Sec-WebSocket-Version: 13",
+      `${ZCODE_RPC_HOST_CAPABILITY_HEADER}: ${capability}`,
+    ]);
+    assert.equal(status, 426);
+    await expectOpen(attemptUpgrade(hostUrl, hostHeaders(capability)), "ticket is still live");
+  });
+});
+
+test("ws/host: handshakes rejected by the WebSocket layer do not burn the ticket", async () => {
+  const store = createHostCapabilityStore({ now: createClock().now });
+  await withCoreServer(store, async ({ hostUrl }) => {
+    const { capability } = store.issue();
+    const ticket = `${ZCODE_RPC_HOST_CAPABILITY_HEADER}: ${capability}`;
+    const upgrade = ["Connection: Upgrade", "Upgrade: websocket"];
+    const rejected: Array<[string, readonly string[], number]> = [
       [
+        "unsupported Sec-WebSocket-Version",
+        ["GET /ws/host HTTP/1.1", ...upgrade, WS_KEY, "Sec-WebSocket-Version: 7", ticket],
+        400,
+      ],
+      [
+        "missing Sec-WebSocket-Key",
+        ["GET /ws/host HTTP/1.1", ...upgrade, "Sec-WebSocket-Version: 13", ticket],
+        400,
+      ],
+      [
+        "malformed Sec-WebSocket-Key",
+        [
+          "GET /ws/host HTTP/1.1",
+          ...upgrade,
+          "Sec-WebSocket-Key: not-a-key",
+          "Sec-WebSocket-Version: 13",
+          ticket,
+        ],
+        400,
+      ],
+      // @hono/node-ws routes every upgrade as GET; ws itself then refuses the method.
+      [
+        "POST upgrade",
+        ["POST /ws/host HTTP/1.1", ...upgrade, WS_KEY, "Sec-WebSocket-Version: 13", ticket],
+        405,
+      ],
+    ];
+    for (const [label, lines, expected] of rejected) {
+      assert.equal(await rawRequest(hostUrl, lines), expected, label);
+    }
+    await expectOpen(
+      attemptUpgrade(hostUrl, hostHeaders(capability)),
+      "no rejected handshake consumed the ticket",
+    );
+    await expectRejected(attemptUpgrade(hostUrl, hostHeaders(capability)), "then single-use");
+  });
+});
+
+test("ws/host: upgrades to the wrong path with the ticket do not burn it", async () => {
+  const store = createHostCapabilityStore({ now: createClock().now });
+  await withCoreServer(store, async ({ hostUrl }) => {
+    const { capability } = store.issue();
+    for (const path of ["/ws/host/", "/ws/host/extra", "/WS/host", "/ws/hostx"]) {
+      const outcome = await attemptUpgrade(new URL(path, hostUrl).href, hostHeaders(capability));
+      if (outcome.kind === "open") await closeSocket(outcome.socket);
+      assert.equal(outcome.kind, "rejected", `${path} does not open a Host channel`);
+    }
+    await expectOpen(attemptUpgrade(hostUrl, hostHeaders(capability)), "ticket is still live");
+  });
+});
+
+test("ws/host: an invalid ticket is refused before any upgrade and does not affect a live one", async () => {
+  const clock = createClock();
+  const store = createHostCapabilityStore({ now: clock.now, ttlMs: 5_000 });
+  await withCoreServer(store, async ({ baseHttp, hostUrl }) => {
+    const live = store.issue();
+    const response = await fetch(`${baseHttp}/ws/host`, { headers: hostHeaders("unknown") });
+    await response.body?.cancel();
+    assert.equal(response.status, 401, "ticket validity is checked before the upgrade check");
+    clock.set(live.expiresAt);
+    const expired = await fetch(`${baseHttp}/ws/host`, { headers: hostHeaders(live.capability) });
+    await expired.body?.cancel();
+    assert.equal(expired.status, 401, "expired ticket is refused even without an upgrade");
+    clock.set(T0);
+    await expectRejected(
+      attemptUpgrade(hostUrl, hostHeaders(live.capability)),
+      "an expired ticket stays rejected after the clock rewinds",
+    );
+  });
+});
+
+test("ws/host: after a failed handshake, concurrent upgrades with the same ticket still admit exactly one", async () => {
+  const store = createHostCapabilityStore({ now: createClock().now });
+  await withCoreServer(store, async ({ hostUrl }) => {
+    const { capability } = store.issue();
+    assert.equal(
+      await rawRequest(hostUrl, [
         "GET /ws/host HTTP/1.1",
-        `Host: ${url.host}`,
         "Connection: Upgrade",
         "Upgrade: websocket",
-        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+        WS_KEY,
         "Sec-WebSocket-Version: 7",
         `${ZCODE_RPC_HOST_CAPABILITY_HEADER}: ${capability}`,
-        "",
-        "",
-      ].join("\r\n"),
+      ]),
+      400,
     );
-    let reply = "";
-    raw.setEncoding("utf8");
-    raw.on("data", (chunk: string) => {
-      reply += chunk;
-    });
-    await once(raw, "close");
-    assert.match(reply, /^HTTP\/1\.1 400 /, "ws rejects the malformed handshake");
-    await expectRejected(
-      attemptUpgrade(hostUrl, hostHeaders(capability)),
-      "failed handshake consumed the ticket",
+    const outcomes = await Promise.all(
+      Array.from({ length: 4 }, () => attemptUpgrade(hostUrl, hostHeaders(capability))),
+    );
+    const opened = outcomes.filter((outcome) => outcome.kind === "open");
+    await Promise.all(
+      opened.map((outcome) => (outcome.kind === "open" ? closeSocket(outcome.socket) : undefined)),
+    );
+    assert.equal(opened.length, 1, "exactly one upgrade wins the ticket");
+    assert.deepEqual(
+      outcomes.filter((outcome) => outcome.kind === "rejected"),
+      [
+        { kind: "rejected", status: 401 },
+        { kind: "rejected", status: 401 },
+        { kind: "rejected", status: 401 },
+      ],
+      "losers are refused before 101 Switching Protocols",
     );
   });
 });
