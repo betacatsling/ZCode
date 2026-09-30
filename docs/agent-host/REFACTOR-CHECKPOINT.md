@@ -20,7 +20,7 @@ Desktop 窗口 Host 正在改为附着既有持久 Supervisor/Core，SSH 持久�
 
 ### Claude Messages / P5
 
-Messages decoder/encoder 和局部 HTTP 用例曾通过；真实 pinned Claude Code 2.1.263 → Host → Gateway → FakeModel 集成未通过。去掉错误的空 `--mcp-config` 后，最后一次运行失败原因已从日志确认：CLI 报 `unrecognized_model`，model 为 `zcode-host`、query source 为 SDK；FakeModel 收到 0 个 user prompt，Host turn outcome 为 failed。因此这不是 Provider 兼容通过，也没有证据表明请求到达 FakeModel。
+Messages decoder/encoder 和局部 HTTP 用例曾通过。2026-09-30 更新：门控的真实 CLI 集成测试 `packages/services/test/claudeHarnessAdapter.integration.test.ts`（`ZCODE_CLAUDE_ADAPTER_TEST=1`，npm 安装的 pinned `@anthropic-ai/claude-code@2.1.263`，`/usr/bin/strace`，不用 API Key）在 box 上通过：`d40a1cc` 上连跑 2 次（Ex1），`27f57d5`、`594d892`、`b05bfbb`（含 #347 A17：t.after 清理 strace trace、只保留一个 JSON summary）、`3a9a4a3`、`ac8d1bb`、`dae37f8`（含 #352 启动 launchProcess hook）、`82c899b`、`1fe714c`（含 #357 Claude A14–A16）与 `d60395e` 上各 1 次（ex6），每次 1/1 pass、0 skip，约 63–64 秒。这只说明该集成测试在 box 上通过；模型是 loopback FakeModel，不代表 Provider 兼容通过或真实环境验收。CI job `.github/workflows/claude-harness-integration.yml` 已添加，尚未在 CI 上运行过；它不依赖残留 trace 文件，只上传该 JSON summary。
 
 当前实现要求 Model 的第一个 `start` event 提供精确 input/output usage，并将顶层 `system` 映射到新增 `systemInstructions`。恢复时按 pinned CLI 的真实 payload/usage 语义审查这两个约束，覆盖普通 OpenAI-compatible Model 可能只在 finish 报 usage 的情况；未知 usage 不可估算或伪造，通用 Gateway 不应因测试方便而被缩成仅适配 Anthropic 上游。FakeModel/decoder 测试不能代替真实 CLI 回归。
 
