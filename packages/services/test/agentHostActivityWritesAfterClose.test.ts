@@ -344,7 +344,7 @@ function assertClosingReceipt(result: Settled<AgentCommandReceipt>): void {
 
 test(
   "send admission finishing after a healthy close() began writes no sidecar and is refused",
-  { timeout: TEST_TIMEOUT_MS, todo: "send admission writes the sidecar and accepts after close()" },
+  { timeout: TEST_TIMEOUT_MS },
   async () => {
     await withHost(async ({ root, host, harness }) => {
       const prepare = harness.holdNextPrepare();
@@ -372,10 +372,7 @@ test(
 
 test(
   "send admission finishing after force-close does not overwrite the force-closed sidecar",
-  {
-    timeout: TEST_TIMEOUT_MS,
-    todo: "send admission overwrites the force-closed sidecar",
-  },
+  { timeout: TEST_TIMEOUT_MS },
   async () => {
     await withHost(async ({ root, host, harness }) => {
       const prepare = harness.holdNextPrepare();
@@ -405,7 +402,7 @@ test(
 
 test(
   "send admission already writing when close() force-closes lands before the force-close write",
-  { timeout: TEST_TIMEOUT_MS, todo: "close() does not wait for an in-flight admission write" },
+  { timeout: TEST_TIMEOUT_MS },
   async () => {
     await withHost(async ({ root, host, harness }) => {
       const renames = holdSidecarRenames(root, 1);
@@ -432,7 +429,7 @@ test(
 
 test(
   "the execution-unknown sidecar write of a synchronously failed send lands before close() settles",
-  { timeout: TEST_TIMEOUT_MS, todo: "close() does not wait for the sync-send-failure write" },
+  { timeout: TEST_TIMEOUT_MS },
   async () => {
     await withHost(async ({ root, host, harness }) => {
       harness.throwOnSend = true;
@@ -467,7 +464,7 @@ test(
 
 test(
   "an event delivered before close() unsubscribed is journaled with its sidecar before close() settles",
-  { timeout: TEST_TIMEOUT_MS, todo: "a queued event writes the sidecar after close() settled" },
+  { timeout: TEST_TIMEOUT_MS },
   async () => {
     await withHost(async ({ root, host, harness }) => {
       // Rename 0: event A ("running"), held while close() starts; rename 1: event B ("idle").

@@ -102,7 +102,7 @@ export class SessionHost {
   readonly #events: EventJournal;
   readonly #listeners = new Set<(event: AgentEvent) => void>();
   readonly #active = new Set<Promise<void>>();
-  /** Turn-settlement and send-reservation-release writes in flight (see #settleTurn); never rejects. */
+  /** Turn-settlement and live sidecar writes in flight (#settleTurn, #persistActivityWhileOpen). */
   readonly #settlements = new Set<Promise<void>>();
   readonly #interactions = new Map<string, string>();
   readonly #unsettledTurns = new Set<string>();
@@ -656,6 +656,12 @@ export class SessionHost {
                   error instanceof BindingPreparationFailure ? error.failure : undefined,
                 );
               }
+              // close() began while this send was preparing: refuse before reserving, so there is
+              // no sidecar write after close and no accepted record for a send that never runs.
+              if (this.#closed) {
+                await this.#adapter.discardPreparedTurn?.(this.spec, prepared.binding);
+                return rejectedAdmission(command, "backend-failure", "session host is closing");
+              }
               this.#preparedTurns.set(command.commandId, prepared.binding);
               // 修复依据：模型/route/credential 预检在现有 admission lane 内完成；只有可执行
               // 的冻结 binding 才能先落 busy、再 accepted，避免无副作用失败变成 uncertain。
@@ -663,7 +669,7 @@ export class SessionHost {
               this.#unsettledTurns.add(command.turnId);
               this.#lastKnownStatus = "starting";
               try {
-                await this.#persistActivityIndex();
+                await this.#persistActivityWhileOpen();
               } catch (error) {
                 this.#preparedTurns.delete(command.commandId);
                 await this.#adapter.discardPreparedTurn?.(this.spec, prepared.binding);
@@ -731,7 +737,7 @@ export class SessionHost {
         };
         this.#lastKnownStatus = "unknown";
         await this.#commands.finish(command.commandId, uncertain);
-        await this.#persistActivityIndex();
+        await this.#persistActivityWhileOpen();
         return uncertain;
       }
     }
@@ -916,6 +922,9 @@ export class SessionHost {
     const failure = this.#eventError;
     this.#closed = true;
     this.#unsubscribe();
+    // Events delivered before unsubscribe may still be journaling (bounded local I/O): let their
+    // journal and sidecar writes land now, never after close() settles.
+    await this.#eventTail;
     // A turn settlement or send-reservation release that started before #closed may still be
     // writing; let it land before the journals close (and before a force-close sidecar write).
     await Promise.all(this.#settlements);
@@ -1072,15 +1081,22 @@ export class SessionHost {
 
   /**
    * Undoes a send admission that never reached the adapter. Its sidecar write follows the same
-   * rule as turn settlements: close() waits for one already in flight (#settlements), and none
-   * starts once the host is closed, so a stale host never overwrites or resurrects the sidecar
-   * after close() settled (force-close has already persisted its own "unknown" state).
+   * rule as turn settlements (#persistActivityWhileOpen), so a stale host never overwrites or
+   * resurrects the sidecar after close() settled (force-close persisted its own "unknown").
    */
   async #releaseSendReservation(command: Extract<AgentCommand, { type: "send" }>): Promise<void> {
     this.#unsettledTurns.delete(command.turnId);
     if (this.#activeTurn === command.turnId) this.#activeTurn = undefined;
     if (this.#lastKnownStatus === "starting") this.#lastKnownStatus = "idle";
-    if (this.#closed) return;
+    await this.#persistActivityWhileOpen();
+  }
+  /**
+   * Sidecar write of a live host (send admission and release, failed send): none starts once
+   * #closed is set, and one already in flight is tracked in #settlements, so close() waits for it
+   * before its force-close write and journal close. None lands after close() settles.
+   */
+  #persistActivityWhileOpen(): Promise<void> {
+    if (this.#closed) return Promise.resolve();
     const write = this.#persistActivityIndex();
     const settled = write.then(
       () => undefined,
@@ -1088,7 +1104,7 @@ export class SessionHost {
     );
     this.#settlements.add(settled);
     void settled.then(() => this.#settlements.delete(settled));
-    await write;
+    return write;
   }
   async #reject(
     command: AgentCommand,
