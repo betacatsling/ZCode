@@ -1812,6 +1812,10 @@ const zhCN: Record<string, string> = {
     "「{provider}」的认证已被拒绝。重新配置前，使用该 Provider 的请求会被拒绝，其他 Provider 不受影响。",
   "chat.providerReconfigure.messageUnnamed":
     "当前 Provider 的认证已被拒绝。重新配置前，使用该 Provider 的请求会被拒绝，其他 Provider 不受影响。",
+  "chat.providerReconfigure.remoteNamed":
+    "此 Provider 属于远程目标「{target}」，本机的 Provider 设置不会影响它。请在该远程目标上重新配置。",
+  "chat.providerReconfigure.remoteUnnamed":
+    "此 Provider 属于远程目标，本机的 Provider 设置不会影响它。请在该远程目标上重新配置。",
   "chat.providerReconfigure.open": "打开 Provider 设置",
   "chat.providerReconfigure.dismiss": "稍后",
 

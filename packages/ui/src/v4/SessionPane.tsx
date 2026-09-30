@@ -129,6 +129,7 @@ import { ProviderReconfigureNotice } from "@/v4/ProviderReconfigureNotice.js";
 import {
   openProviderReconfigureSettings,
   providerReconfigureReceiptFromAck,
+  providerReconfigureTarget,
   resolveProviderReconfigureNotice,
   type ProviderReconfigureReceipt,
 } from "@/v4/providerReconfigureNotice.js";
@@ -4525,6 +4526,8 @@ export function SessionPane({
           providerLabel={lookupProviderName?.(providerReconfigureNotice.providerId)}
           onOpenSettings={handleOpenProviderReconfigure}
           onDismiss={() => setDismissedProviderNoticeKey(providerReconfigureNotice.key)}
+          // Remote-target sessions: local Provider settings would edit this device, not the target.
+          target={providerReconfigureTarget({ workspaceIdentity, remoteSessionId })}
         />
       ) : null}
       {recoverableCommand ? (

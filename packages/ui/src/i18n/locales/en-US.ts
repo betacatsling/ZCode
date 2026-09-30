@@ -1954,6 +1954,10 @@ const enUS: Record<string, string> = {
     "Authentication for “{provider}” was rejected. Requests using this Provider are refused until it is reconfigured; other Providers are unaffected.",
   "chat.providerReconfigure.messageUnnamed":
     "Authentication for the current Provider was rejected. Requests using this Provider are refused until it is reconfigured; other Providers are unaffected.",
+  "chat.providerReconfigure.remoteNamed":
+    "This Provider belongs to the remote target “{target}”; Provider settings on this device do not change it. Reconfigure it on that remote target.",
+  "chat.providerReconfigure.remoteUnnamed":
+    "This Provider belongs to a remote target; Provider settings on this device do not change it. Reconfigure it on that remote target.",
   "chat.providerReconfigure.open": "Open Provider settings",
   "chat.providerReconfigure.dismiss": "Later",
 
