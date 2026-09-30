@@ -17,7 +17,6 @@ import {
   type ClaudeFakeModelCompatibilityEvidence,
 } from "./claudeCapabilities.js";
 import { PINNED_CLAUDE_CLI_VERSION, probeClaudeTarget } from "./claudeExecutable.js";
-import { writeClaudeSessionCapability } from "./claudeProfile.js";
 import { denyPendingClaudeApprovals, resolveClaudeApproval } from "./claudeHostApproval.js";
 import { ClaudeSessionRegistry } from "./claudeSessionRegistry.js";
 import { ClaudeRuntimeEventSink } from "./claudeRuntimeEventSink.js";
@@ -32,6 +31,7 @@ import {
 } from "./claudeRuntimeOutcome.js";
 import {
   replaceClaudeIdleBinding,
+  revalidateClaudeRuntime,
   startClaudeSession,
   type ClaudeProcessLauncher,
   type ClaudeSessionStartupContext,
@@ -207,7 +207,10 @@ export class ClaudeHarnessAdapter implements HarnessAdapter {
       ) {
         throw new Error("stale Claude backend binding");
       }
-      if (!current.failed && current.process.isRunning) return;
+      if (!current.failed && current.process.isRunning) {
+        await revalidateClaudeRuntime(this.#session, spec, plan, current);
+        return;
+      }
       await stopClaudeRuntime(current);
       this.#registry.remove(spec.hostSessionId, current);
     }

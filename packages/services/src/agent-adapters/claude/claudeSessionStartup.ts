@@ -188,6 +188,30 @@ export async function startClaudeSession(
   }
 }
 
+/**
+ * attach() of a live registered runtime (SessionHost.close() never stops it) must pass the same
+ * binding checks as a fresh start against the reopening plan and the runtime's grant; otherwise the
+ * old process, grant and hook server are stopped and dropped, and the startup error is thrown.
+ */
+export async function revalidateClaudeRuntime(
+  ctx: ClaudeSessionStartupContext,
+  spec: SessionSpec,
+  plan: BindingPlan,
+  runtime: ClaudeSessionRuntime,
+): Promise<void> {
+  try {
+    ctx.validatePlan(spec, plan);
+    validateClaudeModel(plan, runtime.model);
+    if (!ctx.isSelectionAuthorized(plan))
+      throw new Error("Claude Model selection is no longer authorized");
+    assertClaudeGrantMatchesBinding(runtime.grant, spec, plan, CLAUDE_PUBLIC_MODEL_ID);
+  } catch (error) {
+    await stopClaudeRuntime(runtime);
+    ctx.registry.remove(spec.hostSessionId, runtime);
+    throw error;
+  }
+}
+
 export async function replaceClaudeIdleBinding(
   ctx: ClaudeSessionStartupContext,
   previous: ClaudeSessionRuntime,

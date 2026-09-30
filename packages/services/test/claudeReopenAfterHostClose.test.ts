@@ -15,8 +15,10 @@
  *   the next TargetService.attach() finds the runtime.
  * - The first send re-plans; a changed plan rebinds through startClaudeSession and its grant check.
  *
- * "CURRENT" tests pin the bypass as it is on the base; "EXPECTED" tests assert the fixed behaviour
- * and fail until the attach revalidation lands.
+ * Fix: attach() revalidates a live runtime (revalidateClaudeRuntime: plan, Model, authorization and
+ * the runtime's grant against the reopening plan). A mismatch stops the runtime (process, grant,
+ * hook server, registry entry; a live turn settles unknown) and rejects with the startup error; a
+ * match reuses it as before, with no second grant.
  *
  * Binding B = a new catalog fingerprint plus a Gateway that tampers grants: a fresh start refuses it.
  */
@@ -108,7 +110,7 @@ test(
 );
 
 test(
-  "CURRENT (C4 bug): SessionHost.close() leaves the Claude runtime running and reopen reuses it without the grant check",
+  "a matching reopen after SessionHost.close() reuses the live runtime: no second grant, nothing revoked",
   { timeout: TEST_TIMEOUT_MS },
   async (t) => {
     const r = await reopenHarness(t);
@@ -116,14 +118,14 @@ test(
     const [process] = r.h.launches;
     await created.close();
     assert.equal(process!.isRunning, true, "SessionHost.close() does not stop the process");
-    assert.deepEqual(r.h.grants.revoked, [], "nor revoke its grant");
 
-    mismatchBindingB(r);
+    // A tampering Gateway is never asked: reuse creates no grant.
+    r.state.tamper = true;
     const reopened = await SessionHost.open(r.options);
     try {
-      assert.equal(reopened.plan.catalogFingerprint, FINGERPRINT_B, "the host now holds binding B");
-      assert.deepEqual(r.grantFingerprints, [fingerprintA(r)], "no grant check for binding B");
-      assert.equal(r.h.launches.length, 1, "no new process: the old one was adopted");
+      assert.deepEqual(r.grantFingerprints, [fingerprintA(r)], "no second grant");
+      assert.deepEqual(r.h.grants.revoked, [], "the reused grant is not revoked");
+      assert.equal(r.h.launches.length, 1, "the live process is reused");
       assert.equal(reopened.binding.runtimeEpoch, created.binding.runtimeEpoch);
       assert.equal(process!.isRunning, true);
     } finally {
@@ -133,7 +135,7 @@ test(
 );
 
 test(
-  "EXPECTED: reopen after SessionHost.close() with binding B is refused as invalid-binding and stops the old runtime",
+  "fixed: reopen after SessionHost.close() with binding B is refused as invalid-binding and stops the old runtime",
   { timeout: TEST_TIMEOUT_MS },
   async (t) => {
     const r = await reopenHarness(t);
@@ -163,7 +165,7 @@ test(
 );
 
 test(
-  "CURRENT (C4 bug): a forced close mid-turn leaves the turn live; reopen adopts it without the grant check",
+  "known: a matching reopen after a forced close mid-turn still adopts the live runtime and its turn",
   { timeout: TEST_TIMEOUT_MS },
   async (t) => {
     const r = await reopenHarness(t);
@@ -173,10 +175,9 @@ test(
     assert.equal(process!.isRunning, true, "the force-close leaves the process running");
     assert.ok(r.h.adapter.renewTurnLease(r.h.spec.hostSessionId, turnId).expiresAt > 0);
 
-    mismatchBindingB(r);
     const reopened = await SessionHost.open(r.options);
     try {
-      assert.deepEqual(r.grantFingerprints, [fingerprintA(r)], "no grant check for binding B");
+      assert.deepEqual(r.grantFingerprints, [fingerprintA(r)], "no second grant");
       assert.equal(r.h.launches.length, 1);
       assert.equal(reopened.binding.runtimeEpoch, created.binding.runtimeEpoch);
       assert.ok(
@@ -190,7 +191,7 @@ test(
 );
 
 test(
-  "EXPECTED: after a forced close mid-turn, reopen with binding B is refused and the live turn is terminated, not adopted",
+  "fixed: after a forced close mid-turn, reopen with binding B is refused and the live turn is terminated, not adopted",
   { timeout: TEST_TIMEOUT_MS },
   async (t) => {
     const r = await reopenHarness(t);
@@ -220,16 +221,16 @@ test(
 );
 
 test(
-  "CURRENT (mitigation): the first send after that reopen rebinds for binding B and is refused as invalid-binding",
+  "mitigation: a binding change after a matching reopen is refused as invalid-binding by the first send's rebind",
   { timeout: TEST_TIMEOUT_MS },
   async (t) => {
     const r = await reopenHarness(t);
     const created = await SessionHost.create(r.options);
     await created.close();
-    mismatchBindingB(r);
     const reopened = await SessionHost.open(r.options);
     try {
       assert.deepEqual(r.grantFingerprints, [fingerprintA(r)]);
+      mismatchBindingB(r);
       const receipt = await reopened.dispatch(sendCommand(r.h.spec, "turn-after-reopen"));
       assert.equal(receipt.status, "rejected", JSON.stringify(receipt));
       assert.equal(receipt.reasonCode, "invalid-binding");
@@ -246,7 +247,7 @@ test(
 );
 
 test(
-  "CURRENT (C4 bug): TargetService.create failing after adapter.create leaves the runtime; TargetService.attach reuses it without the grant check",
+  "a TargetService.create failing after adapter.create leaves the runtime; a matching TargetService.attach reuses it",
   { timeout: TEST_TIMEOUT_MS },
   async (t) => {
     const r = await reopenHarness(t);
@@ -257,16 +258,15 @@ test(
       assert.equal(process!.isRunning, true, "the failed create closed its host, not the runtime");
 
       await free();
-      mismatchBindingB(r);
       await service.attach(r.h.spec);
-      assert.deepEqual(r.grantFingerprints, [fingerprintA(r)], "no grant check for binding B");
-      assert.equal(r.h.launches.length, 1, "the attach adopted the orphaned process");
+      assert.deepEqual(r.grantFingerprints, [fingerprintA(r)], "no second grant");
+      assert.equal(r.h.launches.length, 1, "the attach reused the orphaned process");
     });
   },
 );
 
 test(
-  "EXPECTED: TargetService.attach after that failed create refuses binding B and stops the orphaned runtime",
+  "fixed: TargetService.attach after that failed create refuses binding B and stops the orphaned runtime",
   { timeout: TEST_TIMEOUT_MS },
   async (t) => {
     const r = await reopenHarness(t);
