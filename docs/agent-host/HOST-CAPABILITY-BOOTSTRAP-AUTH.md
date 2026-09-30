@@ -6,7 +6,10 @@ fallback ("Version-skew fallback"). Tickets are consumed only when the
 consume-on-upgrade"). Tickets are bound to the bootstrap credential that
 authorised them and to the Core generation ("Ticket binding to the bootstrap
 credential"). `/ws/host` applies the issue endpoint's `Origin`/`Host` rule
-before it looks at the ticket ("`/ws/host` request header checks").
+before it looks at the ticket ("`/ws/host` request header checks"). The
+unauthenticated `/ws` and `/api/server-info` refuse browser and DNS-rebinding
+requests and publish only non-sensitive fields ("Local endpoints: `/ws` and
+`/api/server-info`"); token auth for them is deferred.
 
 Requirement: `docs/PROJECT-DELIVERY-PLAN.md` §4 M2 risks and the §5 security row
 ("reject unauthorised Host/Web access"). Before this change, both HTTP servers
@@ -127,7 +130,8 @@ sha256(presented))`, which runs in constant time whatever the length. When
 5. **`authRequired`.** Both servers now report `true`, because the privileged
    Host bootstrap always needs an out-of-band credential. No in-repo client
    branches on this field today. The Core's `/ws` (terminal-client, Host
-   channels excluded) and `/api/server-info` stay loopback-open.
+   channels excluded) and `/api/server-info` have no token, but they do have
+   header checks ("Local endpoints").
 
 ### Ticket consume-on-upgrade
 
@@ -310,6 +314,100 @@ importing it. Services was avoided because other teams are actively changing it.
 - `authRequired` no longer reads the mismatched `ZCODE_SERVER_TOKEN` env var
   (`entry-http.ts` uses `ZCODE_SERVER_AUTH_TOKEN`).
 
+## Local endpoints: `/ws` and `/api/server-info`
+
+These endpoints have no token (full token auth is deferred), so they are locked
+down by request headers and by publishing less. The same rules cover the
+legacy server's `/ws/remote/:id`, whose only client is the same Web UI.
+
+### Who connects (audit)
+
+Found with `git grep` for `server-info`, `new WebSocket(`,
+`connectViaWebSocket` and `/ws`. The desktop renderer is not a client: it
+reaches the Host over MessagePorts and opens no WebSocket to either server
+(`packages/desktop/src/main/chromeLocalStorageManager.ts:193` connects to a
+Chrome DevTools endpoint, not to ZCode). `apps/zcode-cli` has no caller.
+
+| Client                                                                                                          | Server | Endpoint(s)                                                                                                     | `Origin` sent                                                                                                                                                                                                                               | server-info fields read                                                                     |
+| --------------------------------------------------------------------------------------------------------------- | ------ | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Web UI served by the legacy server (`zcode --web`, `scripts/zcode-distribution/runner.mjs:178-190`)             | legacy | `/ws` or `/ws/remote/:id` (`packages/web/src/main.tsx:308-318`, `:393` → `packages/client/src/websocket.ts:67`) | Browser WebSocket: always the page origin, which is this server, e.g. `http://127.0.0.1:<port>` (`runner.mjs:131-135`), `http://localhost:<port>`, or `http://<LAN IP>:<port>` with `--host 0.0.0.0` (token enforced, `runner.mjs:105`)     | —                                                                                           |
+| Same Web UI bootstrap fetch                                                                                     | legacy | `GET /api/server-info` (`packages/web/src/main.tsx:324`)                                                        | None: a same-origin `GET` fetch carries no `Origin` (Fetch spec), and an `Origin` would equal the page origin                                                                                                                               | `workspaces[0].path`, `workspaces[0].workspaceIdentity` (`main.tsx:331-337`)                |
+| Web UI under Vite dev (`packages/web/vite.config.ts:52-56`, page `http://localhost:5173`)                       | legacy | `/ws`, `/api/*` proxied to `localhost:3030`                                                                     | `http://localhost:5173`. The proxy entries are objects without `changeOrigin` or `rewriteWsOrigin`, so Vite 8.0.8 forwards `Host: localhost:5173` and the `Origin` unchanged (`node_modules/vite/dist/node/chunks/node.js:16854`, `:17761`) | same as above                                                                               |
+| Desktop Host → local Core (`packages/desktop/src/host/index.ts:2839`)                                           | Core   | `GET /api/server-info`, then `/ws/host` (`packages/server/src/remote/persistentTargetClient.ts:83`, `:186`)     | None: Node `fetch` and the `ws` client (`ws` sends `Origin` only with its `origin` option, unused)                                                                                                                                          | `serverId` (target identity), `capabilities.agentHost` (`persistentTargetClient.ts:88-104`) |
+| SSH connector → remote Core over a local forward (`packages/server/src/remote/connect.ts:513`)                  | Core   | same as above, `Host: 127.0.0.1:<forward>` (`ssh-backend.ts:380`)                                               | None                                                                                                                                                                                                                                        | same as above                                                                               |
+| `packages/zcode-server-cli/scripts/verify-remote-ssh.mjs`                                                       | Core   | `GET /api/server-info` (`:208-217`), `/ws` (`:221`), `/ws/host` (`:265`)                                        | None (Node `fetch`, `ws`)                                                                                                                                                                                                                   | `capabilities.websocketRpc`, `serverId`, `version` (logged)                                 |
+| `scripts/zcode-distribution-smoke.mjs`                                                                          | legacy | `GET /api/server-info` (`:103`), `/ws` (`:121`)                                                                 | None (Node `fetch`, `ws`)                                                                                                                                                                                                                   | `workspaces[0].path` (`:116`)                                                               |
+| Tests (`runtimeLifecycle.integration.test.ts:196`, `hostCapability*.test.ts`, `persistentTargetClient.test.ts`) | both   | `/ws`, `/api/server-info`                                                                                       | None                                                                                                                                                                                                                                        | `authRequired` (schema parse), `serverId`, `capabilities`                                   |
+
+No real client sends `Origin: null`, and no page other than the server's own
+Web UI (or the Vite dev page that proxies to it) connects.
+
+### Header rules
+
+One shared predicate, `verifyLocalEndpointHeaders` in
+`packages/shared/src/node/hostBootstrapAuth.ts`, runs as Hono middleware
+registered before the routes (and before the legacy lite-token middleware), so
+a rejected request never reaches the upgrade or the handler. Rejections are
+**403**.
+
+- **Host.** The same rule and the same options object as
+  `POST /api/rpc-host-capability` and `/ws/host` (`hostRequestHeaderRules`):
+  a `Host` other than `127.0.0.1` / `localhost` / `[::1]` (optional port) is
+  refused. Server Core always applies it. The legacy server applies it only
+  when it is bound to loopback. Bound to another interface (`--host 0.0.0.0`,
+  or no host in dev), the `Host` is not checked, exactly as for issuance, and
+  the lite token (`authToken`, auto-enabled by the runner for non-local hosts)
+  is the defence.
+- **Origin, Server Core (`origin: "no-browser"`).** Every real client is a Node
+  process that sends no `Origin`, and Core serves no web page, so any `Origin`
+  is refused, including Core's own origin.
+- **Origin, legacy server (`origin: "same-origin"`).** No `Origin` (Node
+  clients) is accepted. Otherwise the `Origin` must be exactly the
+  serialization `http(s)://<Host header>` (`isSameOriginAsHost`: scheme http or
+  https, no path, default ports normalised), which is what the served page and
+  the Vite dev proxy send. `null`, other sites, other loopback ports and `ws:`
+  origins are refused.
+- **What this stops.** Cross-site WebSocket hijacking and cross-site reads from
+  any other page, including pages on other localhost ports. A DNS-rebinding
+  page is "same-origin" with the name it rebound (`Origin` and `Host` both
+  `evil.example:<port>`), so it is stopped by the `Host` rule, and therefore
+  only while the server is bound to loopback.
+
+### `/api/server-info` fields
+
+Servers publish only what a real client reads. The shared schema
+(`packages/shared/src/server-remote.ts`) keeps `serverId` and `workspaces` as
+optional fields for old servers.
+
+- **Server Core** publishes `serverId`, `version`, `protocolVersion`,
+  `authRequired` and `capabilities`.
+  - Removed: `workspaces` (always `[]`), and the `os.hostname()` fallback for
+    `serverId` when no install identity is injected (embedded and test Cores
+    now say `zcode-server`).
+  - Kept with justification: `serverId` is the install-scoped target identity
+    (`local:<deviceMid>` or the installation ID). The Desktop Host and the SSH
+    connector must check it **before** they send the bootstrap secret to the
+    port. `capabilities` gates `agentHost` and `websocketRpc`.
+- **Legacy server** publishes `version`, `protocolVersion`, `authRequired`,
+  `capabilities` and `workspaces: [{path, workspaceIdentity?}]`.
+  - Removed: `serverId` (`os.hostname()` by default), `name`
+    (`ZCODE_SERVER_NAME`) and workspace `label`. No client reads them. The
+    options are still accepted.
+  - Kept with justification: the workspace `path` and `workspaceIdentity`,
+    because the Web UI (`packages/web/src/main.tsx:331-337`) opens its initial
+    workspace from them, and the distribution smoke asserts the path. The same
+    page gets the same data over `/ws` anyway, and with `authToken` set,
+    `/api/*` needs the lite token.
+
+### Compatibility
+
+- Legacy web behind a reverse proxy that rewrites `Host` but not `Origin`
+  (for example nginx's default `proxy_set_header Host $proxy_host`, with a
+  public `Origin`) now gets 403 on `/ws`. No in-repo deployment does this. The
+  fix would be an explicit allowed-origins option, which is not added here.
+- A browser page on another loopback port (for example a second dev server)
+  can no longer open the legacy `/ws`.
+
 ## Migration and compatibility
 
 | Client → Server                                                                                                      | Result                                                                                                                                                                                                                   |
@@ -395,8 +493,16 @@ first post-M2 update, was not taken. Code:
 - The skew fallback file can be removed once pre-M2 Supervisors are no longer
   supported, meaning every running Supervisor forwards `ready.hostBootstrapToken`.
 - The secret rotates only per Core launch, not per ticket or on a timer.
-- The Core's `/ws` terminal-client and `/api/server-info` stay unauthenticated
-  on loopback.
+- **Token auth for `/ws` and `/api/server-info`** (both servers, plus the legacy
+  `/ws/remote/:id`). Today they rely on the header rules and minimal fields
+  ("Local endpoints"). That stops browsers and DNS rebinding, but not other
+  local OS users or processes, or anyone reaching an SSH forward. A per-launch
+  secret like the Host bootstrap credential (header for Node clients, a
+  cookie or subprotocol for the Web UI) would close this. It needs client
+  changes in the Web UI and the connectors. Until then, the legacy server bound
+  to a non-loopback interface depends on `authToken`.
+- The legacy `POST /api/connect-remote` has no `Origin`/`Host` check beyond the
+  lite token.
 
 ## Tests
 
@@ -444,6 +550,17 @@ first post-M2 update, was not taken. Code:
   ticket, a foreign `Host` with an unknown ticket, and a plain `GET` with
   `Origin` all get 403 (not 401 or 426). Control: loopback authorities without
   `Origin` upgrade.
+- `localEndpointHeaders.test.ts` in both packages:
+  - Core: any `Origin` on `/ws` or `/api/server-info` → 403, and a
+    non-loopback `Host` → 403. server-info keys are limited to the allow-list,
+    with no hostname fallback.
+  - Legacy: cross-site `Origin`s (`null`, other sites, another loopback port,
+    `ws:`) on `/ws`, `/ws/remote/:id` and server-info → 403, and a non-loopback
+    `Host` → 403 when bound to loopback, including the rebinding pair.
+    server-info drops `serverId`, `name` and `label`. Bound to `127.0.0.2`
+    (Linux only), `Host` is unchecked but cross-site `Origin` is still refused.
+  - Controls: Node clients and the fields they read, the same-origin Web UI
+    page, and the Vite dev proxy form.
 - `packages/server/src/remote/persistentTargetClient.test.ts`: the secret is
   sent only to the capability endpoint; a missing secret surfaces the 401.
 - `runtimeLifecycle.integration.test.ts`: the real Supervisor/Core path uses the
