@@ -26,7 +26,9 @@ import {
   type NativeWorkspaceSessionOwnerPort,
   type WorkspaceAdmissionFenceChecker,
 } from "./targetService.js";
+import { createServiceLogger } from "../logger/serviceLogger.js";
 
+const logger = createServiceLogger("agent-host-lazy-target");
 
 /** Lazy registration avoids loading Pi/Codex/Claude/Devin CLI adapters during native-only startup. */
 export function createLazyTargetAgentHostService(input: {
@@ -59,6 +61,7 @@ export function createLazyTargetAgentHostService(input: {
   const targetModelGateway = new TargetModelGateway();
   let targetDispose: (() => void) | undefined;
   let disposed = false;
+  let disposing: Promise<void> | undefined;
   const events = new Emitter<TargetHostEvent>();
   const conversationFrames = new Emitter<AgentHostConversationFrame>();
   const authorizeWorktree = async (spec: SessionSpec, realPath: string) =>
@@ -282,20 +285,45 @@ export function createLazyTargetAgentHostService(input: {
   return {
     service,
     targetModelGateway,
-    async dispose() {
-      disposed = true;
-      conversationFrameSubscription.dispose();
-      conversation.dispose();
-      targetDispose?.();
-      events.dispose();
-      conversationFrames.dispose();
-      // Process shutdown with an active turn leaves durable accepted/unknown; no
-      // fabricated completion or implicit prompt replay on the next target epoch.
-      // Codex 不拥有注入的 Gateway，所以要在 harness shutdown 之后由这里关闭。
-      // ssh-disconnect 不会走到 dispose。
-      if (target) await target.close();
-      await targetModelGateway.close();
-      await historyOnly.close();
+    dispose() {
+      // A second dispose shares the first one's outcome instead of re-running the closes.
+      disposing ??= (async () => {
+        disposed = true;
+        conversationFrameSubscription.dispose();
+        conversation.dispose();
+        targetDispose?.();
+        events.dispose();
+        conversationFrames.dispose();
+        // Process shutdown with an active turn leaves durable accepted/unknown; no
+        // fabricated completion or implicit prompt replay on the next target epoch.
+        // Codex 不拥有注入的 Gateway，所以要在 harness shutdown 之后由这里关闭。
+        // ssh-disconnect 不会走到 dispose。
+        // Each close runs even if an earlier one rejected (a broken event stream makes
+        // target.close() reject with EventStreamFailure after its own teardown). Like
+        // AgentHostTargetService.#finishClose, the first failure is rethrown unchanged so typed
+        // errors stay matchable; later failures are logged, not combined.
+        let failed = false;
+        let failure: unknown;
+        const closes: [string, () => Promise<void> | undefined][] = [
+          ["target", () => target?.close()],
+          ["target model gateway", () => targetModelGateway.close()],
+          ["history-only", () => historyOnly.close()],
+        ];
+        for (const [name, close] of closes) {
+          try {
+            await close();
+          } catch (error) {
+            if (!failed) {
+              failed = true;
+              failure = error;
+            } else {
+              logger.warn(undefined, "agent host dispose: later close failed", { name, error });
+            }
+          }
+        }
+        if (failed) throw failure;
+      })();
+      return disposing;
     },
   };
 }

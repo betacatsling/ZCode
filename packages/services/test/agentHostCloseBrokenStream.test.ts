@@ -13,11 +13,13 @@
  *   EventStreamFailure（code "backend-failure"，cause 为原始流错误）拒绝。
  * - whenIdle() 在流损坏时立即以原始流错误拒绝，不再等一个结束不了的 adapter run。
  * - AgentHostTargetService.close() 照样关闭其余 Host、释放 owner fence，最后抛出该类型错误。
+ * - 强制关闭把 activity sidecar 改写为 "unknown"（best-effort，写失败仍抛 EventStreamFailure），
+ *   卸载后的会话不会一直显示损坏前存下的 "idle"。健康 close 不写 sidecar。
  *
  * 每个可能挂住的等待都用 settle() 限时观察，每个 test 也有 timeout，回归时快速失败而不是挂住 CI。
  */
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -622,3 +624,161 @@ for (const endTurnsOnShutdown of [false, true]) {
     },
   );
 }
+
+// ---------------------------------------------------------------------------
+// Activity sidecar after close
+// ---------------------------------------------------------------------------
+
+/** The one session's bounded activity sidecar under root (never the journals). */
+async function sidecarPath(root: string): Promise<string> {
+  const names = (await readdir(root)).filter((name) => name.endsWith(".activity.json"));
+  assert.equal(names.length, 1, `one activity sidecar under ${root}: ${names.join(", ")}`);
+  return join(root, names[0]!);
+}
+
+async function storedSidecarState(root: string): Promise<string> {
+  const raw = JSON.parse(await readFile(await sidecarPath(root), "utf8")) as { state: string };
+  return raw.state;
+}
+
+/** What an unmounted listing (a later target owner, the sidebar) reports for host-a. */
+async function listedState(root: string): Promise<string | undefined> {
+  const entries = await SessionHost.listStoredActivityIndex(root, TARGET_ID);
+  return entries.find((entry) => entry.spec.hostSessionId === "host-a")?.state;
+}
+
+async function idleHost(root: string, worktree: string, harness: OpenTurnHarness) {
+  const spec = makeSpec("host-a", worktree);
+  const host = await SessionHost.create({
+    root,
+    spec,
+    target: target(),
+    catalog,
+    registry: registryWith(harness),
+  });
+  return { host, spec };
+}
+
+test(
+  "healthy close leaves the activity sidecar untouched and the stored session idle",
+  { timeout: TEST_TIMEOUT_MS },
+  async () => {
+    await withRoot("zcode-close-sidecar-healthy-", async (root, worktree) => {
+      const harness = new OpenTurnHarness();
+      const { host } = await idleHost(root, worktree, harness);
+      try {
+        const before = await readFile(await sidecarPath(root), "utf8");
+        await within(host.close(), "healthy close");
+        assert.equal(await readFile(await sidecarPath(root), "utf8"), before);
+        assert.equal(await listedState(root), "idle");
+      } finally {
+        await settle(host.close()).catch(() => undefined);
+      }
+    });
+  },
+);
+
+test(
+  "broken stream, open turn: the unmounted session lists as unknown after force-close",
+  { timeout: TEST_TIMEOUT_MS },
+  async () => {
+    await withRoot("zcode-close-sidecar-open-", async (root, worktree) => {
+      const harness = new OpenTurnHarness();
+      const { host } = await hostWithOpenTurn(root, worktree, harness);
+      try {
+        const cause = await breakAndCapture(host, harness, "sequence gap", /sequence gap/);
+        assertTypedCloseError(await settle(host.close()), cause);
+        assert.equal(await listedState(root), "unknown");
+      } finally {
+        harness.releaseAll();
+        await settle(host.close()).catch(() => undefined);
+      }
+    });
+  },
+);
+
+test(
+  "broken stream: a sidecar that cannot be rewritten does not hang or mask the typed close error",
+  { timeout: TEST_TIMEOUT_MS },
+  async () => {
+    await withRoot("zcode-close-sidecar-unwritable-", async (root, worktree) => {
+      const harness = new OpenTurnHarness();
+      const { host } = await idleHost(root, worktree, harness);
+      try {
+        // A non-empty directory in place of the sidecar: the atomic rename onto it fails.
+        const path = await sidecarPath(root);
+        await rm(path);
+        await mkdir(path);
+        await writeFile(join(path, "occupied"), "");
+        const cause = await breakAndCapture(
+          host,
+          harness,
+          "foreign event identity",
+          /foreign event identity/,
+        );
+        assertTypedCloseError(await settle(host.close()), cause);
+        assert.equal(harness.listenerCount("host-a"), 0, "adapter subscription removed");
+        await within(host.close(), "second close");
+      } finally {
+        await settle(host.close()).catch(() => undefined);
+      }
+    });
+  },
+);
+
+for (const { kind, error: expected } of BREAKS) {
+  test(
+    `broken stream (${kind}), no open turn: force-close rewrites the stored activity to unknown`,
+    { timeout: TEST_TIMEOUT_MS },
+    async () => {
+      await withRoot("zcode-close-sidecar-idle-", async (root, worktree) => {
+        const harness = new OpenTurnHarness();
+        const { host } = await idleHost(root, worktree, harness);
+        try {
+          assert.equal(await storedSidecarState(root), "idle");
+          const cause = await breakAndCapture(host, harness, kind, expected);
+          assertTypedCloseError(await settle(host.close()), cause);
+          assert.equal(await storedSidecarState(root), "unknown");
+          assert.equal(await listedState(root), "unknown");
+        } finally {
+          await settle(host.close()).catch(() => undefined);
+        }
+      });
+    },
+  );
+}
+
+test(
+  "target close of a broken idle session: the next target owner lists it as unknown, not idle",
+  { timeout: TEST_TIMEOUT_MS },
+  async () => {
+    await withRoot("zcode-close-sidecar-target-", async (root, worktree) => {
+      const harness = new OpenTurnHarness();
+      const spec = makeSpec("host-a", worktree);
+      const service = makeService(join(root, "host"), harness);
+      let closing: Promise<void> | undefined;
+      try {
+        await within(service.create(spec), "create");
+        breakStream(harness, "host-a", "foreign event identity");
+        const cause = rejection(await settle(service.snapshot(spec)), "snapshot after break");
+        closing = service.close();
+        assertTypedCloseError(await settle(closing), cause);
+        const next = makeService(join(root, "host"), harness);
+        try {
+          const index = await within(
+            next.listActivityIndex(),
+            "activity index from the next owner",
+          );
+          assert.deepEqual(
+            index.sessions.map((entry) => [entry.spec.hostSessionId, entry.state]),
+            [["host-a", "unknown"]],
+          );
+        } finally {
+          await within(next.close(), "close next target owner");
+        }
+      } finally {
+        await settle(closing ?? service.close()).catch(() => undefined);
+      }
+    });
+  },
+);

@@ -882,9 +882,27 @@ export class SessionHost {
     const failure = this.#eventError;
     this.#closed = true;
     this.#unsubscribe();
+    if (failure) await this.#persistForceClosedActivity(failure);
     await this.#commands.close();
     await this.#events.close();
     if (failure) throw new EventStreamFailure(failure);
+  }
+
+  /**
+   * The last sidecar write predates the stream break, so an unmounted session with no open turn
+   * would keep listing "idle". activityIndexEntry() already derives "unknown" from #eventError;
+   * persist that. Best-effort: a failed write is logged and never masks EventStreamFailure.
+   */
+  async #persistForceClosedActivity(failure: Error): Promise<void> {
+    try {
+      await this.#persistActivityIndex();
+    } catch (error) {
+      logger.warn(undefined, "force-closed session activity sidecar not rewritten", {
+        hostSessionId: this.spec.hostSessionId,
+        eventStreamError: failure.message,
+        error,
+      });
+    }
   }
 
   async #persistActivityIndex(): Promise<void> {
