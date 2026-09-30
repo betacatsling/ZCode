@@ -18,6 +18,9 @@
  * - sidecar 原子写（临时文件 + rename）失败时删掉自己的临时文件，调用方仍收到原始写/rename 错误。
  * - adapter run 在强制关闭之后才结束：什么都不写、不抛。关闭时正在写 turn 结算（命令 journal +
  *   sidecar）的，close() 等它写完再关 journal；close() 落定之后不再有任何写入。
+ * - 关闭之后的 dispatch()，以及 close() 落定时还卡在 adapter 里的 cancel / resolve / terminate，
+ *   都以 SessionHostClosedError（code "host-closed"）拒绝；journal 拒写，命令保持 accepted
+ *   （重启后 execution-unknown）。terminate 仍记录 adapter 已确认的 "terminated" manifest。
  *
  * 每个可能挂住的等待都用 settle() 限时观察，每个 test 也有 timeout，回归时快速失败而不是挂住 CI。
  */
@@ -38,7 +41,11 @@ import {
   type SessionSpec,
 } from "@zcode/shared/agent-host";
 import { HarnessRegistry, type HarnessAdapter } from "../src/agent-host/harnessRegistry.js";
-import { EventStreamFailure, SessionHost } from "../src/agent-host/sessionHost.js";
+import {
+  EventStreamFailure,
+  SessionHost,
+  SessionHostClosedError,
+} from "../src/agent-host/sessionHost.js";
 import { AgentHostTargetService } from "../src/agent-host/targetService.js";
 
 const catalog = { fingerprint: "registry-v1", validateSelection: () => ({ ok: true as const }) };
@@ -1049,10 +1056,11 @@ test(
 // Commands in flight across a force-close, and commands after close
 // ---------------------------------------------------------------------------
 
-/** The typed refusal of a closed host (name + code, so the repro loads before the class exists). */
+/** The typed refusal of a closed host; name/code are what an RPC client or log can match on. */
 function assertHostClosed(result: Settled<unknown>, label: string): void {
   const error = rejection(result, label) as Error & { code?: unknown };
-  assert.equal(error.name, "SessionHostClosedError", `${label}: ${String(error)}`);
+  assert.ok(error instanceof SessionHostClosedError, `${label}: ${String(error)}`);
+  assert.equal(error.name, "SessionHostClosedError");
   assert.equal(error.code, "host-closed");
   assert.match(error.message, /session host closed/);
 }
@@ -1096,10 +1104,7 @@ const IN_FLIGHT: readonly {
 for (const { call, command } of IN_FLIGHT) {
   test(
     `broken stream: a ${call} still inside the adapter when close() force-closes rejects typed and writes no journal or sidecar`,
-    {
-      timeout: TEST_TIMEOUT_MS,
-      todo: "repro: the late completion hits the closed command journal as an untyped 'journal closed'",
-    },
+    { timeout: TEST_TIMEOUT_MS },
     async () => {
       await withRoot("zcode-close-inflight-", async (root, worktree) => {
         await collectingUnhandledRejections(async (unhandled) => {
@@ -1138,6 +1143,9 @@ for (const { call, command } of IN_FLIGHT) {
               "no journal or sidecar write after close()",
             );
             assert.deepEqual(unhandled, [], "no unhandled rejection");
+            // The adapter confirmed the termination: the manifest records it, so no reopen revives it.
+            const stored = await SessionHost.listStoredSessions(root, { targetId: TARGET_ID });
+            assert.equal(stored[0]?.state, call === "terminate" ? "terminated" : "running");
             assertHostClosed(
               await settle(host.dispatch(send("host-a", "2"))),
               "dispatch after the in-flight command",
@@ -1160,10 +1168,7 @@ for (const { call, command } of IN_FLIGHT) {
 
 test(
   "a dispatch that starts after close() (healthy or force-closed) rejects with the typed host-closed error",
-  {
-    timeout: TEST_TIMEOUT_MS,
-    todo: "repro: dispatch() after close() throws a bare Error('session host closed')",
-  },
+  { timeout: TEST_TIMEOUT_MS },
   async () => {
     await withRoot("zcode-close-dispatch-after-", async (root, worktree) => {
       const harness = new OpenTurnHarness();

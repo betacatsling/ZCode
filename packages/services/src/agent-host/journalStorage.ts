@@ -26,6 +26,14 @@ export function journalPath(root: string, identity: JournalIdentity, kind: strin
   return join(root, `${digest}.${kind}.jsonl`);
 }
 
+/** A write reached a journal after close(); nothing was written. */
+export class JournalClosedError extends Error {
+  constructor() {
+    super("journal closed");
+    this.name = "JournalClosedError";
+  }
+}
+
 async function tryTakeLock(path: string): Promise<FileHandle> {
   const lock = await open(path, "wx", 0o600);
   await lock.writeFile(`${process.pid}\n`);
