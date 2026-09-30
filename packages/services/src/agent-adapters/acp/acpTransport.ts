@@ -105,7 +105,10 @@ export class AcpRpc {
   readonly sentMethods: string[] = [];
   #next = 1;
   #closed = false;
-  readonly #pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
+  readonly #pending = new Map<
+    number,
+    { resolve: (value: unknown) => void; reject: (error: Error) => void }
+  >();
   readonly #unsubscribe: () => void;
 
   readonly #unsubscribeClose: (() => void) | undefined;

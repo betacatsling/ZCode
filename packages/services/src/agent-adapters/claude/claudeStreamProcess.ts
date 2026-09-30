@@ -13,15 +13,19 @@ export interface ClaudeStructuredMessage {
 
 export class ClaudeStreamProcess {
   readonly child: ChildProcess;
-  readonly closed: Promise<{ readonly code: number | null; readonly signal: NodeJS.Signals | null }>;
+  readonly closed: Promise<{
+    readonly code: number | null;
+    readonly signal: NodeJS.Signals | null;
+  }>;
   readonly #onMessage: (message: ClaudeStructuredMessage) => void;
   readonly #onFailure: (error: Error) => void;
   #lineBuffer = "";
   #closing = false;
   #closeResult?: { readonly code: number | null; readonly signal: NodeJS.Signals | null };
-  #resolveClosed!: (
-    result: { readonly code: number | null; readonly signal: NodeJS.Signals | null },
-  ) => void;
+  #resolveClosed!: (result: {
+    readonly code: number | null;
+    readonly signal: NodeJS.Signals | null;
+  }) => void;
 
   constructor(input: {
     readonly executablePath: string;

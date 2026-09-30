@@ -102,7 +102,15 @@ export function createDevinPrintEnvironment(executablePath: string): NodeJS.Proc
     NO_COLOR: "1",
   };
   if (process.platform === "win32") {
-    for (const key of ["SystemRoot", "WINDIR", "ComSpec", "PATHEXT", "USERPROFILE", "TEMP", "TMP"] as const) {
+    for (const key of [
+      "SystemRoot",
+      "WINDIR",
+      "ComSpec",
+      "PATHEXT",
+      "USERPROFILE",
+      "TEMP",
+      "TMP",
+    ] as const) {
       if (process.env[key]) env[key] = process.env[key];
     }
   } else {

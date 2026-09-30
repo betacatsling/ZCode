@@ -1,5 +1,10 @@
 import { agentEventSchema, type AgentEvent } from "@zcode/shared/agent-host";
-import { acpInitializeParams, isRecord, negotiateAcpInitialize, type AcpNegotiation } from "./acpProtocol.js";
+import {
+  acpInitializeParams,
+  isRecord,
+  negotiateAcpInitialize,
+  type AcpNegotiation,
+} from "./acpProtocol.js";
 import { AcpRpc, type AcpJsonRpcMessage, type AcpTransport } from "./acpTransport.js";
 import { translateAcpUpdate } from "./acpTranslate.js";
 
@@ -51,9 +56,13 @@ export class AcpSessionMachine {
     this.#cwd = input.cwd;
     this.#now = input.now ?? Date.now;
     this.#onEvent = input.onEvent;
-    this.#rpc = new AcpRpc(input.transport, (message) => this.#onRequest(message), (message) => {
-      this.#onNotification(message);
-    });
+    this.#rpc = new AcpRpc(
+      input.transport,
+      (message) => this.#onRequest(message),
+      (message) => {
+        this.#onNotification(message);
+      },
+    );
   }
 
   negotiation(): AcpNegotiation | undefined {
@@ -74,7 +83,9 @@ export class AcpSessionMachine {
   }
 
   async initialize(): Promise<AcpNegotiation> {
-    const negotiation = negotiateAcpInitialize(await this.#rpc.request("initialize", acpInitializeParams()));
+    const negotiation = negotiateAcpInitialize(
+      await this.#rpc.request("initialize", acpInitializeParams()),
+    );
     this.#negotiation = negotiation;
     return negotiation;
   }
@@ -92,10 +103,14 @@ export class AcpSessionMachine {
    * 未协商时直接拒绝，不能改走 session/new 或重放 prompt。
    * load 回放期间的更新不写入宿主正文。
    */
-  async resumeNative(sessionId: string): Promise<{ method: "session/load" | "session/resume"; replaysHistory: boolean }> {
+  async resumeNative(
+    sessionId: string,
+  ): Promise<{ method: "session/load" | "session/resume"; replaysHistory: boolean }> {
     const negotiation = this.#negotiation;
     if (!negotiation || negotiation.stability !== "stable") {
-      throw new Error(`experimental: ${negotiation?.stabilityReason ?? "ACP protocol version is not stable"}`);
+      throw new Error(
+        `experimental: ${negotiation?.stabilityReason ?? "ACP protocol version is not stable"}`,
+      );
     }
     if (!negotiation.loadSession && !negotiation.resumeSession) {
       throw new Error("unsupported: ACP session resume was not negotiated");
@@ -165,8 +180,10 @@ export class AcpSessionMachine {
   }): Promise<void> {
     this.#assertTurn(input.turnId, input.runtimeEpoch);
     const permission = this.#permission;
-    if (!permission || permission.interactionId !== input.interactionId) throw new Error("stale-interaction");
-    const optionId = input.decision === "allow" ? permission.allowOptionId : permission.rejectOptionId;
+    if (!permission || permission.interactionId !== input.interactionId)
+      throw new Error("stale-interaction");
+    const optionId =
+      input.decision === "allow" ? permission.allowOptionId : permission.rejectOptionId;
     if (!optionId) throw new Error("unsupported: ACP permission has no matching option");
     this.#permission = undefined;
     this.#emit("interaction.resolved", {
@@ -187,11 +204,15 @@ export class AcpSessionMachine {
     const negotiation = this.#negotiation;
     if (!negotiation) throw new Error("ACP initialize did not complete");
     if (negotiation.stability !== "stable") {
-      throw new Error(`experimental: ${negotiation.stabilityReason ?? "ACP protocol version is not stable"}`);
+      throw new Error(
+        `experimental: ${negotiation.stabilityReason ?? "ACP protocol version is not stable"}`,
+      );
     }
     if (negotiation.authMethods.length > 0) {
       const ids = negotiation.authMethods.map((method) => method.methodId).join(", ");
-      throw new Error(`unsupported: ACP auth methods were advertised (${ids}) and this adapter does not submit credentials`);
+      throw new Error(
+        `unsupported: ACP auth methods were advertised (${ids}) and this adapter does not submit credentials`,
+      );
     }
   }
 
@@ -201,7 +222,11 @@ export class AcpSessionMachine {
   }
 
   #onRequest(message: AcpJsonRpcMessage): void {
-    if (message.method === "session/request_permission" && message.id !== undefined && message.id !== null) {
+    if (
+      message.method === "session/request_permission" &&
+      message.id !== undefined &&
+      message.id !== null
+    ) {
       this.#requestPermission(message.id, message.params);
       return;
     }
@@ -228,7 +253,10 @@ export class AcpSessionMachine {
     }
     const interactionId = `acp-permission:${toolCallId}`;
     this.#permission = { id, turnId: turn.id, interactionId, allowOptionId, rejectOptionId };
-    const summary = typeof toolCall.title === "string" && toolCall.title.trim() ? toolCall.title : "ACP permission";
+    const summary =
+      typeof toolCall.title === "string" && toolCall.title.trim()
+        ? toolCall.title
+        : "ACP permission";
     this.#emit("interaction.requested", { turnId: turn.id, interactionId, toolCallId, summary });
   }
 
@@ -249,7 +277,8 @@ export class AcpSessionMachine {
       startedTools: this.#startedTools,
     });
     for (const draft of drafts) {
-      if (draft.kind === "text.delta" && typeof draft.fields.text === "string") this.#turn.text += draft.fields.text;
+      if (draft.kind === "text.delta" && typeof draft.fields.text === "string")
+        this.#turn.text += draft.fields.text;
       this.#emit(draft.kind, draft.fields, draft.sourceEventId);
     }
   }
@@ -266,7 +295,13 @@ export class AcpSessionMachine {
         text: turn.text,
       });
     }
-    const outcome = turn.cancelled ? "cancelled" : stopReason === "end_turn" ? "success" : stopReason ? "failed" : "unknown";
+    const outcome = turn.cancelled
+      ? "cancelled"
+      : stopReason === "end_turn"
+        ? "success"
+        : stopReason
+          ? "failed"
+          : "unknown";
     if (!stopReason || failure) {
       this.#emit("session.error", {
         code: "backend-failure",
@@ -309,7 +344,8 @@ function optionId(options: readonly unknown[], kind: string): string | undefined
 }
 
 function readSessionId(result: unknown): string | undefined {
-  if (!isRecord(result) || typeof result.sessionId !== "string" || !result.sessionId.trim()) return undefined;
+  if (!isRecord(result) || typeof result.sessionId !== "string" || !result.sessionId.trim())
+    return undefined;
   return result.sessionId;
 }
 

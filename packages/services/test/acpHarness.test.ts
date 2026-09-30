@@ -17,7 +17,12 @@ import {
 } from "../src/agent-adapters/acp/index.js";
 import { HarnessRegistry } from "../src/agent-host/harnessRegistry.js";
 import { loadExplicitHarnessPlugins } from "../src/agent-host/harnessPluginLoader.js";
-import type { AgentEvent, BindingPlan, ExecutionTarget, SessionSpec } from "@zcode/shared/agent-host";
+import type {
+  AgentEvent,
+  BindingPlan,
+  ExecutionTarget,
+  SessionSpec,
+} from "@zcode/shared/agent-host";
 
 const target: ExecutionTarget = {
   id: "local-1",
@@ -70,7 +75,10 @@ class FakePeer {
     return result;
   }
 
-  readonly #pending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
+  readonly #pending = new Map<
+    string,
+    { resolve: (value: unknown) => void; reject: (error: Error) => void }
+  >();
 
   async #receive(message: AcpJsonRpcMessage): Promise<void> {
     if (message.method === undefined && message.id !== undefined && message.id !== null) {
@@ -90,7 +98,11 @@ class FakePeer {
     }
     if (message.id === undefined || message.id === null) return;
     if (message.method === "initialize") {
-      await this.#transport.send({ jsonrpc: "2.0", id: message.id, result: initializeResult(this.#options) });
+      await this.#transport.send({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: initializeResult(this.#options),
+      });
       return;
     }
     if (message.method === "session/new") {
@@ -103,7 +115,11 @@ class FakePeer {
     }
     if (message.method === "session/load" || message.method === "session/resume") {
       await this.#options.onLoad?.(this);
-      await this.#transport.send({ jsonrpc: "2.0", id: message.id, result: { sessionId: this.#sessionId } });
+      await this.#transport.send({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: { sessionId: this.#sessionId },
+      });
       return;
     }
     if (message.method === "session/prompt") {
@@ -199,7 +215,9 @@ function harness(profile: typeof openCodeAcpProfile, options: FakeOptions = {}) 
     profile,
     openTransport: () => {
       const link = linkAcpTransports();
-      peers.push(new FakePeer(link.agent, options, options.agentName ?? `${profile.manifest.id}-session`));
+      peers.push(
+        new FakePeer(link.agent, options, options.agentName ?? `${profile.manifest.id}-session`),
+      );
       return link.client;
     },
   });
@@ -215,9 +233,7 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 }
 
 function textOf(events: readonly AgentEvent[]): string {
-  return events
-    .flatMap((event) => (event.kind === "text.delta" ? [event.text] : []))
-    .join("");
+  return events.flatMap((event) => (event.kind === "text.delta" ? [event.text] : [])).join("");
 }
 
 test("version 1 negotiates load and resume only from the initialize payload", () => {
@@ -268,7 +284,10 @@ test("OpenCode without negotiated resume can show history and does not pretend t
     text: "hello",
   });
   assert.equal(textOf(adapter.viewHistory(spec.hostSessionId)), "hello");
-  assert.equal(events.some((event) => event.kind === "message.finished" && event.text === "hello"), true);
+  assert.equal(
+    events.some((event) => event.kind === "message.finished" && event.text === "hello"),
+    true,
+  );
   const before = peers[0]?.methods.length ?? 0;
   await assert.rejects(
     adapter.resumeExecution(spec.hostSessionId, peers[0]?.sessionId() ?? "missing"),
@@ -289,9 +308,18 @@ test("attach without negotiated resume does not open a replacement session", asy
     reattached.attach(spec, binding, 3, planFor(spec.hostSessionId, "opencode")),
     /unsupported: ACP session resume was not negotiated/,
   );
-  assert.equal(peers.some((peer) => peer.methods.includes("session/new")), false);
-  assert.equal(peers.some((peer) => peer.methods.includes("session/load")), false);
-  assert.equal(peers.some((peer) => peer.methods.includes("session/prompt")), false);
+  assert.equal(
+    peers.some((peer) => peer.methods.includes("session/new")),
+    false,
+  );
+  assert.equal(
+    peers.some((peer) => peer.methods.includes("session/load")),
+    false,
+  );
+  assert.equal(
+    peers.some((peer) => peer.methods.includes("session/prompt")),
+    false,
+  );
 });
 
 test("negotiated session/load resumes without copying replay into host text", async () => {
@@ -315,7 +343,9 @@ test("negotiated session/load resumes without copying replay into host text", as
   assert.equal(resumed.peers[0]?.methods.includes("session/prompt"), false);
   assert.equal(textOf(resumed.adapter.viewHistory(spec.hostSessionId)), "");
   assert.equal(
-    resumed.adapter.viewHistory(spec.hostSessionId).some((event) => event.kind === "extension.event"),
+    resumed.adapter
+      .viewHistory(spec.hostSessionId)
+      .some((event) => event.kind === "extension.event"),
     true,
   );
   assert.equal(peers.length > 0, true);
@@ -334,12 +364,18 @@ test("Goose, OpenCode, and Devin share one session machine and register without 
     new URL("../src/agent-adapters/acp/acpSessionMachine.ts", import.meta.url),
     "utf8",
   );
-  const goose = await readFile(new URL("../src/agent-adapters/acp/agents/goose.ts", import.meta.url), "utf8");
+  const goose = await readFile(
+    new URL("../src/agent-adapters/acp/agents/goose.ts", import.meta.url),
+    "utf8",
+  );
   const opencode = await readFile(
     new URL("../src/agent-adapters/acp/agents/opencode.ts", import.meta.url),
     "utf8",
   );
-  const devin = await readFile(new URL("../src/agent-adapters/acp/agents/devin.ts", import.meta.url), "utf8");
+  const devin = await readFile(
+    new URL("../src/agent-adapters/acp/agents/devin.ts", import.meta.url),
+    "utf8",
+  );
   assert.equal(machine.includes("opencode"), false);
   assert.equal(machine.includes("goose"), false);
   assert.equal(machine.includes("devin"), false);
@@ -411,12 +447,18 @@ test("Devin stays on harness-managed ACP and does not inject a host model", asyn
   });
   const report = await authed.adapter.probe(target);
   assert.equal(report.support, "unsupported");
-  assert.equal(authed.peers.some((peer) => peer.methods.includes("authenticate")), false);
+  assert.equal(
+    authed.peers.some((peer) => peer.methods.includes("authenticate")),
+    false,
+  );
   await assert.rejects(
     authed.adapter.create(specFor("host-devin-auth", "devin"), planFor("host-devin-auth", "devin")),
     /does not submit credentials/,
   );
-  assert.equal(authed.peers.some((peer) => peer.methods.includes("session/new")), false);
+  assert.equal(
+    authed.peers.some((peer) => peer.methods.includes("session/new")),
+    false,
+  );
 });
 
 test("protocol version 2 stays experimental and does not start a session", async () => {
@@ -430,7 +472,10 @@ test("protocol version 2 stays experimental and does not start a session", async
     adapter.create(specFor("host-v2", "opencode"), planFor("host-v2", "opencode")),
     /experimental/,
   );
-  assert.equal(peers.some((peer) => peer.methods.includes("session/new")), false);
+  assert.equal(
+    peers.some((peer) => peer.methods.includes("session/new")),
+    false,
+  );
 });
 
 test("unknown extensions and client filesystem methods are refused", async () => {
@@ -440,12 +485,20 @@ test("unknown extensions and client filesystem methods are refused", async () =>
         sessionId: peer.sessionId(),
         update: { sessionUpdate: "widget_inject", script: "alert(1)" },
       });
-      const extension = await peer.request("_acp/exec", { command: "rm -rf /" }).catch((error: unknown) => error);
-      assert.match(extension instanceof Error ? extension.message : "", /unsupported ACP extension/);
+      const extension = await peer
+        .request("_acp/exec", { command: "rm -rf /" })
+        .catch((error: unknown) => error);
+      assert.match(
+        extension instanceof Error ? extension.message : "",
+        /unsupported ACP extension/,
+      );
       const filesystem = await peer
         .request("fs/read_text_file", { path: "/tmp/secret" })
         .catch((error: unknown) => error);
-      assert.match(filesystem instanceof Error ? filesystem.message : "", /unsupported ACP extension/);
+      assert.match(
+        filesystem instanceof Error ? filesystem.message : "",
+        /unsupported ACP extension/,
+      );
       await peer.chunk("visible");
     },
   });
@@ -576,7 +629,9 @@ test("cancel only reaches the current turn", async () => {
   await sending;
   assert.equal(peers[0]?.methods.filter((method) => method === "session/cancel").length, 1);
   assert.equal(
-    adapter.viewHistory(spec.hostSessionId).some((event) => event.kind === "turn.finished" && event.outcome === "cancelled"),
+    adapter
+      .viewHistory(spec.hostSessionId)
+      .some((event) => event.kind === "turn.finished" && event.outcome === "cancelled"),
     true,
   );
 });
@@ -598,7 +653,9 @@ test("duplicate source updates and a burst of chunks keep one contiguous transcr
     turnId: "turn-burst",
     text: "burst",
   });
-  const deltas = adapter.viewHistory(spec.hostSessionId).filter((event) => event.kind === "text.delta");
+  const deltas = adapter
+    .viewHistory(spec.hostSessionId)
+    .filter((event) => event.kind === "text.delta");
   assert.equal(deltas.length, 201);
   assert.equal(textOf(adapter.viewHistory(spec.hostSessionId)), `A${"x".repeat(200)}`);
   const sequences = adapter.viewHistory(spec.hostSessionId).map((event) => event.sequence);
@@ -616,8 +673,14 @@ test("advertised auth is reported without submitting credentials", async () => {
   assert.equal(report.support, "unsupported");
   assert.match(report.reason ?? "", /terminal-login/);
   assert.equal(JSON.stringify(report).includes("token"), false);
-  assert.equal(peers.some((peer) => peer.methods.includes("authenticate")), false);
-  assert.equal(peers.some((peer) => peer.methods.includes("auth/login")), false);
+  assert.equal(
+    peers.some((peer) => peer.methods.includes("authenticate")),
+    false,
+  );
+  assert.equal(
+    peers.some((peer) => peer.methods.includes("auth/login")),
+    false,
+  );
   const compatibility = buildAcpCompatibilityReport({
     profile: openCodeAcpProfile,
     install: diagnoseAcpInstall({ profile: openCodeAcpProfile, executableFound: false }),

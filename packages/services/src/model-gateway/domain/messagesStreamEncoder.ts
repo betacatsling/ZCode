@@ -45,9 +45,7 @@ function usageSnapshot(usage: ModelUsage, outputTokens: number): Record<string, 
     output_tokens: outputTokens,
     ...(cacheRead === undefined ? {} : { cache_read_input_tokens: cacheRead }),
     ...(cacheWrite === undefined ? {} : { cache_creation_input_tokens: cacheWrite }),
-    ...(reasoning === undefined
-      ? {}
-      : { output_tokens_details: { thinking_tokens: reasoning } }),
+    ...(reasoning === undefined ? {} : { output_tokens_details: { thinking_tokens: reasoning } }),
   };
 }
 
@@ -149,7 +147,9 @@ export class MessagesStreamEncoder {
       case "reasoning_start":
       case "reasoning_delta":
       case "reasoning_end":
-        return unsupportedFeature("bound Model reasoning cannot be emitted as unsigned Messages thinking");
+        return unsupportedFeature(
+          "bound Model reasoning cannot be emitted as unsigned Messages thinking",
+        );
     }
     return unsupportedFeature("bound Model stream event is not supported by Messages");
   }
@@ -164,7 +164,10 @@ export class MessagesStreamEncoder {
       unsupportedFeature("bound Model did not report provider output-token usage");
     if (event.usage.outputTokens > this.#maxOutputTokens)
       unsupportedFeature("bound Model exceeded the session output-token reservation");
-    if ((event.usage.serverToolUse?.webFetchRequests ?? 0) > 0 || (event.usage.serverToolUse?.webSearchRequests ?? 0) > 0)
+    if (
+      (event.usage.serverToolUse?.webFetchRequests ?? 0) > 0 ||
+      (event.usage.serverToolUse?.webSearchRequests ?? 0) > 0
+    )
       unsupportedFeature("bound Model usage includes unsupported server tools");
 
     const stopReason =
@@ -176,7 +179,7 @@ export class MessagesStreamEncoder {
             ? "max_tokens"
             : undefined;
     if (!stopReason) unsupportedFeature("bound Model finish reason is not supported by Messages");
-    if ((stopReason === "tool_use") !== (this.#toolCallCount > 0))
+    if ((stopReason === "tool_use") !== this.#toolCallCount > 0)
       invalidRequest("bound Model tool calls and finish reason disagree");
     return [
       {
@@ -206,7 +209,9 @@ export class MessagesStreamEncoder {
     if (typeof text !== "string") invalidRequest("bound Model text delta is invalid");
     const state = id ? this.#activeTextBlocks.get(id) : undefined;
     if (!state || state.closed) invalidRequest("bound Model text delta has no active block");
-    return [{ type: "content_block_delta", index: state.index, delta: { type: "text_delta", text } }];
+    return [
+      { type: "content_block_delta", index: state.index, delta: { type: "text_delta", text } },
+    ];
   }
 
   #endText(id: string): MessagesEvent[] {
@@ -218,7 +223,8 @@ export class MessagesStreamEncoder {
 
   #startTool(id: string, name: string): MessagesEvent[] {
     this.#requireId(id);
-    if (!this.#allowedTools.has(name)) unsupportedFeature("bound Model selected a tool not declared by Claude");
+    if (!this.#allowedTools.has(name))
+      unsupportedFeature("bound Model selected a tool not declared by Claude");
     if (this.#seenToolIds.has(id)) invalidRequest("bound Model reused a tool call id");
     this.#seenToolIds.add(id);
     const state: ToolBlockState = {
@@ -305,7 +311,10 @@ function assertSupportedToolInput(name: string, input: Record<string, unknown>):
       unsupportedFeature("background Claude Bash tools are not supported");
     if (
       input.timeout !== undefined &&
-      (typeof input.timeout !== "number" || !Number.isSafeInteger(input.timeout) || input.timeout < 1 || input.timeout > 300_000)
+      (typeof input.timeout !== "number" ||
+        !Number.isSafeInteger(input.timeout) ||
+        input.timeout < 1 ||
+        input.timeout > 300_000)
     ) {
       unsupportedFeature("Claude Bash timeout is outside the pinned Gateway limit");
     }

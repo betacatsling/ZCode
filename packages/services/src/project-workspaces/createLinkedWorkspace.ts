@@ -11,7 +11,11 @@ import type { CatalogSnapshot } from "./snapshot.js";
 const logger = createServiceLogger("project-workspaces");
 
 export type CreateWorkspaceResult =
-  | { status: "created" | "already-present"; binding: RepositoryBinding; workspace: WorktreeWorkspace }
+  | {
+      status: "created" | "already-present";
+      binding: RepositoryBinding;
+      workspace: WorktreeWorkspace;
+    }
   | { status: "unregistered"; requestId: string; candidate: DiscoveredWorktree };
 
 export interface CreateWorkspaceInput {
@@ -90,11 +94,20 @@ export async function createLinkedWorkspace(
     return { status: "already-present", workspace, binding };
   }
   const binding = prepared.bindings.find((item) => item.id === input.repositoryBindingId);
-  if (!binding || binding.projectId !== input.projectId) throw new ProjectWorkspaceError("unknown-binding");
-  if (binding.executionTargetId !== deps.executionTargetId) throw new ProjectWorkspaceError("foreign-target");
+  if (!binding || binding.projectId !== input.projectId)
+    throw new ProjectWorkspaceError("unknown-binding");
+  if (binding.executionTargetId !== deps.executionTargetId)
+    throw new ProjectWorkspaceError("foreign-target");
   const parentAccess = await deps.filesystem.access(dirname(input.worktreePath));
   if (parentAccess !== "ok") throw new ProjectWorkspaceError("permission-denied");
-  const listed = await deps.git.run(["--git-dir", binding.gitCommonDir, "worktree", "list", "--porcelain", "-z"]);
+  const listed = await deps.git.run([
+    "--git-dir",
+    binding.gitCommonDir,
+    "worktree",
+    "list",
+    "--porcelain",
+    "-z",
+  ]);
   if (listed.exitCode !== 0) throw new ProjectWorkspaceError("scan-failed");
   const records = parsePorcelainZ(listed.stdout);
   if (await deps.filesystem.exists(input.worktreePath)) {
@@ -156,10 +169,18 @@ export async function createLinkedWorkspace(
   try {
     evidence = await deps.filesystem.identity(await deps.filesystem.realpath(input.worktreePath));
   } catch {
-    return unregistered(deps, input, binding, input.worktreePath, { kind: "branch", ref: input.branch, oid: null }, false, {
-      device: null,
-      inode: null,
-    });
+    return unregistered(
+      deps,
+      input,
+      binding,
+      input.worktreePath,
+      { kind: "branch", ref: input.branch, oid: null },
+      false,
+      {
+        device: null,
+        inode: null,
+      },
+    );
   }
   const candidate: DiscoveredWorktree = {
     executionTargetId: deps.executionTargetId,
@@ -184,12 +205,18 @@ export async function createLinkedWorkspace(
         snapshot: {
           ...snapshot,
           workspaces: [...snapshot.workspaces, created.workspace],
-          evidenceByWorkspaceId: { ...snapshot.evidenceByWorkspaceId, ...created.snapshotPatch.evidenceByWorkspaceId },
+          evidenceByWorkspaceId: {
+            ...snapshot.evidenceByWorkspaceId,
+            ...created.snapshotPatch.evidenceByWorkspaceId,
+          },
           verificationByWorkspaceId: {
             ...snapshot.verificationByWorkspaceId,
             ...created.snapshotPatch.verificationByWorkspaceId,
           },
-          creationReceipts: { ...snapshot.creationReceipts, [input.requestId]: created.workspace.id },
+          creationReceipts: {
+            ...snapshot.creationReceipts,
+            [input.requestId]: created.workspace.id,
+          },
         },
         result: { status: "created" as const, binding, workspace: created.workspace },
       };
@@ -211,7 +238,9 @@ async function existingPath(
   records: ReturnType<typeof parsePorcelainZ>,
 ): Promise<CreateWorkspaceResult> {
   const canonical = await deps.filesystem.realpath(input.worktreePath);
-  const listedHere = records.find((record) => record.path === canonical || record.path === input.worktreePath);
+  const listedHere = records.find(
+    (record) => record.path === canonical || record.path === input.worktreePath,
+  );
   const registered = prepared.workspaces.find(
     (workspace) =>
       workspace.repositoryBindingId === binding.id &&
@@ -220,7 +249,15 @@ async function existingPath(
   if (registered) return { status: "already-present", workspace: registered, binding };
   if (!listedHere) throw new ProjectWorkspaceError("path-occupied");
   const evidence = await deps.filesystem.identity(canonical);
-  return unregistered(deps, input, binding, canonical, listedHere.head, listedHere.locked, evidence);
+  return unregistered(
+    deps,
+    input,
+    binding,
+    canonical,
+    listedHere.head,
+    listedHere.locked,
+    evidence,
+  );
 }
 
 function unregistered(

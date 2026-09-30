@@ -114,13 +114,11 @@ export function codexHarnessCapabilities(): HarnessCapabilities {
     },
     images: {
       support: "unsupported",
-      reason:
-        "Codex app-server send accepts text only; the images surface is unsupported.",
+      reason: "Codex app-server send accepts text only; the images surface is unsupported.",
     },
     modelSwitch: {
       support: "unsupported",
-      reason:
-        "In-turn modelSwitch is unsupported; model binding is fixed at session admission.",
+      reason: "In-turn modelSwitch is unsupported; model binding is fixed at session admission.",
     },
     detach: {
       support: "unsupported",

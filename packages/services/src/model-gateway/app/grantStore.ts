@@ -63,7 +63,11 @@ export class GatewayGrantStore {
     const selectedReasoning = input.model.options.reasoningLevel;
     if (
       input.protocol === "openai-responses" &&
-      !(selectedReasoning === "none" || selectedReasoning === "off" || selectedReasoning === "disabled")
+      !(
+        selectedReasoning === "none" ||
+        selectedReasoning === "off" ||
+        selectedReasoning === "disabled"
+      )
     ) {
       throw new Error(
         "bound Model must be configured with reasoning disabled for this Responses slice",
@@ -195,10 +199,7 @@ export class GatewayGrantStore {
     for (const grantId of this.grantsById.keys()) this.revoke(grantId);
   }
 
-  authorize(
-    token: string,
-    protocol: ModelGatewayProtocol,
-  ): GatewayGrantRecord | undefined {
+  authorize(token: string, protocol: ModelGatewayProtocol): GatewayGrantRecord | undefined {
     const digest = this.tokenPort.digestToken(token);
     const record = this.grants.get(digest);
     return record && record.protocol === protocol && this.isAuthorizedAt(record, this.now())

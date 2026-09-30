@@ -132,7 +132,10 @@ test("default host directory lists zcode, pi, codex, claude-code, and devin mani
       ["devin", "unavailable", "external"],
     ],
   );
-  assert.equal(directory.get("codex")?.manifest.adapterVersion, CODEX_HARNESS_MANIFEST.adapterVersion);
+  assert.equal(
+    directory.get("codex")?.manifest.adapterVersion,
+    CODEX_HARNESS_MANIFEST.adapterVersion,
+  );
   assert.equal(
     directory.get("claude-code")?.manifest.adapterVersion,
     CLAUDE_CODE_HARNESS_MANIFEST.adapterVersion,

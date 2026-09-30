@@ -39,7 +39,8 @@ export class ClaudeApprovalHookServer {
       });
     });
     const address = this.#server.address();
-    if (!address || typeof address === "string") throw new Error("Claude hook did not bind loopback");
+    if (!address || typeof address === "string")
+      throw new Error("Claude hook did not bind loopback");
     this.#baseUrl = `http://127.0.0.1:${address.port}/${this.#secret}`;
     return this.#baseUrl;
   }
@@ -79,13 +80,19 @@ export class ClaudeApprovalHookServer {
         if (!response.writableEnded) requestAbort.abort();
       };
       response.once("close", onClose);
-      const decision = await this.handleRequest(body as unknown as ClaudePreToolUseInput, requestAbort.signal);
+      const decision = await this.handleRequest(
+        body as unknown as ClaudePreToolUseInput,
+        requestAbort.signal,
+      );
       response.off("close", onClose);
       writeJson(response, 200, {
         hookSpecificOutput: {
           hookEventName: "PreToolUse",
           permissionDecision: decision,
-          permissionDecisionReason: decision === "allow" ? "Allowed by the active Host turn" : "Denied by the active Host turn",
+          permissionDecisionReason:
+            decision === "allow"
+              ? "Allowed by the active Host turn"
+              : "Denied by the active Host turn",
         },
       });
     } catch {
@@ -95,7 +102,10 @@ export class ClaudeApprovalHookServer {
   }
 }
 
-async function readLimitedJson(request: IncomingMessage, maxBytes: number): Promise<Record<string, unknown>> {
+async function readLimitedJson(
+  request: IncomingMessage,
+  maxBytes: number,
+): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let length = 0;
   for await (const chunk of request) {

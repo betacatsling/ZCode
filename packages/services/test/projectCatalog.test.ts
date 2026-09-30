@@ -349,7 +349,9 @@ test("target snapshots merge by target and workspace while offline cache survive
     ]);
     assert.equal(offlineRead.schemaVersion, 1);
     assert.deepEqual(
-      offlineRead.targets.map((target) => [target.targetId, target.presentation?.displayName]).sort(),
+      offlineRead.targets
+        .map((target) => [target.targetId, target.presentation?.displayName])
+        .sort(),
       [
         ["target-a", "SSH · build-lab"],
         ["target-b", "Docker · test-container"],

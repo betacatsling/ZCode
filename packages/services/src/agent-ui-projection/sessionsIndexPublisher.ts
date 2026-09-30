@@ -104,7 +104,9 @@ export function createSessionsIndexPublisher(input: {
       order = nextOrder;
       const head = ops.length;
       const current = snapshot();
-      const replace = (reason: "initial" | "epoch-changed" | "cursor-gap"): SessionsIndexDelivery => ({
+      const replace = (
+        reason: "initial" | "epoch-changed" | "cursor-gap",
+      ): SessionsIndexDelivery => ({
         clientMode: update.clientMode,
         mode: "snapshot",
         reason,
@@ -113,8 +115,10 @@ export function createSessionsIndexPublisher(input: {
       const base = update.base;
       if (!base) return replace("initial");
       if (base.logEpoch !== input.logEpoch) return replace("epoch-changed");
-      if (!Number.isSafeInteger(base.seq) || base.seq < 0 || base.seq > head) return replace("cursor-gap");
-      if (base.seq === head) return { clientMode: update.clientMode, mode: "resume", reason: "caught-up" };
+      if (!Number.isSafeInteger(base.seq) || base.seq < 0 || base.seq > head)
+        return replace("cursor-gap");
+      if (base.seq === head)
+        return { clientMode: update.clientMode, mode: "resume", reason: "caught-up" };
       return {
         clientMode: update.clientMode,
         mode: "resume",
@@ -193,7 +197,9 @@ function toSummary(
           pendingInteraction: {
             interactionId: pending.interactionId,
             kind: pending.kind,
-            ...(pending.payload.kind === "permission" ? { toolName: pending.payload.toolName } : {}),
+            ...(pending.payload.kind === "permission"
+              ? { toolName: pending.payload.toolName }
+              : {}),
           },
         }
       : {}),
