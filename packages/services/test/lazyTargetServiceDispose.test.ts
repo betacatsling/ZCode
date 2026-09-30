@@ -167,7 +167,7 @@ test(
 
 test(
   "a failing target close still closes the shared gateway and the history-only service",
-  { timeout: TEST_TIMEOUT_MS, todo: "lazy dispose stops at the first failing close" },
+  { timeout: TEST_TIMEOUT_MS },
   async () => {
     await withLazyHost("zcode-lazy-dispose-target-fails-", async (host) => {
       await warm(host);
@@ -186,7 +186,7 @@ test(
 
 test(
   "a failing gateway close still closes the history-only service and rejects with the gateway error",
-  { timeout: TEST_TIMEOUT_MS, todo: "lazy dispose stops at the first failing close" },
+  { timeout: TEST_TIMEOUT_MS },
   async () => {
     await withLazyHost("zcode-lazy-dispose-gateway-fails-", async (host) => {
       await warm(host);
@@ -204,7 +204,7 @@ test(
 
 test(
   "target and gateway close both failing: the target error wins and history is still closed",
-  { timeout: TEST_TIMEOUT_MS, todo: "lazy dispose stops at the first failing close" },
+  { timeout: TEST_TIMEOUT_MS },
   async () => {
     await withLazyHost("zcode-lazy-dispose-both-fail-", async (host) => {
       await warm(host);
