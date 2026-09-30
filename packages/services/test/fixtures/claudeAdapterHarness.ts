@@ -109,9 +109,22 @@ export async function startTurn(
   return { sending };
 }
 
-/** Number of listening TCP servers in this process (Gateway + hook servers). */
-export function listeningServers(): number {
-  return process.getActiveResourcesInfo().filter((kind) => kind === "TCPServerWrap").length;
+const tcpServers = () =>
+  process.getActiveResourcesInfo().filter((kind) => kind === "TCPServerWrap").length;
+
+/**
+ * Listening TCP servers in this process (Gateway + hook servers), sampled until stable:
+ * net.Server "close" fires before libuv releases the handle, so a count can lag ~10-20 ms.
+ */
+export async function listeningServers(): Promise<number> {
+  let previous = -1;
+  let current = tcpServers();
+  for (let attempt = 0; attempt < 100 && current !== previous; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    previous = current;
+    current = tcpServers();
+  }
+  return current;
 }
 
 export function eventsOf<K extends AgentEvent["kind"]>(
