@@ -196,7 +196,7 @@ test("a typed session.error failure (401 and non-retryable 403) names its own Pr
       key: `session-error:s-1:${statusCode}`,
     });
     assert.doesNotMatch(JSON.stringify(notice), /sk-|https?:\/\//);
-    // Still only while the session is in error, and never for harness-managed sessions.
+    // Still only while the session is in error.
     assert.equal(
       resolveProviderReconfigureNotice({
         sessionId: "s-1",
@@ -206,16 +206,94 @@ test("a typed session.error failure (401 and non-retryable 403) names its own Pr
       }),
       null,
     );
-    assert.equal(
+    // An empty config.provider does not hide it: the typed failure names the Provider itself.
+    assert.deepEqual(
       resolveProviderReconfigureNotice({
         sessionId: "s-1",
         phase: "error",
         lastError,
         sessionProviderId: "",
       }),
+      {
+        source: "session-error",
+        providerId: "provider-rejected",
+        modelId: "model-rejected",
+        key: `session-error:s-1:${statusCode}`,
+      },
+    );
+  }
+});
+
+test("a typed failure shows the hint even when config.provider is empty; untyped + empty stays hidden", () => {
+  for (const statusCode of [401, 403]) {
+    const failure = typedFailure(statusCode);
+    const typedReceipt = providerReconfigureReceiptFromAck(
+      {
+        commandId: "c-typed",
+        status: "rejected",
+        reasonCode: PROVIDER_RECONFIGURE_REQUIRED,
+        failure,
+      },
+      "s-1",
+    );
+    for (const sessionProviderId of ["", "   ", null]) {
+      assert.deepEqual(
+        resolveProviderReconfigureNotice({
+          sessionId: "s-1",
+          phase: "idle",
+          receipt: typedReceipt,
+          sessionProviderId,
+          sessionModelId: "model-one",
+        }),
+        {
+          source: "command-receipt",
+          providerId: "provider-rejected",
+          modelId: "model-rejected",
+          key: "command-receipt:s-1:c-typed",
+        },
+      );
+    }
+  }
+  const untypedReceipt = providerReconfigureReceiptFromAck(
+    { commandId: "c-old", status: "rejected", reasonCode: PROVIDER_RECONFIGURE_REQUIRED },
+    "s-1",
+  );
+  const untypedError = { code: PROVIDER_RECONFIGURE_REQUIRED, at: 9 };
+  for (const input of [
+    { phase: "idle", receipt: untypedReceipt },
+    { phase: "error", lastError: untypedError },
+    { phase: "error", lastError: untypedError, receipt: untypedReceipt },
+  ]) {
+    assert.equal(
+      resolveProviderReconfigureNotice({ sessionId: "s-1", sessionProviderId: "", ...input }),
       null,
     );
   }
+  // Other gates are unchanged for typed failures: code and error phase still decide.
+  const failure = typedFailure(403);
+  for (const lastError of [
+    { code: "pi-model-executor-stream", at: 10, failure },
+    { code: PROVIDER_RECONFIGURE_REQUIRED, at: 11, failure },
+  ]) {
+    const phase = lastError.code === PROVIDER_RECONFIGURE_REQUIRED ? "running" : "error";
+    assert.equal(
+      resolveProviderReconfigureNotice({
+        sessionId: "s-1",
+        phase,
+        lastError,
+        sessionProviderId: "",
+      }),
+      null,
+    );
+  }
+  assert.equal(
+    resolveProviderReconfigureNotice({
+      sessionId: null,
+      phase: "error",
+      lastError: { code: PROVIDER_RECONFIGURE_REQUIRED, at: 12, failure },
+    }),
+    null,
+  );
 });
 
 test("without a typed failure (older hosts) the notice falls back to the session config Provider", () => {
