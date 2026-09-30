@@ -1,7 +1,8 @@
 # Host capability bootstrap authentication (M2)
 
-Status: implemented for issuance in this cut. Ticket binding and consume-side
-hardening are deferred (see "Deferred").
+Status: implemented for issuance, including the old-Supervisor + new-Core skew
+fallback ("Version-skew fallback"). Ticket binding and consume-side hardening
+are deferred (see "Deferred").
 
 Requirement: `docs/PROJECT-DELIVERY-PLAN.md` §4 M2 risks and the §5 security row
 ("reject unauthorised Host/Web access"). Before this change, both HTTP servers
@@ -91,6 +92,9 @@ A per-Core-launch private bootstrap secret, presented as `Authorization: Bearer`
    - `clearCoreScopedStatus()` drops it whenever the Core exits, crashes or is
      replaced. The next generation publishes a new one, so old secrets stop
      working (asserted in `runtimeLifecycle.integration.test.ts`).
+   - Core → CLI, skew fallback only: the Core also writes
+     `run/core-host-bootstrap.json` (`0600`). The new CLI reads it only when the
+     Supervisor status lacks the secret. See "Version-skew fallback".
 3. **Verification.** `verifyHostBootstrapRequest`
    (`hostBootstrapAuth.ts`, one copy in each package) checks, in this order:
    - Any `Origin` header → **403**. Real callers are Node. Browsers always send
@@ -137,19 +141,67 @@ sha256(presented))`, which runs in constant time whatever the length. When
 
 ## Migration and compatibility
 
-| Client → Server                                                                                                          | Result                                                                                                                                                                                  |
-| ------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| New client, new Supervisor + new Core                                                                                    | Secret flows. Ticket issued.                                                                                                                                                            |
-| New client, old running Supervisor + old Core (Desktop upgraded while a service-registered Supervisor keeps running)     | Status has no secret, so the client sends no header, and the old Core does not check. Works.                                                                                            |
-| New or old client, **old Supervisor + new Core** (in-place `apply-update` of the Core release under a pre-M2 Supervisor) | The old Supervisor's `ready` schema strips the unknown field, so status has no secret and the new Core returns **401**. **Known gap:** Host attach fails until the Supervisor restarts. |
-| Old Desktop CLI reading a new status (`.strict()` schema)                                                                | Rejected as invalid status. Desktop always uses its own bundled CLI, so this happens only in manual mixed-version setups. The SSH parser is lenient.                                    |
-| Remote `bin/zcode` older than the Desktop (SSH path without a staged runtime)                                            | Old Core, no enforcement. Works.                                                                                                                                                        |
+| Client → Server                                                                                                      | Result                                                                                                                                                                                                                   |
+| -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| New client, new Supervisor + new Core                                                                                | Secret flows. Ticket issued.                                                                                                                                                                                             |
+| New client, old running Supervisor + old Core (Desktop upgraded while a service-registered Supervisor keeps running) | Status has no secret, so the client sends no header, and the old Core does not check. Works.                                                                                                                             |
+| New client, **old Supervisor + new Core** (in-place `apply-update` of the Core release under a pre-M2 Supervisor)    | The old Supervisor's `ready` schema strips the unknown field, so its status has no secret. The new CLI fills it from the Core-written `run/core-host-bootstrap.json` (see below). Ticket issued.                         |
+| Old client, old Supervisor + new Core                                                                                | The old CLI does not read the file, so the new Core returns **401** until the Supervisor restarts. Desktop runs its bundled CLI and the SSH connector runs the staged runtime's CLI, so this needs a manual mixed setup. |
+| Old Desktop CLI reading a new status (`.strict()` schema)                                                            | Rejected as invalid status. Desktop always uses its own bundled CLI, so this happens only in manual mixed-version setups. The SSH parser is lenient.                                                                     |
+| Remote `bin/zcode` older than the Desktop (SSH path without a staged runtime)                                        | Old Core, no enforcement. Works.                                                                                                                                                                                         |
 
-Options to close the skew gap (Planner decision): (a) Core also writes a `0600`
-`run/core-host-bootstrap.json` keyed by generation and port, and the new CLI
-merges it into `serve/status --json` when the Supervisor status lacks it; or
-(b) require a Supervisor restart as part of the first post-M2 update. This cut
-implements neither.
+### Version-skew fallback: `run/core-host-bootstrap.json`
+
+Planner option (a). The alternative, (b) forcing a Supervisor restart on the
+first post-M2 update, was not taken. Code:
+`packages/zcode-server-cli/src/runtime/coreHostBootstrap.ts`.
+
+- **Location.** `<serverRoot>/run/core-host-bootstrap.json`
+  (`ServerLayout.coreHostBootstrapFile`, next to `status.json`). The Core finds
+  the server root through `ZCODE_SERVER_ROOT`, which every Supervisor launcher
+  in the repository history (pre-M2 included) sets for the Core. Without it
+  (embedded or test Cores), no file is written.
+- **Format.** A strict JSON object:
+  `{schemaVersion: 1, generation, pid, host, port, hostBootstrapToken, createdAt}`.
+  `generation` is the Supervisor-assigned argv generation. `pid`, `host` and
+  `port` are the Core's own, which are the same values the Supervisor publishes in
+  `ServerStatus`.
+- **Write.** `runServerCore` writes the file after the HTTP server listens and
+  **before** it sends `ready`, so any status that says `ready` for this
+  generation already has its file. The write creates the runDir `0700` and
+  `chmod`s an existing one to `0700` on POSIX (a pre-M2 Supervisor never
+  tightens it). It writes a unique temp file with `0600` and `wx`, `chmod`s it to
+  exactly `0600`, then renames it over the target. A failed write is logged and
+  does not block startup, because the new-Supervisor path does not need the file.
+- **Removal.** On clean shutdown, after the HTTP server closes, the Core removes
+  the file, but only if it still names this Core's generation and pid. A crash
+  or `SIGKILL` leaves it behind, and the next generation overwrites it before its
+  own `ready`. Uninstall clears `run/`.
+- **Merge rules.** `serve --json` covers the already-running, freshly started and
+  foreground paths. Desktop Main and the SSH connector read this output.
+  `status --json` covers the control socket and the `status.json` fallback. Both
+  call `mergeCoreHostBootstrapToken`, which adds the file's secret only when all
+  of these hold:
+  1. The Supervisor status has no `hostBootstrapToken`. A Supervisor-provided
+     secret always wins.
+  2. `state === "ready"`, and `pid`, `host` and `port` are non-null.
+  3. On POSIX, the file is opened with `O_NOFOLLOW`. Through the opened handle it
+     must be a regular file of at most 4 KiB, with mode exactly `0600`, owned by
+     the current uid.
+  4. It parses under the strict schema. Malformed JSON, an unknown
+     `schemaVersion`, extra keys or a bad token shape mean it is ignored.
+  5. `generation`, `pid`, `host` and `port` all equal the status values. A record
+     from a previous generation or port is stale and is ignored.
+  6. The pid is alive (`kill(pid, 0)`). `EPERM` counts as not ours.
+
+  Only the secret is added to the printed status. Nothing else changes.
+  Human-readable `zcode status` still prints `[redacted]`. The secret still never
+  enters the environment, the renderer or logs.
+
+- **Why this is safe.** The file holds the same secret with the same
+  confidentiality as `status.json` (`0600` in a `0700` runDir, same OS user). A
+  stale file's secret is useless, because each Core generation generates its own
+  secret, and the old secret gets 401 from the new Core.
 
 ## Deferred (tracked, not fixed here)
 
@@ -186,8 +238,11 @@ implements neither.
   `@zcode/server` from server-cli. Candidate home: a Node-only subpath of a
   shared package. Until then, the two `hostBootstrapAuth.ts` copies are
   byte-identical and must be changed together.
-- Windows: `chmod` is a no-op, so status.json confidentiality relies on the
-  per-user profile ACL and the named-pipe control endpoint.
+- Windows: `chmod` is a no-op, so the confidentiality of `status.json` and
+  `core-host-bootstrap.json` relies on the per-user profile ACL and the
+  named-pipe control endpoint. The reader skips the mode and uid checks there.
+- The skew fallback file can be removed once pre-M2 Supervisors are no longer
+  supported, meaning every running Supervisor forwards `ready.hostBootstrapToken`.
 - The secret rotates only per Core launch, not per ticket or on a timer.
 - The Core's `/ws` terminal-client and `/api/server-info` stay unauthenticated
   on loopback.
@@ -206,3 +261,18 @@ implements neither.
   sent only to the capability endpoint; a missing secret surfaces the 401.
 - `runtimeLifecycle.integration.test.ts`: the real Supervisor/Core path uses the
   status secret; after a Core crash, the previous generation's secret gets 401.
+- `packages/zcode-server-cli/src/server-core/hostBootstrapSkew.integration.test.ts`:
+  a real Supervisor with a Core whose `ready` passes through the pre-M2 schema
+  (`fixtures/preM2SupervisorCoreEntry.ts`). The status has no secret and the
+  Core returns 401. `status --json` and `serve --daemon --json` merge the file,
+  a ticket is issued and `/ws/host` attaches. Human `status` redacts the secret.
+  After a Core crash the file is replaced by the new generation, and the old
+  secret gets 401. A planted previous-generation record is not merged. A clean
+  stop removes the file.
+- `packages/zcode-server-cli/src/runtime/coreHostBootstrap.test.ts`: atomic
+  `0600` write and `0700` runDir tightening; merge only for a matching, live,
+  ready Core; the Supervisor token wins; stale generation, port, host or pid,
+  and a dead pid, are ignored; missing and malformed files are ignored;
+  non-`0600` modes and symlinks are rejected (POSIX); cleanup removes only its
+  own record; the `status --json` `status.json` fallback merges while human
+  output redacts.

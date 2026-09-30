@@ -14,6 +14,8 @@ export interface ServerLayout {
   readonly componentsCacheDir: string;
   readonly stableBinDir: string;
   readonly statusFile: string;
+  /** Core-written copy of its Host bootstrap secret for Supervisors that predate ready.hostBootstrapToken. */
+  readonly coreHostBootstrapFile: string;
   readonly lockFile: string;
   readonly controlEndpoint: string;
   readonly serviceDir: string;
@@ -40,6 +42,7 @@ export function resolveServerLayout(serverRoot = getDefaultServerDataRoot()): Se
     componentsCacheDir: join(root, "cache", "components"),
     stableBinDir: join(root, "bin"),
     statusFile: join(runDir, "status.json"),
+    coreHostBootstrapFile: join(runDir, "core-host-bootstrap.json"),
     lockFile: join(runDir, "server.lock"),
     controlEndpoint:
       process.platform === "win32"
