@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { ServerRemoteHostCapability } from "../server-remote.js";
+import { verifyHostRequestHeaders } from "./hostBootstrapAuth.js";
 
 /**
  * Single shared implementation of the `/ws/host` Host capability ticket (legacy
@@ -144,13 +145,16 @@ export function createHostCapabilityStore(
 
 export type HostUpgradeAdmission =
   | { ok: true }
-  | { ok: false; status: 401 | 426; error: string; headers?: Record<string, string> };
+  | { ok: false; status: 401 | 403 | 426; error: string; headers?: Record<string, string> };
 
 export interface HostUpgradeRequest {
   /** The Node `IncomingMessage` (`c.env.incoming` under @hono/node-server / @hono/node-ws). */
   incoming: object | undefined;
   /** Value of the `x-zcode-rpc-host-capability` header. */
   capability: string | undefined;
+  /** `Origin` and `Host` headers, checked exactly like `POST /api/rpc-host-capability`. */
+  origin: string | undefined;
+  host: string | undefined;
   upgrade: string | undefined;
   connection: string | undefined;
 }
@@ -162,6 +166,11 @@ export interface HostUpgradeWebSocketServer {
 
 export interface HostCapabilityUpgradeGateOptions {
   path?: string;
+  /**
+   * Same value the server passes to `verifyHostBootstrapRequest` for the issue endpoint: refuse
+   * a non-loopback `Host` (DNS rebinding). Defaults to true; `Origin` is always refused.
+   */
+  requireLoopbackHost?: boolean;
   /**
    * The server's current bindings, read at every check so a credential rotated in-process takes
    * effect immediately. Omit (or return `undefined`) when no bootstrap credential is configured.
@@ -176,9 +185,11 @@ export interface HostCapabilityUpgradeGate {
    */
   issue(binding: HostCapabilityBinding | undefined): ServerRemoteHostCapability;
   /**
-   * Runs in the `/ws/host` HTTP middleware and never consumes the ticket: 401 for a missing,
-   * unknown, expired or no-longer-current-binding ticket, 426 for a request that is not a
-   * WebSocket upgrade. An admitted request is remembered so the consume point can find its ticket.
+   * Runs in the `/ws/host` HTTP middleware and never consumes the ticket. In order: 403 for any
+   * `Origin` or a non-loopback `Host` (the issue endpoint's rule, checked before the ticket is
+   * even looked at), 401 for a missing, unknown, expired or no-longer-current-binding ticket, 426
+   * for a request that is not a WebSocket upgrade. An admitted request is remembered so the
+   * consume point can find its ticket.
    */
   admit(request: HostUpgradeRequest): HostUpgradeAdmission;
   /**
@@ -241,6 +252,7 @@ export function createHostCapabilityUpgradeGate(
 ): HostCapabilityUpgradeGate {
   const path = options.path ?? HOST_CAPABILITY_WS_PATH;
   const acceptedBindings = options.acceptedBindings ?? (() => undefined);
+  const requireLoopbackHost = options.requireLoopbackHost ?? true;
   const store = bindingAwareStore(injectedStore);
   // IncomingMessage → ticket; WeakMap so requests that never reach the ws handshake
   // (404 route, aborted socket) do not leak.
@@ -249,7 +261,12 @@ export function createHostCapabilityUpgradeGate(
     issue(binding) {
       return store.issue(binding);
     },
-    admit({ incoming, capability, upgrade, connection }) {
+    admit({ incoming, capability, origin, host, upgrade, connection }) {
+      // 头部规则必须先于任何 ticket peek/consume：被拒绝的浏览器 / rebinding 请求不能烧掉 ticket。
+      const headerRejection = verifyHostRequestHeaders({ origin, host }, { requireLoopbackHost });
+      if (headerRejection) {
+        return { ok: false, status: headerRejection.status, error: headerRejection.error };
+      }
       if (!capability || store.peek?.(capability, acceptedBindings()) === false) {
         return { ok: false, status: 401, error: "Invalid or expired host capability" };
       }
