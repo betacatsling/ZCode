@@ -39,6 +39,7 @@ import {
   type ServerRemoteInfo,
   type ServerRemoteWorkspaceInfo,
 } from "@zcode/shared";
+import { verifyWebSocketUpgrade, type WebSocketUpgradeIncoming } from "@zcode/shared/node";
 import { connectRemote, createRemoteBackend, type RemoteConnection } from "./remote/index.js";
 import {
   createHostCapabilityStore,
@@ -261,6 +262,10 @@ function hasValidLiteToken(c: Context, token: string): boolean {
   return parseCookieHeader(c.req.header("cookie")).get(zcodeLiteTokenCookieName) === token;
 }
 
+function incomingOf(c: Context): WebSocketUpgradeIncoming | undefined {
+  return (c.env as { incoming?: WebSocketUpgradeIncoming } | undefined)?.incoming;
+}
+
 function isTokenProtectedPath(pathname: string): boolean {
   return pathname === "/ws" || pathname.startsWith("/ws/") || pathname.startsWith("/api/");
 }
@@ -350,7 +355,8 @@ export function createHttpServer(
       : undefined;
   // /ws/host 与签发端点同一请求头规则（Origin → 403；监听回环时非回环 Host → 403），先于 ticket 检查。
   const hostRequestHeaderRules = { requireLoopbackHost: isLoopbackBindHost(options.host) };
-  // ticket 只在 ws 接受握手（verifyClient，紧挨 101）时消费；普通请求、握手失败或路由不符都不会烧掉它。
+  // ticket 在 /ws/host middleware 里、ws 同款握手检查全部通过之后才消费（仍在路由之前），
+  // 普通请求、会失败的握手、半关闭的客户端或路由不符都不会烧掉它；verifyClient 只放行已准入的请求。
   const hostUpgradeGate = createHostCapabilityUpgradeGate(hostCapabilities, {
     acceptedBindings: () => acceptedHostCapabilityBindings,
     ...hostRequestHeaderRules,
@@ -426,6 +432,16 @@ export function createHttpServer(
     );
   });
 
+  // @hono/node-ws 在路由里登记的 waiter 只在握手成功时删除：ws 会拒绝的升级（以及没走 upgrade
+  // 路径的 Upgrade: websocket）必须在路由之前拒绝，否则请求会一直被留住（见 webSocketUpgrade.ts）。
+  const guardWebSocketUpgrade: MiddlewareHandler = async (c, next) => {
+    const rejection = verifyWebSocketUpgrade(incomingOf(c) ?? { headers: {} });
+    if (rejection) return c.json({ error: rejection.error }, rejection.status);
+    await next();
+  };
+  app.use("/ws", guardWebSocketUpgrade);
+  app.use("/ws/remote/*", guardWebSocketUpgrade);
+
   // 普通 `/ws` 永远是 terminal-client；浏览器/任意客户端设置旧 mode header
   // 都不能再把自己提升为 trusted host。
   app.get(
@@ -444,7 +460,7 @@ export function createHttpServer(
   }));
   app.use(HOST_CAPABILITY_WS_PATH, async (c, next) => {
     const admission = hostUpgradeGate.admit({
-      incoming: (c.env as { incoming?: object } | undefined)?.incoming,
+      incoming: incomingOf(c),
       capability: c.req.header(ZCODE_RPC_HOST_CAPABILITY_HEADER),
       origin: c.req.header("origin"),
       host: c.req.header("host"),

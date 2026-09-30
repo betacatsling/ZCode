@@ -70,3 +70,9 @@ export {
   type HostUpgradeRequest,
   type HostUpgradeWebSocketServer,
 } from "./node/hostCapabilityStore.js";
+export {
+  isWebSocketUpgradeRequest,
+  verifyWebSocketUpgrade,
+  type WebSocketUpgradeIncoming,
+  type WebSocketUpgradeRejection,
+} from "./node/webSocketUpgrade.js";

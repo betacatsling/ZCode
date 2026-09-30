@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { serve } from "@hono/node-server";
 import { createNodeWebSocket } from "@hono/node-ws";
-import { Hono, type MiddlewareHandler } from "hono";
+import { Hono, type Context, type MiddlewareHandler } from "hono";
 import type { WebSocket } from "ws";
 import type { WebSocketServer } from "ws";
 import {
@@ -27,6 +27,7 @@ import {
   ZCODE_VERSION,
   type ServerRemoteInfo,
 } from "@zcode/shared";
+import { verifyWebSocketUpgrade, type WebSocketUpgradeIncoming } from "@zcode/shared/node";
 import {
   createHostCapabilityStore,
   createHostCapabilityUpgradeGate,
@@ -53,6 +54,10 @@ interface CoreHttpServer {
 
 const WEBSOCKET_DRAIN_TIMEOUT_MS = 250;
 const log = createServiceLogger("server-core");
+
+function incomingOf(context: Context): WebSocketUpgradeIncoming | undefined {
+  return (context.env as { incoming?: WebSocketUpgradeIncoming } | undefined)?.incoming;
+}
 
 async function closeWebSocketServer(wss: WebSocketServer): Promise<void> {
   for (const client of wss.clients) {
@@ -180,7 +185,8 @@ export async function createCoreHttpServer(
   // 裸 Set 无法落实 expiresAt，未消费的 capability 会一直有效并持续累积。
   // 使用与 packages/server 兼容的 TTL 一次性 store，使有效期和消费语义与返回信息一致。
   const capabilities = options.hostCapabilityStore ?? createHostCapabilityStore();
-  // ticket 只在 ws 接受握手（verifyClient，紧挨 101）时消费；普通请求、握手失败或路由不符都不会烧掉它。
+  // ticket 在 /ws/host middleware 里、ws 同款握手检查全部通过之后才消费（仍在路由之前），
+  // 普通请求、会失败的握手、半关闭的客户端或路由不符都不会烧掉它；verifyClient 只放行已准入的请求。
   // ticket 绑定签发它的 bootstrap 凭据指纹与 Core generation；只接受当前绑定，轮换/换代前的 ticket 401。
   const hostCapabilityBinding: HostCapabilityBinding = {
     credentialFingerprint: hostBootstrapCredentialFingerprint(hostBootstrapToken),
@@ -208,6 +214,13 @@ export async function createCoreHttpServer(
   app.use("/ws", guardLocalEndpoint);
   app.use("/api/server-info", guardLocalEndpoint);
   app.get("/api/server-info", (context) => context.json(info));
+  // @hono/node-ws 在路由里登记的 waiter 只在握手成功时删除：ws 会拒绝的升级（以及没走 upgrade
+  // 路径的 Upgrade: websocket）必须在路由之前拒绝，否则请求会一直被留住（见 webSocketUpgrade.ts）。
+  app.use("/ws", async (context, next) => {
+    const rejection = verifyWebSocketUpgrade(incomingOf(context) ?? { headers: {} });
+    if (rejection) return context.json({ error: rejection.error }, rejection.status);
+    await next();
+  });
   app.get(
     "/ws",
     upgradeWebSocket(() => ({
@@ -218,7 +231,7 @@ export async function createCoreHttpServer(
   );
   app.use(HOST_CAPABILITY_WS_PATH, async (context, next) => {
     const admission = hostUpgradeGate.admit({
-      incoming: (context.env as { incoming?: object } | undefined)?.incoming,
+      incoming: incomingOf(context),
       capability: context.req.header(ZCODE_RPC_HOST_CAPABILITY_HEADER),
       origin: context.req.header("origin"),
       host: context.req.header("host"),
