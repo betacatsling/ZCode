@@ -30,3 +30,15 @@ export {
   type NodeSelfResourceSampler,
   type NodeSelfResourceSamplerOptions,
 } from "./node/nodeSelfResourceTelemetry.js";
+export {
+  createHostCapabilityStore,
+  createHostCapabilityUpgradeGate,
+  DEFAULT_HOST_CAPABILITY_TTL_MS,
+  HOST_CAPABILITY_WS_PATH,
+  type HostCapabilityStore,
+  type HostCapabilityStoreOptions,
+  type HostCapabilityUpgradeGate,
+  type HostUpgradeAdmission,
+  type HostUpgradeRequest,
+  type HostUpgradeWebSocketServer,
+} from "./node/hostCapabilityStore.js";

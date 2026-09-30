@@ -1,8 +1,9 @@
 # Host capability bootstrap authentication (M2)
 
 Status: implemented for issuance, including the old-Supervisor + new-Core skew
-fallback ("Version-skew fallback"). Ticket binding and consume-side hardening
-are deferred (see "Deferred").
+fallback ("Version-skew fallback"). Tickets are consumed only when the
+`/ws/host` upgrade is accepted, and both servers share one store ("Ticket
+consume-on-upgrade"). Ticket binding is deferred (see "Deferred").
 
 Requirement: `docs/PROJECT-DELIVERY-PLAN.md` §4 M2 risks and the §5 security row
 ("reject unauthorised Host/Web access"). Before this change, both HTTP servers
@@ -16,10 +17,10 @@ issued a trusted Host ticket to any caller that could reach them:
   when `authToken` was configured, and then the browser cookie or `?token=`
   lite token was enough.
 
-A ticket (`{capability, expiresAt}`, 30 s TTL, single use, stores in
-`packages/server/src/hostCapability.ts` and
-`packages/zcode-server-cli/src/server-core/hostCapability.ts`) upgrades
-`/ws/host` to `desktop-continuous` / `trusted-host-relay`. That role gets
+A ticket (`{capability, expiresAt}`, 30 s TTL, single use; one shared store in
+`packages/shared/src/node/hostCapabilityStore.ts`, see "Ticket
+consume-on-upgrade") upgrades `/ws/host` to `desktop-continuous` /
+`trusted-host-relay`. That role gets
 `IAgentHostService` and `IProviderProvisioningTargetService`: it can create or
 dispatch Host sessions, read history, and write cross-environment Provider
 credentials.
@@ -121,6 +122,69 @@ sha256(presented))`, which runs in constant time whatever the length. When
    branches on this field today. The Core's `/ws` (terminal-client, Host
    channels excluded) and `/api/server-info` stay loopback-open.
 
+### Ticket consume-on-upgrade
+
+A ticket is consumed only when the `/ws/host` WebSocket upgrade is accepted, not
+when the request first arrives. Both servers wire the same gate
+(`createHostCapabilityUpgradeGate`) in the same two places:
+
+1. **HTTP middleware on `/ws/host` (`admit`, never consumes).** It runs for
+   every method, in the order below:
+   - Missing, unknown or expired ticket → **401**. The check is
+     `store.peek()`, which is non-consuming. It purges expired entries, so an
+     expired ticket stays dead even if the clock later rewinds.
+   - Not a WebSocket upgrade → **426** with `Upgrade: websocket`. A
+     WebSocket upgrade here means `Upgrade: websocket` plus a
+     `Connection: upgrade` token, which is exactly what makes Node route the
+     request to the `upgrade` event. This covers plain `GET`/`POST`/`PUT`/`DELETE`
+     and an `Upgrade` header without `Connection: Upgrade`.
+   - Otherwise the Node `IncomingMessage` is remembered with its ticket in a
+     `WeakMap`, and the request continues to `upgradeWebSocket`.
+2. **Consume point: the `ws` server's `verifyClient` (`attach`).** `ws` calls it
+   only after it has validated the handshake: method `GET`,
+   `Sec-WebSocket-Key`, `Sec-WebSocket-Version`, and subprotocol and extension
+   headers. It runs synchronously, right before `101 Switching Protocols` is
+   written. Only here is `store.consume()` called, which deletes the ticket
+   whatever the result. If it returns `false` (replayed, expired, or already
+   won by a concurrent upgrade), `ws` answers **401** and never sends 101.
+   Requests without a remembered ticket pass through (the plain `/ws` route).
+   A defensive check rejects an unremembered request whose path is exactly
+   `/ws/host`.
+
+Resulting semantics, identical on both servers:
+
+- A request that never reaches an accepted handshake does not burn the ticket.
+  This covers non-upgrade requests, a malformed handshake (400), a `POST`
+  upgrade (405, because `@hono/node-ws` routes every upgrade as `GET` and `ws`
+  refuses the method), wrong paths such as `/ws/host/` or `/ws/host/extra`
+  (404), and requests the lite-token middleware rejects.
+- Invalid and expired tickets are still rejected (401).
+- A ticket is still single-use. Replaying it after a successful upgrade gets 401.
+- Concurrent upgrades with one ticket: exactly one gets 101, and the others get
+  401 before 101. JavaScript runs `verifyClient` one call at a time, so the
+  consume is atomic.
+- Remaining edge: if the client has already half-closed its socket when
+  `verifyClient` returns, `ws` destroys the socket after the ticket was
+  consumed. Only that client's own ticket is lost.
+
+`HostCapabilityStore.peek` is optional for injected stores, so the legacy
+`hostCapabilityStore` option keeps accepting `{issue, consume}`. Without
+`peek`, an invalid ticket is refused at the consume point (401) instead of in
+the middleware.
+
+**Shared location.** `packages/shared/src/node/hostCapabilityStore.ts`,
+exported from the Node-only subpath `@zcode/shared/node`. Both
+`packages/server` and `packages/zcode-server-cli` already depend on
+`@zcode/shared`, so no new dependency edge was added. The subpath is
+Node-only, because the store uses `node:crypto`, and it is never imported by
+renderer or browser bundles. The gate talks to the `ws` server through a
+structural type, so `@zcode/shared` does not depend on `ws`.
+`packages/server/src/hostCapability.ts` and
+`packages/zcode-server-cli/src/server-core/hostCapability.ts` are now plain
+re-exports that keep the historical import paths. `@zcode/server` could not
+host the store, because the dependency boundary forbids server-cli from
+importing it. Services was avoided because other teams are actively changing it.
+
 ### Legacy server mapping (`packages/server/src/http.ts`)
 
 - The accepted credentials are `hostBootstrapToken` (new option) and/or
@@ -135,7 +199,8 @@ sha256(presented))`, which runs in constant time whatever the length. When
   bound to other interfaces, the credential is the only defence and the
   `Origin` check still applies.
 - New `hostCapabilityStore` option, mirroring Server Core, so tests can inject
-  a store. Without it, each server still creates a fresh TTL store.
+  a store. Without it, each server still creates a fresh TTL store. The
+  consume-on-upgrade gate applies to injected stores too.
 - `authRequired` no longer reads the mismatched `ZCODE_SERVER_TOKEN` env var
   (`entry-http.ts` uses `ZCODE_SERVER_AUTH_TOKEN`).
 
@@ -205,16 +270,20 @@ first post-M2 update, was not taken. Code:
 
 ## Deferred (tracked, not fixed here)
 
-- **Tickets are unbound bearer tokens (Ex4 finding).** A ticket is only
-  `{capability, expiresAt}`. Whoever holds it within 30 s becomes a trusted
-  Host, whatever the client, scope or generation. This cut makes _obtaining_ a
-  ticket require the private secret, but does not bind the ticket itself.
-  Binding options:
+- **Ticket binding to the bootstrap credential.** At issue, record the
+  credential's fingerprint and the generation. Verify both at the `/ws/host`
+  consume. Reject tickets issued before a credential rotation. Owned by Ex2 as
+  the next slice after the shared store. Today a ticket is only
+  `{capability, expiresAt}`: whoever holds it within 30 s becomes a trusted
+  Host, whatever the client, scope or generation. This cut requires the private
+  secret to _obtain_ a ticket, but does not bind the ticket itself. The consume
+  point is now the single shared `verifyClient` gate, so binding lands in one
+  place. Binding options:
   1. _Bind to the bootstrap credential._ `issue()` stores
-     `sha256(bootstrap secret)`, and the `/ws/host` upgrade must present the
-     same Bearer secret alongside the ticket. A leaked ticket alone is then
-     useless. This is the recommended next step, but it changes the consume
-     path owned by Ex4.
+     `sha256(bootstrap secret)` and the generation. The `/ws/host` upgrade must
+     present the same Bearer secret alongside the ticket, and a mismatch is
+     rejected. A leaked ticket alone is then useless. This is the planned next
+     slice.
   2. _Proof of possession._ The client sends `sha256(nonce)` at issuance and
      the nonce at upgrade. This binds the ticket to the one requesting process
      without sending the secret twice.
@@ -227,17 +296,11 @@ first post-M2 update, was not taken. Code:
      service-level scoped channel API.
   5. _Bind to connection origin_ (peer address). Weak: every caller, including
      SSH forwards, appears as loopback.
-- **Burn on non-upgrade or failed handshake (Ex4 finding, low risk).** The
-  `/ws/host` middleware consumes a ticket before knowing whether the request is
-  a WebSocket upgrade, or whether the handshake completes. A plain GET/POST, or
-  an upgrade rejected by a later layer, burns the ticket. That is fail-closed
-  (a DoS against oneself only).
-- **Duplicated store logic (Ex4 finding, drift risk).** `hostCapability.ts` and
-  now `hostBootstrapAuth.ts` exist in both `packages/server` and
-  `packages/zcode-server-cli`. The dependency boundary forbids importing
-  `@zcode/server` from server-cli. Candidate home: a Node-only subpath of a
-  shared package. Until then, the two `hostBootstrapAuth.ts` copies are
-  byte-identical and must be changed together.
+- **Duplicated bootstrap verification.** The ticket store is shared now
+  ("Ticket consume-on-upgrade"), but `hostBootstrapAuth.ts` still exists in
+  both `packages/server` and `packages/zcode-server-cli`. The two copies are
+  byte-identical and must be changed together. It could move to
+  `@zcode/shared/node` the same way.
 - Windows: `chmod` is a no-op, so the confidentiality of `status.json` and
   `core-host-bootstrap.json` relies on the per-user profile ACL and the
   named-pipe control endpoint. The reader skips the mode and uid checks there.
@@ -257,6 +320,20 @@ first post-M2 update, was not taken. Code:
 - `packages/server/src/hostCapabilityBootstrapAuth.test.ts`: closed when
   unconfigured; `authToken` accepted only as Bearer (cookie and query → 401);
   both credentials accepted; `Origin` and `Host` → 403; injected store is used.
+- `hostCapability.wsHost.test.ts` in both `packages/server/src` and
+  `packages/zcode-server-cli/src/server-core` run the same consume-on-upgrade
+  matrix against each server:
+  - plain `GET`/`POST`/`PUT`/`DELETE` → 426, and an `Upgrade` header without
+    `Connection: Upgrade` → 426;
+  - `Sec-WebSocket-Version: 7` or a missing or malformed `Sec-WebSocket-Key`
+    → 400, and a `POST` upgrade → 405;
+  - wrong-path upgrades are refused;
+  - after each of these, the ticket still upgrades once and then gets 401 on
+    replay;
+  - unknown and expired tickets → 401 before the upgrade check (the legacy
+    variant goes through the `hostCapabilityStore` option);
+  - after a failed handshake, 4 concurrent upgrades with the ticket admit
+    exactly one, and the other three get 401.
 - `packages/server/src/remote/persistentTargetClient.test.ts`: the secret is
   sent only to the capability endpoint; a missing secret surfaces the 401.
 - `runtimeLifecycle.integration.test.ts`: the real Supervisor/Core path uses the

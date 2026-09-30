@@ -41,7 +41,12 @@ import {
   type ServerRemoteWorkspaceInfo,
 } from "@zcode/shared";
 import { connectRemote, createRemoteBackend, type RemoteConnection } from "./remote/index.js";
-import { createHostCapabilityStore, type HostCapabilityStore } from "./hostCapability.js";
+import {
+  createHostCapabilityStore,
+  createHostCapabilityUpgradeGate,
+  HOST_CAPABILITY_WS_PATH,
+  type HostCapabilityStore,
+} from "./hostCapability.js";
 import { HOST_CAPABILITY_PATH, verifyHostBootstrapRequest } from "./hostBootstrapAuth.js";
 
 function wrapWebSocket(ws: WebSocket): ISocket {
@@ -324,8 +329,11 @@ export function createHttpServer(
   options: HttpServerOptions = {},
 ) {
   const app = new Hono();
-  const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
+  const { injectWebSocket, upgradeWebSocket, wss } = createNodeWebSocket({ app });
   const hostCapabilities = options.hostCapabilityStore ?? createHostCapabilityStore();
+  // ticket 只在 ws 接受握手（verifyClient，紧挨 101）时消费；普通请求、握手失败或路由不符都不会烧掉它。
+  const hostUpgradeGate = createHostCapabilityUpgradeGate(hostCapabilities);
+  hostUpgradeGate.attach(wss);
 
   const authToken = options.authToken?.trim();
   const hostBootstrapCredentials = [options.hostBootstrapToken?.trim(), authToken].filter(
@@ -382,14 +390,20 @@ export function createHttpServer(
       setupChannelServer(ws.raw as WebSocket, services, "desktop-continuous");
     },
   }));
-  app.use("/ws/host", async (c, next) => {
-    const capability = c.req.header(ZCODE_RPC_HOST_CAPABILITY_HEADER);
-    if (!hostCapabilities.consume(capability)) {
-      return c.json({ error: "Invalid or expired host capability" }, 401);
+  app.use(HOST_CAPABILITY_WS_PATH, async (c, next) => {
+    const admission = hostUpgradeGate.admit({
+      incoming: (c.env as { incoming?: object } | undefined)?.incoming,
+      capability: c.req.header(ZCODE_RPC_HOST_CAPABILITY_HEADER),
+      upgrade: c.req.header("upgrade"),
+      connection: c.req.header("connection"),
+    });
+    if (!admission.ok) {
+      for (const [name, value] of Object.entries(admission.headers ?? {})) c.header(name, value);
+      return c.json({ error: admission.error }, admission.status);
     }
     await next();
   });
-  app.get("/ws/host", upgradeTrustedHostWebSocket);
+  app.get(HOST_CAPABILITY_WS_PATH, upgradeTrustedHostWebSocket);
 
   // Web 模式下发起远程连接
   app.post("/api/connect-remote", async (c) => {

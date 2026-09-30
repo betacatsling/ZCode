@@ -28,7 +28,12 @@ import {
   ZCODE_VERSION,
   type ServerRemoteInfo,
 } from "@zcode/shared";
-import { createHostCapabilityStore, type HostCapabilityStore } from "./hostCapability.js";
+import {
+  createHostCapabilityStore,
+  createHostCapabilityUpgradeGate,
+  HOST_CAPABILITY_WS_PATH,
+  type HostCapabilityStore,
+} from "./hostCapability.js";
 import {
   createHostBootstrapToken,
   HOST_BOOTSTRAP_TOKEN_PATTERN,
@@ -171,6 +176,9 @@ export async function createCoreHttpServer(
   // 裸 Set 无法落实 expiresAt，未消费的 capability 会一直有效并持续累积。
   // 使用与 packages/server 兼容的 TTL 一次性 store，使有效期和消费语义与返回信息一致。
   const capabilities = options.hostCapabilityStore ?? createHostCapabilityStore();
+  // ticket 只在 ws 接受握手（verifyClient，紧挨 101）时消费；普通请求、握手失败或路由不符都不会烧掉它。
+  const hostUpgradeGate = createHostCapabilityUpgradeGate(capabilities);
+  hostUpgradeGate.attach(wss);
   app.get("/api/server-info", (context) => context.json(info));
   app.get(
     "/ws",
@@ -180,15 +188,23 @@ export async function createCoreHttpServer(
       },
     })),
   );
-  app.use("/ws/host", async (context, next) => {
-    const capability = context.req.header(ZCODE_RPC_HOST_CAPABILITY_HEADER);
-    if (!capabilities.consume(capability)) {
-      return context.json({ error: "Invalid or expired host capability" }, 401);
+  app.use(HOST_CAPABILITY_WS_PATH, async (context, next) => {
+    const admission = hostUpgradeGate.admit({
+      incoming: (context.env as { incoming?: object } | undefined)?.incoming,
+      capability: context.req.header(ZCODE_RPC_HOST_CAPABILITY_HEADER),
+      upgrade: context.req.header("upgrade"),
+      connection: context.req.header("connection"),
+    });
+    if (!admission.ok) {
+      for (const [name, value] of Object.entries(admission.headers ?? {})) {
+        context.header(name, value);
+      }
+      return context.json({ error: admission.error }, admission.status);
     }
     await next();
   });
   app.get(
-    "/ws/host",
+    HOST_CAPABILITY_WS_PATH,
     upgradeWebSocket(() => ({
       onOpen(_event, socket) {
         exposeWebSocket(socket.raw as WebSocket, services, "desktop-continuous");
