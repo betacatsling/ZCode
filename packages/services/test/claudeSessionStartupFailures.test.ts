@@ -10,6 +10,7 @@ import {
   startTurn,
   type ClaudeAdapterHarness,
 } from "./fixtures/claudeAdapterHarness.js";
+import type { FakeClaudeProcess } from "./fixtures/claudeFakeProcess.js";
 import { fakeClaudeModel } from "./fixtures/claudeUnitFixtures.js";
 
 // A8: every startup failure step releases what it allocated (grant, hook server, process,
@@ -190,30 +191,37 @@ test("a selection revoked while the process starts stops the runtime and frees t
   await assertCanStartAgain(h);
 });
 
-test("messages and failures seen before the runtime exists are replayed onto it", async (t) => {
-  const h = await claudeAdapterHarness(t, {
-    behavior: {
-      onLaunch: (process) => {
-        if (process.resumed) return;
-        process.init();
-        process.emit({ type: "system", subtype: { unexpected: true } });
-        process.fail(new Error("stderr said goodbye"));
+const earlySignals = {
+  "a protocol message": (process: FakeClaudeProcess) =>
+    process.emit({ type: "system", subtype: { unexpected: true } }),
+  "a process failure": (process: FakeClaudeProcess) =>
+    process.fail(new Error("stderr said goodbye")),
+};
+
+for (const [label, signal] of Object.entries(earlySignals)) {
+  test(`${label} seen before the runtime exists is replayed onto it`, async (t) => {
+    const h = await claudeAdapterHarness(t, {
+      behavior: {
+        onLaunch: (process) => {
+          if (process.resumed) return;
+          process.init();
+          signal(process);
+        },
       },
-    },
+    });
+    const binding = await h.adapter.create(h.spec, h.plan);
+    assert.equal(binding.hostSessionId, h.spec.hostSessionId, "startup still returns the binding");
+    assert.deepEqual(
+      eventsOf(h.events, "session.error").map((event) => event.code),
+      ["claude-process-failure"],
+    );
+    assert.deepEqual(h.grants.revoked, h.grants.created);
+    // The failed runtime is replaced (resumed) on the next turn instead of accepting input.
+    const { sending } = await startTurn(h, "turn-after-early-failure");
+    assert.equal(h.launches.length, 2);
+    assert.equal(h.launches[1]!.resumed, true);
+    assert.deepEqual(h.launches[0]!.calls, ["terminate"]);
+    h.launches[1]!.result();
+    await sending;
   });
-  const binding = await h.adapter.create(h.spec, h.plan);
-  assert.equal(binding.hostSessionId, h.spec.hostSessionId, "startup still returns the binding");
-  assert.deepEqual(
-    eventsOf(h.events, "session.error").map((event) => event.code),
-    ["claude-process-failure"],
-    "the replayed protocol failure fails the runtime once; the early failure is then a no-op",
-  );
-  assert.deepEqual(h.grants.revoked, h.grants.created);
-  // The failed runtime is replaced (resumed) on the next turn instead of accepting input.
-  const { sending } = await startTurn(h, "turn-after-early-failure");
-  assert.equal(h.launches.length, 2);
-  assert.equal(h.launches[1]!.resumed, true);
-  assert.deepEqual(h.launches[0]!.calls, ["terminate"]);
-  h.launches[1]!.result();
-  await sending;
-});
+}
