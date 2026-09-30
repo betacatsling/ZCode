@@ -331,10 +331,13 @@ export function createLazyTargetAgentHostService(input: {
         // fabricated completion or implicit prompt replay on the next target epoch.
         // Codex 不拥有注入的 Gateway，所以要在 harness shutdown 之后由这里关闭。
         // ssh-disconnect 不会走到 dispose。
-        // Each close runs even if an earlier one rejected (a broken event stream makes
-        // target.close() reject with EventStreamFailure after its own teardown). Like
-        // AgentHostTargetService.#finishClose, the first failure is rethrown unchanged so typed
-        // errors stay matchable; later failures are logged, not combined.
+        // Each close runs even if an earlier one rejected. target.close() first closes every
+        // mounted host (AgentHostTargetService.#finishClose -> closeSessionHosts); a host close
+        // refused only by a starting send is retried once after whenStartingSendsSettled().
+        // Exactly one host failure is rethrown unchanged, so typed errors (EventStreamFailure...)
+        // stay matchable; two or more reject with TargetHostsCloseError (an AggregateError, code
+        // "target-close-failed", `errors` and `failures` {hostSessionId, error} in close order).
+        // This loop still rethrows its own first failure as is; later ones are logged.
         let failed = false;
         let failure: unknown;
         const closes: [string, () => Promise<void> | undefined][] = [
