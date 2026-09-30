@@ -1,80 +1,31 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createServer } from "node:http";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 import { AiSdkModelAdapter } from "@zcode/adapters/model";
 import type { ModelNetworkStatusEvent } from "@zcode/contracts";
-import {
-  ApiKeyAccessConfig,
-  EnumOptionSpecConfig,
-  LimitOptionSpecConfig,
-  ModelConfig,
-  ModelInputFormatConfig,
-  ModelOptionSpecsConfig,
-  ModelOutputFormatConfig,
-  ModelPropertiesConfig,
-  ProviderApiConfig,
-  ProviderConfig,
-} from "@zcode/provider";
-import { createNodeProviderRegistryRuntime } from "@zcode/provider-node";
 import {
   agentCommandReceiptSchema,
   workspaceSessionBindingCapabilityResultSchema,
   type AgentEvent,
   type SessionSpec,
 } from "@zcode/shared/agent-host";
-import { createRegistryPiHarness } from "../src/agent-adapters/pi/createPiHarness.js";
 import { createAgentHostConversationBridge } from "../src/agent-host/conversationBridge.js";
-import { HarnessRegistry } from "../src/agent-host/harnessRegistry.js";
 import { createRegistryModelCatalog } from "../src/agent-host/registryCatalog.js";
-import { AgentHostTargetService } from "../src/agent-host/targetService.js";
-
-const builtinFilePath = fileURLToPath(
-  new URL("../../../config/provider/zcode-builtin.json", import.meta.url),
-);
-
-function modelConfig(): ModelConfig {
-  return new ModelConfig({
-    enabled: true,
-    properties: new ModelPropertiesConfig({
-      requiresMfjsToolSchema: false,
-      contextWindow: 16_000,
-      inputFormat: new ModelInputFormatConfig({
-        supportsText: true,
-        supportsImage: false,
-        supportsVideo: false,
-        supportsAudio: false,
-        supportsPdf: false,
-      }),
-      outputFormat: new ModelOutputFormatConfig({ supportsText: true }),
-      supportsToolCall: true,
-      supportsJsonSchemaOutput: false,
-      supportsNativeWebSearch: false,
-      supportsMidConversationSystem: true,
-    }),
-    optionSpecs: new ModelOptionSpecsConfig({
-      reasoningLevel: new EnumOptionSpecConfig({
-        values: ["off"],
-        map: '{"reasoning_effort": "none"}',
-      }),
-      maxOutputTokens: new LimitOptionSpecConfig({
-        max: 256,
-        map: '{"max_tokens": maxOutputTokens}',
-      }),
-    }),
-  });
-}
-
-function providerConfig(baseUrl: string, apiKey: string): ProviderConfig {
-  return new ProviderConfig({
-    access: new ApiKeyAccessConfig({ apiKey }),
-    api: new ProviderApiConfig({ type: "openai-chat-completions", baseUrl }),
-  });
-}
+import type { AgentHostTargetService } from "../src/agent-host/targetService.js";
+import {
+  addPersonalProvider,
+  createPiTargetService,
+  hostManagedPiSpec,
+  localTarget,
+  modelConfig,
+  providerConfig,
+  startRegistryRuntime,
+  type AdapterRetry,
+} from "./fixtures/registryPiHost.js";
 
 interface CapturedRequest {
   readonly route: string;
@@ -139,30 +90,20 @@ async function startFakes() {
 }
 
 /** Real Registry + real AiSdkModelAdapter + real Pi harness, wired like lazyTargetService. */
-async function createHostEnvironment(
-  root: string,
-  origin: string,
-  retry?: ConstructorParameters<typeof AiSdkModelAdapter>[0]["retry"],
-) {
-  const worktree = join(root, "worktree");
-  await mkdir(worktree, { recursive: true });
-  const runtime = createNodeProviderRegistryRuntime({
-    zcodeBuiltinFilePath: builtinFilePath,
-    personalFilePath: join(root, "personal.json"),
-    personalPollingIntervalMs: false,
-    watch: false,
-  });
-  await runtime.start();
-  const stale = await runtime.configService.createPersonalProvider({
+async function createHostEnvironment(root: string, origin: string, retry?: AdapterRetry) {
+  const { runtime, worktree } = await startRegistryRuntime(root);
+  const staleId = await addPersonalProvider(runtime, {
     providerName: "Stale Provider",
-    initialConfig: providerConfig(`${origin}/stale/v1`, "stale-key-v1"),
+    baseUrl: `${origin}/stale/v1`,
+    apiKey: "stale-key-v1",
+    modelId: "stale-model",
   });
-  await runtime.configService.addPersonalModel(stale.providerId, "stale-model", modelConfig());
-  const other = await runtime.configService.createPersonalProvider({
+  const otherId = await addPersonalProvider(runtime, {
     providerName: "Other Provider",
-    initialConfig: providerConfig(`${origin}/other/v1`, "other-key"),
+    baseUrl: `${origin}/other/v1`,
+    apiKey: "other-key",
+    modelId: "other-model",
   });
-  await runtime.configService.addPersonalModel(other.providerId, "other-model", modelConfig());
   await runtime.registryService.refresh("stale-provider-fixture");
 
   const createdModels: Array<{ providerId: string; modelId: string }> = [];
@@ -182,52 +123,26 @@ async function createHostEnvironment(
       },
     },
   });
-  const target = {
-    id: "local",
-    kind: "local" as const,
-    platform: process.platform as "darwin" | "linux",
-    available: true,
-  };
+  const target = localTarget("local");
   const makeCatalog = () => createRegistryModelCatalog(runtime.registryService, adapter);
-  const makeTarget = (catalog = makeCatalog()) => {
-    const harnesses = new HarnessRegistry();
-    harnesses.register(
-      createRegistryPiHarness({
-        root: join(root, "workers"),
-        registry: runtime.registryService,
-        adapter,
-      }),
-    );
-    return new AgentHostTargetService({
-      root: join(root, "host"),
-      target,
-      catalog,
-      registry: harnesses,
-      authorizeWorktree: async () => true,
-    });
-  };
+  const makeTarget = (catalog = makeCatalog()) =>
+    createPiTargetService({ root, runtime, adapter, target, catalog });
   const specFor = (
     hostSessionId: string,
     selection: { providerId: string; modelId: string },
-  ): SessionSpec => ({
-    schemaVersion: 1,
-    hostSessionId,
-    execution: {
+  ): SessionSpec =>
+    hostManagedPiSpec({
+      hostSessionId,
       targetId: target.id,
       workspaceIdentity: "stale-workspace",
       worktreePath: worktree,
-    },
-    harness: { id: "pi", adapterVersion: "0.87.1" },
-    modelBinding: {
-      kind: "host-managed",
-      selection: { ...selection, options: { reasoningLevel: "off" } },
-    },
-  });
+      selection,
+    });
   return {
     runtime,
     worktree,
-    staleId: stale.providerId,
-    otherId: other.providerId,
+    staleId,
+    otherId,
     createdModels,
     statuses,
     makeCatalog,
