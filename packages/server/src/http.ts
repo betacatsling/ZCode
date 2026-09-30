@@ -53,6 +53,7 @@ import {
   presentedHostBootstrapCredential,
   verifyHostBootstrapRequest,
   verifyLocalEndpointHeaders,
+  type LocalEndpointHeaderPolicy,
 } from "./hostBootstrapAuth.js";
 
 function wrapWebSocket(ws: WebSocket): ISocket {
@@ -357,16 +358,33 @@ export function createHttpServer(
   hostUpgradeGate.attach(wss);
   // /ws、/ws/remote/* 与 server-info：唯一的浏览器客户端是本 server 托管的 Web UI（同源），
   // Node 客户端不发 Origin；跨站 Origin → 403，监听回环时非回环 Host → 403（与签发端点同一 Host 规则）。
-  const localEndpointHeaderPolicy = { ...hostRequestHeaderRules, origin: "same-origin" } as const;
-  const guardLocalEndpoint: MiddlewareHandler = async (c, next) => {
-    const rejection = verifyLocalEndpointHeaders(
-      { origin: c.req.header("origin"), host: c.req.header("host") },
-      localEndpointHeaderPolicy,
-    );
-    if (rejection) return c.json({ error: rejection.error }, rejection.status);
-    await next();
+  const localEndpointHeaderPolicy: LocalEndpointHeaderPolicy = {
+    ...hostRequestHeaderRules,
+    origin: "same-origin",
   };
-  for (const path of ["/ws", "/ws/remote/*", "/api/server-info"]) app.use(path, guardLocalEndpoint);
+  const guardLocalEndpoint =
+    (policy: LocalEndpointHeaderPolicy): MiddlewareHandler =>
+    async (c, next) => {
+      const rejection = verifyLocalEndpointHeaders(
+        {
+          origin: c.req.header("origin"),
+          host: c.req.header("host"),
+          contentType: c.req.header("content-type"),
+        },
+        policy,
+      );
+      if (rejection) return c.json({ error: rejection.error }, rejection.status);
+      await next();
+    };
+  for (const path of ["/ws", "/ws/remote/*", "/api/server-info"]) {
+    app.use(path, guardLocalEndpoint(localEndpointHeaderPolicy));
+  }
+  // connect-remote 有副作用（建立远程连接）：同样的 Origin/Host 规则，另外要求 application/json，
+  // 使没有 Origin 的请求只可能来自非浏览器客户端（跨站页面不经 CORS 预检发不出 JSON）。
+  app.use(
+    "/api/connect-remote",
+    guardLocalEndpoint({ ...localEndpointHeaderPolicy, body: "json" }),
+  );
   if (authToken) {
     app.use("*", async (c, next) => {
       const pathname = new URL(c.req.url).pathname;
@@ -443,7 +461,12 @@ export function createHttpServer(
 
   // Web 模式下发起远程连接
   app.post("/api/connect-remote", async (c) => {
-    const rawBody = await c.req.json();
+    let rawBody: unknown;
+    try {
+      rawBody = await c.req.json();
+    } catch {
+      return c.json({ error: "Invalid request body: malformed JSON" }, 400);
+    }
     const parsedBody = remoteTargetSchema.safeParse(rawBody);
     if (!parsedBody.success) {
       return c.json({ error: `Invalid request body: ${formatZodError(parsedBody.error)}` }, 400);

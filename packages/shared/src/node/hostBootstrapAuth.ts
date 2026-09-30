@@ -117,13 +117,29 @@ export type LocalEndpointOriginPolicy = "no-browser" | "same-origin";
 
 export interface LocalEndpointHeaderPolicy extends HostRequestHeaderOptions {
   origin: LocalEndpointOriginPolicy;
+  /**
+   * State-changing endpoints (`POST /api/connect-remote`): the body must be declared
+   * `application/json`, else 415. A cross-site page can only send `text/plain`, urlencoded or
+   * multipart without a CORS preflight, and these servers never answer one, so a JSON request
+   * without `Origin` can only come from a non-browser client.
+   */
+  body?: "json";
+}
+
+export interface LocalEndpointRequestHeaders extends HostRequestHeaders {
+  contentType?: string | undefined;
 }
 
 export interface LocalEndpointHeaderRejection {
   ok: false;
-  status: 403;
+  status: 403 | 415;
   error: string;
-  reason: "browser-origin" | "cross-origin" | "non-loopback-host";
+  reason: "browser-origin" | "cross-origin" | "non-loopback-host" | "non-json-body";
+}
+
+/** Media type (parameters ignored, case-insensitive) is exactly `application/json`. */
+export function isJsonContentType(contentType: string | undefined): boolean {
+  return contentType?.split(";")[0]?.trim().toLowerCase() === "application/json";
 }
 
 /** `Origin` is a serialized http(s) origin whose authority equals the `Host` header. */
@@ -146,7 +162,7 @@ export function isSameOriginAsHost(origin: string, host: string | undefined): bo
  * rule as {@link verifyHostRequestHeaders}; the Origin rule depends on who the real clients are.
  */
 export function verifyLocalEndpointHeaders(
-  request: HostRequestHeaders,
+  request: LocalEndpointRequestHeaders,
   policy: LocalEndpointHeaderPolicy,
 ): LocalEndpointHeaderRejection | undefined {
   if (request.origin !== undefined) {
@@ -173,6 +189,14 @@ export function verifyLocalEndpointHeaders(
       status: 403,
       error: "Requests must address a loopback authority",
       reason: "non-loopback-host",
+    };
+  }
+  if (policy.body === "json" && !isJsonContentType(request.contentType)) {
+    return {
+      ok: false,
+      status: 415,
+      error: "Request body must be application/json",
+      reason: "non-json-body",
     };
   }
   return undefined;

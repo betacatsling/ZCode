@@ -36,6 +36,7 @@ export {
   HOST_CAPABILITY_PATH,
   hostBootstrapTokenMatches,
   isLoopbackAuthority,
+  isJsonContentType,
   isSameOriginAsHost,
   presentedHostBootstrapCredential,
   verifyHostBootstrapRequest,
@@ -50,6 +51,7 @@ export {
   type LocalEndpointHeaderPolicy,
   type LocalEndpointHeaderRejection,
   type LocalEndpointOriginPolicy,
+  type LocalEndpointRequestHeaders,
 } from "./node/hostBootstrapAuth.js";
 export {
   createHostCapabilityStore,
