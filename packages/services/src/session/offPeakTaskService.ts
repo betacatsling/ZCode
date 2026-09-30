@@ -123,6 +123,8 @@ export class OffPeakTaskService implements IOffPeakTaskService {
   private syncRunning = false;
   private syncStopped = true;
   private consecutiveSyncFailures = 0;
+  /** 本轮连续失败中已按 warn 报过的任务；同步成功即清空，之后再失败会重新 warn。 */
+  private readonly syncFailureWarnedTaskIds = new Set<string>();
 
   constructor(private readonly deps: OffPeakTaskServiceDeps) {}
 
@@ -529,6 +531,7 @@ export class OffPeakTaskService implements IOffPeakTaskService {
     if (this.syncRunning) return;
     this.syncRunning = true;
     let nextDelay = OFF_PEAK_SYNC_MAX_INTERVAL_MS;
+    let cycleTaskIds: readonly string[] = [];
     try {
       // 1) 核销 outbox 捎带补报（不新增计时器）。
       await this.flushSettleOutbox();
@@ -536,6 +539,7 @@ export class OffPeakTaskService implements IOffPeakTaskService {
       const nonTerminal = await this.projectModelSelectionIssues(
         await this.deps.repo.listNonTerminal(),
       );
+      cycleTaskIds = nonTerminal.map((task) => task.offPeakTaskId);
       const withTickets = nonTerminal.filter((task) => task.serverTicketId);
       // 无票的 queued 任务（重取号失败残留）：补取号。
       for (const task of nonTerminal) {
@@ -546,6 +550,7 @@ export class OffPeakTaskService implements IOffPeakTaskService {
       if (withTickets.length === 0 && nonTerminal.length === 0) {
         // 无任务：不再自动重排，等下一次 create/continue 触发。
         this.consecutiveSyncFailures = 0;
+        this.syncFailureWarnedTaskIds.clear();
         return;
       }
       if (withTickets.length > 0) {
@@ -571,6 +576,7 @@ export class OffPeakTaskService implements IOffPeakTaskService {
         nextDelay = OFF_PEAK_SYNC_MIN_INTERVAL_MS;
       }
       this.consecutiveSyncFailures = 0;
+      this.syncFailureWarnedTaskIds.clear();
     } catch (error) {
       // 轮询失败退避重试：期间不派发、在跑不受影响。
       this.consecutiveSyncFailures += 1;
@@ -578,10 +584,14 @@ export class OffPeakTaskService implements IOffPeakTaskService {
         SYNC_FAILURE_BASE_MS * 2 ** Math.max(0, this.consecutiveSyncFailures - 1),
         OFF_PEAK_SYNC_MAX_INTERVAL_MS,
       );
-      this.deps.logger.warn(
-        `off-peak sync cycle failed (attempt ${this.consecutiveSyncFailures}):`,
-        error,
-      );
+      // 同一任务在一段连续失败里只 warn 一次（断网/凭据不可用时会一直重试）；其余重试走 debug。
+      const unwarned = cycleTaskIds.filter((id) => !this.syncFailureWarnedTaskIds.has(id));
+      for (const id of unwarned) this.syncFailureWarnedTaskIds.add(id);
+      const warn =
+        unwarned.length > 0 || (cycleTaskIds.length === 0 && this.consecutiveSyncFailures === 1);
+      const message = `off-peak sync cycle failed (attempt ${this.consecutiveSyncFailures}):`;
+      if (warn) this.deps.logger.warn(message, error);
+      else this.deps.logger.debug(message, error);
     } finally {
       this.syncRunning = false;
       const clamped = Math.min(

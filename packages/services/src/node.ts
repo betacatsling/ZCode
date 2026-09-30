@@ -361,6 +361,7 @@ import type { SessionMessageSendRequested } from "#src/session/sessionMailbox.js
 import { createFileWatcherService } from "./fileWatcher/fileWatcherService.js";
 import { readLegacyZCodeConfigProviders } from "./model-provider/legacyZCodeConfigProviderReader.js";
 import { createProviderConfigRuntime } from "./model-provider/providerConfigRuntime.js";
+import { isZCodeBuiltinInUse } from "./model-provider/zcodeBuiltinUsage.js";
 import { fetchZCodeBuiltinRemoteRelease } from "./model-provider/zcodeBuiltinRemoteConfig.js";
 import {
   createProviderRuntimeFromConfigRuntime,
@@ -1514,6 +1515,9 @@ export function createLocalServices(options: {
     onZCodeBuiltinRefreshError: (error) => {
       providerConfigLog.warn(undefined, "ZCode Built-in Config 远端刷新失败", { error });
     },
+    // 只有 Personal Provider 绑定了 ZCode Built-in Template 时才在后台检查远端配置；
+    // 新装或只有自定义 Provider 时，启动与空闲都不访问 ZCode 控制面。
+    zcodeBuiltinBackgroundCheckEnabled: isZCodeBuiltinInUse,
     onPersonalConfigRecovery: (event) => {
       providerConfigLog.warn(
         undefined,

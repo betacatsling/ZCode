@@ -15,6 +15,7 @@ export interface ProviderConfigRuntimeOptions {
   readonly zcodeBuiltinRemote?: NodeProviderConfigRuntimeOptions["zcodeBuiltinRemote"];
   readonly zcodeBuiltinEnvironment?: NodeProviderConfigRuntimeOptions["zcodeBuiltinEnvironment"];
   readonly onZCodeBuiltinRefreshError?: (error: unknown) => void;
+  readonly zcodeBuiltinBackgroundCheckEnabled?: NodeProviderConfigRuntimeOptions["zcodeBuiltinBackgroundCheckEnabled"];
   readonly onPersonalConfigRecovery?: (event: PersonalProviderConfigRecoveryEvent) => void;
   readonly onPersonalConfigPollingError?: (error: unknown) => void;
   readonly personalFilePath?: string;
@@ -38,6 +39,7 @@ export class ProviderConfigRuntime {
       zcodeBuiltinRemote: options.zcodeBuiltinRemote,
       zcodeBuiltinEnvironment: options.zcodeBuiltinEnvironment,
       onZCodeBuiltinRefreshError: options.onZCodeBuiltinRefreshError,
+      zcodeBuiltinBackgroundCheckEnabled: options.zcodeBuiltinBackgroundCheckEnabled,
       onPersonalConfigRecovery: options.onPersonalConfigRecovery,
       onPersonalConfigPollingError: options.onPersonalConfigPollingError,
       personalFilePath:
