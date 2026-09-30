@@ -1,6 +1,11 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { ServerRemoteHostCapability } from "../server-remote.js";
 import { verifyHostRequestHeaders } from "./hostBootstrapAuth.js";
+import {
+  isWebSocketUpgradeRequest,
+  verifyWebSocketUpgrade,
+  type WebSocketUpgradeIncoming,
+} from "./webSocketUpgrade.js";
 
 /**
  * Single shared implementation of the `/ws/host` Host capability ticket (legacy
@@ -8,10 +13,11 @@ import { verifyHostRequestHeaders } from "./hostBootstrapAuth.js";
  * behaviour cannot drift). See docs/agent-host/HOST-CAPABILITY-BOOTSTRAP-AUTH.md.
  *
  * Tickets are short-lived, single-use and live only in the issuing HTTP server's memory.
- * They are consumed only at the moment the WebSocket upgrade is accepted: the HTTP
- * middleware merely checks them (`admit`), and the consume point runs inside the ws
- * server's `verifyClient`, i.e. after ws has validated the handshake and immediately
- * before it writes `101 Switching Protocols`.
+ * They are consumed only once the WebSocket upgrade can no longer be refused: the `/ws/host`
+ * middleware (`admit`) first applies every check `ws` would apply to the handshake (see
+ * `webSocketUpgrade.ts`), and only then consumes the ticket, still before the route. The ws
+ * server's `verifyClient` then accepts exactly the admitted requests. Nothing refuses an upgrade
+ * after the route has run, which is what keeps @hono/node-ws from retaining its waiter.
  *
  * Tickets issued by `POST /api/rpc-host-capability` are bound to the bootstrap credential that
  * authorised them (a fingerprint, never the secret) and, on Server Core, to the Core generation.
@@ -145,11 +151,16 @@ export function createHostCapabilityStore(
 
 export type HostUpgradeAdmission =
   | { ok: true }
-  | { ok: false; status: 401 | 403 | 426; error: string; headers?: Record<string, string> };
+  | {
+      ok: false;
+      status: 400 | 401 | 403 | 405 | 426;
+      error: string;
+      headers?: Record<string, string>;
+    };
 
 export interface HostUpgradeRequest {
   /** The Node `IncomingMessage` (`c.env.incoming` under @hono/node-server / @hono/node-ws). */
-  incoming: object | undefined;
+  incoming: WebSocketUpgradeIncoming | undefined;
   /** Value of the `x-zcode-rpc-host-capability` header. */
   capability: string | undefined;
   /** `Origin` and `Host` headers, checked exactly like `POST /api/rpc-host-capability`. */
@@ -185,18 +196,18 @@ export interface HostCapabilityUpgradeGate {
    */
   issue(binding: HostCapabilityBinding | undefined): ServerRemoteHostCapability;
   /**
-   * Runs in the `/ws/host` HTTP middleware and never consumes the ticket. In order: 403 for any
-   * `Origin` or a non-loopback `Host` (the issue endpoint's rule, checked before the ticket is
-   * even looked at), 401 for a missing, unknown, expired or no-longer-current-binding ticket, 426
-   * for a request that is not a WebSocket upgrade. An admitted request is remembered so the
-   * consume point can find its ticket.
+   * Runs in the `/ws/host` HTTP middleware, before the route. In order: 403 for any `Origin` or a
+   * non-loopback `Host` (the issue endpoint's rule, checked before the ticket is even looked at),
+   * 401 for a missing, unknown, expired or no-longer-current-binding ticket (non-consuming peek),
+   * 426 for a request that is not a WebSocket upgrade, 400/405 for a handshake `ws` would refuse
+   * or a client that already half-closed. Only then is the ticket consumed (401 if another
+   * upgrade won it). An admitted request is remembered for `verifyClient`.
    */
   admit(request: HostUpgradeRequest): HostUpgradeAdmission;
   /**
-   * Installs the consume point as the ws server's `verifyClient` (sync). It runs only after ws
-   * accepted the handshake headers and right before 101 is written; a ticket another upgrade
-   * already consumed (or whose binding stopped being current) makes ws answer 401 instead of 101.
-   * Other routes (`/ws`) pass through.
+   * Installs the ws server's `verifyClient` (sync): an admitted request is accepted (its ticket
+   * was consumed at admission); an unadmitted request for `/ws/host` is refused (defensive);
+   * other routes (`/ws`) pass through.
    */
   attach(server: HostUpgradeWebSocketServer): void;
 }
@@ -254,9 +265,8 @@ export function createHostCapabilityUpgradeGate(
   const acceptedBindings = options.acceptedBindings ?? (() => undefined);
   const requireLoopbackHost = options.requireLoopbackHost ?? true;
   const store = bindingAwareStore(injectedStore);
-  // IncomingMessage → ticket; WeakMap so requests that never reach the ws handshake
-  // (404 route, aborted socket) do not leak.
-  const admitted = new WeakMap<object, string>();
+  // 已消费 ticket、放行到路由的 IncomingMessage；WeakSet，从未走到握手的请求不会被它留住。
+  const admitted = new WeakSet<object>();
   return {
     issue(binding) {
       return store.issue(binding);
@@ -270,7 +280,7 @@ export function createHostCapabilityUpgradeGate(
       if (!capability || store.peek?.(capability, acceptedBindings()) === false) {
         return { ok: false, status: 401, error: "Invalid or expired host capability" };
       }
-      if (!incoming || !isWebSocketUpgrade(upgrade, connection)) {
+      if (!incoming || !isWebSocketUpgradeRequest(upgrade, connection)) {
         return {
           ok: false,
           status: 426,
@@ -278,7 +288,15 @@ export function createHostCapabilityUpgradeGate(
           headers: { Upgrade: "websocket", Connection: "Upgrade" },
         };
       }
-      admitted.set(incoming, capability);
+      // ws 会拒绝的握手（以及客户端已半关闭）必须在消费之前、在路由之前拒绝：路由一旦运行，
+      // @hono/node-ws 就登记了只有握手成功才会删除的 waiter；ticket 也不能为注定失败的升级烧掉。
+      const handshakeRejection = verifyWebSocketUpgrade(incoming);
+      if (handshakeRejection) return { ok: false, ...handshakeRejection };
+      // 同步消费：并发升级中恰有一个成功，其余在路由之前得到 401。
+      if (!store.consume(capability, acceptedBindings())) {
+        return { ok: false, status: 401, error: "Invalid or expired host capability" };
+      }
+      admitted.add(incoming);
       return { ok: true };
     },
     attach(server) {
@@ -288,19 +306,13 @@ export function createHostCapabilityUpgradeGate(
         );
       }
       const verifyClient = (info: { req: { url?: string } }): boolean => {
-        const capability = admitted.get(info.req);
-        if (capability === undefined) return !isPath(info.req.url, path);
+        if (!admitted.has(info.req)) return !isPath(info.req.url, path);
         admitted.delete(info.req);
-        return store.consume(capability, acceptedBindings());
+        return true;
       };
       server.options.verifyClient = verifyClient;
     },
   };
-}
-
-function isWebSocketUpgrade(upgrade: string | undefined, connection: string | undefined): boolean {
-  if (upgrade?.trim().toLowerCase() !== "websocket") return false;
-  return (connection ?? "").split(",").some((token) => token.trim().toLowerCase() === "upgrade");
 }
 
 function isPath(url: string | undefined, path: string): boolean {

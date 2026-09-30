@@ -1,15 +1,18 @@
 # Host capability bootstrap authentication (M2)
 
 Status: implemented for issuance, including the old-Supervisor + new-Core skew
-fallback ("Version-skew fallback"). Tickets are consumed only when the
-`/ws/host` upgrade is accepted, and both servers share one store ("Ticket
-consume-on-upgrade"). Tickets are bound to the bootstrap credential that
+fallback ("Version-skew fallback"). Tickets are consumed only once the
+`/ws/host` upgrade can no longer be refused, and both servers share one store
+("Ticket consume-on-upgrade"). WebSocket upgrades that would fail are refused
+before the route, so `@hono/node-ws` never retains them ("Upgrade waiters"). Tickets are bound to the bootstrap credential that
 authorised them and to the Core generation ("Ticket binding to the bootstrap
 credential"). `/ws/host` applies the issue endpoint's `Origin`/`Host` rule
 before it looks at the ticket ("`/ws/host` request header checks"). The
 unauthenticated `/ws` and `/api/server-info` refuse browser and DNS-rebinding
 requests and publish only non-sensitive fields ("Local endpoints: `/ws` and
-`/api/server-info`"); token auth for them is deferred.
+`/api/server-info`"); token auth for them is deferred. The legacy
+`POST /api/connect-remote` has the same `Origin`/`Host` rule and accepts only
+JSON bodies ("`POST /api/connect-remote`").
 
 Requirement: `docs/PROJECT-DELIVERY-PLAN.md` §4 M2 risks and the §5 security row
 ("reject unauthorised Host/Web access"). Before this change, both HTTP servers
@@ -135,11 +138,11 @@ sha256(presented))`, which runs in constant time whatever the length. When
 
 ### Ticket consume-on-upgrade
 
-A ticket is consumed only when the `/ws/host` WebSocket upgrade is accepted, not
-when the request first arrives. Both servers wire the same gate
+A ticket is consumed only once the `/ws/host` WebSocket upgrade can no longer be
+refused, not when the request first arrives. Both servers wire the same gate
 (`createHostCapabilityUpgradeGate`) in the same two places:
 
-1. **HTTP middleware on `/ws/host` (`admit`, never consumes).** It runs for
+1. **HTTP middleware on `/ws/host` (`admit`), before the route.** It runs for
    every method, in the order below:
    - Any `Origin`, or a non-loopback `Host` where the issue endpoint requires
      one → **403** ("`/ws/host` request header checks"). The ticket is not
@@ -153,41 +156,108 @@ when the request first arrives. Both servers wire the same gate
      `Connection: upgrade` token, which is exactly what makes Node route the
      request to the `upgrade` event. This covers plain `GET`/`POST`/`PUT`/`DELETE`
      and an `Upgrade` header without `Connection: Upgrade`.
-   - Otherwise the Node `IncomingMessage` is remembered with its ticket in a
-     `WeakMap`, and the request continues to `upgradeWebSocket`.
-2. **Consume point: the `ws` server's `verifyClient` (`attach`).** `ws` calls it
-   only after it has validated the handshake: method `GET`,
-   `Sec-WebSocket-Key`, `Sec-WebSocket-Version`, and subprotocol and extension
-   headers. It runs synchronously, right before `101 Switching Protocols` is
-   written. Only here is `store.consume()` called, which deletes the ticket
-   whatever the result. If it returns `false` (replayed, expired, binding no
-   longer current, or already won by a concurrent upgrade), `ws` answers
-   **401** and never sends 101.
-   Requests without a remembered ticket pass through (the plain `/ws` route).
-   A defensive check rejects an unremembered request whose path is exactly
-   `/ws/host`.
+   - A handshake `ws` would refuse → **405** (method other than `GET`) or
+     **400** (`Sec-WebSocket-Key`, `Sec-WebSocket-Version`,
+     `Sec-WebSocket-Protocol`), and a client that has already half-closed its
+     socket → **400** (`verifyWebSocketUpgrade`, "Upgrade waiters"). The
+     ticket is still intact.
+   - **Consume point:** `store.consume()`, synchronously. It deletes the
+     ticket whatever the result. If it returns `false` (replayed, expired,
+     binding no longer current, or already won by a concurrent upgrade), the
+     answer is **401**, still before the route.
+   - Otherwise the Node `IncomingMessage` is remembered in a `WeakSet`, and the
+     request continues to `upgradeWebSocket`.
+2. **The `ws` server's `verifyClient` (`attach`).** It accepts exactly the
+   remembered requests, so it never refuses an upgrade the route has already
+   seen. Requests that were not remembered pass through (the plain `/ws`
+   route). A defensive check rejects an unremembered request whose path is
+   exactly `/ws/host`.
+
+Until the upgrade-waiter fix, the consume point was `verifyClient` itself: it
+ran after `ws` had validated the handshake, right before 101. That ordering
+had two costs. A `false` there left a `@hono/node-ws` waiter behind. And `ws`
+checks for a half-closed client only after `verifyClient`, so such a client
+lost its ticket. Moving the consume point to admission, behind the mirrored
+handshake checks, removes both.
 
 Resulting semantics, identical on both servers:
 
-- A request that never reaches an accepted handshake does not burn the ticket.
+- A request that cannot reach an accepted handshake does not burn the ticket.
   This covers non-upgrade requests, a malformed handshake (400), a `POST`
-  upgrade (405, because `@hono/node-ws` routes every upgrade as `GET` and `ws`
-  refuses the method), wrong paths such as `/ws/host/` or `/ws/host/extra`
-  (404), and requests the lite-token middleware rejects.
+  upgrade (405, because `@hono/node-ws` routes every upgrade as `GET`; the
+  real method is read from the `IncomingMessage`), a half-closed client,
+  wrong paths such as `/ws/host/` or `/ws/host/extra` (404), and requests the
+  lite-token middleware rejects.
 - Invalid and expired tickets are still rejected (401).
 - A ticket is still single-use. Replaying it after a successful upgrade gets 401.
 - Concurrent upgrades with one ticket: exactly one gets 101, and the others get
-  401 before 101. JavaScript runs `verifyClient` one call at a time, so the
-  consume is atomic.
-- Remaining edge: if the client has already half-closed its socket when
-  `verifyClient` returns, `ws` destroys the socket after the ticket was
-  consumed. Only that client's own ticket is lost.
+  401 before 101 (and before the route). JavaScript runs `admit` one call at a
+  time, so the consume is atomic.
+- Remaining edge: between the consume and `ws` writing 101, only microtasks
+  run on this route (no middleware on it awaits I/O). The socket can only die
+  there if something else destroys it, and the server can only refuse there
+  while it is closing (503). In those cases that client's own ticket is lost.
 
 `HostCapabilityStore.peek` is optional for injected stores, so the legacy
 `hostCapabilityStore` option keeps accepting `{issue, consume}`. Without
-`peek`, an invalid ticket is refused at the consume point (401) instead of in
-the middleware. How such stores interact with binding is described under
+`peek`, an invalid ticket is refused at the consume point (401), which comes
+after the upgrade and handshake checks instead of before them. It is still in
+the middleware, before the route. How such stores interact with binding is described under
 "Ticket binding".
+
+### Upgrade waiters (`@hono/node-ws`)
+
+Root cause of the leak: `@hono/node-ws` 1.3.0 (1.3.1, the latest, is
+byte-identical) runs `upgradeWebSocket` inside the route handler. That stores
+a waiter `{resolve, connectionSymbol}` for the Node `IncomingMessage` in a
+private, strong `Map`. The entry is deleted in two cases only:
+
+- `ws` emits `connection`, meaning the handshake succeeded;
+- the route did not register a waiter for this request at all (the "mismatch"
+  branch, which writes the middleware's status and closes).
+
+So every upgrade that reaches the route and is then refused by
+`wss.handleUpgrade` keeps the request, its socket, the Hono context and the
+route's event closures for the life of the server. That covers 405 for a
+non-`GET` method, 400 for key, version or subprotocol, a `verifyClient` 401,
+`socket.destroy()` for a half-closed client, and 503 while closing. So does an
+`Upgrade: websocket` request on the plain HTTP path: the route registers a
+waiter, but no `upgrade` event ever resolves it. On `/ws` this needed no
+credential at all.
+
+The waiter map cannot be reached from outside the dependency. The fix is
+therefore to refuse, before the route, every request that the route would
+otherwise leave waiting:
+
+- `verifyWebSocketUpgrade` (`packages/shared/src/node/webSocketUpgrade.ts`)
+  mirrors `ws` 8.x `handleUpgrade` for a server created like
+  `@hono/node-ws`'s: `noServer`, no `path`, and `perMessageDeflate: false`, so
+  extensions are ignored. It also adds the half-closed check.
+  - It applies only when `Upgrade` is `websocket`, the same test
+    `upgradeWebSocket` uses. Anything else never registers a waiter.
+  - Plain HTTP path (no `Connection: upgrade` token) → **426**.
+  - Method other than `GET` → **405**.
+  - Key other than 22 base64 characters plus `==`, version other than 8 or 13,
+    or a subprotocol list with empty, duplicate or non-token entries → **400**.
+  - Socket no longer readable or writable → **400**.
+  - `webSocketUpgradeLeak.test.ts` checks the statuses against a bare `ws`
+    server, so a `ws` upgrade that changes the rules fails the test instead of
+    silently reopening the leak.
+- Both servers run it as middleware before `/ws` (legacy: also
+  `/ws/remote/*`), after the `Origin`/`Host` and lite-token checks. `/ws/host`
+  runs it inside `admit`, followed by the ticket consume ("Ticket
+  consume-on-upgrade").
+- The half-closed `/ws/host` edge noted in #331 has the same root cause: it is
+  the `completeUpgrade` early return, which destroys the socket without calling
+  back. There it cost the ticket, because the consume had already run in
+  `verifyClient`, as well as a waiter. Both are gone now.
+- Not patched: `node_modules` and a pnpm patch were not needed. An upstream fix
+  (`WeakMap`, or deleting the waiter when `handleUpgrade` returns without
+  calling back) would make the middleware defence-in-depth only. It would not
+  let us drop it, because the plain-path case would remain.
+- Residual: see the remaining edge under "Ticket consume-on-upgrade". The
+  same window applies to `/ws`, where it costs one retained request and no
+  ticket.
 
 ### `/ws/host` request header checks
 
@@ -210,9 +280,7 @@ with the same options object that each server passes to
   Clients connect to `/ws/host` with the same authority they used to obtain
   the ticket.
 - **Order.** The check is the first step of the shared gate's `admit`, before
-  any `peek`, and a request rejected there is never remembered, so the
-  `verifyClient` consume point never sees it. A rejected request can never
-  burn a ticket. On the legacy server with `authToken`, the lite-token
+  any `peek` or consume, so a request rejected there can never burn a ticket. On the legacy server with `authToken`, the lite-token
   middleware still runs first; it does not touch tickets either.
 
 ### Ticket binding to the bootstrap credential
@@ -244,14 +312,14 @@ credential)`. It is one-way, so the ticket record never holds the secret,
   - Legacy server: one entry per configured credential (`hostBootstrapToken`,
     `authToken`). With neither configured nothing can be issued over HTTP, so
     no binding is enforced.
-- **Where it is checked.** In both places from "Ticket consume-on-upgrade",
+- **Where it is checked.** Twice in `admit` ("Ticket consume-on-upgrade"),
   with the same policy:
-  - `admit` → `store.peek(capability, accepted)`. A mismatch is 401 and the
-    ticket is **not** consumed, so a ticket carried to the wrong server stays
-    usable at its issuer until it expires.
-  - `verifyClient` → `store.consume(capability, accepted)`. The ticket is
-    deleted whatever the outcome, and a mismatch there (for example if the
-    policy changed between `admit` and the handshake) is 401 before 101.
+  - `store.peek(capability, accepted)`. A mismatch is 401 and the ticket is
+    **not** consumed, so a ticket carried to the wrong server stays usable at
+    its issuer until it expires.
+  - `store.consume(capability, accepted)`, after the handshake checks. The
+    ticket is deleted whatever the outcome, and a mismatch there is 401 before
+    the route and before 101.
 - **Rotation behaviour.** A ticket issued under a credential that is no longer
   current, or by another Core generation, is rejected with 401. That includes
   one issued by a previous generation that reused the same secret, and on the
@@ -318,7 +386,9 @@ importing it. Services was avoided because other teams are actively changing it.
 
 These endpoints have no token (full token auth is deferred), so they are locked
 down by request headers and by publishing less. The same rules cover the
-legacy server's `/ws/remote/:id`, whose only client is the same Web UI.
+legacy server's `/ws/remote/:id`, whose only client is the same Web UI. The
+legacy `POST /api/connect-remote` uses the same rules plus a JSON-only body
+("`POST /api/connect-remote`").
 
 ### Who connects (audit)
 
@@ -398,6 +468,63 @@ optional fields for old servers.
     workspace from them, and the distribution smoke asserts the path. The same
     page gets the same data over `/ws` anyway, and with `authToken` set,
     `/api/*` needs the lite token.
+
+### `POST /api/connect-remote`
+
+Legacy server only. The handler builds an SSH, WSL or Docker backend from the
+request body, connects, and keeps the connection for `/ws/remote/:id`. That is a
+side effect an attacker controls, so the route must not be reachable by CSRF.
+Before this change, a cross-site `<form>` or `fetch(..., {mode: "no-cors"})`
+with a `text/plain` body got through, because `c.req.json()` parses any body
+that looks like JSON whatever its `Content-Type`.
+
+Callers, found with `git grep` for `connect-remote`, `connectRemote` and
+`/api/connect-remote` across `packages`, `apps` and `scripts`, and
+`git log -S'"/api/connect-remote"'` (the route has existed unchanged since the
+initial import):
+
+| Caller                                                                                                                                                                                         | Reaches the route? | `Origin` / `Host` it would send                                                                                                                                                                                                            |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Web UI `connectRemote` (`packages/web/src/main.tsx:164-169`)                                                                                                                                   | No                 | Returns "Remote connect is not supported in Web mode yet" without a request. If it is wired up later, a browser sends `Origin` on every `POST`, same-origin included (Fetch spec), so: `Origin: http(s)://<Host>`, `Host` = page authority |
+| Same page under Vite dev (`packages/web/vite.config.ts:52-56`, `/api` proxy)                                                                                                                   | No (as above)      | `Origin: http://localhost:5173`, `Host: localhost:5173`. No `changeOrigin`, so both are forwarded unchanged                                                                                                                                |
+| Desktop `connectRemote` (preload `packages/desktop/src/preload/index.ts:246` → IPC `zcode:connect-remote`, `desktopMainIpcRemote.ts:294`, Host `packages/desktop/src/host/index.ts:3055-3058`) | No                 | In-process `connectRemote()` from `packages/server/src/remote`; no HTTP                                                                                                                                                                    |
+| UI hooks (`packages/ui/src/hooks/usePlatform.tsx:46`, `packages/ui/src/root/useRemoteWorkspaceHistory.ts:756`)                                                                                 | No                 | Go through `IPlatformService.connectRemote`, i.e. one of the two rows above                                                                                                                                                                |
+| Scripts, smoke tests, `apps/zcode-cli`                                                                                                                                                         | No                 | None found                                                                                                                                                                                                                                 |
+| `packages/server/src/connectRemoteHeaders.test.ts`                                                                                                                                             | Yes                | Node `http.request`: no `Origin`, `Host: 127.0.0.1:<port>` unless the test sets one                                                                                                                                                        |
+
+So there is no real caller today. The rule keeps the path open for a future
+same-origin Web UI call and for Node clients, and refuses everything else.
+The shared predicate is `verifyLocalEndpointHeaders` with the legacy `/ws`
+policy plus `body: "json"`. It is registered before the lite-token middleware.
+
+- **`Origin` present:** it must be exactly `http(s)://<Host>`, as for `/ws`.
+  Anything else gets **403**: `null`, other sites, and other loopback ports.
+  Another port on `localhost` is cross-origin but _same-site_, so the lite
+  token's `SameSite=Lax` cookie would still be attached. The `Origin` rule is
+  what refuses it.
+- **`Host`:** loopback is required while the server is bound to loopback
+  (**403**), which also stops the DNS-rebinding pair. Bound to another
+  interface, `Host` is not checked and `authToken` is the defence, as for `/ws`.
+- **Body:** the media type must be `application/json` (parameters and case
+  ignored), with or without `Origin`. Anything else gets **415**.
+- **No `Origin`:** allowed only together with the JSON rule, and this is the
+  Node-client path. Modern browsers always send `Origin` on a `POST`. A
+  cross-site page can send a `POST` without a CORS preflight only as
+  `text/plain`, `application/x-www-form-urlencoded` or `multipart/form-data`.
+  An `application/json` request needs a preflight, and neither server ever
+  answers one (there is no CORS middleware). So even a browser or extension
+  that strips `Origin` cannot deliver a request that passes. Alternatives that
+  were considered and not taken:
+  - Requiring the lite token when there is no `Origin`. The token is off by
+    default on loopback, so this would lock out Node clients with no gain over
+    the JSON rule.
+  - Refusing any `Origin`. That would rule out the intended same-origin Web UI
+    flow (`/ws/remote/:id` exists for it).
+  - `Sec-Fetch-Site`. It is redundant with `Origin` in the browsers that send
+    it, and absent in the ones that do not.
+- Order: 403 (`Origin`/`Host`), then 401 (lite token, if configured), then 415
+  (body type), then 400 (malformed JSON, which used to be a 500, or a schema
+  error). Nothing before the schema check has a side effect.
 
 ### Compatibility
 
@@ -501,8 +628,9 @@ first post-M2 update, was not taken. Code:
   cookie or subprotocol for the Web UI) would close this. It needs client
   changes in the Web UI and the connectors. Until then, the legacy server bound
   to a non-loopback interface depends on `authToken`.
-- The legacy `POST /api/connect-remote` has no `Origin`/`Host` check beyond the
-  lite token.
+- **Token auth for `POST /api/connect-remote`.** The header and JSON rules stop
+  browsers, but, as for `/ws`, any local process can still call it when
+  `authToken` is not configured.
 
 ## Tests
 
@@ -528,6 +656,24 @@ first post-M2 update, was not taken. Code:
     variant goes through the `hostCapabilityStore` option);
   - after a failed handshake, 4 concurrent upgrades with the ticket admit
     exactly one, and the other three get 401.
+- `webSocketUpgradeLeak.test.ts` in both packages (legacy `/ws`,
+  `/ws/remote/:id` and `/ws/host`; Core `/ws` and `/ws/host`):
+  - 10 malformed handshakes × 8, and `Upgrade: websocket` without
+    `Connection: Upgrade` (426), leave no retained `IncomingMessage`. On
+    `/ws/host` the same holds with a live ticket, which then opens once.
+  - Measurement: raw TCP clients, so there is no client-side
+    `IncomingMessage`, and `v8.queryObjects(IncomingMessage)`, which runs its
+    own synchronous full GC. The count is compared with a settled baseline, and
+    the only waiting is for socket teardown. Before the fix: 80 per path, 8 on
+    the plain path (which also answered 200), and 10 on `/ws/host`.
+  - Legacy: status parity with a bare `ws` server.
+  - Control: accepted upgrades retain nothing once closed.
+  - `v8.queryObjects` is marked experimental in Node 24 and prints an
+    `ExperimentalWarning`.
+- `packages/server/src/hostCapabilityUpgradeGate.test.ts`: `verifyClient`
+  accepts every admitted request, and a raced second upgrade gets 401 at
+  admission. A half-closed client (400) and handshakes `ws` would refuse
+  (400/405) are refused at admission without burning the ticket.
 - `hostCapabilityBinding.test.ts` in both `packages/server/src` and
   `packages/zcode-server-cli/src/server-core`: two servers share one injected
   store to model rotation.
@@ -561,6 +707,18 @@ first post-M2 update, was not taken. Code:
     (Linux only), `Host` is unchecked but cross-site `Origin` is still refused.
   - Controls: Node clients and the fields they read, the same-origin Web UI
     page, and the Vite dev proxy form.
+- `packages/server/src/connectRemoteHeaders.test.ts`:
+  - cross-site `Origin`s (`null`, other sites, other loopback ports, the
+    rebinding name) → 403 for simple and JSON content types;
+  - non-loopback `Host` → 403 when bound to loopback;
+  - a body that is not `application/json` → 415, with or without `Origin`;
+  - malformed JSON → 400;
+  - with `authToken`, the `SameSite=Lax` cookie from another port is still
+    refused;
+  - bound to `127.0.0.2` (Linux only): `Host` unchecked, `Origin` and JSON still
+    enforced;
+  - control: Node clients, the same-origin page and the Vite dev proxy reach the
+    handler (a schema 400 on `{}`, never a real connection).
 - `packages/server/src/remote/persistentTargetClient.test.ts`: the secret is
   sent only to the capability endpoint; a missing secret surfaces the 401.
 - `runtimeLifecycle.integration.test.ts`: the real Supervisor/Core path uses the

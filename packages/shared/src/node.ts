@@ -36,6 +36,7 @@ export {
   HOST_CAPABILITY_PATH,
   hostBootstrapTokenMatches,
   isLoopbackAuthority,
+  isJsonContentType,
   isSameOriginAsHost,
   presentedHostBootstrapCredential,
   verifyHostBootstrapRequest,
@@ -50,6 +51,7 @@ export {
   type LocalEndpointHeaderPolicy,
   type LocalEndpointHeaderRejection,
   type LocalEndpointOriginPolicy,
+  type LocalEndpointRequestHeaders,
 } from "./node/hostBootstrapAuth.js";
 export {
   createHostCapabilityStore,
@@ -68,3 +70,9 @@ export {
   type HostUpgradeRequest,
   type HostUpgradeWebSocketServer,
 } from "./node/hostCapabilityStore.js";
+export {
+  isWebSocketUpgradeRequest,
+  verifyWebSocketUpgrade,
+  type WebSocketUpgradeIncoming,
+  type WebSocketUpgradeRejection,
+} from "./node/webSocketUpgrade.js";

@@ -39,6 +39,7 @@ import {
   type ServerRemoteInfo,
   type ServerRemoteWorkspaceInfo,
 } from "@zcode/shared";
+import { verifyWebSocketUpgrade, type WebSocketUpgradeIncoming } from "@zcode/shared/node";
 import { connectRemote, createRemoteBackend, type RemoteConnection } from "./remote/index.js";
 import {
   createHostCapabilityStore,
@@ -53,6 +54,7 @@ import {
   presentedHostBootstrapCredential,
   verifyHostBootstrapRequest,
   verifyLocalEndpointHeaders,
+  type LocalEndpointHeaderPolicy,
 } from "./hostBootstrapAuth.js";
 
 function wrapWebSocket(ws: WebSocket): ISocket {
@@ -260,6 +262,10 @@ function hasValidLiteToken(c: Context, token: string): boolean {
   return parseCookieHeader(c.req.header("cookie")).get(zcodeLiteTokenCookieName) === token;
 }
 
+function incomingOf(c: Context): WebSocketUpgradeIncoming | undefined {
+  return (c.env as { incoming?: WebSocketUpgradeIncoming } | undefined)?.incoming;
+}
+
 function isTokenProtectedPath(pathname: string): boolean {
   return pathname === "/ws" || pathname.startsWith("/ws/") || pathname.startsWith("/api/");
 }
@@ -349,7 +355,8 @@ export function createHttpServer(
       : undefined;
   // /ws/host 与签发端点同一请求头规则（Origin → 403；监听回环时非回环 Host → 403），先于 ticket 检查。
   const hostRequestHeaderRules = { requireLoopbackHost: isLoopbackBindHost(options.host) };
-  // ticket 只在 ws 接受握手（verifyClient，紧挨 101）时消费；普通请求、握手失败或路由不符都不会烧掉它。
+  // ticket 在 /ws/host middleware 里、ws 同款握手检查全部通过之后才消费（仍在路由之前），
+  // 普通请求、会失败的握手、半关闭的客户端或路由不符都不会烧掉它；verifyClient 只放行已准入的请求。
   const hostUpgradeGate = createHostCapabilityUpgradeGate(hostCapabilities, {
     acceptedBindings: () => acceptedHostCapabilityBindings,
     ...hostRequestHeaderRules,
@@ -357,16 +364,33 @@ export function createHttpServer(
   hostUpgradeGate.attach(wss);
   // /ws、/ws/remote/* 与 server-info：唯一的浏览器客户端是本 server 托管的 Web UI（同源），
   // Node 客户端不发 Origin；跨站 Origin → 403，监听回环时非回环 Host → 403（与签发端点同一 Host 规则）。
-  const localEndpointHeaderPolicy = { ...hostRequestHeaderRules, origin: "same-origin" } as const;
-  const guardLocalEndpoint: MiddlewareHandler = async (c, next) => {
-    const rejection = verifyLocalEndpointHeaders(
-      { origin: c.req.header("origin"), host: c.req.header("host") },
-      localEndpointHeaderPolicy,
-    );
-    if (rejection) return c.json({ error: rejection.error }, rejection.status);
-    await next();
+  const localEndpointHeaderPolicy: LocalEndpointHeaderPolicy = {
+    ...hostRequestHeaderRules,
+    origin: "same-origin",
   };
-  for (const path of ["/ws", "/ws/remote/*", "/api/server-info"]) app.use(path, guardLocalEndpoint);
+  const guardLocalEndpoint =
+    (policy: LocalEndpointHeaderPolicy): MiddlewareHandler =>
+    async (c, next) => {
+      const rejection = verifyLocalEndpointHeaders(
+        {
+          origin: c.req.header("origin"),
+          host: c.req.header("host"),
+          contentType: c.req.header("content-type"),
+        },
+        policy,
+      );
+      if (rejection) return c.json({ error: rejection.error }, rejection.status);
+      await next();
+    };
+  for (const path of ["/ws", "/ws/remote/*", "/api/server-info"]) {
+    app.use(path, guardLocalEndpoint(localEndpointHeaderPolicy));
+  }
+  // connect-remote 有副作用（建立远程连接）：同样的 Origin/Host 规则，另外要求 application/json，
+  // 使没有 Origin 的请求只可能来自非浏览器客户端（跨站页面不经 CORS 预检发不出 JSON）。
+  app.use(
+    "/api/connect-remote",
+    guardLocalEndpoint({ ...localEndpointHeaderPolicy, body: "json" }),
+  );
   if (authToken) {
     app.use("*", async (c, next) => {
       const pathname = new URL(c.req.url).pathname;
@@ -408,6 +432,16 @@ export function createHttpServer(
     );
   });
 
+  // @hono/node-ws 在路由里登记的 waiter 只在握手成功时删除：ws 会拒绝的升级（以及没走 upgrade
+  // 路径的 Upgrade: websocket）必须在路由之前拒绝，否则请求会一直被留住（见 webSocketUpgrade.ts）。
+  const guardWebSocketUpgrade: MiddlewareHandler = async (c, next) => {
+    const rejection = verifyWebSocketUpgrade(incomingOf(c) ?? { headers: {} });
+    if (rejection) return c.json({ error: rejection.error }, rejection.status);
+    await next();
+  };
+  app.use("/ws", guardWebSocketUpgrade);
+  app.use("/ws/remote/*", guardWebSocketUpgrade);
+
   // 普通 `/ws` 永远是 terminal-client；浏览器/任意客户端设置旧 mode header
   // 都不能再把自己提升为 trusted host。
   app.get(
@@ -426,7 +460,7 @@ export function createHttpServer(
   }));
   app.use(HOST_CAPABILITY_WS_PATH, async (c, next) => {
     const admission = hostUpgradeGate.admit({
-      incoming: (c.env as { incoming?: object } | undefined)?.incoming,
+      incoming: incomingOf(c),
       capability: c.req.header(ZCODE_RPC_HOST_CAPABILITY_HEADER),
       origin: c.req.header("origin"),
       host: c.req.header("host"),
@@ -443,7 +477,12 @@ export function createHttpServer(
 
   // Web 模式下发起远程连接
   app.post("/api/connect-remote", async (c) => {
-    const rawBody = await c.req.json();
+    let rawBody: unknown;
+    try {
+      rawBody = await c.req.json();
+    } catch {
+      return c.json({ error: "Invalid request body: malformed JSON" }, 400);
+    }
     const parsedBody = remoteTargetSchema.safeParse(rawBody);
     if (!parsedBody.success) {
       return c.json({ error: `Invalid request body: ${formatZodError(parsedBody.error)}` }, 400);
