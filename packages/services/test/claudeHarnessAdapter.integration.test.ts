@@ -135,6 +135,8 @@ test(
       for (const current of adapters) await current.shutdown();
       await targetGateway.close();
       await rm(root, { recursive: true, force: true });
+      // verifyLoopbackEgress already read the traces; keep only the JSON summary artifact.
+      for (const file of await straceTraceFiles(traceBase)) await rm(file, { force: true });
       assert.deepEqual(await straceTraceFiles(traceBase), [], "strace traces must not accumulate");
     });
 
