@@ -262,6 +262,7 @@ test(
       // New turn on the live session: rejected before any Model is created or called.
       const turn2 = await send(target, spec, "turn-2", "continue after removal");
       assert.equal(turn2.status, "rejected");
+      assert.equal(turn2.reasonCode, "invalid-binding");
       assert.equal(turn2.message, "provider-not-found");
       assert.deepEqual(await target.queryCommand(spec, "turn-2-command"), turn2);
       const afterReject = await target.eventsSince(spec, 0);
