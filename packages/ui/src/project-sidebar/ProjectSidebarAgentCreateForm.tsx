@@ -5,9 +5,11 @@ import { useModelSelectionServiceView } from "@/hooks/useModelSelectionView.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { encodeCustomModelValue } from "@/lib/zcodeCustomModelValue.js";
 import { HarnessPicker } from "@/harness/HarnessPicker.js";
+import { CapabilityProviderReconfigureNotice } from "@/v4/ProviderReconfigureNotice.js";
 import type { ModelSelectionView } from "@zcode/services";
 import type { ModelSelection } from "@zcode/shared/model-selection";
 import type {
+  AgentModelFailure,
   CapabilityReport,
   HarnessDirectoryEntry,
   WorkspaceSessionCreateRequest,
@@ -109,7 +111,7 @@ export function ProjectSidebarAgentCreateForm({
   const [title, setTitle] = useState("");
   const [capabilityState, setCapabilityState] = useState<
     | { status: "checking" }
-    | { status: "ready"; report: CapabilityReport }
+    | { status: "ready"; report: CapabilityReport; credentialAttention?: AgentModelFailure }
     | { status: "unavailable" }
     | null
   >(null);
@@ -205,7 +207,11 @@ export function ProjectSidebarAgentCreateForm({
         if (!current) return;
         setCapabilityState(
           result.targetId === targetOption.targetId
-            ? { status: "ready", report: result.report }
+            ? {
+                status: "ready",
+                report: result.report,
+                credentialAttention: result.credentialAttention,
+              }
             : { status: "unavailable" },
         );
       })
@@ -425,6 +431,10 @@ export function ProjectSidebarAgentCreateForm({
           {intl.formatMessage({ id: "projectSidebar.agentCreateCapabilityUnknown" })}
         </p>
       ) : null}
+      <CapabilityProviderReconfigureNotice
+        attention={capabilityState?.status === "ready" ? capabilityState.credentialAttention : null}
+        providers={modelView?.providers}
+      />
 
       <label className="block space-y-1">
         <span className="block text-ui-xs font-medium text-foreground-subtle">
