@@ -1,0 +1,51 @@
+# Unit/behavior tests of apps/zcode-cli/packages/adapters (node:test via tsx). Tests only: no
+# format check (apps/zcode-cli has its own oxfmt and is outside the root formatter).
+# Test files are collected by glob, so new src/**/*.test.ts files are picked up automatically.
+# They use only in-process fakes on 127.0.0.1 (no network, API keys or Claude CLI).
+name: Adapters tests
+
+on:
+  workflow_dispatch:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: adapters-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  adapters-tests:
+    name: "@zcode/adapters tests"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4 # version comes from package.json "packageManager"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.14.0"
+          cache: pnpm
+
+      # Root install: tsx is a root devDependency and resolves from the adapters package.
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The tests import @zcode/contracts through its dist, which is gitignored.
+      - name: Build CLI workspace deps (@zcode/contracts, @zcode/adapters)
+        run: pnpm build:cli-deps
+
+      - name: Adapters tests
+        working-directory: apps/zcode-cli/packages/adapters
+        run: |
+          set -o pipefail
+          # Quoted: node:test expands the glob itself (includes nested directories).
+          node --import tsx --test 'src/**/*.test.ts' 2>&1 | tee "$RUNNER_TEMP/adapters-tests.log"
+          # An empty glob exits 0; make sure tests were actually found.
+          if grep -Eq '^ℹ tests 0$' "$RUNNER_TEMP/adapters-tests.log"; then
+            echo "::error::no adapters test files matched src/**/*.test.ts"
+            exit 1
+          fi
